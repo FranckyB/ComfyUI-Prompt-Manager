@@ -20,9 +20,12 @@ class PromptManagerNode:
         first_category = categories[0] if categories else "Character"
         # Get first prompt from first category, not from all prompts
         first_prompt = ""
+        first_prompt_text = ""
         if prompts_data and first_category in prompts_data and prompts_data[first_category]:
             first_category_prompts = list(prompts_data[first_category].keys())
             first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
+            if first_prompt:
+                first_prompt_text = prompts_data[first_category][first_prompt]
 
         return {
             "required": {
@@ -30,7 +33,7 @@ class PromptManagerNode:
                 "name": (all_prompts_list, {"default": first_prompt}),
             },
             "optional": {
-                "text": ("STRING", {"multiline": True, "default": "", "placeholder": "Enter prompt text or connect input", "dynamicPrompts": False, "forceInput": False, "tooltip": "Enter prompt text directly or connect from another node"}),
+                "text": ("STRING", {"multiline": True, "default": first_prompt_text, "placeholder": "Enter prompt text or connect input", "dynamicPrompts": False, "forceInput": False, "tooltip": "Enter prompt text directly or connect from another node"}),
             },
         }
 
