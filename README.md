@@ -42,18 +42,17 @@ A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) th
 
 ### Managing Prompts
 
-#### Creating a New Category
-1. Click the **"New Category"** button
-2. Enter a name for your category
-3. Click OK
-
 #### Saving a Prompt
 1. Type or paste your prompt into the text field (or have it connected from another node)
 2. Click the **"Save Prompt"** button
 3. Enter a name for your prompt
 4. Click OK
-
 > **Note**: If a prompt with the same name exists in the current category, you'll be asked to confirm before overwriting.
+
+#### Creating a New Category
+1. Click the **"New Category"** button
+2. Enter a name for your category
+3. Click OK
 
 #### Deleting a Category
 1. Select the category you want to delete
