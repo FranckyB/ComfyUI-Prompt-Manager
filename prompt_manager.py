@@ -18,15 +18,19 @@ class PromptManagerNode:
         all_prompts_list = sorted(list(all_prompts))
 
         first_category = categories[0] if categories else "Character"
-        first_prompt = all_prompts_list[0] if all_prompts_list else ""
+        # Get first prompt from first category, not from all prompts
+        first_prompt = ""
+        if prompts_data and first_category in prompts_data and prompts_data[first_category]:
+            first_category_prompts = list(prompts_data[first_category].keys())
+            first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
 
         return {
             "required": {
                 "category": (categories, {"default": first_category}),
-                "prompt_name": (all_prompts_list, {"default": first_prompt}),
+                "name": (all_prompts_list, {"default": first_prompt}),
             },
             "optional": {
-                "prompt_text": ("STRING", {"multiline": True, "default": "", "placeholder": "Enter prompt text or connect input", "dynamicPrompts": False, "forceInput": False, "tooltip": "Enter prompt text directly or connect from another node"}),
+                "text": ("STRING", {"multiline": True, "default": "", "placeholder": "Enter prompt text or connect input", "dynamicPrompts": False, "forceInput": False, "tooltip": "Enter prompt text directly or connect from another node"}),
             },
         }
 
@@ -99,9 +103,9 @@ class PromptManagerNode:
         except Exception as e:
             print(f"[PromptManager] Error saving prompts: {e}")
 
-    def get_prompt(self, category, prompt_name, prompt_text=""):
-        """Return the current text in the prompt_text field"""
-        return (prompt_text,)
+    def get_prompt(self, category, name, text=""):
+        """Return the current text in the text field"""
+        return (text,)
 
 
 @server.PromptServer.instance.routes.get("/prompt-manager/get-prompts")
@@ -145,10 +149,10 @@ async def save_prompt(request):
     try:
         data = await request.json()
         category = data.get("category", "").strip()
-        prompt_name = data.get("prompt_name", "").strip()
-        prompt_text = data.get("prompt_text", "").strip()
+        name = data.get("name", "").strip()
+        text = data.get("text", "").strip()
 
-        if not category or not prompt_name or not prompt_text:
+        if not category or not name or not text:
             return server.web.json_response({"success": False, "error": "All fields are required"})
 
         prompts = PromptManagerNode.load_prompts()
@@ -156,7 +160,7 @@ async def save_prompt(request):
         if category not in prompts:
             prompts[category] = {}
 
-        prompts[category][prompt_name] = prompt_text
+        prompts[category][name] = text
         PromptManagerNode.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
@@ -195,17 +199,17 @@ async def delete_prompt(request):
     try:
         data = await request.json()
         category = data.get("category", "").strip()
-        prompt_name = data.get("prompt_name", "").strip()
+        name = data.get("name", "").strip()
 
-        if not category or not prompt_name:
+        if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and prompt name are required"})
 
         prompts = PromptManagerNode.load_prompts()
 
-        if category not in prompts or prompt_name not in prompts[category]:
+        if category not in prompts or name not in prompts[category]:
             return server.web.json_response({"success": False, "error": "Prompt not found"})
 
-        del prompts[category][prompt_name]
+        del prompts[category][name]
         PromptManagerNode.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})

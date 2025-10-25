@@ -14,12 +14,12 @@ app.registerExtension({
                 node.prompts = {};
                 
                 // Change widget labels
-                const promptTextWidget = this.widgets.find(w => w.name === "prompt_text");
+                const promptTextWidget = this.widgets.find(w => w.name === "text");
                 if (promptTextWidget) {
                     promptTextWidget.label = "prompt";
                 }
                 
-                const promptNameWidget = this.widgets.find(w => w.name === "prompt_name");
+                const promptNameWidget = this.widgets.find(w => w.name === "name");
                 if (promptNameWidget) {
                     promptNameWidget.label = "prompt name";
                 }
@@ -91,9 +91,9 @@ async function loadPrompts(node) {
 }
 
 function filterPromptDropdown(node) {
-    // Filter prompt_name dropdown to only show prompts from current category
+    // Filter name dropdown to only show prompts from current category
     const categoryWidget = node.widgets.find(w => w.name === "category");
-    const promptWidget = node.widgets.find(w => w.name === "prompt_name");
+    const promptWidget = node.widgets.find(w => w.name === "name");
     
     if (categoryWidget && promptWidget) {
         const currentCategory = categoryWidget.value;
@@ -112,9 +112,9 @@ function addButtonBar(node) {
         return;
     }
     
-    const textWidget = node.widgets.find(w => w.name === "prompt_text");
+    const textWidget = node.widgets.find(w => w.name === "text");
     const categoryWidget = node.widgets.find(w => w.name === "category");
-    const promptWidget = node.widgets.find(w => w.name === "prompt_name");
+    const promptWidget = node.widgets.find(w => w.name === "name");
     
     // Create button container
     const buttonContainer = document.createElement("div");
@@ -190,14 +190,14 @@ function addButtonBar(node) {
 
 function setupCategoryChangeHandler(node) {
     const categoryWidget = node.widgets.find(w => w.name === "category");
-    const promptWidget = node.widgets.find(w => w.name === "prompt_name");
-    const textWidget = node.widgets.find(w => w.name === "prompt_text");
+    const promptWidget = node.widgets.find(w => w.name === "name");
+    const textWidget = node.widgets.find(w => w.name === "text");
     
     if (!categoryWidget || !promptWidget || !textWidget) return;
     
-    // Check if prompt_text input is connected from another node
+    // Check if text input is connected from another node
     const isTextInputConnected = () => {
-        const promptTextInput = node.inputs?.find(inp => inp.name === "prompt_text");
+        const promptTextInput = node.inputs?.find(inp => inp.name === "text");
         return promptTextInput && promptTextInput.link != null;
     };
     
@@ -280,7 +280,7 @@ function setupCategoryChangeHandler(node) {
 
 function setupInputConnectionHandler(node) {
     // Handle displaying value from connected input nodes
-    const textWidget = node.widgets?.find(w => w.name === "prompt_text");
+    const textWidget = node.widgets?.find(w => w.name === "text");
     if (!textWidget) return;
     
     const originalGetInputOrProperty = node.getInputOrProperty;
@@ -288,7 +288,7 @@ function setupInputConnectionHandler(node) {
         node.getInputOrProperty = function(name) {
             const value = originalGetInputOrProperty.apply(this, arguments);
             
-            if (name === "prompt_text" && value !== undefined) {
+            if (name === "text" && value !== undefined) {
                 textWidget.value = value;
             }
             
@@ -304,7 +304,7 @@ function setupInputConnectionHandler(node) {
                 originalBeforeChange.apply(this, arguments);
             }
             
-            const promptTextInput = node.inputs?.find(inp => inp.name === "prompt_text");
+            const promptTextInput = node.inputs?.find(inp => inp.name === "text");
             if (promptTextInput && promptTextInput.link != null) {
                 const link = graphCanvas.links[promptTextInput.link];
                 if (link) {
@@ -324,7 +324,7 @@ function setupInputConnectionHandler(node) {
     if (api) {
         const originalQueuePrompt = api.queuePrompt;
         api.queuePrompt = async function(number, workflow) {
-            const promptTextInput = node.inputs?.find(inp => inp.name === "prompt_text");
+            const promptTextInput = node.inputs?.find(inp => inp.name === "text");
             if (promptTextInput && promptTextInput.link != null) {
                 const graph = app.graph;
                 const link = graph.links[promptTextInput.link];
@@ -518,8 +518,8 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
 
 function updateDropdowns(node) {
     const categoryWidget = node.widgets.find(w => w.name === "category");
-    const promptWidget = node.widgets.find(w => w.name === "prompt_name");
-    const textWidget = node.widgets.find(w => w.name === "prompt_text");
+    const promptWidget = node.widgets.find(w => w.name === "name");
+    const textWidget = node.widgets.find(w => w.name === "text");
     
     if (!categoryWidget || !promptWidget || !textWidget) return;
     
@@ -573,8 +573,8 @@ async function createCategory(node, categoryName, textWidget) {
             
             // Select the newly created category
             const categoryWidget = node.widgets.find(w => w.name === "category");
-            const promptWidget = node.widgets.find(w => w.name === "prompt_name");
-            const textWidget = node.widgets.find(w => w.name === "prompt_text");
+            const promptWidget = node.widgets.find(w => w.name === "name");
+            const textWidget = node.widgets.find(w => w.name === "text");
             
             if (categoryWidget) {
                 categoryWidget.value = categoryName;
@@ -604,8 +604,8 @@ async function savePrompt(node, category, promptName, promptText, textWidget) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
                 category: category,
-                prompt_name: promptName,
-                prompt_text: promptText
+                name: promptName,
+                text: promptText
             })
         });
         
@@ -616,7 +616,7 @@ async function savePrompt(node, category, promptName, promptText, textWidget) {
             updateDropdowns(node);
             
             // Select the newly saved prompt
-            const promptWidget = node.widgets.find(w => w.name === "prompt_name");
+            const promptWidget = node.widgets.find(w => w.name === "name");
             if (promptWidget) {
                 promptWidget.value = promptName;
                 updateDropdowns(node);
@@ -659,7 +659,7 @@ async function deletePrompt(node, category, promptName, textWidget) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
                 category: category,
-                prompt_name: promptName
+                name: promptName
             })
         });
         

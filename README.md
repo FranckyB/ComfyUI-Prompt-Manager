@@ -2,6 +2,8 @@
 
 A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allows you to organize, manage, and save prompts into different categories. Useful for managing your prompt library and capturing outputs from LLM nodes.
 
+![Prompt Manager](docs/prompt_manager.png)
+
 ## Features
 
 - **Category Organization**: Create and manage multiple categories to organize your prompts (e.g., Character, Style, Environment, Lighting, Mood)
@@ -21,7 +23,7 @@ A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) th
 
 2. Clone this repository:
    ```bash
-   git clone https://github.com/FranckyB/comfyui-prompt-manager.git
+   git clone https://github.com/FranckyB/ComfyUI-Prompt-Manager.git
    ```
 
 3. Restart ComfyUI
@@ -67,7 +69,7 @@ A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) th
 
 You can capture and save outputs from LLM nodes:
 
-1. Connect an LLM output (or any text output) to the **"prompt_text"** input of the Prompt Manager node
+1. Connect an LLM output (or any text output) to the **"text"** input of the Prompt Manager node
 2. Run your workflow - the generated text will appear in the prompt field
 3. Click **"Save Prompt"** to save the LLM-generated text to your library
 4. Give it a descriptive name for future use
@@ -141,7 +143,7 @@ Feel free to modify or delete these to suit your needs!
 - **Solution**: Click the "Save Prompt" button after making changes. Direct edits in the text field are temporary.
 
 **Problem**: Can't see LLM output in the node
-- **Solution**: Make sure the LLM output is connected to the "prompt_text" input and run the workflow.
+- **Solution**: Make sure the LLM output is connected to the "text" input and run the workflow.
 
 **Problem**: Node appears too small
 - **Solution**: Resize the node by dragging the bottom-right corner. The node will maintain its size in your workflow.
