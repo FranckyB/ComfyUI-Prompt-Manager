@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-prompt-manager"
 description = "A simple custom node for ComfyUI that allows you to save and reuse prompts, organized into different categories"
-version = "1.0.0"
+version = "1.0.1"
 
 [project.urls]
 Repository = "https://github.com/FranckyB/ComfyUI-Prompt-Manager"

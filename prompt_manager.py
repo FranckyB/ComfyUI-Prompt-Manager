@@ -35,11 +35,14 @@ class PromptManagerNode:
             "optional": {
                 "text": ("STRING", {"multiline": True, "default": first_prompt_text, "placeholder": "Enter prompt text or connect input", "dynamicPrompts": False, "forceInput": False, "tooltip": "Enter prompt text directly or connect from another node"}),
             },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+            }
         }
 
     CATEGORY = "Prompt Manager"
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("text",)
+    RETURN_NAMES = ("prompt",)
     FUNCTION = "get_prompt"
 
     @staticmethod
@@ -106,8 +109,15 @@ class PromptManagerNode:
         except Exception as e:
             print(f"[PromptManager] Error saving prompts: {e}")
 
-    def get_prompt(self, category, name, text=""):
-        """Return the current text in the text field"""
+    def get_prompt(self, category, name, text="", unique_id=None):
+        """Return the current text in the text field and broadcast update"""
+        # Broadcast the current prompt text to the frontend
+        if unique_id is not None:
+            server.PromptServer.instance.send_sync("prompt-manager-update-text", {
+                "node_id": unique_id,
+                "prompt": text
+            })
+
         return (text,)
 
 
@@ -134,8 +144,10 @@ async def save_category(request):
 
         prompts = PromptManagerNode.load_prompts()
 
-        if category_name in prompts:
-            return server.web.json_response({"success": False, "error": "Category already exists"})
+        # Case-insensitive check for existing category
+        existing_categories_lower = {k.lower(): k for k in prompts.keys()}
+        if category_name.lower() in existing_categories_lower:
+            return server.web.json_response({"success": False, "error": f"Category already exists as '{existing_categories_lower[category_name.lower()]}'"})
 
         prompts[category_name] = {}
         PromptManagerNode.save_prompts(prompts)
@@ -162,6 +174,15 @@ async def save_prompt(request):
 
         if category not in prompts:
             prompts[category] = {}
+
+        # Case-insensitive check - find if name exists with different casing
+        existing_prompts_lower = {k.lower(): k for k in prompts[category].keys()}
+        if name.lower() in existing_prompts_lower:
+            old_name = existing_prompts_lower[name.lower()]
+            if old_name != name:
+                # Delete the old casing version
+                print(f"[PromptManager] Removing old casing '{old_name}' before saving as '{name}'")
+                del prompts[category][old_name]
 
         prompts[category][name] = text
         PromptManagerNode.save_prompts(prompts)

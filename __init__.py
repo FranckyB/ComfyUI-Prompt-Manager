@@ -1,7 +1,7 @@
 """
 ComfyUI Prompt Manager - A simple custom node for saving and reusing prompts
 """
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 

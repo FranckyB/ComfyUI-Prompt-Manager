@@ -149,7 +149,7 @@ Feel free to modify or delete these to suit your needs!
 
 ## Changelog
 
-### Version 1.0.0
+### Version 1.0.1
 - Initial release
 - Category management
 - Prompt save/load functionality
