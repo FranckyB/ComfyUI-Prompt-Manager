@@ -18,14 +18,15 @@ class PromptManagerNode:
         all_prompts_list = sorted(list(all_prompts))
 
         first_category = categories[0] if categories else "Character"
-        # Get first prompt from first category, not from all prompts
+
+        # Get first prompt from first category
         first_prompt = ""
         first_prompt_text = ""
         if prompts_data and first_category in prompts_data and prompts_data[first_category]:
             first_category_prompts = list(prompts_data[first_category].keys())
             first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
             if first_prompt:
-                first_prompt_text = prompts_data[first_category][first_prompt]
+                first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
 
         return {
             "required": {
@@ -48,7 +49,7 @@ class PromptManagerNode:
     @staticmethod
     def get_prompts_path():
         """Get the path to the prompts JSON file in user/default folder"""
-        return os.path.join(folder_paths.get_user_directory(), "default", "prompt_manager.json")
+        return os.path.join(folder_paths.get_user_directory(), "default", "prompt_manager_data.json")
 
     @staticmethod
     def get_default_prompts_path():
@@ -77,16 +78,9 @@ class PromptManagerNode:
             except Exception as e:
                 print(f"[PromptManager] Error loading default prompts: {e}")
 
-        default_data = {
-            "Character": {
-                "Fantasy Warrior": "a fantasy warrior, detailed armor, epic pose, dramatic lighting"
-            },
-            "Style": {
-                "Cinematic": "cinematic lighting, dramatic atmosphere, film grain, depth of field"
-            }
-        }
-        cls.save_prompts(default_data)
-        return default_data
+        # Return empty structure if all else fails
+        print("[PromptManager] Warning: No prompt files found, starting with empty data")
+        return {}
 
     @staticmethod
     def sort_prompts_data(data):
@@ -111,13 +105,13 @@ class PromptManagerNode:
 
     def get_prompt(self, category, name, text="", unique_id=None):
         """Return the current text in the text field and broadcast update"""
+
         # Broadcast the current prompt text to the frontend
         if unique_id is not None:
             server.PromptServer.instance.send_sync("prompt-manager-update-text", {
                 "node_id": unique_id,
                 "prompt": text
             })
-
         return (text,)
 
 
@@ -180,11 +174,13 @@ async def save_prompt(request):
         if name.lower() in existing_prompts_lower:
             old_name = existing_prompts_lower[name.lower()]
             if old_name != name:
+
                 # Delete the old casing version
                 print(f"[PromptManager] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        prompts[category][name] = text
+        # Save prompt in dict
+        prompts[category][name] = {"prompt": text}
         PromptManagerNode.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})

@@ -257,7 +257,8 @@ function setupCategoryChangeHandler(node) {
                 promptWidget.value = promptNames[0];
                 // Only update text widget if not connected to another node
                 if (!isTextInputConnected()) {
-                    textWidget.value = node.prompts[category][promptNames[0]] || "";
+                    const promptData = node.prompts[category][promptNames[0]];
+                    textWidget.value = promptData?.prompt || "";
                 }
             } else {
                 promptWidget.value = "";
@@ -283,7 +284,8 @@ function setupCategoryChangeHandler(node) {
         if (!isTextInputConnected()) {
             const category = categoryWidget.value;
             if (node.prompts && node.prompts[category] && node.prompts[category][value]) {
-                textWidget.value = node.prompts[category][value];
+                const promptData = node.prompts[category][value];
+                textWidget.value = promptData?.prompt || "";
             }
         }
 
@@ -652,7 +654,8 @@ function updateDropdowns(node) {
         }
 
         if (promptWidget.value && node.prompts[currentCategory][promptWidget.value]) {
-            textWidget.value = node.prompts[currentCategory][promptWidget.value];
+            const promptData = node.prompts[currentCategory][promptWidget.value];
+            textWidget.value = promptData?.prompt || "";
         } else {
             textWidget.value = "";
         }
