@@ -13,7 +13,7 @@ A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) th
 - **LLM Integration**: Connect text outputs from other nodes (like LLM generators) and save them directly
 - **Direct Editing**: Edit prompts directly in the node or select from your saved library
 - **Persistent Storage**: All prompts are saved in your ComfyUI user folder and persist across sessions
-- **Pre-loaded Templates**: Comes with a rich library of example prompts across various categories
+- **Pre-loaded Templates**: Comes with example prompts across various categories
 - **Easy Management**: Delete categories or individual prompts with confirmation dialogs
 
 ## Installation
