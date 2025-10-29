@@ -2,7 +2,9 @@
 
 A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allows you to organize, manage, and save prompts into different categories. Useful for managing your prompt library and capturing outputs from LLM nodes.
 
-![Prompt Manager](docs/prompt_manager.png)
+<div align="center">
+  <img src="docs/prompt_manager.png" alt="Prompt Manager">
+</div>
 
 ## Features
 
