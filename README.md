@@ -10,7 +10,7 @@ A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) th
 
 - **Category Organization**: Create and manage multiple categories to organize your prompts (e.g., Character, Style, Environment, Lighting, Mood)
 - **Save & Load Prompts**: Quickly save and recall your favorite prompts with custom names
-- **LLM Integration**: Connect text outputs from other nodes (like LLM generators) and save them directly
+- **LLM Input Toggle**: Connect text outputs from other nodes (like LLM generators) and toggle between using them or your internal prompts
 - **Direct Editing**: Edit prompts directly in the node or select from your saved library
 - **Persistent Storage**: All prompts are saved in your ComfyUI user folder and persist across sessions
 - **Pre-loaded Templates**: Comes with example prompts across various categories
@@ -66,14 +66,21 @@ A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) th
 2. Click the **"Del Prompt"** button
 3. Confirm the deletion
 
-### Working with LLM Outputs
+### Using LLM Input Toggle
 
-You can capture and save outputs from LLM nodes:
+The node includes a toggle to switch between internal prompts and external LLM inputs:
 
-1. Connect an LLM output (or any text output) to the **"text"** input of the Prompt Manager node
-2. Run your workflow - the generated text will appear in the prompt field
-3. Click **"Save Prompt"** to save the LLM-generated text to your library
-4. Give it a descriptive name for future use
+1. Connect an LLM output (or any text output) to the **"llm_input"** connector
+2. Click the **"use llm input"** toggle to switch it ON
+3. The prompt field will display the connected text (grayed out)
+4. Run your workflow - the node will output the LLM text
+5. Click **"Save Prompt"** to save the LLM-generated text to your library
+6. Toggle OFF to switch back to your internal prompts
+
+**Notes:**
+- The toggle only works when something is connected to `llm_input`
+- When toggled ON, the text field becomes read-only and shows the external input
+- When toggled OFF, it reverts to your selected internal prompt
 
 ## File Structure
 
@@ -129,6 +136,14 @@ These were added for testing purposes, feel free to modify or delete them to sui
 - **Solution**: Make sure the LLM output is connected to the "text" input and run the workflow.
 
 ## Changelog
+
+### Version 1.1.0
+- Added LLM input toggle for easy switching between internal and external text sources
+- Dedicated `llm_input` connector for external text
+- Toggle prevents activation when no connection is present
+- Text field becomes read-only when using external input
+- Auto-reverts to internal prompt when toggle is turned off
+- Fixed reload bug where toggle state wasn't applied on page load
 
 ### Version 1.0.1
 - Initial release

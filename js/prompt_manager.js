@@ -28,11 +28,27 @@ app.registerExtension({
                     promptNameWidget.label = "name";
                 }
 
-                // Listen for text updates from backend (when connected inputs change)
+                const useExternalWidget = this.widgets.find(w => w.name === "use_external");
+                if (useExternalWidget) {
+                    useExternalWidget.label = "use llm input";
+                }
+
+                // Listen for text updates from backend (when connected inputs change or toggle changes)
                 api.addEventListener("prompt-manager-update-text", (event) => {
                     if (String(event.detail.node_id) === String(this.id)) {
                         if (promptTextWidget) {
-                            promptTextWidget.value = event.detail.prompt;
+                            const useExternal = event.detail.use_external || false;
+                            const llmInput = event.detail.llm_input || "";
+                            
+                            if (useExternal && llmInput) {
+                                // When using external, display the LLM input text (grayed out)
+                                promptTextWidget.value = llmInput;
+                                promptTextWidget.disabled = true;
+                            } else {
+                                // When using internal, enable the widget
+                                promptTextWidget.disabled = false;
+                            }
+                            
                             this.serialize_widgets = true;
                             app.graph.setDirtyCanvas(true, true);
                         }
@@ -44,7 +60,7 @@ app.registerExtension({
                     addButtonBar(node);
                     setupCategoryChangeHandler(node);
                     filterPromptDropdown(node);
-                    setupInputConnectionHandler(node);
+                    setupUseExternalToggleHandler(node);
 
                     // After buttons are added, ensure height is sufficient
                     setTimeout(() => {
@@ -76,7 +92,7 @@ app.registerExtension({
                         if (!node.buttonBarAttached) {
                             addButtonBar(node);
                             setupCategoryChangeHandler(node);
-                            setupInputConnectionHandler(node);
+                            setupUseExternalToggleHandler(node);
                         }
                     });
                 }, 100);
@@ -231,14 +247,9 @@ function setupCategoryChangeHandler(node) {
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
     const textWidget = node.widgets.find(w => w.name === "text");
+    const useExternalWidget = node.widgets.find(w => w.name === "use_external");
 
     if (!categoryWidget || !promptWidget || !textWidget) return;
-
-    // Check if text input is connected from another node
-    const isTextInputConnected = () => {
-        const promptTextInput = node.inputs?.find(inp => inp.name === "text");
-        return promptTextInput && promptTextInput.link != null;
-    };
 
     const originalCallback = categoryWidget.callback;
 
@@ -255,14 +266,15 @@ function setupCategoryChangeHandler(node) {
 
             if (promptNames.length > 0) {
                 promptWidget.value = promptNames[0];
-                // Only update text widget if not connected to another node
-                if (!isTextInputConnected()) {
+                // Only update text widget if not using external
+                const useExternal = useExternalWidget ? useExternalWidget.value : false;
+                if (!useExternal) {
                     const promptData = node.prompts[category][promptNames[0]];
                     textWidget.value = promptData?.prompt || "";
                 }
             } else {
                 promptWidget.value = "";
-                if (!isTextInputConnected()) {
+                if (!useExternal) {
                     textWidget.value = "";
                 }
             }
@@ -280,8 +292,9 @@ function setupCategoryChangeHandler(node) {
             originalPromptCallback.apply(this, arguments);
         }
 
-        // Only update text if not connected to another node
-        if (!isTextInputConnected()) {
+        // Only update text if not using external
+        const useExternal = useExternalWidget ? useExternalWidget.value : false;
+        if (!useExternal) {
             const category = categoryWidget.value;
             if (node.prompts && node.prompts[category] && node.prompts[category][value]) {
                 const promptData = node.prompts[category][value];
@@ -325,70 +338,83 @@ function setupCategoryChangeHandler(node) {
     promptWidget.options._values = promptWidget.options.values || [];
 }
 
-function setupInputConnectionHandler(node) {
-    // Handle displaying value from connected input nodes
+function setupUseExternalToggleHandler(node) {
     const textWidget = node.widgets?.find(w => w.name === "text");
-    if (!textWidget) return;
+    const useExternalWidget = node.widgets?.find(w => w.name === "use_external");
+    const categoryWidget = node.widgets?.find(w => w.name === "category");
+    const promptWidget = node.widgets?.find(w => w.name === "name");
+    
+    if (!textWidget || !useExternalWidget) return;
 
-    const originalGetInputOrProperty = node.getInputOrProperty;
-    if (originalGetInputOrProperty) {
-        node.getInputOrProperty = function(name) {
-            const value = originalGetInputOrProperty.apply(this, arguments);
+    // Apply initial state on load/reload
+    const applyToggleState = (value) => {
+        const llmInputConnection = node.inputs?.find(inp => inp.name === "llm_input");
+        const isLlmConnected = llmInputConnection && llmInputConnection.link != null;
 
-            if (name === "text" && value !== undefined) {
-                textWidget.value = value;
-            }
-
-            return value;
-        };
-    }
-
-    const graphCanvas = app.graph;
-    if (graphCanvas) {
-        const originalBeforeChange = graphCanvas.beforeChange;
-        graphCanvas.beforeChange = function() {
-            if (originalBeforeChange) {
-                originalBeforeChange.apply(this, arguments);
-            }
-
-            const promptTextInput = node.inputs?.find(inp => inp.name === "text");
-            if (promptTextInput && promptTextInput.link != null) {
-                const link = graphCanvas.links[promptTextInput.link];
-                if (link) {
-                    const originNode = graphCanvas.getNodeById(link.origin_id);
-                    if (originNode) {
-                        const outputValue = originNode.getOutputData?.(link.origin_slot);
-                        if (outputValue !== undefined) {
-                            textWidget.value = outputValue;
-                        }
-                    }
-                }
-            }
-        };
-    }
-
-    const api = app.api;
-    if (api) {
-        const originalQueuePrompt = api.queuePrompt;
-        api.queuePrompt = async function(number, workflow) {
-            const promptTextInput = node.inputs?.find(inp => inp.name === "text");
-            if (promptTextInput && promptTextInput.link != null) {
-                const graph = app.graph;
-                const link = graph.links[promptTextInput.link];
-                if (link) {
-                    const originNode = graph.getNodeById(link.origin_id);
-                    if (originNode && originNode.widgets) {
-                        const outputWidget = originNode.widgets.find(w => w.name === link.origin_slot || w.name === "text" || w.name === "STRING");
+        if (value && isLlmConnected) {
+            // Using LLM and it's connected - disable text widget and show LLM value
+            const graph = app.graph;
+            const link = graph.links[llmInputConnection.link];
+            if (link) {
+                const originNode = graph.getNodeById(link.origin_id);
+                if (originNode) {
+                    // Try to get the output value from the origin node
+                    const outputData = originNode.getOutputData?.(link.origin_slot);
+                    if (outputData !== undefined) {
+                        textWidget.value = outputData;
+                    } else if (originNode.widgets) {
+                        // Fallback: try to find widget with matching output
+                        const outputWidget = originNode.widgets.find(w => w.name === "text" || w.name === "STRING");
                         if (outputWidget) {
                             textWidget.value = outputWidget.value;
                         }
                     }
                 }
             }
+            textWidget.disabled = true;
+        } else {
+            // Using internal text - enable widget and revert to selected prompt
+            textWidget.disabled = false;
+            
+            // Revert to the currently selected prompt from the node's prompt library
+            if (categoryWidget && promptWidget && node.prompts) {
+                const category = categoryWidget.value;
+                const promptName = promptWidget.value;
+                if (node.prompts[category] && node.prompts[category][promptName]) {
+                    const promptData = node.prompts[category][promptName];
+                    textWidget.value = promptData?.prompt || "";
+                }
+            }
+        }
+    };
 
-            return originalQueuePrompt.apply(this, arguments);
-        };
-    }
+    // Apply initial state when the handler is set up
+    applyToggleState(useExternalWidget.value);
+
+    const originalCallback = useExternalWidget.callback;
+
+    useExternalWidget.callback = function(value) {
+        // Check if llm_input is connected
+        const llmInputConnection = node.inputs?.find(inp => inp.name === "llm_input");
+        const isLlmConnected = llmInputConnection && llmInputConnection.link != null;
+
+        // Prevent turning on if nothing is connected
+        if (value && !isLlmConnected) {
+            useExternalWidget.value = false;
+            node.serialize_widgets = true;
+            app.graph.setDirtyCanvas(true, true);
+            return;
+        }
+
+        if (originalCallback) {
+            originalCallback.apply(this, arguments);
+        }
+
+        applyToggleState(value);
+
+        node.serialize_widgets = true;
+        app.graph.setDirtyCanvas(true, true);
+    };
 }
 
 function createButton(text, callback) {

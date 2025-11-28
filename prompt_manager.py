@@ -32,9 +32,11 @@ class PromptManagerNode:
             "required": {
                 "category": (categories, {"default": first_category}),
                 "name": (all_prompts_list, {"default": first_prompt}),
+                "use_external": ("BOOLEAN", {"default": False, "label_on": "on", "label_off": "off", "tooltip": "Toggle to use LLM input instead of internal text"}),
+                "text": ("STRING", {"multiline": True, "default": first_prompt_text, "placeholder": "Enter prompt text", "dynamicPrompts": False, "tooltip": "Enter prompt text directly"}),
             },
             "optional": {
-                "text": ("STRING", {"multiline": True, "default": first_prompt_text, "placeholder": "Enter prompt text or connect input", "dynamicPrompts": False, "forceInput": False, "tooltip": "Enter prompt text directly or connect from another node"}),
+                "llm_input": ("STRING", {"multiline": True, "forceInput": True, "tooltip": "Connect LLM text input here"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -103,16 +105,24 @@ class PromptManagerNode:
         except Exception as e:
             print(f"[PromptManager] Error saving prompts: {e}")
 
-    def get_prompt(self, category, name, text="", unique_id=None):
-        """Return the current text in the text field and broadcast update"""
+    def get_prompt(self, category, name, use_external, text="", llm_input="", unique_id=None):
+        """Return the appropriate text based on use_external toggle and broadcast update"""
+        
+        # Choose which text to use based on the toggle
+        if use_external and llm_input:
+            output_text = llm_input
+        else:
+            output_text = text
 
         # Broadcast the current prompt text to the frontend
         if unique_id is not None:
             server.PromptServer.instance.send_sync("prompt-manager-update-text", {
                 "node_id": unique_id,
-                "prompt": text
+                "prompt": output_text,
+                "use_external": use_external,
+                "llm_input": llm_input if use_external else ""
             })
-        return (text,)
+        return (output_text,)
 
 
 @server.PromptServer.instance.routes.get("/prompt-manager/get-prompts")
