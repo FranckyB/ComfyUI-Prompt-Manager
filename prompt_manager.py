@@ -3,11 +3,11 @@ import json
 import folder_paths
 import server
 
-class PromptManagerNode:
+class PromptManager:
 
     @classmethod
     def INPUT_TYPES(s):
-        prompts_data = PromptManagerNode.load_prompts()
+        prompts_data = PromptManager.load_prompts()
         categories = list(prompts_data.keys()) if prompts_data else ["Character"]
 
         all_prompts = set()
@@ -129,7 +129,7 @@ class PromptManagerNode:
 async def get_prompts(request):
     """API endpoint to get all prompts"""
     try:
-        prompts = PromptManagerNode.load_prompts()
+        prompts = PromptManager.load_prompts()
         return server.web.json_response(prompts)
     except Exception as e:
         print(f"[PromptManager] Error in get_prompts API: {e}")
@@ -146,7 +146,7 @@ async def save_category(request):
         if not category_name:
             return server.web.json_response({"success": False, "error": "Category name is required"})
 
-        prompts = PromptManagerNode.load_prompts()
+        prompts = PromptManager.load_prompts()
 
         # Case-insensitive check for existing category
         existing_categories_lower = {k.lower(): k for k in prompts.keys()}
@@ -154,7 +154,7 @@ async def save_category(request):
             return server.web.json_response({"success": False, "error": f"Category already exists as '{existing_categories_lower[category_name.lower()]}'"})
 
         prompts[category_name] = {}
-        PromptManagerNode.save_prompts(prompts)
+        PromptManager.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
@@ -174,7 +174,7 @@ async def save_prompt(request):
         if not category or not name or not text:
             return server.web.json_response({"success": False, "error": "All fields are required"})
 
-        prompts = PromptManagerNode.load_prompts()
+        prompts = PromptManager.load_prompts()
 
         if category not in prompts:
             prompts[category] = {}
@@ -191,7 +191,7 @@ async def save_prompt(request):
 
         # Save prompt in dict
         prompts[category][name] = {"prompt": text}
-        PromptManagerNode.save_prompts(prompts)
+        PromptManager.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
@@ -209,13 +209,13 @@ async def delete_category(request):
         if not category:
             return server.web.json_response({"success": False, "error": "Category name is required"})
 
-        prompts = PromptManagerNode.load_prompts()
+        prompts = PromptManager.load_prompts()
 
         if category not in prompts:
             return server.web.json_response({"success": False, "error": "Category not found"})
 
         del prompts[category]
-        PromptManagerNode.save_prompts(prompts)
+        PromptManager.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
@@ -234,13 +234,13 @@ async def delete_prompt(request):
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and prompt name are required"})
 
-        prompts = PromptManagerNode.load_prompts()
+        prompts = PromptManager.load_prompts()
 
         if category not in prompts or name not in prompts[category]:
             return server.web.json_response({"success": False, "error": "Prompt not found"})
 
         del prompts[category][name]
-        PromptManagerNode.save_prompts(prompts)
+        PromptManager.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:

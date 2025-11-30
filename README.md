@@ -1,20 +1,31 @@
 # ComfyUI Prompt Manager
 
-A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allows you to organize, manage, and save prompts into different categories. Useful for managing your prompt library and capturing outputs from LLM nodes.
+A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allows both saving and generating new prompts using llama.cpp.
+**Llama.cpp needs to be installed and accessible from command prompt.**
 
 <div align="center">
   <img src="docs/prompt_manager.png" alt="Prompt Manager">
 </div>
 
-## Features
-
-- **Category Organization**: Create and manage multiple categories to organize your prompts (e.g., Character, Style, Environment, Lighting, Mood)
+### Key features:
+### Prompt Manager:
+- **Category Organization**: Create and manage multiple categories to organize your prompts
 - **Save & Load Prompts**: Quickly save and recall your favorite prompts with custom names
-- **LLM Input Toggle**: Connect text outputs from other nodes (like LLM generators) and toggle between using them or your internal prompts
-- **Direct Editing**: Edit prompts directly in the node or select from your saved library
-- **Persistent Storage**: All prompts are saved in your ComfyUI user folder and persist across sessions
-- **Pre-loaded Templates**: Comes with example prompts across various categories
-- **Easy Management**: Delete categories or individual prompts with confirmation dialogs
+- **LLM Input Toggle**: Connect text outputs from other nodes and toggle between using them or your internal prompts
+- **LLM Input Toggle**: When in use, display of categories and prompt is disabled, allowing user to switch category and save.
+- **Persistent Storage**: All prompts saved in your ComfyUI user folder
+
+### Prompt Generator
+- **Automatic llama.cpp Server Management**: Automatically starts llama.cpp server as needed
+- **Server Control**: Toggle to stop server after generation (frees VRAM)
+- **AI-Powered Prompt Enhancement**: Transform basic prompts into detailed, vivid descriptions optimized for image generation
+- **Local Model Support**: Automatically detects and uses first .gguf model found in the models/guff folder.
+
+### Prompt Generator Options
+- **Model Selection**: Choose from local models or download from HuggingFace
+- **Model Auto-Download**: Easy download of Qwen3 1.7B, 4B, or 8B from HuggingFace.
+- **LLM Parameters**: Fine-tune temperature, top_k, top_p, min_p, repeat_penalty
+- **Custom Instructions**: Override default system prompt for different enhancement styles
 
 ## Installation
 
@@ -28,101 +39,61 @@ A simple custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) th
    git clone https://github.com/FranckyB/ComfyUI-Prompt-Manager.git
    ```
 
-3. Restart ComfyUI
+3. Install dependencies:
+   ```bash
+   cd ComfyUI-Prompt-Manager
+   pip install -r requirements.txt
+   ```
+
+4. Install llama.cpp. It can be found here: [llama.cpp install](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
+
+5. If you have them, place your .gguf models in the models/gguf folder. (Create folder if not present)
+
+
+6. Restart ComfyUI
 
 ## Usage
 
-### Basic Usage
+### Prompt Manager
 
-1. **Add the Node**: Right-click in ComfyUI → Add Node → Prompt Manager → Prompt Manager
+1. **Add the Node**: Add Node → Prompt Manager
+2. **Select a Category**: Use the dropdown to choose from your categories
+3. **Choose a Prompt**: Select a saved prompt from the name dropdown
+4. **Connect prompt output**: Connect Prompt Manager output to your clip text encode node.
 
-2. **Select a Category**: Use the dropdown to choose from your categories (Character, Style, Environment, etc.)
 
-3. **Choose a Prompt**: Select a saved prompt from the dropdown
+### Prompt Generator
 
-4. **Use the Output**: Connect the output to any node that accepts text/string input
+**Basic Usage** (assuming a model is present in models\gguf):
+1. **Add the Node**: Add Node → Prompt Generator
+2. **Connect llm_output to prompt manager**: If you want to save your generated prompt connect to prompt manager.
+3. **type your prompt**: Type in your basic prompt that will be embelished
+4. **Save memory**: Toggle "stop_server_after" ON to free VRAM after generation, if seed is set to fix, it won't restart unless prompt changes.
+4. **Run Workflow**: Once calculated, the prompt will display in the Prompt Manager window and allow you to save it.
 
-### Managing Prompts
+**Advanced Usage**:
+1. **Add the Options Node**: Add Node → Prompt Generator Options
+2. **Connect Options**: Connect the options node to the Prompt Generator Options input
+3. **Select from available models**: Select from models found in your modeld\gguf folder. Qwen models will be available to download.
+4. **Adjust settings**: Adjust LLM parameters (temperature, top_k, etc.)
+5. **Customize LLM**: Customize the default LLM instructions to modify the responses llama returns.
 
-#### Saving a Prompt
-1. Type or paste your prompt into the text field (or have it connected from another node)
-2. Click the **"Save Prompt"** button
-3. Enter a name for your prompt
-4. Click OK
-> **Note**: If a prompt with the same name exists in the current category, you'll be asked to confirm before overwriting.
+**Size of Qwen models found in options**
+- Qwen3-1.7B-Q8_0.gguf: Fastest, lowest VRAM (~2GB)
+- Qwen3-4B-Q8_0.gguf:   Balanced performance (~4GB VRAM)
+- Qwen3-8B-Q8_0.gguf:   Best quality, highest VRAM (~8GB)
 
-#### Creating a New Category
-1. Click the **"New Category"** button
-2. Enter a name for your category
-3. Click OK
+**Model Management**:
+- Place gguf files in models/gguf folder
+- Downloaded models are also placed in this folder.
 
-#### Deleting a Category
-1. Select the category you want to delete
-2. Click the **"Del Category"** button
-3. Confirm the deletion
+## Requirements
 
-#### Deleting a Prompt
-1. Select the prompt you want to delete
-2. Click the **"Del Prompt"** button
-3. Confirm the deletion
-
-### Using LLM Input Toggle
-
-The node includes a toggle to switch between internal prompts and external LLM inputs:
-
-1. Connect an LLM output (or any text output) to the **"llm_input"** connector
-2. Click the **"use llm input"** toggle to switch it ON
-3. The prompt field will display the connected text (grayed out)
-4. Run your workflow - the node will output the LLM text
-5. Click **"Save Prompt"** to save the LLM-generated text to your library
-6. Toggle OFF to switch back to your internal prompts
-
-**Notes:**
-- The toggle only works when something is connected to `llm_input`
-- When toggled ON, the text field becomes read-only and shows the external input
-- When toggled OFF, it reverts to your selected internal prompt
-
-## File Structure
-
-```
-comfyui-prompt-manager/
-├── __init__.py              # Node registration
-├── prompt_manager.py        # Main node logic and API endpoints
-├── default_prompts.json     # Default prompt templates
-├── js/
-│   └── prompt_manager.js    # Frontend UI and interactions
-└── README.md                # This file
-```
-
-## Data Storage
-
-Prompts are stored in:
-```
-ComfyUI/user/default/prompt_manager.json
-```
-The file is automatically created on first use, copying from `default_prompts.json`.
-
-You can:
-- Back up this file to save your prompt library
-- Share it with others
-- Edit it directly (with caution)
-
-## Default Prompts
-
-The node comes pre-loaded with example prompts.
-These were added for testing purposes, feel free to modify or delete them to suit your needs!
-
-## Tips & Tricks
-
-### Workflow Organization
-- Create categories that match your workflow (e.g., "Characters", "Backgrounds", "Styles")
-- Use descriptive names for your prompts to find them easily later
-- Regularly backup your `prompt_manager.json` file
-
-### Editing Prompts
-- You can edit prompts directly in the text field even when loaded from the library
-- Changes are not saved automatically - click "Save Prompt" to update
-- Use "Save Prompt" with the same name to overwrite an existing prompt
+- ComfyUI
+- Python 3.8+
+- requests >= 2.31.0
+- huggingface_hub >= 0.20.0
+- llama-server (from llama.cpp)
 
 ## Troubleshooting
 
@@ -133,22 +104,37 @@ These were added for testing purposes, feel free to modify or delete them to sui
 - **Solution**: Click the "Save Prompt" button after making changes. Direct edits in the text field are temporary.
 
 **Problem**: Can't see LLM output in the node
-- **Solution**: Make sure the LLM output is connected to the "text" input and run the workflow.
+- **Solution**: Make sure the LLM output is connected to the "llm_input" and run the workflow.
+
+**Problem**: "llama-server command not found"
+- **Solution**: Install llama.cpp and make sure `llama-server` is available in command line. See [llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases)
+
+**Problem**: "No models found"
+- **Solution**: Either place a .gguf file in the `models/` folder, or connect the Prompt Generator Option node and select a model size (1.7B, 4B, or 8B) to download from HuggingFace
+
+**Problem**: Server won't start
+- **Solution**: Check that port 8080 is not in use. Close any existing llama-server processes.
+
+**Problem**: Model download fails
+- **Solution**: Check your internet connection and HuggingFace availability. Large models may take time to download.
+
+**Problem**: Generation is slow
+- **Solution**: Either, Use a smaller quantized model (Q4 instead of Q8) or toggle 'stop_server_after' to quit llama.cpp after generating prompt.
 
 ## Changelog
 
-### Version 1.1.0
-- Added LLM input toggle for easy switching between internal and external text sources
-- Dedicated `llm_input` connector for external text
-- Toggle prevents activation when no connection is present
-- Text field becomes read-only when using external input
-- Auto-reverts to internal prompt when toggle is turned off
-- Fixed reload bug where toggle state wasn't applied on page load
+### Version 1.5.0
+- Added Prompt Generator node with automatic llama.cpp server management
+- Added Prompt Generator Options node for model selection and parameters
+- Automatic model detection and auto-download from HuggingFace for Qwen3 models.
+- VRAM management with optional server shutdown
 
-### Version 1.0.1
+### Version 1.1.0
+- Added LLM input toggle for switching between internal and external text
+- Made text fields scrollable even when disabled
+- Fixed reload bugs with toggle state
+
+### Version 1.0.0
 - Initial release
-- Category management
-- Prompt save/load functionality
+- Category and prompt management
 - LLM output integration
-- Pre-loaded example prompts
-- ComfyUI-style UI dialogs

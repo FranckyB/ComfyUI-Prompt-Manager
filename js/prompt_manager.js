@@ -33,6 +33,17 @@ app.registerExtension({
                     useExternalWidget.label = "use llm input";
                 }
 
+                // Make text widget scrollable even when disabled
+                if (promptTextWidget && promptTextWidget.inputEl) {
+                    promptTextWidget.inputEl.style.pointerEvents = "auto";
+                    promptTextWidget.inputEl.addEventListener("mousedown", function(e) {
+                        if (this.disabled) {
+                            // Allow scrolling but prevent editing
+                            e.stopPropagation();
+                        }
+                    });
+                }
+
                 // Listen for text updates from backend (when connected inputs change or toggle changes)
                 api.addEventListener("prompt-manager-update-text", (event) => {
                     if (String(event.detail.node_id) === String(this.id)) {
@@ -44,6 +55,10 @@ app.registerExtension({
                                 // When using external, display the LLM input text (grayed out)
                                 promptTextWidget.value = llmInput;
                                 promptTextWidget.disabled = true;
+                                // Keep scrolling enabled
+                                if (promptTextWidget.inputEl) {
+                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                }
                             } else {
                                 // When using internal, enable the widget
                                 promptTextWidget.disabled = false;
@@ -372,6 +387,10 @@ function setupUseExternalToggleHandler(node) {
                 }
             }
             textWidget.disabled = true;
+            // Keep scrolling enabled even when disabled
+            if (textWidget.inputEl) {
+                textWidget.inputEl.style.pointerEvents = "auto";
+            }
         } else {
             // Using internal text - enable widget and revert to selected prompt
             textWidget.disabled = false;
