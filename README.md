@@ -1,7 +1,8 @@
 # ComfyUI Prompt Manager
 
 A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allows both saving and generating new prompts using llama.cpp.
-**Llama.cpp needs to be installed and accessible from command prompt.**
+
+(**Llama.cpp needs to be installed and accessible from command prompt.**)
 
 <div align="center">
   <img src="docs/prompt_manager.png" alt="Prompt Manager">
