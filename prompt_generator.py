@@ -233,12 +233,9 @@ class PromptGenerator:
                 return (error_msg,)
             model_to_use = local_models[0]
 
-        # Caching logic: if prompt/seed/model/system_prompt are unchanged, return cached result
-        if options and "system_prompt" in options:
-            system_prompt = options["system_prompt"]
-        else:
-            system_prompt = self.DEFAULT_SYSTEM_PROMPT
-        cache_key = (prompt, seed, model_to_use, system_prompt)
+        # Caching logic: if prompt/seed/model/options are unchanged, return cached result
+        options_tuple = tuple(sorted(options.items())) if options else ()
+        cache_key = (prompt, seed, model_to_use, options_tuple)
         # Only use cache if the model has not changed since last use
         if cache_key in self._prompt_cache and _current_model == model_to_use:
             print("[Prompt Generator] Returning cached prompt result.")

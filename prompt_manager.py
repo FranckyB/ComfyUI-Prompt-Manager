@@ -36,7 +36,7 @@ class PromptManager:
                 "text": ("STRING", {"multiline": True, "default": first_prompt_text, "placeholder": "Enter prompt text", "dynamicPrompts": False, "tooltip": "Enter prompt text directly"}),
             },
             "optional": {
-                "llm_input": ("STRING", {"multiline": True, "forceInput": True, "tooltip": "Connect LLM text input here"}),
+                "llm_input": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect LLM text input here"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -107,7 +107,7 @@ class PromptManager:
 
     def get_prompt(self, category, name, use_external, text="", llm_input="", unique_id=None):
         """Return the appropriate text based on use_external toggle and broadcast update"""
-        
+
         # Choose which text to use based on the toggle
         if use_external and llm_input:
             output_text = llm_input
@@ -123,6 +123,12 @@ class PromptManager:
                 "llm_input": llm_input if use_external else ""
             })
         return (output_text,)
+
+    def check_lazy_status(self, category, name, use_external, text, llm_input=None, unique_id=None):
+        needed = []
+        if use_external:
+            needed.append("llm_input")
+        return needed
 
 
 @server.PromptServer.instance.routes.get("/prompt-manager/get-prompts")

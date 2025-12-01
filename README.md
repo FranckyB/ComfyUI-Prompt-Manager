@@ -124,6 +124,11 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allo
 
 ## Changelog
 
+### Version 1.5.1
+- LLM output remains avaiable when use llm is off. So it can be edited
+- Improved Caching detection, any change to options will be detected and force a new ouput
+- Improved some UI quirks
+
 ### Version 1.5.0
 - Added Prompt Generator node with automatic llama.cpp server management
 - Added Prompt Generator Options node for model selection and parameters

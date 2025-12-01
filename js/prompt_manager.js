@@ -367,7 +367,15 @@ function setupUseExternalToggleHandler(node) {
         const isLlmConnected = llmInputConnection && llmInputConnection.link != null;
 
         if (value && isLlmConnected) {
-            // Using LLM and it's connected - disable text widget and show LLM value
+            // Using LLM and it's connected - disable text widget immediately
+            textWidget.disabled = true;
+            // Keep scrolling enabled but prevent editing
+            if (textWidget.inputEl) {
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.readOnly = true;
+            }
+            
+            // Try to show LLM value if available
             const graph = app.graph;
             const link = graph.links[llmInputConnection.link];
             if (link) {
@@ -386,23 +394,11 @@ function setupUseExternalToggleHandler(node) {
                     }
                 }
             }
-            textWidget.disabled = true;
-            // Keep scrolling enabled even when disabled
-            if (textWidget.inputEl) {
-                textWidget.inputEl.style.pointerEvents = "auto";
-            }
         } else {
-            // Using internal text - enable widget and revert to selected prompt
+            // Using internal text - enable widget but keep current text (which may be LLM output)
             textWidget.disabled = false;
-            
-            // Revert to the currently selected prompt from the node's prompt library
-            if (categoryWidget && promptWidget && node.prompts) {
-                const category = categoryWidget.value;
-                const promptName = promptWidget.value;
-                if (node.prompts[category] && node.prompts[category][promptName]) {
-                    const promptData = node.prompts[category][promptName];
-                    textWidget.value = promptData?.prompt || "";
-                }
+            if (textWidget.inputEl) {
+                textWidget.inputEl.readOnly = false;
             }
         }
     };
