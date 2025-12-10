@@ -32,17 +32,13 @@ def setup_windows_job_object():
         
         kernel32 = ctypes.windll.kernel32
         
-        # Job Object constants
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
         JobObjectExtendedLimitInformation = 9
         
-        # Create job object
         _job_handle = kernel32.CreateJobObjectW(None, None)
         if not _job_handle:
-            print("[Prompt Generator] Warning: Could not create job object")
             return
         
-        # Define structures for job object configuration
         class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
             _fields_ = [
                 ("PerProcessUserTimeLimit", ctypes.c_int64),
@@ -76,28 +72,23 @@ def setup_windows_job_object():
                 ("PeakJobMemoryUsed", ctypes.c_size_t),
             ]
 
-        # Configure job to kill processes on close
         info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 
-        result = kernel32.SetInformationJobObject(
+        kernel32.SetInformationJobObject(
             _job_handle,
             JobObjectExtendedLimitInformation,
             ctypes.byref(info),
             ctypes.sizeof(info)
         )
-        
-        if result:
-            print("[Prompt Generator] Windows Job Object created - child processes will be cleaned up on exit")
-        else:
-            print("[Prompt Generator] Warning: Could not configure job object")
+        print("[Prompt Generator] Job Object created - llama-server will be killed on console close")
             
     except Exception as e:
         print(f"[Prompt Generator] Warning: Job object setup failed: {e}")
 
 
 def assign_process_to_job(process):
-    """Assign a subprocess to the job object so it gets killed when parent exits"""
+    """Assign subprocess to job object so it gets killed when parent exits"""
     global _job_handle
     
     if os.name != 'nt' or not _job_handle or not process:
@@ -106,25 +97,21 @@ def assign_process_to_job(process):
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
-        
-        # Get the process handle from subprocess
         handle = int(process._handle)
-        result = kernel32.AssignProcessToJobObject(_job_handle, handle)
-        
-        if result:
-            print("[Prompt Generator] Server process assigned to job object")
-        else:
-            print("[Prompt Generator] Warning: Could not assign process to job object")
-            
-    except Exception as e:
-        print(f"[Prompt Generator] Warning: Could not assign to job: {e}")
+        kernel32.AssignProcessToJobObject(_job_handle, handle)
+    except:
+        pass
+
+
+# Initialize job object at module load
+setup_windows_job_object()
 
 
 def setup_console_handler():
-    """Set up Windows console control handler for Ctrl+C, console close, etc."""
+    """Set up Windows console control handler for console close, logoff, shutdown only"""
     if os.name != 'nt':
         return
-        
+    
     try:
         import ctypes
         
@@ -137,10 +124,12 @@ def setup_console_handler():
         
         @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
         def console_handler(event):
-            if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT, CTRL_C_EVENT, CTRL_BREAK_EVENT):
-                print(f"\n[Prompt Generator] Console event {event} received, cleaning up...")
+            # ONLY handle close/logoff/shutdown - NOT Ctrl+C or Ctrl+Break
+            if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
+                print(f"\n[Prompt Generator] Console closing (event {event}), cleaning up...")
                 cleanup_server()
                 return False  # Let other handlers run
+            # For Ctrl+C and Ctrl+Break, return False to let ComfyUI handle them
             return False
         
         # Keep a reference to prevent garbage collection
@@ -149,7 +138,7 @@ def setup_console_handler():
         
         kernel32 = ctypes.windll.kernel32
         if kernel32.SetConsoleCtrlHandler(console_handler, True):
-            print("[Prompt Generator] Console control handler registered")
+            print("[Prompt Generator] Console close handler registered")
         else:
             print("[Prompt Generator] Warning: Could not register console handler")
             
@@ -198,18 +187,16 @@ def signal_handler(signum, frame):
 
 
 # === INITIALIZATION ===
+
 # Set up Windows Job Object (most reliable method)
 setup_windows_job_object()
 
-# Set up console control handler for Windows
+# Set up console control handler for Windows (close button only)
 setup_console_handler()
 
-# Register signal handlers
+# Register signal handlers - ONLY SIGTERM, not SIGINT (Ctrl+C)
 try:
     signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    if hasattr(signal, 'SIGBREAK'):  # Windows only
-        signal.signal(signal.SIGBREAK, signal_handler)
 except Exception as e:
     print(f"[Prompt Generator] Warning: Could not register signal handlers: {e}")
 
@@ -337,11 +324,15 @@ class PromptGenerator:
             # Start server process WITH --reasoning-format deepseek for thinking models
             _server_process = subprocess.Popen(
                 [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), 
-                 "--no-warmup", "--reasoning-format", "deepseek"],
+                "--no-warmup", "--reasoning-format", "deepseek"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=creation_flags
             )
+
+            assign_process_to_job(_server_process)
+
+            _current_model = model_name
 
             # Assign to job object for guaranteed cleanup on Windows
             assign_process_to_job(_server_process)
