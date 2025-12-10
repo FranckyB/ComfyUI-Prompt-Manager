@@ -5,6 +5,8 @@ import os
 import atexit
 import psutil
 import json
+import signal
+import sys
 from .model_manager import get_local_models, get_model_path, is_model_local, download_model
 
 # Import ComfyUI's model management for interrupt handling
@@ -14,18 +16,204 @@ import comfy.model_management
 _server_process = None
 _current_model = None
 
+# Windows Job Object for guaranteed child process cleanup
+_job_handle = None
+
+def setup_windows_job_object():
+    """Create a Windows Job Object that kills child processes when parent exits"""
+    global _job_handle
+    
+    if os.name != 'nt':
+        return
+    
+    try:
+        import ctypes
+        from ctypes import wintypes
+        
+        kernel32 = ctypes.windll.kernel32
+        
+        # Job Object constants
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+        JobObjectExtendedLimitInformation = 9
+        
+        # Create job object
+        _job_handle = kernel32.CreateJobObjectW(None, None)
+        if not _job_handle:
+            print("[Prompt Generator] Warning: Could not create job object")
+            return
+        
+        # Define structures for job object configuration
+        class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        # Configure job to kill processes on close
+        info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+        result = kernel32.SetInformationJobObject(
+            _job_handle,
+            JobObjectExtendedLimitInformation,
+            ctypes.byref(info),
+            ctypes.sizeof(info)
+        )
+        
+        if result:
+            print("[Prompt Generator] Windows Job Object created - child processes will be cleaned up on exit")
+        else:
+            print("[Prompt Generator] Warning: Could not configure job object")
+            
+    except Exception as e:
+        print(f"[Prompt Generator] Warning: Job object setup failed: {e}")
+
+
+def assign_process_to_job(process):
+    """Assign a subprocess to the job object so it gets killed when parent exits"""
+    global _job_handle
+    
+    if os.name != 'nt' or not _job_handle or not process:
+        return
+    
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        
+        # Get the process handle from subprocess
+        handle = int(process._handle)
+        result = kernel32.AssignProcessToJobObject(_job_handle, handle)
+        
+        if result:
+            print("[Prompt Generator] Server process assigned to job object")
+        else:
+            print("[Prompt Generator] Warning: Could not assign process to job object")
+            
+    except Exception as e:
+        print(f"[Prompt Generator] Warning: Could not assign to job: {e}")
+
+
+def setup_console_handler():
+    """Set up Windows console control handler for Ctrl+C, console close, etc."""
+    if os.name != 'nt':
+        return
+        
+    try:
+        import ctypes
+        
+        # Console control handler types
+        CTRL_C_EVENT = 0
+        CTRL_BREAK_EVENT = 1
+        CTRL_CLOSE_EVENT = 2
+        CTRL_LOGOFF_EVENT = 5
+        CTRL_SHUTDOWN_EVENT = 6
+        
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+        def console_handler(event):
+            if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT, CTRL_C_EVENT, CTRL_BREAK_EVENT):
+                print(f"\n[Prompt Generator] Console event {event} received, cleaning up...")
+                cleanup_server()
+                return False  # Let other handlers run
+            return False
+        
+        # Keep a reference to prevent garbage collection
+        global _console_handler_ref
+        _console_handler_ref = console_handler
+        
+        kernel32 = ctypes.windll.kernel32
+        if kernel32.SetConsoleCtrlHandler(console_handler, True):
+            print("[Prompt Generator] Console control handler registered")
+        else:
+            print("[Prompt Generator] Warning: Could not register console handler")
+            
+    except Exception as e:
+        print(f"[Prompt Generator] Warning: Console handler setup failed: {e}")
+
+
 def cleanup_server():
     """Cleanup function to stop server on exit"""
-    global _server_process
+    global _server_process, _current_model
+    
     if _server_process:
         try:
+            print("[Prompt Generator] Stopping server on exit...")
             _server_process.terminate()
-            _server_process.wait(timeout=5)
+            try:
+                _server_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                _server_process.kill()
+                _server_process.wait(timeout=2)
             print("[Prompt Generator] Server stopped on exit")
-        except:
-            pass
+        except Exception as e:
+            print(f"[Prompt Generator] Error stopping server: {e}")
+        finally:
+            _server_process = None
+            _current_model = None
+    
+    # Also kill any orphaned llama-server processes
+    try:
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if proc.info['name'] and 'llama-server' in proc.info['name'].lower():
+                    print(f"[Prompt Generator] Killing orphaned llama-server (PID: {proc.info['pid']})")
+                    proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except Exception as e:
+        print(f"[Prompt Generator] Error cleaning up orphaned processes: {e}")
 
-# Register cleanup function
+
+def signal_handler(signum, frame):
+    """Handle termination signals"""
+    print(f"\n[Prompt Generator] Signal {signum} received, cleaning up...")
+    cleanup_server()
+    sys.exit(0)
+
+
+# === INITIALIZATION ===
+# Set up Windows Job Object (most reliable method)
+setup_windows_job_object()
+
+# Set up console control handler for Windows
+setup_console_handler()
+
+# Register signal handlers
+try:
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    if hasattr(signal, 'SIGBREAK'):  # Windows only
+        signal.signal(signal.SIGBREAK, signal_handler)
+except Exception as e:
+    print(f"[Prompt Generator] Warning: Could not register signal handlers: {e}")
+
+# Register atexit cleanup as fallback
 atexit.register(cleanup_server)
 
 
@@ -154,6 +342,9 @@ class PromptGenerator:
                 stderr=subprocess.PIPE,
                 creationflags=creation_flags
             )
+
+            # Assign to job object for guaranteed cleanup on Windows
+            assign_process_to_job(_server_process)
 
             _current_model = model_name
 
