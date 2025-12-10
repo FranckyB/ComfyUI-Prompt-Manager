@@ -4,7 +4,11 @@ import time
 import os
 import atexit
 import psutil
+import json
 from .model_manager import get_local_models, get_model_path, is_model_local, download_model
+
+# Import ComfyUI's model management for interrupt handling
+import comfy.model_management
 
 # Global variable to track the server process
 _server_process = None
@@ -56,6 +60,10 @@ class PromptGenerator:
                 }),
             },
             "optional": {
+                "show_everything_in_console": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Print system prompt, user prompt, thinking process, and raw model response to the console."
+                }),
                 "stop_server_after": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Stop the llama.cpp server after each prompt (for resource saving, but slower)."
@@ -138,9 +146,10 @@ class PromptGenerator:
                 server_cmd = "llama-server"
                 creation_flags = 0
 
-            # Start server process
+            # Start server process WITH --reasoning-format deepseek for thinking models
             _server_process = subprocess.Popen(
-                [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup"],
+                [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), 
+                 "--no-warmup", "--reasoning-format", "deepseek"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=creation_flags
@@ -210,7 +219,27 @@ class PromptGenerator:
         # Also kill any orphaned llama-server processes
         PromptGenerator.kill_all_llama_servers()
 
-    def convert_prompt(self, prompt: str, seed: int, stop_server_after=False, options=None) -> str:
+    def _print_debug_header(self, payload):
+        """Helper to print colorful debug info header"""
+        print("\n" + "="*60)
+        print(" [Prompt Generator] DEBUG: TOKENS & MESSAGES IN ACTION")
+        print("="*60)
+        
+        # Print System and User Prompt from payload
+        if "messages" in payload:
+            for msg in payload["messages"]:
+                role = msg.get("role", "unknown").upper()
+                content = msg.get("content", "")
+                print(f"\n--- <|{role}|> STARTS ---")
+                print(content)
+                print(f"--- <|{role}|> ENDS ---")
+        
+        # Print parameters
+        print("\n--- GENERATION PARAMS ---")
+        params = {k: v for k, v in payload.items() if k != "messages"}
+        print(json.dumps(params, indent=2))
+
+    def convert_prompt(self, prompt: str, seed: int, stop_server_after=False, show_everything_in_console=False, options=None) -> str:
         """Convert prompt using llama.cpp server, with caching for repeated requests."""
         global _current_model
 
@@ -220,8 +249,7 @@ class PromptGenerator:
 
         # Always determine a valid model filename before running server
         model_to_use = None
-        model_changed = False
-
+        
         # Priority: options node > first local model filename
         if options and "model" in options and is_model_local(options["model"]):
             model_to_use = options["model"]
@@ -233,12 +261,53 @@ class PromptGenerator:
                 return (error_msg,)
             model_to_use = local_models[0]
 
-        # Caching logic: if prompt/seed/model/options are unchanged, return cached result
+        # Prepare system prompt (needed for cache key)
+        if options and "system_prompt" in options:
+            system_prompt = options["system_prompt"]
+        else:
+            system_prompt = self.DEFAULT_SYSTEM_PROMPT
+
+        # Caching logic
         options_tuple = tuple(sorted(options.items())) if options else ()
         cache_key = (prompt, seed, model_to_use, options_tuple)
+        
+        # Prepare the payload structure
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "seed": seed,
+            "max_tokens": 8192  # Default max tokens
+        }
+                
+        # Add optional parameters if provided via options
+        if options:
+            if "max_tokens" in options:
+                payload["max_tokens"] = options["max_tokens"]
+            if "temperature" in options:
+                payload["temperature"] = options["temperature"]
+            if "top_p" in options:
+                payload["top_p"] = options["top_p"]
+            if "top_k" in options:
+                payload["top_k"] = options["top_k"]
+            if "min_p" in options:
+                payload["min_p"] = options["min_p"]
+            if "repeat_penalty" in options:
+                payload["repeat_penalty"] = options["repeat_penalty"]
+
         # Only use cache if the model has not changed since last use
         if cache_key in self._prompt_cache and _current_model == model_to_use:
             print("[Prompt Generator] Returning cached prompt result.")
+            
+            if show_everything_in_console:
+                self._print_debug_header(payload)
+                print(f"\n--- <|CACHED MODEL ANSWER|> STARTS ---")
+                print(self._prompt_cache[cache_key])
+                print(f"--- <|CACHED MODEL ANSWER|> ENDS ---\n")
+
             if stop_server_after:
                 self.stop_server()
             return (self._prompt_cache[cache_key],)
@@ -259,57 +328,132 @@ class PromptGenerator:
         # Build the endpoint URL
         full_url = f"{self.SERVER_URL}/v1/chat/completions"
 
-        # Prepare the system prompt - use custom if provided, otherwise use default
-        if options and "system_prompt" in options:
-            system_prompt = options["system_prompt"]
-        else:
-            system_prompt = self.DEFAULT_SYSTEM_PROMPT
-
-        # Prepare request payload for llama.cpp chat completions
-        payload = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False,
-            "seed": seed
-        }
-
-        # Add optional parameters if provided via options
-        if options:
-            if "temperature" in options:
-                payload["temperature"] = options["temperature"]
-            if "top_p" in options:
-                payload["top_p"] = options["top_p"]
-            if "top_k" in options:
-                payload["top_k"] = options["top_k"]
-            if "min_p" in options:
-                payload["min_p"] = options["min_p"]
-            if "repeat_penalty" in options:
-                payload["repeat_penalty"] = options["repeat_penalty"]
-
         try:
-            # Show which model is being used
             if _current_model:
                 print(f"[Prompt Generator] Generating with model: {_current_model}")
-            else:
-                print("[Prompt Generator] Generating with last used model")
+            
+            if show_everything_in_console:
+                self._print_debug_header(payload)
+                print("\n--- <|REAL-TIME STREAM|> STARTS ---")
 
-            print(f"[Prompt Generator] Sending request to {full_url}")
+            # Send request with stream=True
             response = requests.post(
                 full_url,
                 json=payload,
+                stream=True,
                 timeout=120
             )
             response.raise_for_status()
 
-            result = response.json()
+            full_response = ""
+            thinking_content = ""
+            in_thinking = False
+            usage_stats = None
+            
+            # Process the stream
+            for line in response.iter_lines():
+                # CHECK FOR COMFYUI INTERRUPT
+                try:
+                    comfy.model_management.throw_exception_if_processing_interrupted()
+                except comfy.model_management.InterruptProcessingException:
+                    print("[Prompt Generator] Generation interrupted by user")
+                    response.close()
+                    if stop_server_after:
+                        self.stop_server()
+                    # Re-raise the exception so ComfyUI handles it properly
+                    raise
+                
+                if line:
+                    decoded_line = line.decode('utf-8')
+                    if decoded_line.startswith('data: '):
+                        json_str = decoded_line[6:]  # Remove 'data: ' prefix
+                        
+                        # Check for stream end signal
+                        if json_str.strip() == '[DONE]':
+                            break
+                            
+                        try:
+                            chunk = json.loads(json_str)
 
-            # Extract content from chat completions response format
-            if "choices" in result and len(result["choices"]) > 0:
-                full_response = result["choices"][0]["message"]["content"].strip()
-            else:
-                full_response = result.get("content", "").strip()
+                            # Capture usage stats if present (usually in the last chunk)
+                            if "usage" in chunk:
+                                usage_stats = chunk["usage"]
+
+                            if 'choices' in chunk and len(chunk['choices']) > 0:
+                                delta = chunk['choices'][0].get('delta', {})
+                                
+                                # Handle main content
+                                content = delta.get('content', '')
+                                if content:
+                                    full_response += content
+                                    if show_everything_in_console and not in_thinking:
+                                        print(content, end='', flush=True)
+                                
+                                # Handle reasoning/thinking content
+                                reasoning_delta = delta.get('reasoning_content', '')
+                                if reasoning_delta and show_everything_in_console:
+                                    thinking_content += reasoning_delta
+                                    if not in_thinking:
+                                        print("\n\n🧠 [THINKING] ", end='', flush=True)
+                                        in_thinking = True
+                                    print(reasoning_delta, end='', flush=True)
+                                
+                                # Check if we exited thinking mode
+                                if in_thinking and content and not reasoning_delta:
+                                    print("\n\n💡 [ANSWER] ", end='', flush=True)
+                                    in_thinking = False
+                                    
+                        except json.JSONDecodeError:
+                            pass
+
+            # Finalize debug output
+            if show_everything_in_console:
+                print("\n--- <|REAL-TIME STREAM|> ENDS ---\n")
+                
+                # --- TOKEN STATS LOGIC ---
+                print("="*60)
+                print(" [Prompt Generator] TOKEN USAGE STATISTICS")
+                print("="*60)
+
+                # Use server stats if available, otherwise 0
+                total_input = usage_stats.get('prompt_tokens', 0) if usage_stats else 0
+                total_output = usage_stats.get('completion_tokens', 0) if usage_stats else 0
+
+                # Calculate Proportions (Approximation based on char length)
+                # Since we don't have a tokenizer locally, we split the total input tokens
+                # based on the character length ratio of system vs user prompt.
+                sys_len = len(system_prompt)
+                usr_len = len(prompt)
+                total_in_len = sys_len + usr_len
+                
+                if total_input > 0 and total_in_len > 0:
+                    sys_tokens = int(total_input * (sys_len / total_in_len))
+                    usr_tokens = total_input - sys_tokens
+                else:
+                    sys_tokens = 0
+                    usr_tokens = 0
+
+                # Same logic for Output (Thinking vs Answer)
+                think_len = len(thinking_content)
+                ans_len = len(full_response)
+                total_out_len = think_len + ans_len
+
+                if total_output > 0 and total_out_len > 0:
+                    think_tokens = int(total_output * (think_len / total_out_len))
+                    ans_tokens = total_output - think_tokens
+                else:
+                    think_tokens = 0
+                    ans_tokens = 0
+                
+                print(f" SYSTEM PROMPT: {sys_tokens:>6} tokens")
+                print(f" USER PROMPT:   {usr_tokens:>6} tokens")
+                print(f" -----------------------------")
+                print(f" THINKING:      {think_tokens:>6} tokens")
+                print(f" FINAL ANSWER:  {ans_tokens:>6} tokens")
+                print(f" -----------------------------")
+                print(f" TOTAL INPUT:   {total_input:>6} tokens")
+                print(f" TOTAL OUTPUT:  {total_output:>6} tokens")
+                print("="*60 + "\n")
 
             if not full_response:
                 print("[Prompt Generator] Warning: Empty response from server")
@@ -326,6 +470,9 @@ class PromptGenerator:
 
             return (full_response,)
 
+        except comfy.model_management.InterruptProcessingException:
+            # Re-raise interrupt exceptions so ComfyUI handles them properly
+            raise
         except requests.exceptions.ConnectionError:
             error_msg = f"Error: Could not connect to server at {full_url}. Server may have crashed."
             print(f"[Prompt Generator] {error_msg}")
