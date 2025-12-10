@@ -32,6 +32,13 @@ class PromptGenOptions:
                     "placeholder": "Replace LLM Instructions...",
                     "tooltip": "Custom LLM Instructions (leave empty to use default)"
                 }),
+                "max_tokens": ("INT", {
+                    "default": 8192,
+                    "min": 1,
+                    "max": 32768,
+                    "step": 1,
+                    "tooltip": "Maximum number of tokens the model can generate in its response (thinking included)"
+                }),
                 "temperature": ("FLOAT", {
                     "default": 0.8,
                     "min": 0.0,
@@ -81,8 +88,9 @@ class PromptGenOptions:
         return _last_model_update
 
     def create_options(self, model: str = None,
-                       system_prompt: str = None, temperature: float = None,
-                       top_k: int = None, top_p: float = None, min_p: float = None,
+                       system_prompt: str = None, max_tokens: int = None,
+                       temperature: float = None, top_k: int = None, 
+                       top_p: float = None, min_p: float = None,
                        repeat_penalty: float = None) -> dict:
         """Create options dictionary with model and LLM parameters"""
 
@@ -105,6 +113,8 @@ class PromptGenOptions:
         # Only include LLM parameters that are provided
         if system_prompt and system_prompt.strip():
             options["system_prompt"] = system_prompt
+        if max_tokens is not None:
+            options["max_tokens"] = max_tokens
         if temperature is not None:
             options["temperature"] = temperature
         if top_p is not None:
