@@ -34,6 +34,13 @@ class PromptGenOptions:
                     "default": True,
                     "tooltip": "Enable thinking/reasoning mode (model thinks before answering)"
                 }),
+                "context_size": ("INT", {
+                    "default": 8192,
+                    "min": 2048,
+                    "max": 131072,
+                    "step": 1,
+                    "tooltip": "Context window size (total tokens for input + output). Higher values use more VRAM."
+                }),
                 "max_tokens": ("INT", {
                     "default": 8192,
                     "min": 1,
@@ -55,7 +62,7 @@ class PromptGenOptions:
                     "default": 0.8,
                     "min": 0.0,
                     "max": 2.0,
-                    "step": 0.05,
+                    "step": 0.01,
                     "tooltip": "Temperature for generation (higher = more creative, lower = more focused)"
                 }),
                 "top_p": ("FLOAT", {
@@ -83,7 +90,7 @@ class PromptGenOptions:
                     "default": 1.0,
                     "min": 0.0,
                     "max": 2.0,
-                    "step": 0.05,
+                    "step": 0.1,
                     "tooltip": "Repetition penalty (1.0 = no penalty, higher = less repetition)"
                 }),
             },
@@ -96,9 +103,9 @@ class PromptGenOptions:
     RETURN_NAMES = ("options",)
     FUNCTION = "create_options"
 
-    def create_options(self, model, gpu_layers, enable_thinking, max_tokens, use_model_default_sampling,
-                       temperature, top_p, top_k, min_p, repeat_penalty, 
-                       system_prompt=""):
+    def create_options(self, model, gpu_layers, enable_thinking, context_size, max_tokens, 
+                       use_model_default_sampling, temperature, top_p, top_k, min_p, 
+                       repeat_penalty, system_prompt=""):
         
         # Handle downloadable models (remove ⬇ prefix)
         if model.startswith("⬇ "):
@@ -108,6 +115,7 @@ class PromptGenOptions:
             "model": model,
             "gpu_config": gpu_layers.strip() if gpu_layers.strip() else "auto",
             "enable_thinking": enable_thinking,
+            "context_size": context_size,
             "max_tokens": max_tokens,
             "use_model_default_sampling": use_model_default_sampling,
             "temperature": temperature,
