@@ -37,14 +37,14 @@ class PromptGenOptions:
                 "context_size": ("INT", {
                     "default": 4096,
                     "min": 256,
-                    "max": 131072,
+                    "max": 1000000,
                     "step": 1,
                     "tooltip": "Context window size (total tokens for input + output). Higher values use more VRAM."
                 }),
                 "max_tokens": ("INT", {
-                    "default": 8192,
+                    "default": 4096,
                     "min": 1,
-                    "max": 32768,
+                    "max": 1000000,
                     "step": 1,
                     "tooltip": "Maximum tokens to generate"
                 }),
