@@ -430,12 +430,12 @@ class PromptGenerator:
                 params = data.get("default_generation_settings", {}).get("params", {})
                 
                 _model_default_params = {
-                    "temperature": params.get("temperature", 0.8),
-                    "top_k": params.get("top_k", 40),
-                    "top_p": params.get("top_p", 0.95),
-                    "min_p": params.get("min_p", 0.05),
-                    "repeat_penalty": params.get("repeat_penalty", 1.0),
-                    "max_tokens": params.get("max_tokens", -1) if params.get("max_tokens", -1) > 0 else 2048,
+                    "temperature": round(params.get("temperature", 0.8), 4),
+                    "top_k": int(params.get("top_k", 40)),
+                    "top_p": round(params.get("top_p", 0.95), 4),
+                    "min_p": round(params.get("min_p", 0.05), 4),
+                    "repeat_penalty": round(params.get("repeat_penalty", 1.0), 4),
+                    "max_tokens": int(params.get("max_tokens", -1)) if params.get("max_tokens", -1) > 0 else 2048,
                 }
                 
                 print(f"[Prompt Generator] Fetched model defaults: {_model_default_params}")
@@ -751,41 +751,41 @@ class PromptGenerator:
 
         # Apply parameters based on use_model_default_sampling setting
         if use_model_default_sampling:
-            # Fetch and use model's default parameters
+            # Fetch and use model's default SAMPLING parameters (not max_tokens)
             model_defaults = self.get_model_defaults()
             if model_defaults:
-                print(f"[Prompt Generator] Applying model defaults: {model_defaults}")
-                payload["temperature"] = model_defaults.get("temperature", 0.8)
-                payload["top_k"] = model_defaults.get("top_k", 40)
-                payload["top_p"] = model_defaults.get("top_p", 0.95)
-                payload["min_p"] = model_defaults.get("min_p", 0.05)
-                payload["repeat_penalty"] = model_defaults.get("repeat_penalty", 1.0)
-                payload["max_tokens"] = model_defaults.get("max_tokens", 2048)
+                print(f"[Prompt Generator] Applying model default sampling: temp={model_defaults.get('temperature')}, top_k={model_defaults.get('top_k')}, top_p={model_defaults.get('top_p')}, min_p={model_defaults.get('min_p')}, repeat_penalty={model_defaults.get('repeat_penalty')}")
+                payload["temperature"] = round(float(model_defaults.get("temperature", 0.8)), 4)
+                payload["top_k"] = int(model_defaults.get("top_k", 40))
+                payload["top_p"] = round(float(model_defaults.get("top_p", 0.95)), 4)
+                payload["min_p"] = round(float(model_defaults.get("min_p", 0.05)), 4)
+                payload["repeat_penalty"] = round(float(model_defaults.get("repeat_penalty", 1.0)), 4)
             else:
-                print("[Prompt Generator] Warning: Could not fetch model defaults, using fallback values")
+                print("[Prompt Generator] Warning: Could not fetch model defaults, using fallback sampling values")
                 payload["temperature"] = 0.8
                 payload["top_k"] = 40
                 payload["top_p"] = 0.95
                 payload["min_p"] = 0.05
                 payload["repeat_penalty"] = 1.0
-                payload["max_tokens"] = 2048
+            
+            # max_tokens always from options or default (not a sampling param)
+            payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192
         else:
             # Use custom parameters from options or sensible defaults
-            payload["max_tokens"] = 2048  # Default max_tokens
-            
             if options:
-                if "max_tokens" in options:
-                    payload["max_tokens"] = options["max_tokens"]
                 if "temperature" in options:
-                    payload["temperature"] = options["temperature"]
+                    payload["temperature"] = round(float(options["temperature"]), 4)
                 if "top_p" in options:
-                    payload["top_p"] = options["top_p"]
+                    payload["top_p"] = round(float(options["top_p"]), 4)
                 if "top_k" in options:
-                    payload["top_k"] = options["top_k"]
+                    payload["top_k"] = int(options["top_k"])
                 if "min_p" in options:
-                    payload["min_p"] = options["min_p"]
+                    payload["min_p"] = round(float(options["min_p"]), 4)
                 if "repeat_penalty" in options:
-                    payload["repeat_penalty"] = options["repeat_penalty"]
+                    payload["repeat_penalty"] = round(float(options["repeat_penalty"]), 4)
+            
+            # max_tokens always from options or default
+            payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192
 
         # Check cache
         if cache_key in self._prompt_cache and _current_model == model_to_use:
