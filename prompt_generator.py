@@ -308,9 +308,9 @@ def parse_gpu_config(gpu_config_str, total_layers):
             
             if fraction > 1.0:
                 # Assume it's a layer count, not a fraction
-                layer_count = int(fraction)
+                layer_count = round(fraction)
             else:
-                layer_count = int(total_layers * fraction)
+                layer_count = round(total_layers * fraction)
             
             gpu_specs.append((device_idx, layer_count))
             total_fraction += fraction if fraction <= 1.0 else (fraction / total_layers)
