@@ -35,8 +35,8 @@ class PromptGenOptions:
                     "tooltip": "Enable thinking/reasoning mode (model thinks before answering)"
                 }),
                 "context_size": ("INT", {
-                    "default": 8192,
-                    "min": 2048,
+                    "default": 4096,
+                    "min": 256,
                     "max": 131072,
                     "step": 1,
                     "tooltip": "Context window size (total tokens for input + output). Higher values use more VRAM."
