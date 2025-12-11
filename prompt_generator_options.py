@@ -35,10 +35,10 @@ class PromptGenOptions:
                     "tooltip": "Enable thinking/reasoning mode (model thinks before answering)"
                 }),
                 "max_tokens": ("INT", {
-                    "default": 2048,
-                    "min": 64,
+                    "default": 8192,
+                    "min": 1,
                     "max": 32768,
-                    "step": 64,
+                    "step": 1,
                     "tooltip": "Maximum tokens to generate"
                 }),
                 "system_prompt": ("STRING", {
