@@ -1,131 +1,125 @@
-from .model_manager import get_all_models, is_model_local, download_model
-import time
-
-# Global timestamp to track when models were last updated
-_last_model_update = time.time()
-
-def trigger_model_list_refresh():
-    """Call this after downloading a model to trigger UI refresh"""
-    global _last_model_update
-    _last_model_update = time.time()
+# prompt_generator_options.py
 
 class PromptGenOptions:
-    """Node that provides optional configuration for llama.cpp servers"""
+    """Options node for Prompt Generator"""
 
     @classmethod
     def INPUT_TYPES(cls):
-        available_models = get_all_models()
-
-        # If no models found, show a placeholder
-        if not available_models:
-            available_models = ["No models found - check HuggingFace"]
+        from .model_manager import get_local_models, get_huggingface_models
+        
+        local_models = get_local_models()
+        hf_models = get_huggingface_models()
+        
+        # Combine: local models first, then downloadable ones marked with ⬇
+        all_models = list(local_models)
+        for m in hf_models:
+            if m not in local_models:
+                all_models.append(f"⬇ {m}")
+        
+        if not all_models:
+            all_models = ["No models available"]
 
         return {
-            "optional": {
-                "model": (available_models, {
-                    "default": available_models[0] if available_models else "",
-                    "tooltip": "Select model to use (local models listed first, then HuggingFace models)"
+            "required": {
+                "model": (all_models, {
+                    "default": all_models[0] if all_models else "No models available",
+                    "tooltip": "Select model to use. Models with ⬇ will be downloaded automatically."
+                }),
+                "gpu_layers": ("STRING", {
+                    "default": "",
+                    "placeholder": "gpu0:0.7, gpu0:0.5,gpu1:0.4",
+                    "tooltip": "GPU layer distribution. Examples:\n• empty -> All layers go to the first GPU (default)\n• gpu0:0.7 -> 70% to GPU:0, 30% to CPU\n• gpu0:0.5, gpu1:0.4 -> 50% GPU:0, 40% GPU:1, 10% CPU"
+                }),
+                "enable_thinking": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Enable thinking/reasoning mode (model thinks before answering)"
+                }),
+                "max_tokens": ("INT", {
+                    "default": 2048,
+                    "min": 64,
+                    "max": 32768,
+                    "step": 64,
+                    "tooltip": "Maximum tokens to generate"
                 }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
-                    "placeholder": "Replace LLM Instructions...",
-                    "tooltip": "Custom LLM Instructions (leave empty to use default)"
+                    "placeholder": "Custom system prompt (leave empty for default)",
+                    "tooltip": "Override the default system prompt"
                 }),
-                "max_tokens": ("INT", {
-                    "default": 8192,
-                    "min": 1,
-                    "max": 32768,
-                    "step": 1,
-                    "tooltip": "Maximum number of tokens the model can generate in its response (thinking included)"
+                "use_model_default_sampling": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Use the model's default sampling parameters (overrides temperature, top_p, etc)"
                 }),
                 "temperature": ("FLOAT", {
                     "default": 0.8,
                     "min": 0.0,
                     "max": 2.0,
-                    "step": 0.01,
-                    "tooltip": "Controls randomness (0.0 = deterministic, 2.0 = very random)"
-                }),
-                "top_k": ("INT", {
-                    "default": 40,
-                    "min": 0,
-                    "max": 100,
-                    "step": 1,
-                    "tooltip": "Sample from top K most likely tokens (0 = disabled)"
+                    "step": 0.05,
+                    "tooltip": "Temperature for generation (higher = more creative, lower = more focused)"
                 }),
                 "top_p": ("FLOAT", {
                     "default": 0.95,
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.01,
-                    "tooltip": "Nucleus sampling: consider tokens with top_p probability mass"
+                    "tooltip": "Top-p (nucleus) sampling"
+                }),
+                "top_k": ("INT", {
+                    "default": 40,
+                    "min": 0,
+                    "max": 200,
+                    "step": 1,
+                    "tooltip": "Top-k sampling (0 = disabled)"
                 }),
                 "min_p": ("FLOAT", {
                     "default": 0.05,
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.01,
-                    "tooltip": "Minimum probability threshold relative to top token"
+                    "tooltip": "Min-p sampling threshold"
                 }),
                 "repeat_penalty": ("FLOAT", {
                     "default": 1.0,
-                    "min": 1.0,
+                    "min": 0.0,
                     "max": 2.0,
-                    "step": 0.01,
-                    "tooltip": "Penalty for repeating tokens (1.0 = no penalty)"
+                    "step": 0.05,
+                    "tooltip": "Repetition penalty (1.0 = no penalty, higher = less repetition)"
                 }),
-            }
+            },
+            "optional": {}
         }
+
 
     CATEGORY = "Prompt Manager"
     RETURN_TYPES = ("OPTIONS",)
     RETURN_NAMES = ("options",)
     FUNCTION = "create_options"
 
-    @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        """Force refresh when models are updated"""
-        return _last_model_update
-
-    def create_options(self, model: str = None,
-                       system_prompt: str = None, max_tokens: int = None,
-                       temperature: float = None, top_k: int = None, 
-                       top_p: float = None, min_p: float = None,
-                       repeat_penalty: float = None) -> dict:
-        """Create options dictionary with model and LLM parameters"""
-
-        options = {}
-
-        # Handle model selection and download if needed
-        if model and model != "No models found - check HuggingFace":
-            # Re-check if model is local (in case it was just downloaded but UI not refreshed)
-            if not is_model_local(model):
-                print(f"[Prompt Generator Options] Model not found locally, downloading: {model}")
-                downloaded_path = download_model(model)
-                if downloaded_path:
-                    trigger_model_list_refresh()
-                    options["model"] = model
-                else:
-                    print(f"[Prompt Generator Options] Failed to download model: {model}")
-            else:
-                options["model"] = model
-
-        # Only include LLM parameters that are provided
-        if system_prompt and system_prompt.strip():
+    def create_options(self, model, gpu_layers, enable_thinking, max_tokens, use_model_default_sampling,
+                       temperature, top_p, top_k, min_p, repeat_penalty, 
+                       system_prompt=""):
+        
+        # Handle downloadable models (remove ⬇ prefix)
+        if model.startswith("⬇ "):
+            model = model[2:]
+        
+        options = {
+            "model": model,
+            "gpu_config": gpu_layers.strip() if gpu_layers.strip() else "auto",
+            "enable_thinking": enable_thinking,
+            "max_tokens": max_tokens,
+            "use_model_default_sampling": use_model_default_sampling,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "repeat_penalty": repeat_penalty,
+        }
+        
+        if system_prompt.strip():
             options["system_prompt"] = system_prompt
-        if max_tokens is not None:
-            options["max_tokens"] = max_tokens
-        if temperature is not None:
-            options["temperature"] = temperature
-        if top_p is not None:
-            options["top_p"] = top_p
-        if top_k is not None:
-            options["top_k"] = top_k
-        if min_p is not None:
-            options["min_p"] = min_p
-        if repeat_penalty is not None:
-            options["repeat_penalty"] = repeat_penalty
-
+        
         return (options,)
 
 
