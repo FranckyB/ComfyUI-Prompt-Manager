@@ -17,6 +17,7 @@ import comfy.model_management
 _server_process = None
 _current_model = None
 _current_gpu_config = None  # Track GPU configuration
+_current_context_size = None  # Track context size
 _model_default_params = None  # Cache for model default parameters
 _model_layer_cache = {}  # Cache for model layer counts
 
@@ -146,7 +147,7 @@ def setup_console_handler():
 
 def cleanup_server():
     """Cleanup function to stop server on exit"""
-    global _server_process, _current_model, _current_gpu_config, _model_default_params
+    global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params
     
     if _server_process:
         try:
@@ -164,6 +165,7 @@ def cleanup_server():
             _server_process = None
             _current_model = None
             _current_gpu_config = None
+            _current_context_size = None
             _model_default_params = None
     
     # Also kill any orphaned llama-server processes
@@ -356,8 +358,8 @@ def build_gpu_args(gpu_specs, total_layers):
         
         ts_str = ",".join(str(v) for v in split_values)
         
-        # No --split-mode needed, llama.cpp handles it automatically
         return ["-ngl", ngl_value, "--tensor-split", ts_str]
+
 
 class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
@@ -366,7 +368,7 @@ class PromptGenerator:
     SERVER_URL = "http://localhost:8080"
     SERVER_PORT = 8080
 
-    DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". Only output the final modified prompt, and do not output anything else.  If no text is needed, don't mention it."""
+    DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". Only output the final modified prompt, and do not output anything else. If no text is needed, don't mention it."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -459,22 +461,23 @@ class PromptGenerator:
         return None
 
     @staticmethod
-    def start_server(model_name, gpu_config=None):
-        """Start llama.cpp server with specified model and GPU configuration"""
-        global _server_process, _current_model, _current_gpu_config, _model_default_params
+    def start_server(model_name, gpu_config=None, context_size=32768):
+        """Start llama.cpp server with specified model, GPU configuration, and context size"""
+        global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params
 
         # Kill any existing llama-server processes first
         PromptGenerator.kill_all_llama_servers()
 
-        # If server is already running with the same model and GPU config, don't restart
+        # If server is already running with the same model, GPU config, and context size, don't restart
         if (_server_process and 
             _current_model == model_name and 
             _current_gpu_config == gpu_config and
+            _current_context_size == context_size and
             PromptGenerator.is_server_alive()):
             print(f"[Prompt Generator] Server already running with model: {model_name}")
             return (True, None)
 
-        # Stop existing server if running different model or GPU config
+        # Stop existing server if running different model, GPU config, or context size
         if _server_process:
             PromptGenerator.stop_server()
 
@@ -505,19 +508,21 @@ class PromptGenerator:
 
         try:
             print(f"[Prompt Generator] Starting llama.cpp server with model: {model_name}")
+            print(f"[Prompt Generator] Context size: {context_size}")
 
             if os.name == 'nt':
                 server_cmd = "llama-server.exe"
             else:
                 server_cmd = "llama-server"
 
-            # Build base command
+            # Build base command with context size
             cmd = [
                 server_cmd, 
                 "-m", model_path, 
                 "--port", str(PromptGenerator.SERVER_PORT),
                 "--no-warmup",
-                "--reasoning-format", "deepseek"
+                "--reasoning-format", "deepseek",
+                "-c", str(context_size)
             ]
             
             # Handle GPU configuration
@@ -557,6 +562,7 @@ class PromptGenerator:
             assign_process_to_job(_server_process)
             _current_model = model_name
             _current_gpu_config = gpu_config
+            _current_context_size = context_size
 
             print("[Prompt Generator] Waiting for server to be ready...")
             
@@ -583,6 +589,7 @@ class PromptGenerator:
                     _server_process = None
                     _current_model = None
                     _current_gpu_config = None
+                    _current_context_size = None
                     return (False, error_msg + (f"\n\nServer output:\n{output[:1000]}" if output else ""))
                 
                 if (i + 1) % 10 == 0:
@@ -622,7 +629,7 @@ class PromptGenerator:
     @staticmethod
     def stop_server():
         """Stop the llama.cpp server"""
-        global _server_process, _current_model, _current_gpu_config, _model_default_params
+        global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params
 
         if _server_process:
             try:
@@ -639,6 +646,7 @@ class PromptGenerator:
                 _server_process = None
                 _current_model = None
                 _current_gpu_config = None
+                _current_context_size = None
                 _model_default_params = None
 
         PromptGenerator.kill_all_llama_servers()
@@ -674,7 +682,7 @@ class PromptGenerator:
     def convert_prompt(self, prompt: str, seed: int, stop_server_after=False, 
                     show_everything_in_console=False, options=None) -> str:
         """Convert prompt using llama.cpp server, with caching for repeated requests."""
-        global _current_model, _current_gpu_config
+        global _current_model, _current_gpu_config, _current_context_size
 
         if not prompt.strip():
             return ("",)
@@ -684,6 +692,7 @@ class PromptGenerator:
         enable_thinking = True  # Default to thinking ON
         use_model_default_sampling = False  # Default to custom parameters
         gpu_config = None  # GPU layer distribution config
+        context_size = 32768  # Default context size
         
         if options:
             if "model" in options and is_model_local(options["model"]):
@@ -694,6 +703,8 @@ class PromptGenerator:
                 use_model_default_sampling = options["use_model_default_sampling"]
             if "gpu_config" in options:
                 gpu_config = options["gpu_config"]
+            if "context_size" in options:
+                context_size = int(options["context_size"])
         
         if not model_to_use:
             local_models = get_local_models()
@@ -712,18 +723,21 @@ class PromptGenerator:
         options_tuple = tuple(sorted(options.items())) if options else ()
         cache_key = (prompt, seed, model_to_use, options_tuple)
 
-        # Only restart server if model or GPU config changed
+        # Only restart server if model, GPU config, or context size changed
         if (_current_model != model_to_use or 
             _current_gpu_config != gpu_config or 
+            _current_context_size != context_size or
             not self.is_server_alive()):
             if _current_model and _current_model != model_to_use:
                 print(f"[Prompt Generator] Model changed: {_current_model} → {model_to_use}")
             elif _current_gpu_config != gpu_config:
                 print(f"[Prompt Generator] GPU config changed: {_current_gpu_config} → {gpu_config}")
+            elif _current_context_size != context_size:
+                print(f"[Prompt Generator] Context size changed: {_current_context_size} → {context_size}")
             else:
                 print(f"[Prompt Generator] Starting server with model: {model_to_use}")
             self.stop_server()
-            success, error_msg = self.start_server(model_to_use, gpu_config)
+            success, error_msg = self.start_server(model_to_use, gpu_config, context_size)
             if not success:
                 return (error_msg,)
         else:
