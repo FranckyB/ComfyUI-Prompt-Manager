@@ -1069,9 +1069,6 @@ class PromptGenerator:
                 if images and image_tokens > 0:
                     image_label = "image" if len(images) == 1 else "images"
                     print(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label})")
-                    if len(images) > 1:
-                        avg_per_image = image_tokens / len(images)
-                        print(f"                      (avg {avg_per_image:.0f} tokens per image)")
                 print(f" -----------------------------")
                 print(f" THINKING:      {think_tokens:>5} tokens")
                 print(f" FINAL ANSWER:  {ans_tokens:>5} tokens")
