@@ -21,6 +21,53 @@ QWEN_MODELS = {
     }
 }
 
+def get_matching_mmproj(model_name):
+    """
+    Automatically find matching mmproj file for a given model.
+    Extracts the base model name and searches for corresponding mmproj file.
+    
+    Example: "Qwen3-VL-4B-Thinking-Q8_0.gguf" -> "Qwen3-VL-4B-Thinking-mmproj-F16.gguf"
+    """
+    if not model_name:
+        return None
+    
+    # Remove .gguf extension
+    base_name = model_name.replace('.gguf', '')
+    
+    # Remove quantization suffix (e.g., -Q8_0, -Q4_K_M, etc.)
+    # Common patterns: -Q8_0, -Q4_K_M, -Q5_K_S, etc.
+    import re
+    base_name = re.sub(r'-Q\d+_[KM0-9_]+$', '', base_name)
+    base_name = re.sub(r'-[Ff]\d+$', '', base_name)  # Remove -F16, -f32, etc.
+    
+    # Get all mmproj files
+    mmproj_files = get_mmproj_models()
+    
+    # Search for matching mmproj file
+    for mmproj_file in mmproj_files:
+        if base_name.lower() in mmproj_file.lower() and 'mmproj' in mmproj_file.lower():
+            print(f"[Model Manager] Auto-detected mmproj: {mmproj_file} for model: {model_name}")
+            return mmproj_file
+    
+    return None
+
+def get_mmproj_models():
+    """Get list of mmproj files in the models folder"""
+    models_dir = get_models_directory()
+    mmproj_files = []
+    
+    if os.path.exists(models_dir):
+        for file in os.listdir(models_dir):
+            if file.endswith('.gguf') and 'mmproj' in file.lower():
+                mmproj_files.append(file)
+    
+    return sorted(mmproj_files)
+
+
+def get_mmproj_path(mmproj_name):
+    """Get full path to an mmproj file"""
+    return os.path.join(get_models_directory(), mmproj_name)
+
 def get_models_directory():
     """Get the path to the models directory (ComfyUI/models/gguf)"""
     # Get the custom_nodes directory (parent of this extension)
