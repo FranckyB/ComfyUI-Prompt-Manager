@@ -5,10 +5,14 @@ class PromptGenOptions:
 
     @classmethod
     def INPUT_TYPES(cls):
-        from .model_manager import get_local_models, get_huggingface_models
+        from .model_manager import get_local_models, get_huggingface_models, get_mmproj_models
         
         local_models = get_local_models()
         hf_models = get_huggingface_models()
+        mmproj_models = get_mmproj_models()
+
+        # Filter out mmproj files from local models
+        local_models = [m for m in local_models if 'mmproj' not in m.lower()]
         
         # Combine: local models first, then downloadable ones marked with ⬇
         all_models = list(local_models)
@@ -18,6 +22,9 @@ class PromptGenOptions:
         
         if not all_models:
             all_models = ["No models available"]
+        
+        # mmproj options: None first, then available mmproj files
+        mmproj_options = ["None"] + list(mmproj_models)
 
         return {
             "required": {
@@ -94,7 +101,23 @@ class PromptGenOptions:
                     "tooltip": "Repetition penalty (1.0 = no penalty, higher = less repetition)"
                 }),
             },
-            "optional": {}
+            "optional": {
+                "image_1": ("IMAGE", {
+                    "tooltip": "Optional image input for VLM models (image 1 of 5). Requires mmproj file."
+                }),
+                "image_2": ("IMAGE", {
+                    "tooltip": "Optional image input for VLM models (image 2 of 5). Requires mmproj file."
+                }),
+                "image_3": ("IMAGE", {
+                    "tooltip": "Optional image input for VLM models (image 3 of 5). Requires mmproj file."
+                }),
+                "image_4": ("IMAGE", {
+                    "tooltip": "Optional image input for VLM models (image 4 of 5). Requires mmproj file."
+                }),
+                "image_5": ("IMAGE", {
+                    "tooltip": "Optional image input for VLM models (image 5 of 5). Requires mmproj file."
+                }),
+            }
         }
 
 
@@ -104,15 +127,22 @@ class PromptGenOptions:
     FUNCTION = "create_options"
 
     def create_options(self, model, gpu_layers, enable_thinking, context_size, max_tokens, 
-                       use_model_default_sampling, temperature, top_p, top_k, min_p, 
-                       repeat_penalty, system_prompt=""):
+                    use_model_default_sampling, temperature, top_p, top_k, min_p, 
+                    repeat_penalty, system_prompt="", 
+                    image_1=None, image_2=None, image_3=None, image_4=None, image_5=None):
+        
+        from .model_manager import get_matching_mmproj
         
         # Handle downloadable models (remove ⬇ prefix)
         if model.startswith("⬇ "):
             model = model[2:]
         
+        # Auto-detect mmproj file
+        mmproj = get_matching_mmproj(model)
+        
         options = {
             "model": model,
+            "mmproj": mmproj,  # Automatically detected
             "gpu_config": gpu_layers.strip() if gpu_layers.strip() else "auto",
             "enable_thinking": enable_thinking,
             "context_size": context_size,
@@ -127,6 +157,20 @@ class PromptGenOptions:
         
         if system_prompt.strip():
             options["system_prompt"] = system_prompt
+        
+        # Collect images (filter out None values)
+        images = []
+        for img in [image_1, image_2, image_3, image_4, image_5]:
+            if img is not None:
+                images.append(img)
+        
+        if images:
+            options["images"] = images
+            if not mmproj:
+                print(f"[Prompt Generator Options] Warning: Images provided but no matching mmproj file found for model: {model}")
+        
+        if mmproj:
+            print(f"[Prompt Generator Options] Using mmproj: {mmproj}")
         
         return (options,)
 
