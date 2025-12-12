@@ -1073,8 +1073,8 @@ class PromptGenerator:
                 print(f" THINKING:      {think_tokens:>5} tokens")
                 print(f" FINAL ANSWER:  {ans_tokens:>5} tokens")
                 print(f" -----------------------------")
-                print(f" TOTAL INPUT:    {total_input:>5} tokens")
-                print(f" TOTAL OUTPUT:   {total_output:>5} tokens")
+                print(f" TOTAL INPUT:   {total_input:>5} tokens")
+                print(f" TOTAL OUTPUT:  {total_output:>5} tokens")
                 
                 print("="*60 + "\n")
             if not full_response:
