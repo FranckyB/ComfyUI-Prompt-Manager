@@ -26,19 +26,31 @@ def get_matching_mmproj(model_name):
     Automatically find matching mmproj file for a given model.
     Extracts the base model name and searches for corresponding mmproj file.
     
-    Example: "Qwen3-VL-4B-Thinking-Q8_0.gguf" -> "Qwen3-VL-4B-Thinking-mmproj-F16.gguf"
+    Examples: 
+        "Qwen3-VL-4B-Thinking-Q8_0.gguf" -> "Qwen3-VL-4B-Thinking-mmproj-F16.gguf"
+        "Qwen3-VL-4B-Thinking-UD-Q8_K_XL.gguf" -> "Qwen3-VL-4B-Thinking-mmproj-BF16.gguf"
     """
     if not model_name:
         return None
     
+    import re
+    
     # Remove .gguf extension
     base_name = model_name.replace('.gguf', '')
     
-    # Remove quantization suffix (e.g., -Q8_0, -Q4_K_M, etc.)
-    # Common patterns: -Q8_0, -Q4_K_M, -Q5_K_S, etc.
-    import re
-    base_name = re.sub(r'-Q\d+_[KM0-9_]+$', '', base_name)
-    base_name = re.sub(r'-[Ff]\d+$', '', base_name)  # Remove -F16, -f32, etc.
+    # Remove quantization suffixes (comprehensive pattern)
+    # Handles: Q8_0, Q4_K_M, Q4_K_S, Q8_K_XL, IQ4_XS, IQ3_XXS, UD-Q8_K_XL, etc.
+    # 
+    # Pattern breakdown:
+    # (-UD)?     - Optional UD (Unidiffuser) prefix  
+    # -[QI]      - Dash followed by Q or I
+    # Q?         - Optional second Q (for IQ patterns like IQ4_XS)
+    # \d+        - One or more digits
+    # _\w+       - Underscore followed by word chars (handles K_M, K_XL, _0, _XS, XXS, etc.)
+    base_name = re.sub(r'(-UD)?-[QI]Q?\d+_\w+$', '', base_name, flags=re.IGNORECASE)
+    
+    # Remove float format suffixes: -F16, -BF16, -F32, etc.
+    base_name = re.sub(r'-B?F\d+$', '', base_name, flags=re.IGNORECASE)
     
     # Get all mmproj files
     mmproj_files = get_mmproj_models()
