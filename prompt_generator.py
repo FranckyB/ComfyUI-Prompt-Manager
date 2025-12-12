@@ -1064,18 +1064,20 @@ class PromptGenerator:
                     think_tokens = 0
                     ans_tokens = 0
                 
-                print(f" SYSTEM PROMPT: {sys_tokens:>5} tokens (est.)")
-                print(f" USER PROMPT:   {usr_tokens:>5} tokens (est.)")
+                print(f" SYSTEM PROMPT: {sys_tokens:>5} tokens")
+                print(f" USER PROMPT:   {usr_tokens:>5} tokens")
                 if images and image_tokens > 0:
-                    print(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} image(s))")
-                    avg_per_image = image_tokens / len(images)
-                    print(f" (avg {avg_per_image:.0f} tokens per image)")
+                    image_label = "image" if len(images) == 1 else "images"
+                    print(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label})")
+                    if len(images) > 1:
+                        avg_per_image = image_tokens / len(images)
+                        print(f"                      (avg {avg_per_image:.0f} tokens per image)")
                 print(f" -----------------------------")
-                print(f" THINKING:      {think_tokens:>5} tokens (est.)")
-                print(f" FINAL ANSWER:  {ans_tokens:>5} tokens (est.)")
+                print(f" THINKING:      {think_tokens:>5} tokens")
+                print(f" FINAL ANSWER:  {ans_tokens:>5} tokens")
                 print(f" -----------------------------")
-                print(f" TOTAL INPUT:    {total_input:>5} tokens (actual)")
-                print(f" TOTAL OUTPUT:   {total_output:>5} tokens (actual)")
+                print(f" TOTAL INPUT:    {total_input:>5} tokens")
+                print(f" TOTAL OUTPUT:   {total_output:>5} tokens")
                 
                 print("="*60 + "\n")
             if not full_response:
