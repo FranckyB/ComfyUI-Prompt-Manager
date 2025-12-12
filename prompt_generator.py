@@ -8,6 +8,10 @@ import json
 import signal
 import sys
 import re
+import base64
+from io import BytesIO
+from PIL import Image
+import numpy as np
 from .model_manager import get_local_models, get_model_path, is_model_local, download_model
 
 # Import ComfyUI's model management for interrupt handling
@@ -18,6 +22,7 @@ _server_process = None
 _current_model = None
 _current_gpu_config = None  # Track GPU configuration
 _current_context_size = None  # Track context size
+_current_mmproj = None  # Track mmproj file
 _model_default_params = None  # Cache for model default parameters
 _model_layer_cache = {}  # Cache for model layer counts
 
@@ -147,7 +152,7 @@ def setup_console_handler():
 
 def cleanup_server():
     """Cleanup function to stop server on exit"""
-    global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params
+    global _server_process, _current_model, _current_gpu_config, _current_context_size, _current_mmproj, _model_default_params
     
     if _server_process:
         try:
@@ -166,6 +171,7 @@ def cleanup_server():
             _current_model = None
             _current_gpu_config = None
             _current_context_size = None
+            _current_mmproj = None
             _model_default_params = None
     
     # Also kill any orphaned llama-server processes
@@ -359,6 +365,34 @@ def build_gpu_args(gpu_specs, total_layers):
         ts_str = ",".join(str(v) for v in split_values)
         
         return ["-ngl", ngl_value, "--tensor-split", ts_str]
+    
+def tensor_to_base64(image_tensor):
+    """
+    Convert a ComfyUI image tensor to base64-encoded PNG string.
+    
+    ComfyUI images are tensors with shape [B, H, W, C] in float32 format (0-1 range).
+    """
+    try:
+        # Handle batch dimension - take first image if batched
+        if len(image_tensor.shape) == 4:
+            image_tensor = image_tensor[0]
+        
+        # Convert from float32 (0-1) to uint8 (0-255)
+        image_np = (image_tensor.cpu().numpy() * 255).astype(np.uint8)
+        
+        # Create PIL Image
+        pil_image = Image.fromarray(image_np)
+        
+        # Convert to base64 PNG
+        buffer = BytesIO()
+        pil_image.save(buffer, format="PNG")
+        buffer.seek(0)
+        base64_str = base64.b64encode(buffer.read()).decode('utf-8')
+        
+        return base64_str
+    except Exception as e:
+        print(f"[Prompt Generator] Error converting image to base64: {e}")
+        return None
 
 
 class PromptGenerator:
@@ -461,23 +495,24 @@ class PromptGenerator:
         return None
 
     @staticmethod
-    def start_server(model_name, gpu_config=None, context_size=32768):
-        """Start llama.cpp server with specified model, GPU configuration, and context size"""
-        global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params
+    def start_server(model_name, gpu_config=None, context_size=32768, mmproj=None):
+        """Start llama.cpp server with specified model, GPU configuration, context size, and optional mmproj"""
+        global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params, _current_mmproj
 
         # Kill any existing llama-server processes first
         PromptGenerator.kill_all_llama_servers()
 
-        # If server is already running with the same model, GPU config, and context size, don't restart
+        # If server is already running with the same model, GPU config, context size, and mmproj, don't restart
         if (_server_process and 
             _current_model == model_name and 
             _current_gpu_config == gpu_config and
             _current_context_size == context_size and
+            _current_mmproj == mmproj and
             PromptGenerator.is_server_alive()):
             print(f"[Prompt Generator] Server already running with model: {model_name}")
             return (True, None)
 
-        # Stop existing server if running different model, GPU config, or context size
+        # Stop existing server if running different model, GPU config, context size, or mmproj
         if _server_process:
             PromptGenerator.stop_server()
 
@@ -506,6 +541,17 @@ class PromptGenerator:
             print(f"[Prompt Generator] {error_msg}")
             return (False, error_msg)
 
+        # Check mmproj if specified
+        mmproj_path = None
+        if mmproj:
+            from .model_manager import get_mmproj_path
+            mmproj_path = get_mmproj_path(mmproj)
+            if not os.path.exists(mmproj_path):
+                error_msg = f"Error: mmproj file not found: {mmproj_path}"
+                print(f"[Prompt Generator] {error_msg}")
+                return (False, error_msg)
+            print(f"[Prompt Generator] Using mmproj: {mmproj}")
+
         try:
             print(f"[Prompt Generator] Starting llama.cpp server with model: {model_name}")
             print(f"[Prompt Generator] Context size: {context_size}")
@@ -524,6 +570,10 @@ class PromptGenerator:
                 "--reasoning-format", "deepseek",
                 "-c", str(context_size)
             ]
+            
+            # Add mmproj if specified
+            if mmproj_path:
+                cmd.extend(["--mmproj", mmproj_path])
             
             # Handle GPU configuration
             if gpu_config and gpu_config.lower() not in ('auto', 'all', ''):
@@ -563,6 +613,7 @@ class PromptGenerator:
             _current_model = model_name
             _current_gpu_config = gpu_config
             _current_context_size = context_size
+            _current_mmproj = mmproj
 
             print("[Prompt Generator] Waiting for server to be ready...")
             
@@ -590,6 +641,7 @@ class PromptGenerator:
                     _current_model = None
                     _current_gpu_config = None
                     _current_context_size = None
+                    _current_mmproj = None
                     return (False, error_msg + (f"\n\nServer output:\n{output[:1000]}" if output else ""))
                 
                 if (i + 1) % 10 == 0:
@@ -629,7 +681,7 @@ class PromptGenerator:
     @staticmethod
     def stop_server():
         """Stop the llama.cpp server"""
-        global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params
+        global _server_process, _current_model, _current_gpu_config, _current_context_size, _current_mmproj, _model_default_params
 
         if _server_process:
             try:
@@ -647,6 +699,7 @@ class PromptGenerator:
                 _current_model = None
                 _current_gpu_config = None
                 _current_context_size = None
+                _current_mmproj = None
                 _model_default_params = None
 
         PromptGenerator.kill_all_llama_servers()
@@ -671,8 +724,25 @@ class PromptGenerator:
             for msg in payload["messages"]:
                 role = msg.get("role", "unknown").upper()
                 content = msg.get("content", "")
+                
                 print(f"\n--- <|{role}|> STARTS ---")
-                print(content)
+                
+                # Handle multi-part content (for VLM with images)
+                if isinstance(content, list):
+                    for idx, part in enumerate(content):
+                        if isinstance(part, dict):
+                            if part.get("type") == "image_url":
+                                print(f"[Image {idx + 1}: base64 data omitted for brevity]")
+                            elif part.get("type") == "text":
+                                print(part.get("text", ""))
+                            else:
+                                print(f"[Unknown content type: {part.get('type')}]")
+                        else:
+                            print(part)
+                else:
+                    # Simple text content
+                    print(content)
+                
                 print(f"--- <|{role}|> ENDS ---")
         
         print("\n--- GENERATION PARAMS ---")
@@ -682,7 +752,7 @@ class PromptGenerator:
     def convert_prompt(self, prompt: str, seed: int, stop_server_after=False, 
                     show_everything_in_console=False, options=None) -> str:
         """Convert prompt using llama.cpp server, with caching for repeated requests."""
-        global _current_model, _current_gpu_config, _current_context_size
+        global _current_model, _current_gpu_config, _current_context_size, _current_mmproj
 
         if not prompt.strip():
             return ("",)
@@ -693,6 +763,8 @@ class PromptGenerator:
         use_model_default_sampling = False  # Default to custom parameters
         gpu_config = None  # GPU layer distribution config
         context_size = 32768  # Default context size
+        images = None  # Optional images for VLM
+        mmproj = None  # Multimodal projector for VLM
         
         if options:
             if "model" in options and is_model_local(options["model"]):
@@ -705,6 +777,10 @@ class PromptGenerator:
                 gpu_config = options["gpu_config"]
             if "context_size" in options:
                 context_size = int(options["context_size"])
+            if "images" in options:
+                images = options["images"]
+            if "mmproj" in options:
+                mmproj = options["mmproj"]
         
         if not model_to_use:
             local_models = get_local_models()
@@ -719,14 +795,23 @@ class PromptGenerator:
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
 
-        # Cache key includes thinking setting and use_model_default_sampling
+        # Cache key includes thinking setting, use_model_default_sampling, and image count
+        # Note: We include image count but not image content in cache key for practical reasons
+        image_count = len(images) if images else 0
         options_tuple = tuple(sorted(options.items())) if options else ()
-        cache_key = (prompt, seed, model_to_use, options_tuple)
+        cache_key = (prompt, seed, model_to_use, options_tuple, image_count)
 
-        # Only restart server if model, GPU config, or context size changed
+        # Check for images without mmproj
+        if images and not mmproj:
+            error_msg = f"Error: Images provided but no matching mmproj file found for model '{model_to_use}'. Please ensure a corresponding mmproj file (e.g., '{model_to_use.replace('.gguf', '')}-mmproj-*.gguf') exists in the models folder."
+            print(f"[Prompt Generator] {error_msg}")
+            return (error_msg,)
+
+        # Only restart server if model, GPU config, context size, or mmproj changed
         if (_current_model != model_to_use or 
             _current_gpu_config != gpu_config or 
             _current_context_size != context_size or
+            _current_mmproj != mmproj or
             not self.is_server_alive()):
             if _current_model and _current_model != model_to_use:
                 print(f"[Prompt Generator] Model changed: {_current_model} → {model_to_use}")
@@ -734,10 +819,12 @@ class PromptGenerator:
                 print(f"[Prompt Generator] GPU config changed: {_current_gpu_config} → {gpu_config}")
             elif _current_context_size != context_size:
                 print(f"[Prompt Generator] Context size changed: {_current_context_size} → {context_size}")
+            elif _current_mmproj != mmproj:
+                print(f"[Prompt Generator] mmproj changed: {_current_mmproj} → {mmproj}")
             else:
                 print(f"[Prompt Generator] Starting server with model: {model_to_use}")
             self.stop_server()
-            success, error_msg = self.start_server(model_to_use, gpu_config, context_size)
+            success, error_msg = self.start_server(model_to_use, gpu_config, context_size, mmproj)
             if not success:
                 return (error_msg,)
         else:
@@ -748,12 +835,44 @@ class PromptGenerator:
             print("[Prompt Generator] Thinking: ON (per-request)")
         else:
             print("[Prompt Generator] Thinking: OFF (per-request)")
+        
+        # Log image count
+        if images:
+            print(f"[Prompt Generator] Images attached: {len(images)}")
+
+        # Build user message content
+        # For VLM models with images, we use the multi-part content format
+        if images:
+            user_content = []
+            
+            # Add images first
+            for idx, img_tensor in enumerate(images):
+                base64_img = tensor_to_base64(img_tensor)
+                if base64_img:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{base64_img}"
+                        }
+                    })
+                    print(f"[Prompt Generator] Image {idx + 1} encoded successfully")
+                else:
+                    print(f"[Prompt Generator] Warning: Failed to encode image {idx + 1}")
+            
+            # Add text prompt
+            user_content.append({
+                "type": "text",
+                "text": prompt
+            })
+        else:
+            # Simple text-only content
+            user_content = prompt
 
         # Build payload with base settings
         payload = {
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": user_content}
             ],
             "stream": True,
             "stream_options": {"include_usage": True},
@@ -801,8 +920,8 @@ class PromptGenerator:
             # max_tokens always from options or default
             payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192
 
-        # Check cache
-        if cache_key in self._prompt_cache and _current_model == model_to_use:
+        # Check cache (skip cache if images are present since they change)
+        if not images and cache_key in self._prompt_cache and _current_model == model_to_use:
             print("[Prompt Generator] Returning cached prompt result.")
             
             if show_everything_in_console:
@@ -823,6 +942,8 @@ class PromptGenerator:
             
             if show_everything_in_console:
                 self._print_debug_header(payload, enable_thinking, use_model_default_sampling)
+                if images:
+                    print(f"\n📷 Images attached: {len(images)}")
                 print("\n--- <|REAL-TIME STREAM|> STARTS ---")
 
             response = requests.post(
@@ -899,16 +1020,38 @@ class PromptGenerator:
                 total_input = usage_stats.get('prompt_tokens', 0) if usage_stats else 0
                 total_output = usage_stats.get('completion_tokens', 0) if usage_stats else 0
 
-                sys_len = len(system_prompt)
-                usr_len = len(prompt)
-                total_in_len = sys_len + usr_len
+                # Estimate text tokens using ~4 characters per token (rough average for English)
+                CHARS_PER_TOKEN = 4
+                sys_tokens_est = len(system_prompt) // CHARS_PER_TOKEN
+                usr_tokens_est = len(prompt) // CHARS_PER_TOKEN
+                text_tokens_est = sys_tokens_est + usr_tokens_est
                 
-                if total_input > 0 and total_in_len > 0:
-                    sys_tokens = int(total_input * (sys_len / total_in_len))
-                    usr_tokens = total_input - sys_tokens
+                # Add some overhead for special tokens, formatting, etc.
+                text_tokens_with_overhead = int(text_tokens_est * 1.2)
+                
+                if images:
+                    # Image tokens = total input - estimated text tokens
+                    image_tokens = max(0, total_input - text_tokens_with_overhead)
+                    # Adjust text token estimates proportionally if needed
+                    if text_tokens_with_overhead > total_input:
+                        # No room for images, something's off - just report what we know
+                        sys_tokens = total_input // 2
+                        usr_tokens = total_input - sys_tokens
+                        image_tokens = 0
+                    else:
+                        sys_tokens = sys_tokens_est
+                        usr_tokens = usr_tokens_est
                 else:
-                    sys_tokens = 0
-                    usr_tokens = 0
+                    # No images - all input tokens are text
+                    image_tokens = 0
+                    # Distribute total_input proportionally based on character length
+                    total_chars = len(system_prompt) + len(prompt)
+                    if total_chars > 0:
+                        sys_tokens = int(total_input * len(system_prompt) / total_chars)
+                        usr_tokens = total_input - sys_tokens
+                    else:
+                        sys_tokens = 0
+                        usr_tokens = 0
 
                 think_len = len(thinking_content)
                 ans_len = len(full_response)
@@ -921,23 +1064,29 @@ class PromptGenerator:
                     think_tokens = 0
                     ans_tokens = 0
                 
-                print(f" SYSTEM PROMPT: {sys_tokens:>6} tokens")
-                print(f" USER PROMPT:   {usr_tokens:>6} tokens")
+                print(f" SYSTEM PROMPT: {sys_tokens:>5} tokens (est.)")
+                print(f" USER PROMPT:   {usr_tokens:>5} tokens (est.)")
+                if images and image_tokens > 0:
+                    print(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} image(s))")
+                    avg_per_image = image_tokens / len(images)
+                    print(f" (avg {avg_per_image:.0f} tokens per image)")
                 print(f" -----------------------------")
-                print(f" THINKING:      {think_tokens:>6} tokens")
-                print(f" FINAL ANSWER:  {ans_tokens:>6} tokens")
+                print(f" THINKING:      {think_tokens:>5} tokens (est.)")
+                print(f" FINAL ANSWER:  {ans_tokens:>5} tokens (est.)")
                 print(f" -----------------------------")
-                print(f" TOTAL INPUT:   {total_input:>6} tokens")
-                print(f" TOTAL OUTPUT:  {total_output:>6} tokens")
+                print(f" TOTAL INPUT:    {total_input:>5} tokens (actual)")
+                print(f" TOTAL OUTPUT:   {total_output:>5} tokens (actual)")
+                
                 print("="*60 + "\n")
-
             if not full_response:
                 print("[Prompt Generator] Warning: Empty response from server")
                 full_response = prompt
 
             print("[Prompt Generator] Successfully generated prompt")
 
-            self._prompt_cache[cache_key] = full_response
+            # Only cache if no images (images make caching impractical)
+            if not images:
+                self._prompt_cache[cache_key] = full_response
 
             if stop_server_after:
                 self.stop_server()
@@ -946,6 +1095,24 @@ class PromptGenerator:
 
         except comfy.model_management.InterruptProcessingException:
             raise
+        except requests.exceptions.HTTPError as e:
+            # Capture detailed error from server
+            error_body = ""
+            try:
+                error_body = e.response.text
+            except:
+                pass
+            
+            error_msg = f"Error: HTTP {e.response.status_code}"
+            if error_body:
+                error_msg += f"\nServer response: {error_body[:1000]}"
+            
+            print(f"[Prompt Generator] {error_msg}")
+            
+            if images and e.response.status_code == 500:
+                print(f"[Prompt Generator] Note: This may be a VLM context issue. Current context: {context_size}")
+            
+            return (error_msg,)
         except requests.exceptions.ConnectionError:
             error_msg = f"Error: Could not connect to server at {full_url}. Server may have crashed."
             print(f"[Prompt Generator] {error_msg}")
