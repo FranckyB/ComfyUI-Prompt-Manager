@@ -394,7 +394,6 @@ def tensor_to_base64(image_tensor):
         print(f"[Prompt Generator] Error converting image to base64: {e}")
         return None
 
-
 class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
@@ -441,6 +440,21 @@ class PromptGenerator:
     RETURN_NAMES = ("output",)
     FUNCTION = "convert_prompt"
 
+    def count_tokens(self, text):
+        """Get exact token count for text using server's tokenize endpoint"""
+        try:
+            response = requests.post(
+                f"{self.SERVER_URL}/tokenize",
+                json={"content": text},
+                timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return len(data.get("tokens", []))
+        except Exception as e:
+            print(f"[Prompt Generator] Warning: Could not tokenize: {e}")
+        return None
+
     @classmethod
     def IS_CHANGED(cls, seed, **kwargs):
         return seed
@@ -471,7 +485,6 @@ class PromptGenerator:
                     "top_p": round(params.get("top_p", 0.95), 4),
                     "min_p": round(params.get("min_p", 0.05), 4),
                     "repeat_penalty": round(params.get("repeat_penalty", 1.0), 4),
-                    "max_tokens": int(params.get("max_tokens", -1)) if params.get("max_tokens", -1) > 0 else 2048,
                 }
                 
                 print(f"[Prompt Generator] Fetched model defaults: {_model_default_params}")
@@ -720,6 +733,10 @@ class PromptGenerator:
         else:
             print(f"⚙️  PARAMETERS: Using custom/node settings")
         
+        print("\n--- GENERATION PARAMS ---")
+        params = {k: v for k, v in payload.items() if k != "messages"}
+        print(json.dumps(params, indent=2))
+        
         if "messages" in payload:
             for msg in payload["messages"]:
                 role = msg.get("role", "unknown").upper()
@@ -732,7 +749,7 @@ class PromptGenerator:
                     for idx, part in enumerate(content):
                         if isinstance(part, dict):
                             if part.get("type") == "image_url":
-                                print(f"[Image {idx + 1}: base64 data omitted for brevity]")
+                                print(f"[Image {idx + 1}]")
                             elif part.get("type") == "text":
                                 print(part.get("text", ""))
                             else:
@@ -744,10 +761,6 @@ class PromptGenerator:
                     print(content)
                 
                 print(f"--- <|{role}|> ENDS ---")
-        
-        print("\n--- GENERATION PARAMS ---")
-        params = {k: v for k, v in payload.items() if k != "messages"}
-        print(json.dumps(params, indent=2))
 
     def convert_prompt(self, prompt: str, seed: int, stop_server_after=False, 
                     show_everything_in_console=False, options=None) -> str:
@@ -759,12 +772,12 @@ class PromptGenerator:
 
         # === EXTRACT OPTIONS ===
         model_to_use = None
-        enable_thinking = True  # Default to thinking ON
-        use_model_default_sampling = False  # Default to custom parameters
-        gpu_config = None  # GPU layer distribution config
-        context_size = 32768  # Default context size
-        images = None  # Optional images for VLM
-        mmproj = None  # Multimodal projector for VLM
+        enable_thinking = True
+        use_model_default_sampling = False
+        gpu_config = None
+        context_size = 32768
+        images = None
+        mmproj = None
         
         if options:
             if "model" in options and is_model_local(options["model"]):
@@ -795,13 +808,10 @@ class PromptGenerator:
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
 
-        # Cache key includes thinking setting, use_model_default_sampling, and image count
-        # Note: We include image count but not image content in cache key for practical reasons
         image_count = len(images) if images else 0
         options_tuple = tuple(sorted(options.items())) if options else ()
         cache_key = (prompt, seed, model_to_use, options_tuple, image_count)
 
-        # Check for images without mmproj
         if images and not mmproj:
             error_msg = f"Error: Images provided but no matching mmproj file found for model '{model_to_use}'. Please ensure a corresponding mmproj file (e.g., '{model_to_use.replace('.gguf', '')}-mmproj-*.gguf') exists in the models folder."
             print(f"[Prompt Generator] {error_msg}")
@@ -829,23 +839,25 @@ class PromptGenerator:
                 return (error_msg,)
         else:
             print("[Prompt Generator] Using existing server instance")
+        
+        # === PRE-TOKENIZE for debug display (only if showing console output) ===
+        # Do this RIGHT AFTER server is confirmed alive, BEFORE building payload
+        cached_token_counts = None
+        if show_everything_in_console:
+            cached_token_counts = self._get_token_counts_parallel(system_prompt, prompt)
             
-        # Log thinking mode (no restart needed!)
+        # Log thinking mode
         if enable_thinking:
             print("[Prompt Generator] Thinking: ON (per-request)")
         else:
             print("[Prompt Generator] Thinking: OFF (per-request)")
         
-        # Log image count
         if images:
             print(f"[Prompt Generator] Images attached: {len(images)}")
 
         # Build user message content
-        # For VLM models with images, we use the multi-part content format
         if images:
             user_content = []
-            
-            # Add images first
             for idx, img_tensor in enumerate(images):
                 base64_img = tensor_to_base64(img_tensor)
                 if base64_img:
@@ -858,17 +870,13 @@ class PromptGenerator:
                     print(f"[Prompt Generator] Image {idx + 1} encoded successfully")
                 else:
                     print(f"[Prompt Generator] Warning: Failed to encode image {idx + 1}")
-            
-            # Add text prompt
             user_content.append({
                 "type": "text",
                 "text": prompt
             })
         else:
-            # Simple text-only content
             user_content = prompt
 
-        # Build payload with base settings
         payload = {
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -882,9 +890,7 @@ class PromptGenerator:
             }
         }
 
-        # Apply parameters based on use_model_default_sampling setting
         if use_model_default_sampling:
-            # Fetch and use model's default SAMPLING parameters (not max_tokens)
             model_defaults = self.get_model_defaults()
             if model_defaults:
                 print(f"[Prompt Generator] Applying model default sampling: temp={model_defaults.get('temperature')}, top_k={model_defaults.get('top_k')}, top_p={model_defaults.get('top_p')}, min_p={model_defaults.get('min_p')}, repeat_penalty={model_defaults.get('repeat_penalty')}")
@@ -900,11 +906,8 @@ class PromptGenerator:
                 payload["top_p"] = 0.95
                 payload["min_p"] = 0.05
                 payload["repeat_penalty"] = 1.0
-            
-            # max_tokens always from options or default (not a sampling param)
-            payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192
+            payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192  # ← Always from options
         else:
-            # Use custom parameters from options or sensible defaults
             if options:
                 if "temperature" in options:
                     payload["temperature"] = round(float(options["temperature"]), 4)
@@ -916,11 +919,8 @@ class PromptGenerator:
                     payload["min_p"] = round(float(options["min_p"]), 4)
                 if "repeat_penalty" in options:
                     payload["repeat_penalty"] = round(float(options["repeat_penalty"]), 4)
-            
-            # max_tokens always from options or default
             payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192
 
-        # Check cache (skip cache if images are present since they change)
         if not images and cache_key in self._prompt_cache and _current_model == model_to_use:
             print("[Prompt Generator] Returning cached prompt result.")
             
@@ -992,7 +992,6 @@ class PromptGenerator:
                                     if show_everything_in_console and not in_thinking:
                                         print(content, end='', flush=True)
                                 
-                                # Handle reasoning content (only present when thinking is ON)
                                 reasoning_delta = delta.get('reasoning_content', '')
                                 if reasoning_delta:
                                     thinking_content += reasoning_delta
@@ -1013,77 +1012,21 @@ class PromptGenerator:
             if show_everything_in_console:
                 print("\n--- <|REAL-TIME STREAM|> ENDS ---\n")
                 
-                print("="*60)
-                print(" [Prompt Generator] TOKEN USAGE STATISTICS")
-                print("="*60)
+                # Use pre-cached token counts (already fetched before generation)
+                self._print_token_stats(
+                    usage_stats, 
+                    cached_token_counts,
+                    thinking_content, 
+                    full_response, 
+                    images
+                )
 
-                total_input = usage_stats.get('prompt_tokens', 0) if usage_stats else 0
-                total_output = usage_stats.get('completion_tokens', 0) if usage_stats else 0
-
-                # Estimate text tokens using ~4 characters per token (rough average for English)
-                CHARS_PER_TOKEN = 4
-                sys_tokens_est = len(system_prompt) // CHARS_PER_TOKEN
-                usr_tokens_est = len(prompt) // CHARS_PER_TOKEN
-                text_tokens_est = sys_tokens_est + usr_tokens_est
-                
-                # Add some overhead for special tokens, formatting, etc.
-                text_tokens_with_overhead = int(text_tokens_est * 1.2)
-                
-                if images:
-                    # Image tokens = total input - estimated text tokens
-                    image_tokens = max(0, total_input - text_tokens_with_overhead)
-                    # Adjust text token estimates proportionally if needed
-                    if text_tokens_with_overhead > total_input:
-                        # No room for images, something's off - just report what we know
-                        sys_tokens = total_input // 2
-                        usr_tokens = total_input - sys_tokens
-                        image_tokens = 0
-                    else:
-                        sys_tokens = sys_tokens_est
-                        usr_tokens = usr_tokens_est
-                else:
-                    # No images - all input tokens are text
-                    image_tokens = 0
-                    # Distribute total_input proportionally based on character length
-                    total_chars = len(system_prompt) + len(prompt)
-                    if total_chars > 0:
-                        sys_tokens = int(total_input * len(system_prompt) / total_chars)
-                        usr_tokens = total_input - sys_tokens
-                    else:
-                        sys_tokens = 0
-                        usr_tokens = 0
-
-                think_len = len(thinking_content)
-                ans_len = len(full_response)
-                total_out_len = think_len + ans_len
-
-                if total_output > 0 and total_out_len > 0:
-                    think_tokens = int(total_output * (think_len / total_out_len))
-                    ans_tokens = total_output - think_tokens
-                else:
-                    think_tokens = 0
-                    ans_tokens = 0
-                
-                print(f" SYSTEM PROMPT: {sys_tokens:>5} tokens")
-                print(f" USER PROMPT:   {usr_tokens:>5} tokens")
-                if images and image_tokens > 0:
-                    image_label = "image" if len(images) == 1 else "images"
-                    print(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label})")
-                print(f" -----------------------------")
-                print(f" THINKING:      {think_tokens:>5} tokens")
-                print(f" FINAL ANSWER:  {ans_tokens:>5} tokens")
-                print(f" -----------------------------")
-                print(f" TOTAL INPUT:   {total_input:>5} tokens")
-                print(f" TOTAL OUTPUT:  {total_output:>5} tokens")
-                
-                print("="*60 + "\n")
             if not full_response:
                 print("[Prompt Generator] Warning: Empty response from server")
                 full_response = prompt
 
             print("[Prompt Generator] Successfully generated prompt")
 
-            # Only cache if no images (images make caching impractical)
             if not images:
                 self._prompt_cache[cache_key] = full_response
 
@@ -1095,7 +1038,6 @@ class PromptGenerator:
         except comfy.model_management.InterruptProcessingException:
             raise
         except requests.exceptions.HTTPError as e:
-            # Capture detailed error from server
             error_body = ""
             try:
                 error_body = e.response.text
@@ -1126,6 +1068,85 @@ class PromptGenerator:
             import traceback
             traceback.print_exc()
             return (error_msg,)
+
+    def _get_token_counts_parallel(self, system_prompt, user_prompt):
+        """Get token counts for system and user prompts in parallel using threads"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        results = {"system": None, "user": None}
+        
+        def tokenize_system():
+            return self.count_tokens(system_prompt)
+        
+        def tokenize_user():
+            return self.count_tokens(user_prompt)
+        
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_sys = executor.submit(tokenize_system)
+                future_usr = executor.submit(tokenize_user)
+                
+                results["system"] = future_sys.result(timeout=15)
+                results["user"] = future_usr.result(timeout=15)
+        except Exception as e:
+            print(f"[Prompt Generator] Warning: Parallel tokenization failed: {e}")
+        
+        return results
+
+    def _print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):
+        """Print token statistics using pre-cached counts"""
+        print("="*60)
+        print(" [Prompt Generator] TOKEN USAGE STATISTICS")
+        print("="*60)
+
+        total_input = usage_stats.get('prompt_tokens', 0) if usage_stats else 0
+        total_output = usage_stats.get('completion_tokens', 0) if usage_stats else 0
+
+        # Use cached token counts - handle None values
+        sys_tokens = cached_token_counts.get("system") if cached_token_counts else None
+        usr_tokens = cached_token_counts.get("user") if cached_token_counts else None
+        
+        # Convert None to 0 for arithmetic, but track if we have valid counts
+        sys_tokens_val = sys_tokens if sys_tokens is not None else 0
+        usr_tokens_val = usr_tokens if usr_tokens is not None else 0
+        
+        # Image tokens = total input - text tokens
+        text_tokens = sys_tokens_val + usr_tokens_val
+        image_tokens = max(0, total_input - text_tokens) if images else 0
+
+        # Output token split
+        think_len = len(thinking_content) if thinking_content else 0
+        ans_len = len(full_response) if full_response else 0
+        total_out_len = think_len + ans_len
+
+        if total_output > 0 and total_out_len > 0:
+            think_tokens = int(total_output * (think_len / total_out_len))
+            ans_tokens = total_output - think_tokens
+        else:
+            think_tokens = 0
+            ans_tokens = 0
+        
+        # Display with "N/A" if tokenization failed
+        if sys_tokens is not None:
+            print(f" SYSTEM PROMPT: {sys_tokens:>5} tokens")
+        else:
+            print(f" SYSTEM PROMPT:   N/A (tokenization failed)")
+            
+        if usr_tokens is not None:
+            print(f" USER PROMPT:   {usr_tokens:>5} tokens")
+        else:
+            print(f" USER PROMPT:     N/A (tokenization failed)")
+            
+        if images and image_tokens > 0:
+            image_label = "image" if len(images) == 1 else "images"
+            print(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label})")
+        print(f" -----------------------------")
+        print(f" THINKING:      {think_tokens:>5} tokens")
+        print(f" FINAL ANSWER:  {ans_tokens:>5} tokens")
+        print(f" -----------------------------")
+        print(f" TOTAL:         {total_input + total_output:>5} tokens")
+        
+        print("="*60 + "\n")
 
 
 NODE_CLASS_MAPPINGS = {
