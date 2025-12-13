@@ -464,53 +464,6 @@ class PromptGeneratorZ:
             hasher.update(img.cpu().numpy().tobytes())
         return hasher.hexdigest()
     
-    @classmethod
-    def IS_CHANGED(cls, prompt, seed, stop_server_after=False, 
-                show_everything_in_console=False, options=None):
-        import hashlib
-        
-        hasher = hashlib.md5()
-        hasher.update(prompt.encode('utf-8'))
-        hasher.update(str(seed).encode())
-        hasher.update(str(stop_server_after).encode())
-        # NOT hashing show_everything_in_console - it's display-only
-        
-        if options is None:
-            hasher.update(b"options:None")
-        else:
-            # Build a completely deterministic representation
-            parts = []
-            for key in sorted(options.keys()):
-                value = options[key]
-                
-                if key == "images":
-                    if value:
-                        for idx, img in enumerate(value):
-                            # Use a faster hash for large tensors
-                            img_np = img.cpu().numpy()
-                            # Hash shape + dtype + a sample of data for speed
-                            img_sig = f"{img_np.shape}|{img_np.dtype}|{img_np.flat[0]}|{img_np.flat[-1]}|{img_np.sum()}"
-                            parts.append(f"img{idx}:{img_sig}")
-                    else:
-                        parts.append("images:empty")
-                elif key == "system_prompt":
-                    # Hash long strings separately
-                    sp_hash = hashlib.md5(str(value).encode()).hexdigest()[:16]
-                    parts.append(f"system_prompt:{sp_hash}")
-                elif isinstance(value, (str, int, float, bool)):
-                    parts.append(f"{key}:{value}")
-                elif value is None:
-                    parts.append(f"{key}:None")
-                else:
-                    # For any other type, use repr or str
-                    parts.append(f"{key}:{type(value).__name__}")
-            
-            hasher.update("|".join(parts).encode())
-        
-        result = hasher.hexdigest()
-        
-        return result
-
     @staticmethod
     def is_server_alive():
         """Check if llama.cpp server is responding"""
