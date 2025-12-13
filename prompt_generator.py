@@ -454,6 +454,15 @@ class PromptGenerator:
         except Exception as e:
             print(f"[Prompt Generator] Warning: Could not tokenize: {e}")
         return None
+    
+    def get_image_hash(self, images):
+        if not images:
+            return None
+        import hashlib
+        hasher = hashlib.md5()
+        for img in images:
+            hasher.update(img.cpu().numpy().tobytes())
+        return hasher.hexdigest()
 
     @classmethod
     def IS_CHANGED(cls, seed, **kwargs):
@@ -808,9 +817,30 @@ class PromptGenerator:
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
 
-        image_count = len(images) if images else 0
-        options_tuple = tuple(sorted(options.items())) if options else ()
-        cache_key = (prompt, seed, model_to_use, options_tuple, image_count)
+        # === CREATE HASHABLE CACHE KEY ===
+        image_hash = self.get_image_hash(images)
+        
+        # Filter out unhashable items from options for cache key
+        if options:
+            # Exclude images (already covered by image_hash) and any other unhashable types
+            hashable_options = {}
+            for k, v in options.items():
+                if k == "images":
+                    continue  # Skip images - we use image_hash instead
+                if isinstance(v, (str, int, float, bool, type(None))):
+                    hashable_options[k] = v
+                else:
+                    # Convert other types to string representation
+                    hashable_options[k] = str(v)
+            try:
+                options_tuple = tuple(sorted(hashable_options.items()))
+            except TypeError:
+                # Ultimate fallback
+                options_tuple = tuple(sorted((k, str(v)) for k, v in hashable_options.items()))
+        else:
+            options_tuple = ()
+        
+        cache_key = (prompt, seed, model_to_use, options_tuple, image_hash)
 
         if images and not mmproj:
             error_msg = f"Error: Images provided but no matching mmproj file found for model '{model_to_use}'. Please ensure a corresponding mmproj file (e.g., '{model_to_use.replace('.gguf', '')}-mmproj-*.gguf') exists in the models folder."
@@ -921,7 +951,7 @@ class PromptGenerator:
                     payload["repeat_penalty"] = round(float(options["repeat_penalty"]), 4)
             payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192
 
-        if not images and cache_key in self._prompt_cache and _current_model == model_to_use:
+        if cache_key in self._prompt_cache and _current_model == model_to_use:
             print("[Prompt Generator] Returning cached prompt result.")
             
             if show_everything_in_console:
@@ -1027,8 +1057,7 @@ class PromptGenerator:
 
             print("[Prompt Generator] Successfully generated prompt")
 
-            if not images:
-                self._prompt_cache[cache_key] = full_response
+            self._prompt_cache[cache_key] = full_response
 
             if stop_server_after:
                 self.stop_server()
