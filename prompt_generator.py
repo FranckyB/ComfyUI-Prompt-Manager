@@ -463,34 +463,53 @@ class PromptGeneratorZ:
         for img in images:
             hasher.update(img.cpu().numpy().tobytes())
         return hasher.hexdigest()
-
+    
     @classmethod
     def IS_CHANGED(cls, prompt, seed, stop_server_after=False, 
                 show_everything_in_console=False, options=None):
         import hashlib
         
         hasher = hashlib.md5()
-        hasher.update(str(prompt).encode())
+        hasher.update(prompt.encode('utf-8'))
         hasher.update(str(seed).encode())
         hasher.update(str(stop_server_after).encode())
-        # Intentionally NOT hashing show_everything_in_console - it only affects console output
+        # NOT hashing show_everything_in_console - it's display-only
         
-        if options:
-            sorted_items = []
+        if options is None:
+            hasher.update(b"options:None")
+        else:
+            # Build a completely deterministic representation
+            parts = []
             for key in sorted(options.keys()):
                 value = options[key]
+                
                 if key == "images":
                     if value:
-                        for img in value:
-                            img_bytes = img.cpu().numpy().tobytes()
-                            sorted_items.append(f"images:{hashlib.md5(img_bytes).hexdigest()}")
-                elif value is not None:
-                    sorted_items.append(f"{key}:{str(value)}")
+                        for idx, img in enumerate(value):
+                            # Use a faster hash for large tensors
+                            img_np = img.cpu().numpy()
+                            # Hash shape + dtype + a sample of data for speed
+                            img_sig = f"{img_np.shape}|{img_np.dtype}|{img_np.flat[0]}|{img_np.flat[-1]}|{img_np.sum()}"
+                            parts.append(f"img{idx}:{img_sig}")
+                    else:
+                        parts.append("images:empty")
+                elif key == "system_prompt":
+                    # Hash long strings separately
+                    sp_hash = hashlib.md5(str(value).encode()).hexdigest()[:16]
+                    parts.append(f"system_prompt:{sp_hash}")
+                elif isinstance(value, (str, int, float, bool)):
+                    parts.append(f"{key}:{value}")
+                elif value is None:
+                    parts.append(f"{key}:None")
+                else:
+                    # For any other type, use repr or str
+                    parts.append(f"{key}:{type(value).__name__}")
             
-            hasher.update("|".join(sorted_items).encode())
+            hasher.update("|".join(parts).encode())
         
-        final_hash = hasher.hexdigest()
-        return final_hash
+        result = hasher.hexdigest()
+        
+        return result
 
     @staticmethod
     def is_server_alive():
