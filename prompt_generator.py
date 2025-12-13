@@ -394,7 +394,7 @@ def tensor_to_base64(image_tensor):
         print(f"[Prompt Generator] Error converting image to base64: {e}")
         return None
 
-class PromptGenerator:
+class PromptGeneratorZ:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
     _prompt_cache = {}
@@ -472,7 +472,7 @@ class PromptGenerator:
     def is_server_alive():
         """Check if llama.cpp server is responding"""
         try:
-            response = requests.get(f"{PromptGenerator.SERVER_URL}/health", timeout=2)
+            response = requests.get(f"{PromptGeneratorZ.SERVER_URL}/health", timeout=2)
             return response.status_code == 200
         except:
             return False
@@ -483,7 +483,7 @@ class PromptGenerator:
         global _model_default_params
         
         try:
-            response = requests.get(f"{PromptGenerator.SERVER_URL}/props", timeout=5)
+            response = requests.get(f"{PromptGeneratorZ.SERVER_URL}/props", timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 params = data.get("default_generation_settings", {}).get("params", {})
@@ -511,8 +511,8 @@ class PromptGenerator:
         if _model_default_params is not None:
             return _model_default_params
         
-        if PromptGenerator.is_server_alive():
-            return PromptGenerator.fetch_model_defaults()
+        if PromptGeneratorZ.is_server_alive():
+            return PromptGeneratorZ.fetch_model_defaults()
         
         return None
 
@@ -522,7 +522,7 @@ class PromptGenerator:
         global _server_process, _current_model, _current_gpu_config, _current_context_size, _model_default_params, _current_mmproj
 
         # Kill any existing llama-server processes first
-        PromptGenerator.kill_all_llama_servers()
+        PromptGeneratorZ.kill_all_llama_servers()
 
         # If server is already running with the same model, GPU config, context size, and mmproj, don't restart
         if (_server_process and 
@@ -530,13 +530,13 @@ class PromptGenerator:
             _current_gpu_config == gpu_config and
             _current_context_size == context_size and
             _current_mmproj == mmproj and
-            PromptGenerator.is_server_alive()):
+            PromptGeneratorZ.is_server_alive()):
             print(f"[Prompt Generator] Server already running with model: {model_name}")
             return (True, None)
 
         # Stop existing server if running different model, GPU config, context size, or mmproj
         if _server_process:
-            PromptGenerator.stop_server()
+            PromptGeneratorZ.stop_server()
 
         # Reset model defaults when changing models
         _model_default_params = None
@@ -587,7 +587,7 @@ class PromptGenerator:
             cmd = [
                 server_cmd, 
                 "-m", model_path, 
-                "--port", str(PromptGenerator.SERVER_PORT),
+                "--port", str(PromptGeneratorZ.SERVER_PORT),
                 "--no-warmup",
                 "--reasoning-format", "deepseek",
                 "-c", str(context_size)
@@ -642,10 +642,10 @@ class PromptGenerator:
             for i in range(60):
                 time.sleep(1)
                 
-                if PromptGenerator.is_server_alive():
+                if PromptGeneratorZ.is_server_alive():
                     print("[Prompt Generator] Server is ready!")
                     # Fetch model defaults after server starts
-                    PromptGenerator.fetch_model_defaults()
+                    PromptGeneratorZ.fetch_model_defaults()
                     return (True, None)
                 
                 if _server_process.poll() is not None:
@@ -671,7 +671,7 @@ class PromptGenerator:
 
             error_msg = "Error: Server did not start in time (60s timeout)"
             print(f"[Prompt Generator] {error_msg}")
-            PromptGenerator.stop_server()
+            PromptGeneratorZ.stop_server()
             return (False, error_msg)
 
         except FileNotFoundError:
@@ -724,7 +724,7 @@ class PromptGenerator:
                 _current_mmproj = None
                 _model_default_params = None
 
-        PromptGenerator.kill_all_llama_servers()
+        PromptGeneratorZ.kill_all_llama_servers()
 
     def _print_debug_header(self, payload, enable_thinking, use_model_default_sampling):
         """Helper to print debug info header"""
@@ -1179,9 +1179,9 @@ class PromptGenerator:
 
 
 NODE_CLASS_MAPPINGS = {
-    "PromptGenerator": PromptGenerator
+    "PromptGeneratorZ": PromptGeneratorZ
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptGenerator": "Prompt Generator"
+    "PromptGeneratorZ": "Prompt Generator"
 }
