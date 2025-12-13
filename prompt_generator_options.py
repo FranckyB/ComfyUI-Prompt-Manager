@@ -1,6 +1,6 @@
 # prompt_generator_options.py
 
-class PromptGenOptions:
+class PromptGenOptionsZ:
     """Options node for Prompt Generator"""
 
     @classmethod
@@ -176,9 +176,9 @@ class PromptGenOptions:
 
 
 NODE_CLASS_MAPPINGS = {
-    "PromptGenOptions": PromptGenOptions
+    "PromptGenOptionsZ": PromptGenOptionsZ
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptGenOptions": "Prompt Generator Options"
+    "PromptGenOptionsZ": "Prompt Generator Options"
 }
