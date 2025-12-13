@@ -469,24 +469,28 @@ class PromptGeneratorZ:
                 show_everything_in_console=False, options=None):
         import hashlib
         
-        # Build a hash of all inputs that affect output
         hasher = hashlib.md5()
         hasher.update(str(prompt).encode())
         hasher.update(str(seed).encode())
+        hasher.update(str(stop_server_after).encode())
+        # Intentionally NOT hashing show_everything_in_console - it only affects console output
         
         if options:
-            # Sort options for consistent hashing
+            sorted_items = []
             for key in sorted(options.keys()):
                 value = options[key]
                 if key == "images":
-                    # Hash image data
                     if value:
                         for img in value:
-                            hasher.update(img.cpu().numpy().tobytes())
-                else:
-                    hasher.update(f"{key}:{value}".encode())
+                            img_bytes = img.cpu().numpy().tobytes()
+                            sorted_items.append(f"images:{hashlib.md5(img_bytes).hexdigest()}")
+                elif value is not None:
+                    sorted_items.append(f"{key}:{str(value)}")
+            
+            hasher.update("|".join(sorted_items).encode())
         
-        return hasher.hexdigest()
+        final_hash = hasher.hexdigest()
+        return final_hash
 
     @staticmethod
     def is_server_alive():
@@ -854,15 +858,18 @@ class PromptGeneratorZ:
         cache_key = (prompt, seed, model_to_use, options_tuple, image_hash)
 
         # === CHECK CACHE FIRST - BEFORE ANY HEAVY WORK ===
-        # Only return cached if server state matches (model hasn't changed)
-        if (cache_key in self._prompt_cache and 
+        # Only compare to the LAST cached result
+        last_cached_key = self._prompt_cache.get("last_key")
+        last_cached_result = self._prompt_cache.get("last_result")
+        
+        if (last_cached_key == cache_key and 
             _current_model == model_to_use and
             _current_gpu_config == gpu_config and
             _current_context_size == context_size and
             _current_mmproj == mmproj and
             self.is_server_alive()):
             
-            print("[Prompt Generator] Returning cached prompt result (skipping all processing).")
+            print("[Prompt Generator] Returning cached prompt result (matches last run).")
             
             # Only do debug output if requested - minimal work
             if show_everything_in_console:
@@ -871,10 +878,10 @@ class PromptGeneratorZ:
                 print("="*60)
                 print(f"\n🧠 THINKING MODE: {'ON' if enable_thinking else 'OFF'}")
                 print(f"\n--- <|CACHED MODEL ANSWER|> ---")
-                print(self._prompt_cache[cache_key])
+                print(last_cached_result)
                 print(f"--- <|END CACHED|> ---\n")
 
-            return (self._prompt_cache[cache_key],)
+            return (last_cached_result,)
 
         # === FROM HERE ON: Only runs if NOT cached ===
         
@@ -995,18 +1002,18 @@ class PromptGeneratorZ:
                     payload["repeat_penalty"] = round(float(options["repeat_penalty"]), 4)
             payload["max_tokens"] = int(options.get("max_tokens", 8192)) if options else 8192
 
-        if cache_key in self._prompt_cache and _current_model == model_to_use:
+        if (last_cached_key == cache_key and _current_model == model_to_use):
             print("[Prompt Generator] Returning cached prompt result.")
             
             if show_everything_in_console:
                 self._print_debug_header(payload, enable_thinking, use_model_default_sampling)
                 print(f"\n--- <|CACHED MODEL ANSWER|> STARTS ---")
-                print(self._prompt_cache[cache_key])
+                print(last_cached_result)
                 print(f"--- <|CACHED MODEL ANSWER|> ENDS ---\n")
 
             if stop_server_after:
                 self.stop_server()
-            return (self._prompt_cache[cache_key],)
+            return (last_cached_result,)
 
         full_url = f"{self.SERVER_URL}/v1/chat/completions"
 
@@ -1032,6 +1039,7 @@ class PromptGeneratorZ:
             thinking_content = ""
             in_thinking = False
             usage_stats = None
+            first_content_received = False
             
             for line in response.iter_lines():
                 try:
@@ -1062,6 +1070,11 @@ class PromptGeneratorZ:
                                 
                                 content = delta.get('content', '')
                                 if content:
+                                    # Strip leading newlines from first content only
+                                    if not first_content_received:
+                                        content = content.lstrip('\n')
+                                        first_content_received = True
+                                    
                                     full_response += content
                                     if show_everything_in_console and not in_thinking:
                                         print(content, end='', flush=True)
@@ -1101,12 +1114,16 @@ class PromptGeneratorZ:
 
             print("[Prompt Generator] Successfully generated prompt")
 
-            self._prompt_cache[cache_key] = full_response
+            # Store ONLY this result, replacing any previous cache
+            self._prompt_cache = {
+                "last_key": cache_key,
+                "last_result": full_response
+            }
 
             if stop_server_after:
                 self.stop_server()
 
-            return (full_response,)
+            return (full_response,)  
 
         except comfy.model_management.InterruptProcessingException:
             raise
