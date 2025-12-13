@@ -6,20 +6,20 @@ __version__ = "1.5.1"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
-from .prompt_manager import PromptManager
-from .prompt_generator import PromptGenerator
-from .prompt_generator_options import PromptGenOptions
+from .prompt_manager import PromptManagerZ
+from .prompt_generator import PromptGeneratorZ
+from .prompt_generator_options import PromptGenOptionsZ
 
 NODE_CLASS_MAPPINGS = {
-    "PromptManager": PromptManager,
-    "PromptGenerator": PromptGenerator,
-    "PromptGenOptions": PromptGenOptions
+    "PromptManagerZ": PromptManagerZ,
+    "PromptGeneratorZ": PromptGeneratorZ,
+    "PromptGenOptionsZ": PromptGenOptionsZ
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptManager": "Prompt Manager",
-    "PromptGenerator": "Prompt Generator",
-    "PromptGenOptions": "Prompt Generator Options"
+    "PromptManagerZ": "Prompt Manager",
+    "PromptGeneratorZ": "Prompt Generator",
+    "PromptGenOptionsZ": "Prompt Generator Options"
 }
 
 
@@ -27,4 +27,4 @@ WEB_DIRECTORY = "./js"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
-print("[PromptManager] Node registered successfully")
+print("[PromptManagerZ] Node registered successfully")
