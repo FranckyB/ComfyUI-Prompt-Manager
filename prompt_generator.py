@@ -465,8 +465,28 @@ class PromptGeneratorZ:
         return hasher.hexdigest()
 
     @classmethod
-    def IS_CHANGED(cls, seed, **kwargs):
-        return seed
+    def IS_CHANGED(cls, prompt, seed, stop_server_after=False, 
+                show_everything_in_console=False, options=None):
+        import hashlib
+        
+        # Build a hash of all inputs that affect output
+        hasher = hashlib.md5()
+        hasher.update(str(prompt).encode())
+        hasher.update(str(seed).encode())
+        
+        if options:
+            # Sort options for consistent hashing
+            for key in sorted(options.keys()):
+                value = options[key]
+                if key == "images":
+                    # Hash image data
+                    if value:
+                        for img in value:
+                            hasher.update(img.cpu().numpy().tobytes())
+                else:
+                    hasher.update(f"{key}:{value}".encode())
+        
+        return hasher.hexdigest()
 
     @staticmethod
     def is_server_alive():
@@ -779,7 +799,7 @@ class PromptGeneratorZ:
         if not prompt.strip():
             return ("",)
 
-        # === EXTRACT OPTIONS ===
+        # === EXTRACT OPTIONS (minimal, for cache key) ===
         model_to_use = None
         enable_thinking = True
         use_model_default_sampling = False
@@ -812,47 +832,70 @@ class PromptGeneratorZ:
                 return (error_msg,)
             model_to_use = local_models[0]
 
-        if options and "system_prompt" in options:
-            system_prompt = options["system_prompt"]
-        else:
-            system_prompt = self.DEFAULT_SYSTEM_PROMPT
-
-        # === CREATE HASHABLE CACHE KEY ===
+        # === BUILD CACHE KEY EARLY ===
         image_hash = self.get_image_hash(images)
         
-        # Filter out unhashable items from options for cache key
         if options:
-            # Exclude images (already covered by image_hash) and any other unhashable types
             hashable_options = {}
             for k, v in options.items():
                 if k == "images":
-                    continue  # Skip images - we use image_hash instead
+                    continue
                 if isinstance(v, (str, int, float, bool, type(None))):
                     hashable_options[k] = v
                 else:
-                    # Convert other types to string representation
                     hashable_options[k] = str(v)
             try:
                 options_tuple = tuple(sorted(hashable_options.items()))
             except TypeError:
-                # Ultimate fallback
                 options_tuple = tuple(sorted((k, str(v)) for k, v in hashable_options.items()))
         else:
             options_tuple = ()
         
         cache_key = (prompt, seed, model_to_use, options_tuple, image_hash)
 
+        # === CHECK CACHE FIRST - BEFORE ANY HEAVY WORK ===
+        # Only return cached if server state matches (model hasn't changed)
+        if (cache_key in self._prompt_cache and 
+            _current_model == model_to_use and
+            _current_gpu_config == gpu_config and
+            _current_context_size == context_size and
+            _current_mmproj == mmproj and
+            self.is_server_alive()):
+            
+            print("[Prompt Generator] Returning cached prompt result (skipping all processing).")
+            
+            # Only do debug output if requested - minimal work
+            if show_everything_in_console:
+                print("\n" + "="*60)
+                print(" [Prompt Generator] CACHED RESULT")
+                print("="*60)
+                print(f"\n🧠 THINKING MODE: {'ON' if enable_thinking else 'OFF'}")
+                print(f"\n--- <|CACHED MODEL ANSWER|> ---")
+                print(self._prompt_cache[cache_key])
+                print(f"--- <|END CACHED|> ---\n")
+
+            return (self._prompt_cache[cache_key],)
+
+        # === FROM HERE ON: Only runs if NOT cached ===
+        
+        if options and "system_prompt" in options:
+            system_prompt = options["system_prompt"]
+        else:
+            system_prompt = self.DEFAULT_SYSTEM_PROMPT
+
+        # Validate mmproj for images
         if images and not mmproj:
-            error_msg = f"Error: Images provided but no matching mmproj file found for model '{model_to_use}'. Please ensure a corresponding mmproj file (e.g., '{model_to_use.replace('.gguf', '')}-mmproj-*.gguf') exists in the models folder."
+            error_msg = f"Error: Images provided but no matching mmproj file found for model '{model_to_use}'."
             print(f"[Prompt Generator] {error_msg}")
             return (error_msg,)
 
-        # Only restart server if model, GPU config, context size, or mmproj changed
+        # Only restart server if needed
         if (_current_model != model_to_use or 
             _current_gpu_config != gpu_config or 
             _current_context_size != context_size or
             _current_mmproj != mmproj or
             not self.is_server_alive()):
+            
             if _current_model and _current_model != model_to_use:
                 print(f"[Prompt Generator] Model changed: {_current_model} → {model_to_use}")
             elif _current_gpu_config != gpu_config:
@@ -863,6 +906,7 @@ class PromptGeneratorZ:
                 print(f"[Prompt Generator] mmproj changed: {_current_mmproj} → {mmproj}")
             else:
                 print(f"[Prompt Generator] Starting server with model: {model_to_use}")
+            
             self.stop_server()
             success, error_msg = self.start_server(model_to_use, gpu_config, context_size, mmproj)
             if not success:
@@ -870,12 +914,12 @@ class PromptGeneratorZ:
         else:
             print("[Prompt Generator] Using existing server instance")
         
-        # === PRE-TOKENIZE for debug display (only if showing console output) ===
-        # Do this RIGHT AFTER server is confirmed alive, BEFORE building payload
+        # === TOKENIZATION (only for non-cached requests) ===
         cached_token_counts = None
         if show_everything_in_console:
             cached_token_counts = self._get_token_counts_parallel(system_prompt, prompt)
-            
+        
+    # ... rest of your code for building payload and making request ...
         # Log thinking mode
         if enable_thinking:
             print("[Prompt Generator] Thinking: ON (per-request)")
