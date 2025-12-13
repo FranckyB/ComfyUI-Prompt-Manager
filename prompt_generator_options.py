@@ -1,7 +1,43 @@
 # prompt_generator_options.py
+import numpy as np
 
 class PromptGenOptionsZ:
     """Options node for Prompt Generator"""
+
+    @classmethod
+    def IS_CHANGED(cls, model, gpu_layers, enable_thinking, context_size, max_tokens, 
+                   use_model_default_sampling, temperature, top_p, top_k, min_p, 
+                   repeat_penalty, system_prompt="", 
+                   image_1=None, image_2=None, image_3=None, image_4=None, image_5=None):
+        import hashlib
+        
+        hasher = hashlib.md5()
+        
+        # Hash all primitive inputs
+        hasher.update(str(model).encode())
+        hasher.update(str(gpu_layers).encode())
+        hasher.update(str(enable_thinking).encode())
+        hasher.update(str(context_size).encode())
+        hasher.update(str(max_tokens).encode())
+        hasher.update(str(use_model_default_sampling).encode())
+        hasher.update(str(temperature).encode())
+        hasher.update(str(top_p).encode())
+        hasher.update(str(top_k).encode())
+        hasher.update(str(min_p).encode())
+        hasher.update(str(repeat_penalty).encode())
+        hasher.update(str(system_prompt).encode())
+        
+        # Hash images with stable byte representation
+        for idx, img in enumerate([image_1, image_2, image_3, image_4, image_5]):
+            if img is not None:
+                # Ensure consistent memory layout
+                img_np = np.ascontiguousarray(img.cpu().numpy())
+                img_hash = hashlib.md5(img_np.tobytes()).hexdigest()
+                hasher.update(f"img{idx}:{img_hash}".encode())
+            else:
+                hasher.update(f"img{idx}:None".encode())
+        
+        return hasher.hexdigest()
 
     @classmethod
     def INPUT_TYPES(cls):
