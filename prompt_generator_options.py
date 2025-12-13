@@ -97,7 +97,7 @@ class PromptGenOptions:
                     "default": 1.0,
                     "min": 0.0,
                     "max": 2.0,
-                    "step": 0.1,
+                    "step": 0.01,
                     "tooltip": "Repetition penalty (1.0 = no penalty, higher = less repetition)"
                 }),
             },
