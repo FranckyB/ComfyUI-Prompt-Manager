@@ -146,9 +146,10 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
 
 ### Version 1.7.0
 - Added three-mode prompt generator: "Enhance User Prompt", "Analyze Image", "Analyze Image with Prompt"
-- Added custom image analysis with user-provided instructions
+- Enhanced vision model workflow with dedicated image analysis modes
+- Added custom image analysis with user-provided instructions (e.g., "describe the lighting", "identify objects")
 - Added model preferences system integrated with ComfyUI Settings
-- Added automatic model preference management (base and vision models)
+- Added automatic model preference management (separate settings for base and vision models)
 - Improved model selection with preference fallback to smallest model
 - Filtered mmproj files from model selection dropdowns
 - All preferences stored in ComfyUI settings for persistence across updates
