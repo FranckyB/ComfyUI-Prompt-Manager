@@ -1,6 +1,6 @@
 # ComfyUI Prompt Manager
 
-A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allows both saving and generating new prompts using llama.cpp.
+A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organizing, generating, and enhancing prompts using local llama.cpp models with vision analysis support.
 
 (**Llama.cpp needs to be installed and accessible from command prompt.**)
 
@@ -17,14 +17,16 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allo
 - **Persistent Storage**: All prompts saved in your ComfyUI user folder
 
 ### Prompt Generator
-- **Automatic llama.cpp Server Management**: Automatically starts llama.cpp server as needed
-- **Server Control**: Toggle to stop server after generation (frees VRAM)
-- **AI-Powered Prompt Enhancement**: Transform basic prompts into detailed, vivid descriptions optimized for image generation
-- **Local Model Support**: Automatically detects and uses first .gguf model found in the models/guff folder.
+- **Prompt Enhancement**: Transform basic prompts into detailed descriptions using local LLMs
+- **Vision Analysis**: Analyze images with Qwen3VL models to generate detailed descriptions
+- **JSON Output**: Optional structured JSON output with scene breakdown
+- **Automatic Server Management**: Starts/stops llama.cpp server as needed
+- **Smart Model Selection**: Auto-selects appropriate model (vision or text) based on inputs
 
 ### Prompt Generator Options
-- **Model Selection**: Choose from local models or download from HuggingFace
-- **Model Auto-Download**: Easy download of Qwen3 1.7B, 4B, or 8B from HuggingFace.
+- **Model Selection**: Choose from local models or download Qwen3 (1.7B/4B/8B) and Qwen3VL (4B/8B) from HuggingFace
+- **Auto-Download**: Automatically downloads both model and required mmproj files for vision models
+- **Context Size**: Adjustable context window (512-32768 tokens)
 - **LLM Parameters**: Fine-tune temperature, top_k, top_p, min_p, repeat_penalty
 - **Custom Instructions**: Override default system prompt for different enhancement styles
 
@@ -94,6 +96,9 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allo
 - Python 3.8+
 - requests >= 2.31.0
 - huggingface_hub >= 0.20.0
+- psutil >= 5.9.0
+- tqdm >= 4.66.0
+- Pillow >= 10.0.0
 - llama-server (from llama.cpp)
 
 ## Troubleshooting
@@ -123,6 +128,16 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that allo
 - **Solution**: Either, Use a smaller quantized model (Q4 instead of Q8) or toggle 'stop_server_after' to quit llama.cpp after generating prompt.
 
 ## Changelog
+
+### Version 1.6.0
+- Added Qwen3VL vision model support for image analysis
+- Added JSON output format option with structured scene breakdown
+- Added adjustable context size parameter (512-32768 tokens)
+- Added automatic mmproj file download for vision models
+- Added image resizing to ~2MP to optimize token usage
+- Added token usage logging for monitoring context consumption
+- Improved model selection logic with automatic VL/non-VL detection
+- Fixed multiple directory support for model search (gguf + LLM folders)
 
 ### Version 1.5.1
 - LLM output remains avaiable when use llm is off. So it can be edited

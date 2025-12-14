@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-prompt-manager"
-description = "Prompt Manager for ComfyUI, with llama.cpp integration for prompt generation. Allowing users to generate and save prompts."
-version = "1.5.1"
+description = "Prompt Manager for ComfyUI, with llama.cpp integration for prompt generation and vision analysis. Organize, generate, and save prompts with local LLM support."
+version = "1.6.0"
 
 [project.urls]
 Repository = "https://github.com/FranckyB/ComfyUI-Prompt-Manager"

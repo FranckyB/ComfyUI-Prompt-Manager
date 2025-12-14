@@ -1,4 +1,4 @@
-from .model_manager import get_all_models, is_model_local, download_model
+from .model_manager import get_all_models, is_model_local, download_model, get_mmproj_for_model, get_mmproj_path
 import time
 
 # Global timestamp to track when models were last updated
@@ -67,6 +67,13 @@ class PromptGenOptions:
                     "step": 0.01,
                     "tooltip": "Penalty for repeating tokens (1.0 = no penalty)"
                 }),
+                "context_size": ("INT", {
+                    "default": 4096,
+                    "min": 512,
+                    "max": 32768,
+                    "step": 512,
+                    "tooltip": "Context size (increase for vision models or large prompts)"
+                }),
             }
         }
 
@@ -83,16 +90,30 @@ class PromptGenOptions:
     def create_options(self, model: str = None,
                        system_prompt: str = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
-                       repeat_penalty: float = None) -> dict:
+                       repeat_penalty: float = None, context_size: int = None) -> dict:
         """Create options dictionary with model and LLM parameters"""
 
         options = {}
 
         # Handle model selection and download if needed
         if model and model != "No models found - check HuggingFace":
-            # Re-check if model is local (in case it was just downloaded but UI not refreshed)
-            if not is_model_local(model):
-                print(f"[Prompt Generator Options] Model not found locally, downloading: {model}")
+            # Check if model is local
+            model_exists = is_model_local(model)
+
+            # For VL models, also check if mmproj exists
+            needs_download = not model_exists
+            if model_exists:
+                mmproj_name = get_mmproj_for_model(model)
+                if mmproj_name:
+                    # This is a VL model, check if mmproj is present
+                    mmproj_path = get_mmproj_path(model)
+                    if not mmproj_path:
+                        print(f"[Prompt Generator Options] Vision model found but mmproj missing, downloading: {mmproj_name}")
+                        needs_download = True
+
+            if needs_download:
+                if not model_exists:
+                    print(f"[Prompt Generator Options] Model not found locally, downloading: {model}")
                 downloaded_path = download_model(model)
                 if downloaded_path:
                     trigger_model_list_refresh()
@@ -115,6 +136,8 @@ class PromptGenOptions:
             options["min_p"] = min_p
         if repeat_penalty is not None:
             options["repeat_penalty"] = repeat_penalty
+        if context_size is not None:
+            options["context_size"] = context_size
 
         return (options,)
 

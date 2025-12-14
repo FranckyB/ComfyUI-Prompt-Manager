@@ -4,11 +4,15 @@ import time
 import os
 import atexit
 import psutil
-from .model_manager import get_local_models, get_model_path, is_model_local, download_model
+import json
+import base64
+from io import BytesIO
+from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, get_mmproj_for_model
 
 # Global variable to track the server process
 _server_process = None
 _current_model = None
+_current_context_size = None
 
 def cleanup_server():
     """Cleanup function to stop server on exit"""
@@ -38,16 +42,54 @@ class PromptGenerator:
     # Default system prompt for prompt enhancement
     DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". Only output the final modified prompt, and do not output anything else.  If no text is needed, don't mention it."""
 
+    # System prompt for image description (used with Qwen3VL)
+    IMAGE_DESCRIPTION_PROMPT = """You are an expert visual analyst creating detailed descriptions for text-to-image generation. Analyze the provided image and create a comprehensive visual description that captures all essential elements: subjects and their characteristics, actions and poses, spatial positioning, composition and framing, lighting and atmosphere, color palette, artistic style, mood and emotion, background details, camera angle and perspective, material textures, and any visible text. Your description must be concrete, objective, and detailed enough that it could be used to recreate a similar image. Focus on visual elements only, avoiding interpretation or metaphor. If there is visible text in the image, enclose it in double quotes ("")."""
+
+    # Additional instructions for JSON formatted output
+    JSON_SYSTEM_PROMPT = """\n\nReturn your response as valid JSON with these fields: scene (overall description), subjects (array with description/position/action for each), style, color_palette, lighting, mood, background, composition, camera."""
+
+    @staticmethod
+    def find_qwen3vl_model(available_models):
+        """Find the smallest available Qwen3VL model"""
+        qwen3vl_models = [m for m in available_models if 'qwen3vl' in m.lower()]
+        if not qwen3vl_models:
+            return None
+        # Prefer 4B over 8B (smaller first)
+        for model in qwen3vl_models:
+            if '4b' in model.lower():
+                return model
+        return qwen3vl_models[0]
+
+    @staticmethod
+    def find_non_vl_model(available_models):
+        """Find the smallest available non-vision model by file size"""
+        from .model_manager import get_models_directory
+
+        non_vl_models = [m for m in available_models if 'qwen3vl' not in m.lower()]
+        if not non_vl_models:
+            return None
+
+        # Sort by file size (smallest first)
+        models_dir = get_models_directory()
+
+        models_with_size = []
+        for model in non_vl_models:
+            model_path = os.path.join(models_dir, model)
+            if os.path.exists(model_path):
+                size = os.path.getsize(model_path)
+                models_with_size.append((model, size))
+
+        if not models_with_size:
+            return non_vl_models[0]
+
+        # Sort by size and return smallest
+        models_with_size.sort(key=lambda x: x[1])
+        return models_with_size[0][0]
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "placeholder": "Enter basic prompt...",
-                    "tooltip": "Enter the prompt you want to embellish"
-                }),
                 "seed": ("INT", {
                     "default": 0,
                     "min": 0,
@@ -56,6 +98,19 @@ class PromptGenerator:
                 }),
             },
             "optional": {
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "Enter prompt to enhance, or connect an image to describe it...",
+                    "tooltip": "Text prompt to enhance. Optional when an image is connected - the image will be analyzed instead."
+                }),
+                "image": ("IMAGE", {
+                    "tooltip": "Connect an image for Qwen3VL to analyze and describe. When connected, the text prompt is optional."
+                }),
+                "format_as_json": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Format the output as structured JSON with scene breakdown"
+                }),
                 "stop_server_after": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Stop the llama.cpp server after each prompt (for resource saving, but slower)."
@@ -85,13 +140,17 @@ class PromptGenerator:
             return False
 
     @staticmethod
-    def start_server(model_name):
+    def start_server(model_name, context_size=4096):
         """Start llama.cpp server with specified model
+
+        Args:
+            model_name: Name of the model to use
+            context_size: Context size (default 4096)
 
         Returns:
             tuple: (success: bool, error_message: str or None)
         """
-        global _server_process, _current_model
+        global _server_process, _current_model, _current_context_size
 
         # Kill any existing llama-server processes first
         PromptGenerator.kill_all_llama_servers()
@@ -138,15 +197,36 @@ class PromptGenerator:
                 server_cmd = "llama-server"
                 creation_flags = 0
 
+            # Build command arguments
+            cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-c", str(context_size)]
+
+            # Add vision flags for Qwen3VL models
+            if "qwen3vl" in model_name.lower():
+                mmproj_path = get_mmproj_path(model_name)
+                if mmproj_path:
+                    print(f"[Prompt Generator] Vision model detected, using mmproj: {mmproj_path}")
+                    cmd_args.extend(["--mmproj", mmproj_path])
+                else:
+                    mmproj_name = get_mmproj_for_model(model_name)
+                    if mmproj_name:
+                        error_msg = f"Error: Vision model requires mmproj file '{mmproj_name}' but it was not found. Please use Generator Options node to download the Qwen3VL model and its mmproj file."
+                        print(f"[Prompt Generator] {error_msg}")
+                        return (False, error_msg)
+                    else:
+                        print("[Prompt Generator] Warning: Vision model but no mmproj file configured")
+
+            print(f"[Prompt Generator] Command: {' '.join(cmd_args)}")
+
             # Start server process
             _server_process = subprocess.Popen(
-                [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup"],
+                cmd_args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=creation_flags
             )
 
             _current_model = model_name
+            _current_context_size = context_size
 
             # Wait for server to be ready
             print("[Prompt Generator] Waiting for server to be ready...")
@@ -210,32 +290,69 @@ class PromptGenerator:
         # Also kill any orphaned llama-server processes
         PromptGenerator.kill_all_llama_servers()
 
-    def convert_prompt(self, prompt: str, seed: int, stop_server_after=False, options=None) -> str:
+    def convert_prompt(self, seed: int, prompt="", image=None, format_as_json=False, stop_server_after=False, options=None) -> str:
         """Convert prompt using llama.cpp server, with caching for repeated requests."""
         global _current_model
 
-        # If prompt is empty, return empty string
-        if not prompt.strip():
+        # If prompt is empty and no image, return empty string
+        if not prompt.strip() and image is None:
             return ("",)
 
         # Always determine a valid model filename before running server
         model_to_use = None
         model_changed = False
+        available_models = get_local_models()
 
-        # Priority: options node > first local model filename
-        if options and "model" in options and is_model_local(options["model"]):
-            model_to_use = options["model"]
+        # If image is provided, we need a Qwen3VL model
+        if image is not None:
+            # Check if options specifies a Qwen3VL model
+            if options and "model" in options and "qwen3vl" in options["model"].lower() and is_model_local(options["model"]):
+                model_to_use = options["model"]
+            elif options and "model" in options and is_model_local(options["model"]):
+                # Non-VL model selected but image is connected
+                print(f"[Prompt Generator] Warning: Non-vision model '{options['model']}' selected but image is connected. Ignoring model selection and using a Qwen3VL model instead.")
+                model_to_use = self.find_qwen3vl_model(available_models)
+                if model_to_use is None:
+                    error_msg = "Error: Image provided but no Qwen3VL model found. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
+                    print(f"[Prompt Generator] {error_msg}")
+                    return (error_msg,)
+            else:
+                # Try to find a Qwen3VL model automatically
+                model_to_use = self.find_qwen3vl_model(available_models)
+                if model_to_use is None:
+                    error_msg = "Error: Image provided but no Qwen3VL model found. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
+                    print(f"[Prompt Generator] {error_msg}")
+                    return (error_msg,)
         else:
-            local_models = get_local_models()
-            if not local_models:
-                error_msg = "Error: No models found in models/ folder. Please add a .gguf model or connect options node to download one."
-                print(f"[Prompt Generator] {error_msg}")
-                return (error_msg,)
-            model_to_use = local_models[0]
+            # No image - use regular model selection logic (exclude Qwen3VL models)
+            if options and "model" in options and is_model_local(options["model"]):
+                # If user explicitly selected a Qwen3VL model but no image provided, use first non-VL model instead
+                if "qwen3vl" in options["model"].lower():
+                    model_to_use = self.find_non_vl_model(available_models)
+                    if model_to_use:
+                        print(f"[Prompt Generator] Warning: Qwen3VL model '{options['model']}' selected but no image connected. Ignoring model selection and using {model_to_use} instead.")
+                    else:
+                        error_msg = "Error: Only Qwen3VL models available but no image provided. Please add a .gguf model or use Generator Options to add a non-vision model."
+                        print(f"[Prompt Generator] {error_msg}")
+                        return (error_msg,)
+                else:
+                    model_to_use = options["model"]
+            else:
+                if not available_models:
+                    error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
+                    print(f"[Prompt Generator] {error_msg}")
+                    return (error_msg,)
+                # Find smallest non-VL model
+                model_to_use = self.find_non_vl_model(available_models)
+                if not model_to_use:
+                    error_msg = "Error: Only Qwen3VL models available but no image provided. Please add a non-vision model or provide an image."
+                    print(f"[Prompt Generator] {error_msg}")
+                    return (error_msg,)
 
-        # Caching logic: if prompt/seed/model/options are unchanged, return cached result
+        # Caching logic: if prompt/seed/model/options/format/image are unchanged, return cached result
         options_tuple = tuple(sorted(options.items())) if options else ()
-        cache_key = (prompt, seed, model_to_use, options_tuple)
+        has_image = image is not None
+        cache_key = (prompt, seed, model_to_use, options_tuple, format_as_json, has_image)
         # Only use cache if the model has not changed since last use
         if cache_key in self._prompt_cache and _current_model == model_to_use:
             print("[Prompt Generator] Returning cached prompt result.")
@@ -244,13 +361,18 @@ class PromptGenerator:
             return (self._prompt_cache[cache_key],)
 
         # If the current model is not the one we want, or server is not running, restart
-        if _current_model != model_to_use or not self.is_server_alive():
+        # Also restart if context_size has changed
+        context_size = options.get("context_size", 4096) if options else 4096
+        if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
             if _current_model and _current_model != model_to_use:
                 print(f"[Prompt Generator] Model changed from {_current_model} to {model_to_use}")
+            elif _current_context_size and _current_context_size != context_size:
+                print(f"[Prompt Generator] Context size changed from {_current_context_size} to {context_size}")
             else:
                 print(f"[Prompt Generator] Ensuring server runs with model: {model_to_use}")
             self.stop_server()
-            success, error_msg = self.start_server(model_to_use)
+            # Get context_size from options or use default
+            success, error_msg = self.start_server(model_to_use, context_size)
             if not success:
                 return (error_msg,)
         else:
@@ -259,21 +381,79 @@ class PromptGenerator:
         # Build the endpoint URL
         full_url = f"{self.SERVER_URL}/v1/chat/completions"
 
-        # Prepare the system prompt - use custom if provided, otherwise use default
+        # Prepare the system prompt
         if options and "system_prompt" in options:
             system_prompt = options["system_prompt"]
+        elif image is not None:
+            # Use image description prompt when image is provided
+            system_prompt = self.IMAGE_DESCRIPTION_PROMPT
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
 
+        # Add JSON formatting instructions if requested
+        if format_as_json:
+            system_prompt = system_prompt + self.JSON_SYSTEM_PROMPT
+
         # Prepare request payload for llama.cpp chat completions
+        # When image is provided, ignore user prompt and just ask for description
+        if image is not None:
+            user_content = "Describe this image in detail."
+        else:
+            user_content = prompt
+
+        # If image is provided, encode it and add to message
+        if image is not None:
+            # Convert tensor to PIL Image and encode as base64
+            import torch
+            import numpy as np
+            from PIL import Image
+
+            # ComfyUI images are in format (batch, height, width, channels) with values 0-1
+            img_tensor = image[0]  # Get first image from batch
+            img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
+            pil_image = Image.fromarray(img_np)
+
+            # Resize to ~1 megapixel if larger (to reduce context usage)
+            width, height = pil_image.size
+            total_pixels = width * height
+            max_pixels = 2000000  # 2 megapixels
+
+            if total_pixels > max_pixels:
+                # Calculate scaling factor to get ~2 megapixels
+                scale = (max_pixels / total_pixels) ** 0.5
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                print(f"[Prompt Generator] Resizing image from {width}x{height} to {new_width}x{new_height} (~2MP)")
+                pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            # Encode to base64
+            buffered = BytesIO()
+            pil_image.save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+            # Qwen3VL format for vision messages
+            user_message = {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}},
+                    {"type": "text", "text": user_content}
+                ]
+            }
+        else:
+            user_message = {"role": "user", "content": user_content}
+
         payload = {
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
+                user_message
             ],
             "stream": False,
             "seed": seed
         }
+
+        # Add JSON mode if requested
+        if format_as_json:
+            payload["response_format"] = {"type": "json_object"}
 
         # Add optional parameters if provided via options
         if options:
@@ -301,9 +481,27 @@ class PromptGenerator:
                 json=payload,
                 timeout=120
             )
+
+            # Log response for debugging
+            if response.status_code != 200:
+                print(f"[Prompt Generator] Server returned status {response.status_code}")
+                try:
+                    error_detail = response.json()
+                    print(f"[Prompt Generator] Error details: {error_detail}")
+                except:
+                    print(f"[Prompt Generator] Error response: {response.text[:500]}")
+
             response.raise_for_status()
 
             result = response.json()
+
+            # Log token usage if available
+            if "usage" in result:
+                usage = result["usage"]
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
+                total_tokens = usage.get("total_tokens", 0)
+                print(f"[Prompt Generator] Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
 
             # Extract content from chat completions response format
             if "choices" in result and len(result["choices"]) > 0:
