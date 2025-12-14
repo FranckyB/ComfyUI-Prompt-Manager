@@ -4,6 +4,71 @@ import { api } from "../../scripts/api.js";
 
 app.registerExtension({
     name: "PromptManager",
+    settings: [
+        {
+            id: "PromptManager.PreferredBaseModel",
+            category: ["Prompt Manager", "Model Preferences", "Base Model (text enhancement)"],
+            name: "Preferred Base Model",
+            tooltip: "Default model for 'Enhance User Prompt' mode (leave empty to auto-select smallest)",
+            type: "text",
+            defaultValue: "",
+            async onChange(value) {
+                try {
+                    await fetch("/prompt-manager/save-preference", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ key: "preferred_base_model", value: value })
+                    });
+                } catch (error) {
+                    console.error("[PromptManager] Error saving base model preference:", error);
+                }
+            }
+        },
+        {
+            id: "PromptManager.PreferredVisionModel",
+            category: ["Prompt Manager", "Model Preferences", "Vision Model (image analysis)"],
+            name: "Preferred Vision Model",
+            tooltip: "Default model for 'Analyze Image' modes (leave empty to auto-select smallest)",
+            type: "text",
+            defaultValue: "",
+            async onChange(value) {
+                try {
+                    await fetch("/prompt-manager/save-preference", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ key: "preferred_vision_model", value: value })
+                    });
+                } catch (error) {
+                    console.error("[PromptManager] Error saving vision model preference:", error);
+                }
+            }
+        }
+    ],
+    async setup() {
+        // Load settings from ComfyUI and sync to Python cache
+        try {
+            const baseModel = app.ui.settings.getSettingValue("PromptManager.PreferredBaseModel", "");
+            const visionModel = app.ui.settings.getSettingValue("PromptManager.PreferredVisionModel", "");
+            
+            // Sync both settings to Python cache
+            if (baseModel) {
+                await fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "preferred_base_model", value: baseModel })
+                });
+            }
+            if (visionModel) {
+                await fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "preferred_vision_model", value: visionModel })
+                });
+            }
+        } catch (error) {
+            console.error("[PromptManager] Error syncing preferences:", error);
+        }
+    },
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "PromptManager") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;

@@ -30,7 +30,7 @@ class PromptGenOptions:
                     "multiline": True,
                     "default": "",
                     "placeholder": "Replace LLM Instructions...",
-                    "tooltip": "Custom LLM Instructions (leave empty to use default)"
+                    "tooltip": "Custom LLM Instructions (leave empty to use default)\nThe default instructions are designed for generating\ndetailed and imaginative prompts for text-to-image generation."
                 }),
                 "temperature": ("FLOAT", {
                     "default": 0.8,

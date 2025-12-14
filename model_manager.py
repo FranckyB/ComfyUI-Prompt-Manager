@@ -3,6 +3,7 @@ Utility functions for managing llama.cpp models
 """
 import os
 import glob
+import json
 import folder_paths
 
 from huggingface_hub import HfApi
@@ -29,6 +30,9 @@ QWEN_MODELS = {
         "mmproj": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
     }
 }
+
+# Preferences are now stored in ComfyUI settings (comfy.settings.json)
+# and accessed via the settings API in prompt_manager.py
 
 def get_models_directory():
     """Get the path to the primary models directory (ComfyUI/models/gguf) for downloads"""
@@ -70,7 +74,10 @@ def get_local_models():
         if os.path.exists(models_dir):
             gguf_files = glob.glob(os.path.join(models_dir, "*.gguf"))
             for f in gguf_files:
-                all_models.add(os.path.basename(f))
+                basename = os.path.basename(f)
+                # Filter out mmproj files
+                if not basename.startswith("mmproj-"):
+                    all_models.add(basename)
 
     # Return sorted list of unique filenames
     return sorted(list(all_models))
@@ -80,18 +87,18 @@ def get_huggingface_models():
     return list(QWEN_MODELS.keys())
 
 def get_all_models():
-    """Get combined list of local and HuggingFace models, excluding already downloaded ones"""
-    local_models = get_local_models()
+    """Get combined list of local and HuggingFace models, excluding already downloaded ones and mmproj files"""
+    local_models = get_local_models()  # Already filtered
     models_dir = get_models_directory()
 
     # List all known filenames, local ones first
     all_models = []
-    # Add local models first
+    # Add local models first (already filtered by get_local_models)
     if local_models:
         all_models.extend(local_models)
-    # Add remote models (not present locally)
+    # Add remote models (not present locally), excluding mmproj files
     for filename in QWEN_MODELS.keys():
-        if filename not in all_models:
+        if filename not in all_models and not filename.startswith("mmproj-"):
             all_models.append(filename)
     return all_models
 

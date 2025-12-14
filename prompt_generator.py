@@ -43,18 +43,31 @@ class PromptGenerator:
     DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". Only output the final modified prompt, and do not output anything else.  If no text is needed, don't mention it."""
 
     # System prompt for image description (used with Qwen3VL)
-    IMAGE_DESCRIPTION_PROMPT = """You are an expert visual analyst creating detailed descriptions for text-to-image generation. Analyze the provided image and create a comprehensive visual description that captures all essential elements: subjects and their characteristics, actions and poses, spatial positioning, composition and framing, lighting and atmosphere, color palette, artistic style, mood and emotion, background details, camera angle and perspective, material textures, and any visible text. Your description must be concrete, objective, and detailed enough that it could be used to recreate a similar image. Focus on visual elements only, avoiding interpretation or metaphor. If there is visible text in the image, enclose it in double quotes ("")."""
+    IMAGE_DESCRIPTION_PROMPT = """You are an expert visual analyst creating detailed descriptions for text-to-image generation. Analyze the provided image and create a comprehensive visual description that captures all essential elements: subjects and their characteristics, actions and poses, spatial positioning, composition and framing, lighting and atmosphere, color palette, artistic style, mood and emotion, background details, camera angle and perspective, material textures, and any visible text. Your description must be concrete, objective, and detailed enough that it could be used to recreate a similar image. Focus on visual elements only, avoiding interpretation or metaphor. If there is visible text in the image, enclose it in double quotes (""). If no text is needed, don't mention it. Only output the final description, and do not output anything else."""
 
     # Additional instructions for JSON formatted output
-    JSON_SYSTEM_PROMPT = """\n\nReturn your response as valid JSON with these fields: scene (overall description), subjects (array with description/position/action for each), style, color_palette, lighting, mood, background, composition, camera."""
+    JSON_SYSTEM_PROMPT = """\n\nReturn your response as valid JSON with these fields: scene (overall description), subjects (array with description/position/action for each), style, color_palette, lighting, mood, background, composition, camera. If you deem more fields are necessary, feel free to add them. Ensure the JSON is properly formatted."""
 
     @staticmethod
     def find_qwen3vl_model(available_models):
-        """Find the smallest available Qwen3VL model"""
+        """Find the preferred or smallest available Qwen3VL model
+
+        First checks user preferences, then falls back to smallest model (4B preferred over 8B)
+        """
+        from . import prompt_manager
+        from .model_manager import is_model_local
+
         qwen3vl_models = [m for m in available_models if 'qwen3vl' in m.lower()]
         if not qwen3vl_models:
             return None
-        # Prefer 4B over 8B (smaller first)
+
+        # Check user preference first
+        preferred = prompt_manager._preferences_cache.get("preferred_vision_model", "")
+        if preferred and preferred in qwen3vl_models and is_model_local(preferred):
+            print(f"[Prompt Generator] Using preferred vision model: {preferred}")
+            return preferred
+
+        # Fall back to smallest model (prefer 4B over 8B)
         for model in qwen3vl_models:
             if '4b' in model.lower():
                 return model
@@ -62,14 +75,22 @@ class PromptGenerator:
 
     @staticmethod
     def find_non_vl_model(available_models):
-        """Find the smallest available non-vision model by file size"""
-        from .model_manager import get_models_directory
+        """Find the preferred or smallest available non-vision model by file size
+
+        First checks user preferences, then falls back to smallest model by file size
+        """
+        from . import prompt_manager
+        from .model_manager import get_models_directory, is_model_local
 
         non_vl_models = [m for m in available_models if 'qwen3vl' not in m.lower()]
         if not non_vl_models:
             return None
 
-        # Sort by file size (smallest first)
+        # Check user preference first
+        preferred = prompt_manager._preferences_cache.get("preferred_base_model", "")
+        if preferred and preferred in non_vl_models and is_model_local(preferred):
+            print(f"[Prompt Generator] Using preferred base model: {preferred}")
+            return preferred
         models_dir = get_models_directory()
 
         models_with_size = []
@@ -98,14 +119,18 @@ class PromptGenerator:
                 }),
             },
             "optional": {
+                "mode": (["Enhance User Prompt", "Analyze Image", "Analyze Image with Prompt"], {
+                    "default": "Enhance User Prompt",
+                    "tooltip": "Choose mode: Enhance text prompt | Analyze image | Analyze image with custom instructions"
+                }),
                 "prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
-                    "placeholder": "Enter prompt to enhance, or connect an image to describe it...",
-                    "tooltip": "Text prompt to enhance. Optional when an image is connected - the image will be analyzed instead."
+                    "placeholder": "Enter prompt...",
+                    "tooltip": "Text prompt (required for 'Enhance User Prompt', optional for 'Analyze Image with Prompt')"
                 }),
                 "image": ("IMAGE", {
-                    "tooltip": "Connect an image for Qwen3VL to analyze and describe. When connected, the text prompt is optional."
+                    "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
                 }),
                 "format_as_json": ("BOOLEAN", {
                     "default": False,
@@ -290,49 +315,52 @@ class PromptGenerator:
         # Also kill any orphaned llama-server processes
         PromptGenerator.kill_all_llama_servers()
 
-    def convert_prompt(self, seed: int, prompt="", image=None, format_as_json=False, stop_server_after=False, options=None) -> str:
+    def convert_prompt(self, seed: int, mode="Enhance User Prompt", prompt="", image=None, format_as_json=False, stop_server_after=False, options=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server, with caching for repeated requests."""
         global _current_model
 
-        # If prompt is empty and no image, return empty string
-        if not prompt.strip() and image is None:
+        # Validate inputs based on mode
+        if mode == "Enhance User Prompt" and not prompt.strip():
             return ("",)
+        elif mode in ["Analyze Image", "Analyze Image with Prompt"] and image is None:
+            error_msg = f"Error: '{mode}' mode requires an image to be connected."
+            return (error_msg,)
 
         # Always determine a valid model filename before running server
         model_to_use = None
         model_changed = False
         available_models = get_local_models()
 
-        # If image is provided, we need a Qwen3VL model
-        if image is not None:
+        # If in Analyze Image or Analyze Image with Prompt mode, we need a Qwen3VL model
+        if mode in ["Analyze Image", "Analyze Image with Prompt"]:
             # Check if options specifies a Qwen3VL model
             if options and "model" in options and "qwen3vl" in options["model"].lower() and is_model_local(options["model"]):
                 model_to_use = options["model"]
             elif options and "model" in options and is_model_local(options["model"]):
-                # Non-VL model selected but image is connected
-                print(f"[Prompt Generator] Warning: Non-vision model '{options['model']}' selected but image is connected. Ignoring model selection and using a Qwen3VL model instead.")
+                # Non-VL model selected but in vision mode
+                print(f"[Prompt Generator] Warning: Non-vision model '{options['model']}' selected but '{mode}' mode is active. Ignoring model selection and using a Qwen3VL model instead.")
                 model_to_use = self.find_qwen3vl_model(available_models)
                 if model_to_use is None:
-                    error_msg = "Error: Image provided but no Qwen3VL model found. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
+                    error_msg = f"Error: '{mode}' mode requires a Qwen3VL model. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
                     print(f"[Prompt Generator] {error_msg}")
                     return (error_msg,)
             else:
                 # Try to find a Qwen3VL model automatically
                 model_to_use = self.find_qwen3vl_model(available_models)
                 if model_to_use is None:
-                    error_msg = "Error: Image provided but no Qwen3VL model found. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
+                    error_msg = f"Error: '{mode}' mode requires a Qwen3VL model. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
                     print(f"[Prompt Generator] {error_msg}")
                     return (error_msg,)
         else:
-            # No image - use regular model selection logic (exclude Qwen3VL models)
+            # Enhance User Prompt mode - use regular model selection logic (exclude Qwen3VL models)
             if options and "model" in options and is_model_local(options["model"]):
-                # If user explicitly selected a Qwen3VL model but no image provided, use first non-VL model instead
+                # If user explicitly selected a Qwen3VL model but in Enhance mode, use first non-VL model instead
                 if "qwen3vl" in options["model"].lower():
                     model_to_use = self.find_non_vl_model(available_models)
                     if model_to_use:
-                        print(f"[Prompt Generator] Warning: Qwen3VL model '{options['model']}' selected but no image connected. Ignoring model selection and using {model_to_use} instead.")
+                        print(f"[Prompt Generator] Warning: Qwen3VL model '{options['model']}' selected but 'Enhance User Prompt' mode is active. Ignoring model selection and using {model_to_use} instead.")
                     else:
-                        error_msg = "Error: Only Qwen3VL models available but no image provided. Please add a .gguf model or use Generator Options to add a non-vision model."
+                        error_msg = "Error: Only Qwen3VL models available but 'Enhance User Prompt' mode is active. Please add a .gguf model or use Generator Options to add a non-vision model."
                         print(f"[Prompt Generator] {error_msg}")
                         return (error_msg,)
                 else:
@@ -345,14 +373,13 @@ class PromptGenerator:
                 # Find smallest non-VL model
                 model_to_use = self.find_non_vl_model(available_models)
                 if not model_to_use:
-                    error_msg = "Error: Only Qwen3VL models available but no image provided. Please add a non-vision model or provide an image."
+                    error_msg = "Error: Only Qwen3VL models available but 'Enhance User Prompt' mode is active. Please add a non-vision model or switch to 'Describe Image' mode."
                     print(f"[Prompt Generator] {error_msg}")
                     return (error_msg,)
 
-        # Caching logic: if prompt/seed/model/options/format/image are unchanged, return cached result
+        # Caching logic: if prompt/seed/model/options/format/mode are unchanged, return cached result
         options_tuple = tuple(sorted(options.items())) if options else ()
-        has_image = image is not None
-        cache_key = (prompt, seed, model_to_use, options_tuple, format_as_json, has_image)
+        cache_key = (prompt, seed, model_to_use, options_tuple, format_as_json, mode)
         # Only use cache if the model has not changed since last use
         if cache_key in self._prompt_cache and _current_model == model_to_use:
             print("[Prompt Generator] Returning cached prompt result.")
@@ -384,8 +411,8 @@ class PromptGenerator:
         # Prepare the system prompt
         if options and "system_prompt" in options:
             system_prompt = options["system_prompt"]
-        elif image is not None:
-            # Use image description prompt when image is provided
+        elif mode in ["Analyze Image", "Analyze Image with Prompt"]:
+            # Use image description prompt for vision modes
             system_prompt = self.IMAGE_DESCRIPTION_PROMPT
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
@@ -395,14 +422,17 @@ class PromptGenerator:
             system_prompt = system_prompt + self.JSON_SYSTEM_PROMPT
 
         # Prepare request payload for llama.cpp chat completions
-        # When image is provided, ignore user prompt and just ask for description
-        if image is not None:
+        # Determine user content based on mode
+        if mode == "Analyze Image":
             user_content = "Describe this image in detail."
+        elif mode == "Analyze Image with Prompt":
+            # Use user prompt if provided, otherwise default to generic description
+            user_content = prompt.strip() if prompt.strip() else "Describe this image in detail."
         else:
             user_content = prompt
 
-        # If image is provided, encode it and add to message
-        if image is not None:
+        # If in vision mode and image is connected, encode it and add to message
+        if mode in ["Analyze Image", "Analyze Image with Prompt"] and image is not None:
             # Convert tensor to PIL Image and encode as base64
             import torch
             import numpy as np
@@ -439,6 +469,11 @@ class PromptGenerator:
                     {"type": "text", "text": user_content}
                 ]
             }
+        elif mode in ["Analyze Image", "Analyze Image with Prompt"]:
+            # Vision mode but no image connected
+            error_msg = f"Error: '{mode}' mode requires an image to be connected. Please connect an image or switch to 'Enhance User Prompt' mode."
+            print(f"[Prompt Generator] {error_msg}")
+            return (error_msg,)
         else:
             user_message = {"role": "user", "content": user_content}
 
@@ -450,10 +485,6 @@ class PromptGenerator:
             "stream": False,
             "seed": seed
         }
-
-        # Add JSON mode if requested
-        if format_as_json:
-            payload["response_format"] = {"type": "json_object"}
 
         # Add optional parameters if provided via options
         if options:
