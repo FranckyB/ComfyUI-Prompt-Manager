@@ -28,6 +28,14 @@ QWEN_MODELS = {
     "Qwen3VL-8B-Instruct-Q8_0.gguf": {
         "repo": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
         "mmproj": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+    },
+    "Qwen3VL-4B-Thinking-Q8_0.gguf": {
+        "repo": "Qwen/Qwen3-VL-4B-Thinking-GGUF",
+        "mmproj": "mmproj-Qwen3VL-4B-Thinking-Q8_0.gguf"
+    },
+    "Qwen3VL-8B-Thinking-Q8_0.gguf": {
+        "repo": "Qwen/Qwen3-VL-8B-Thinking-GGUF",
+        "mmproj": "mmproj-Qwen3VL-8B-Thinking-Q8_0.gguf"
     }
 }
 
@@ -136,11 +144,26 @@ def get_mmproj_for_model(model_name):
     return None
 
 def get_mmproj_path(model_name):
-    """Get the path to the mmproj file for a vision model, if it exists"""
-    mmproj_name = get_mmproj_for_model(model_name)
-    if mmproj_name and is_model_local(mmproj_name):
-        return get_model_path(mmproj_name)
-    return None
+    """Get the path to the mmproj file for a vision model, if it exists
+    Searches for mmproj files that contain all parts of the model name
+    """
+    # Get all parts of the model name (excluding .gguf)
+    model_parts = model_name.replace('.gguf', '').split('-')
+
+    # Get all local mmproj files
+    all_dirs = get_all_model_directories()
+    mmproj_files = []
+    for models_dir in all_dirs:
+        if os.path.exists(models_dir):
+            for f in os.listdir(models_dir):
+                if f.startswith('mmproj-') and f.endswith('.gguf'):
+                    mmproj_files.append(f)
+
+    # Find mmproj that contains all model parts
+    for mmproj_file in mmproj_files:
+        mmproj_parts = mmproj_file.replace('mmproj-', '').replace('.gguf', '').split('-')
+        if all(part in mmproj_parts for part in model_parts):
+            return get_model_path(mmproj_file)
 
 def download_model(model_name):
     """Download a model from HuggingFace with automatic progress display

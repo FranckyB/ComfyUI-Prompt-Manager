@@ -284,4 +284,3 @@ async def save_preference(request):
     except Exception as e:
         print(f"[PromptManager] Error saving preference: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
-

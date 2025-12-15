@@ -26,6 +26,18 @@ class PromptGenOptions:
                     "default": available_models[0] if available_models else "",
                     "tooltip": "Select model to use (local models listed first, then HuggingFace models)"
                 }),
+                "image2": ("IMAGE", {
+                    "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
+                }),
+                "image3": ("IMAGE", {
+                    "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
+                }),
+                "image4": ("IMAGE", {
+                    "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
+                }),
+                "image5": ("IMAGE", {
+                    "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
+                }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
@@ -74,6 +86,14 @@ class PromptGenOptions:
                     "step": 512,
                     "tooltip": "Context size (increase for vision models or large prompts)"
                 }),
+                "enable_thinking": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Enable thinking/reasoning mode for compatible models (DeepSeek format)"
+                }),
+                "show_everything_in_console": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Print system prompt, user prompt, thinking process, and raw model response to console"
+                })
             }
         }
 
@@ -87,11 +107,12 @@ class PromptGenOptions:
         """Force refresh when models are updated"""
         return _last_model_update
 
-    def create_options(self, model: str = None,
+    def create_options(self, model: str = None, image2=None, image3=None, image4=None, image5=None,
                        system_prompt: str = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
-                       repeat_penalty: float = None, context_size: int = None) -> dict:
-        """Create options dictionary with model and LLM parameters"""
+                       repeat_penalty: float = None, context_size: int = None,
+                       enable_thinking: bool = None, show_everything_in_console: bool = None) -> dict:
+        """Create options dictionary with model, LLM parameters, and extra images"""
 
         options = {}
 
@@ -123,6 +144,16 @@ class PromptGenOptions:
             else:
                 options["model"] = model
 
+        # Add extra images if provided
+        if image2 is not None:
+            options["image2"] = image2
+        if image3 is not None:
+            options["image3"] = image3
+        if image4 is not None:
+            options["image4"] = image4
+        if image5 is not None:
+            options["image5"] = image5
+
         # Only include LLM parameters that are provided
         if system_prompt and system_prompt.strip():
             options["system_prompt"] = system_prompt
@@ -138,6 +169,10 @@ class PromptGenOptions:
             options["repeat_penalty"] = repeat_penalty
         if context_size is not None:
             options["context_size"] = context_size
+        if enable_thinking is not None:
+            options["enable_thinking"] = enable_thinking
+        if show_everything_in_console is not None:
+            options["show_everything_in_console"] = show_everything_in_console
 
         return (options,)
 
