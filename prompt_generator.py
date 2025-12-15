@@ -2,20 +2,24 @@ import requests
 import subprocess
 import time
 import os
+import sys
 import atexit
 import signal
 import psutil
 import json
 import base64
-import hashlib
+import ctypes
 import numpy as np
 from PIL import Image
 from io import BytesIO
 from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, get_mmproj_for_model, get_models_directory
 
+# ComfyUI interrupt helper
+import comfy.model_management
+
 # Try to import preferences cache, fallback to empty dict if not available
 try:
-    from .prompt_manager import _preferences_cache
+    from .model_manager import _preferences_cache
 except ImportError:
     _preferences_cache = {}
 
@@ -27,6 +31,8 @@ RESET = '\033[0m'
 _server_process = None
 _current_model = None
 _current_context_size = None
+_job_handle = None
+_model_default_params = None
 
 def print_pg_header():
     """Print the Prompt Generator header"""
@@ -42,28 +48,121 @@ def print_pg(message):
     """Print a message with Prompt Generator formatting and yellow color"""
     print(f"{YELLOW}{message}{RESET}")
 
+# --- Windows Job Object helpers ---
+def setup_windows_job_object():
+    """Create a Windows Job Object that kills child processes when parent exits"""
+    global _job_handle
+    if os.name != 'nt' or _job_handle:
+        return
+    try:
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+        JobObjectExtendedLimitInformation = 9
+
+        class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", ctypes.c_uint32),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", ctypes.c_uint32),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", ctypes.c_uint32),
+                ("SchedulingClass", ctypes.c_uint32),
+            ]
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        extended_info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        extended_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+        if not kernel32.SetInformationJobObject(job, JobObjectExtendedLimitInformation, ctypes.byref(extended_info), ctypes.sizeof(extended_info)):
+            kernel32.CloseHandle(job)
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        _job_handle = job
+    except Exception as e:
+        print_pg(f"Warning: Failed to create Job Object: {e}")
+
+
+def assign_process_to_job(pid):
+    """Assign subprocess pid to job object so it gets killed when parent exits"""
+    global _job_handle
+    if os.name != 'nt' or not _job_handle or not pid:
+        return
+    try:
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        PROCESS_ALL_ACCESS = 0x1F0FFF
+        proc_handle = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, int(pid))
+        if not proc_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not kernel32.AssignProcessToJobObject(_job_handle, proc_handle):
+            kernel32.CloseHandle(proc_handle)
+            raise ctypes.WinError(ctypes.get_last_error())
+        kernel32.CloseHandle(proc_handle)
+    except Exception as e:
+        print_pg(f"Warning: Failed to assign process to Job Object: {e}")
+
+# Initialize job object at module load (no-op on non-Windows)
+setup_windows_job_object()
+
 # Cleanup function to stop server on clean exit
 def cleanup_server():
     """Cleanup function to stop server on exit"""
-    global _server_process
+    global _server_process, _job_handle
     if _server_process:
         try:
             _server_process.terminate()
             _server_process.wait(timeout=5)
             print_pg("Server stopped on exit")
         except:
+            try:
+                _server_process.kill()
+            except:
+                pass
+        finally:
+            _server_process = None
+
+    # Close and release Windows Job Object if created
+    if os.name == 'nt' and _job_handle:
+        try:
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel32.CloseHandle(_job_handle)
+        except Exception:
             pass
+        _job_handle = None
 
 # Cleanup function for signals, on forced exits
 def _signal_handler(signum, frame):
     cleanup_server()
     # Optionally, exit the process after cleanup
-    import sys
     sys.exit(0)
 
-# Register cleanup function for normal exit
+# Register cleanup function for normal and forced exit
 atexit.register(cleanup_server)
-# Register signal handlers for forced exits
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 
@@ -76,10 +175,13 @@ class PromptGenerator:
     SERVER_PORT = 8080
 
     # Default system prompt for prompt enhancement
-    DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". Only output the final modified prompt, and do not output anything else.  If an element, text or other is not needed or seen, then simply don't mention them."""
+    DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". If an element, text or other is not needed or seen, then simply don't mention them.  Only output your newly generated prompt."""
 
     # System prompt for image description (used with Qwen3VL)
-    IMAGE_DESCRIPTION_PROMPT = """You are an expert visual analyst creating detailed descriptions for text-to-image generation. Analyze the provided image and create a comprehensive visual description that captures all essential elements: subjects and their characteristics, actions and poses, spatial positioning, composition and framing, lighting and atmosphere, color palette, artistic style, mood and emotion, background details, camera angle and perspective, material textures, and any visible text. Your description must be concrete, objective, and detailed enough that it could be used to recreate a similar image. Focus on visual elements only, avoiding interpretation or metaphor. If there is visible text in the image, enclose it in double quotes (""). If an element, text or other is not needed or seen, then simply don't mention them. Only output the final description."""
+    DEFAULT_IMAGE_SYSTEM_PROMPT = """You are an expert visual analyst creating detailed descriptions for text-to-image generation. Analyze the provided images and create a comprehensive visual description that captures all essential elements: subjects and their characteristics, actions and poses, spatial positioning, composition and framing, lighting and atmosphere, color palette, artistic style, mood and emotion, background details, camera angle and perspective, material textures, and any visible text. Your description must be concrete, objective, and detailed enough that it could be used to recreate a similar image. Focus on visual elements only, avoiding interpretation or metaphor. If there is visible text in the image, enclose it in double quotes (""). If an element, text or other is not needed or seen, then simply don't mention them.  If more than one image is provided you are free to combine them as you see fit. Only output the final description."""
+
+    # System prompt for custom image description with user prompt
+    CUSTOM_IMAGE_SYSTEM_PROMPT = """You are an expert visual analyst. First, analyze the provided images and note the concrete visual facts: subjects and their characteristics, actions and poses, spatial relationships, composition and framing, lighting and atmosphere, color palette, material textures, background details, camera angle and perspective, and any visible text (enclose visible text in double quotes ""). After analyzing the image, follow the user's prompt: apply the user's requested focus, style, or constraints to shape the final description. Preserve the observed visual facts from the image but prioritize the user's instructions for tone, emphasis, or additional elements. Be concrete and objective; avoid metaphor and speculation. Output only the final description that combines the image analysis with the user's prompt."""
 
     # default Image description action
     IMAGE_ACTION_PROMPT = "Describe this image in detail, making sure to cover all visual aspects comprehensively, as well as the position of each element."
@@ -200,7 +302,7 @@ class PromptGenerator:
         Returns:
             tuple: (success: bool, error_message: str or None)
         """
-        global _server_process, _current_model, _current_context_size
+        global _server_process, _current_model, _current_context_size, _job_handle
 
         # Kill any existing llama-server processes first
         PromptGenerator.kill_all_llama_servers()
@@ -242,7 +344,7 @@ class PromptGenerator:
             # Determine the correct llama-server executable based on OS
             if os.name == 'nt':  # Windows
                 server_cmd = "llama-server.exe"
-                creation_flags = subprocess.CREATE_NO_WINDOW
+                creation_flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             else:  # Linux/Mac
                 server_cmd = "llama-server"
                 creation_flags = 0
@@ -255,7 +357,7 @@ class PromptGenerator:
                 mmproj_path = get_mmproj_path(model_name)
                 if mmproj_path:
                     # Only print if mmproj is used
-                    print_pg(f"Vision model: using mmproj: {mmproj_path}")
+                    print_pg(f"Vision model: using mmproj: {os.path.basename(mmproj_path)}")
                     cmd_args.extend(["--mmproj", mmproj_path])
                 else:
                     mmproj_name = get_mmproj_for_model(model_name)
@@ -264,13 +366,47 @@ class PromptGenerator:
                         print_pg(error_msg)
                         return (False, error_msg)
 
+            # Prepare popen kwargs for cross-platform parent-death behavior
+            popen_kwargs = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+            }
+
+            if os.name == 'nt':
+                popen_kwargs["creationflags"] = creation_flags
+            else:
+                # On Unix, set PR_SET_PDEATHSIG so child gets SIGTERM when parent dies
+                def _set_pdeathsig():
+                    try:
+                        # Try common libc names
+                        for libname in ("libc.so.6", "libc.dylib", "libc.so"):
+                            try:
+                                libc = ctypes.CDLL(libname)
+                                break
+                            except Exception:
+                                libc = None
+                        if not libc:
+                            return
+                        PR_SET_PDEATHSIG = 1
+                        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+                    except Exception:
+                        return
+
+                popen_kwargs["preexec_fn"] = _set_pdeathsig
+
             # Start server process
             _server_process = subprocess.Popen(
                 cmd_args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=creation_flags
+                **popen_kwargs
             )
+
+            # On Windows attach process to Job Object so children die if parent exits
+            if os.name == 'nt':
+                try:
+                    setup_windows_job_object()
+                    assign_process_to_job(_server_process.pid)
+                except Exception as e:
+                    print_pg(f"Warning: Failed to assign process to Job Object: {e}")
 
             _current_model = model_name
             _current_context_size = context_size
@@ -278,6 +414,11 @@ class PromptGenerator:
             # Wait for server to be ready
             for i in range(30):  # Wait up to 30 seconds
                 time.sleep(1)
+                try:
+                    comfy.model_management.throw_exception_if_processing_interrupted()
+                except Exception:
+                    # Propagate interrupt up to caller
+                    raise
                 if PromptGenerator.is_server_alive():
                     return (True, None)
 
@@ -315,7 +456,7 @@ class PromptGenerator:
     @staticmethod
     def stop_server():
         """Stop the llama.cpp server"""
-        global _server_process, _current_model
+        global _server_process, _current_model, _job_handle
 
         if _server_process:
             try:
@@ -330,6 +471,15 @@ class PromptGenerator:
             finally:
                 _server_process = None
                 _current_model = None
+
+        # Close and release Windows Job Object if created
+        if os.name == 'nt' and _job_handle:
+            try:
+                kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel32.CloseHandle(_job_handle)
+            except Exception:
+                pass
+            _job_handle = None
 
         # Also kill any orphaned llama-server processes
         PromptGenerator.kill_all_llama_servers()
@@ -372,6 +522,42 @@ class PromptGenerator:
         except Exception as e:
             print_pg(f"Warning: Could not tokenize: {e}")
         return None
+
+    @staticmethod
+    def fetch_model_defaults():
+        """Fetch default generation parameters from the server"""
+        global _model_default_params
+        try:
+            response = requests.get(f"{PromptGenerator.SERVER_URL}/props", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                params = data.get("default_generation_settings", {}).get("params", {})
+                _model_default_params = {
+                    "temperature": round(params.get("temperature", 0.8), 4),
+                    "top_k": int(params.get("top_k", 40)),
+                    "top_p": round(params.get("top_p", 0.95), 4),
+                    "min_p": round(params.get("min_p", 0.05), 4),
+                    "repeat_penalty": round(params.get("repeat_penalty", 1.0), 4),
+                }
+                return _model_default_params
+        except Exception:
+            _model_default_params = {
+                "temperature": 0.8,
+                "top_k": 40,
+                "top_p": 0.95,
+                "min_p": 0.05,
+                "repeat_penalty": 1.0
+            }
+        return _model_default_params
+
+    @staticmethod
+    def get_model_defaults():
+        """Return cached model defaults or fetch them if possible"""
+        global _model_default_params
+        if _model_default_params is not None:
+            return _model_default_params
+        # Always attempt to fetch defaults; fetch_model_defaults() will fall back to built-in defaults on error, ensuring a dict is
+        return PromptGenerator.fetch_model_defaults()
 
     def convert_prompt(self, seed: int, mode="Enhance User Prompt", prompt="", image=None, format_as_json=False, stop_server_after=False, options=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server, with caching for repeated requests."""
@@ -492,14 +678,17 @@ class PromptGenerator:
         # Prepare the system prompt
         if options and "system_prompt" in options:
             system_prompt = options["system_prompt"]
-        elif mode in ["Analyze Image", "Analyze Image with Prompt"]:
+        elif mode in ["Analyze Image"]:
             # Use image description prompt for vision modes
-            system_prompt = self.IMAGE_DESCRIPTION_PROMPT
+            system_prompt = self.DEFAULT_IMAGE_SYSTEM_PROMPT
+        elif mode in ["Analyze Image with Prompt"]:
+            system_prompt = self.CUSTOM_IMAGE_SYSTEM_PROMPT
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
 
-        # Add JSON formatting instructions if requested
-        system_prompt = system_prompt + self.JSON_SYSTEM_PROMPT
+        # Add JSON formatting instructions only when `format_as_json` is True
+        if format_as_json:
+            system_prompt = system_prompt + self.JSON_SYSTEM_PROMPT
 
         # Determine user content based on mode
         if mode == "Analyze Image":
@@ -566,18 +755,17 @@ class PromptGenerator:
             }
         }
 
-        # Add optional parameters if provided via options
+        model_defaults = self.get_model_defaults()
+
         if options:
-            if "temperature" in options:
-                payload["temperature"] = options["temperature"]
-            if "top_p" in options:
-                payload["top_p"] = options["top_p"]
-            if "top_k" in options:
-                payload["top_k"] = options["top_k"]
-            if "min_p" in options:
-                payload["min_p"] = options["min_p"]
-            if "repeat_penalty" in options:
-                payload["repeat_penalty"] = options["repeat_penalty"]
+            # Override model defaults with any options provided
+            for param in ["temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
+                # we default to model defaults if option not provided
+                payload[param] = options.get(param, model_defaults.get(param))
+        else:
+            # Use model defaults
+            for param in ["temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
+                payload[param] = model_defaults.get(param)
 
         try:
             response = requests.post(
@@ -614,6 +802,16 @@ class PromptGenerator:
             usage_stats = None
 
             for line in response.iter_lines():
+                # Check for user interrupt from ComfyUI
+                try:
+                    comfy.model_management.throw_exception_if_processing_interrupted()
+                except Exception:
+                    # Close response and propagate interrupt
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                    raise
                 if line:
                     line = line.decode('utf-8')
                     if line.startswith('data: '):
@@ -666,6 +864,19 @@ class PromptGenerator:
 
             return (full_response,)
 
+        except comfy.model_management.InterruptProcessingException:
+            # User requested interrupt; ensure response is closed and optionally stop server
+            try:
+                response.close()
+            except Exception:
+                pass
+            if stop_server_after:
+                try:
+                    self.stop_server()
+                except Exception:
+                    pass
+            # Re-raise so ComfyUI handles the interruption
+            raise
         except requests.exceptions.ConnectionError:
             error_msg = f"Error: Could not connect to server at {full_url}. Server may have crashed."
             print_pg(error_msg)
@@ -732,6 +943,7 @@ class PromptGenerator:
         print(f"{YELLOW} -----------------------------------------{RESET}")
         print(f"{YELLOW} TOTAL:         {total_input + total_output:>5} tokens{RESET}")
         print(f"{YELLOW}{'=' * 60}\n{RESET}")
+
 
 NODE_CLASS_MAPPINGS = {
     "PromptGenerator": PromptGenerator

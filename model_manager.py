@@ -5,10 +5,16 @@ import os
 import glob
 import json
 import folder_paths
-
+import server
 from huggingface_hub import HfApi
 from tqdm.auto import tqdm
 import requests
+
+# Add preference cache and API endpoints for preferences
+_preferences_cache = {
+    "preferred_base_model": "",
+    "preferred_vision_model": ""
+}
 
 # Predefined models - use real filenames as keys
 QWEN_MODELS = {
@@ -39,8 +45,30 @@ QWEN_MODELS = {
     }
 }
 
-# Preferences are now stored in ComfyUI settings (comfy.settings.json)
-# and accessed via the settings API in prompt_manager.py
+@server.PromptServer.instance.routes.get("/prompt-manager/load-preferences")
+async def load_preferences(request):
+    """API endpoint to get cached preferences (set from ComfyUI settings)"""
+    return server.web.json_response(_preferences_cache)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/save-preference")
+async def save_preference(request):
+    """API endpoint to update preference cache when settings change"""
+    try:
+        data = await request.json()
+        key = data.get("key")
+        value = data.get("value", "")
+
+        if key not in ["preferred_base_model", "preferred_vision_model"]:
+            return server.web.json_response({"success": False, "error": "Invalid preference key"})
+
+        # Update in-memory cache
+        _preferences_cache[key] = value
+
+        return server.web.json_response({"success": True, "preferences": _preferences_cache})
+    except Exception as e:
+        print(f"[Model Manager] Error saving preference: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 def get_models_directory():
     """Get the path to the primary models directory (ComfyUI/models/gguf) for downloads"""

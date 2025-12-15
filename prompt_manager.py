@@ -3,11 +3,6 @@ import json
 import folder_paths
 import server
 
-# Store preferences in memory (ComfyUI settings is the source of truth)
-_preferences_cache = {
-    "preferred_base_model": "",
-    "preferred_vision_model": ""
-}
 
 class PromptManager:
 
@@ -257,30 +252,4 @@ async def delete_prompt(request):
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
         print(f"[PromptManager] Error in delete_prompt API: {e}")
-        return server.web.json_response({"success": False, "error": str(e)}, status=500)
-
-
-@server.PromptServer.instance.routes.get("/prompt-manager/load-preferences")
-async def load_preferences(request):
-    """API endpoint to get cached preferences (set from ComfyUI settings)"""
-    return server.web.json_response(_preferences_cache)
-
-
-@server.PromptServer.instance.routes.post("/prompt-manager/save-preference")
-async def save_preference(request):
-    """API endpoint to update preference cache when settings change"""
-    try:
-        data = await request.json()
-        key = data.get("key")
-        value = data.get("value", "")
-
-        if key not in ["preferred_base_model", "preferred_vision_model"]:
-            return server.web.json_response({"success": False, "error": "Invalid preference key"})
-
-        # Update in-memory cache
-        _preferences_cache[key] = value
-
-        return server.web.json_response({"success": True, "preferences": _preferences_cache})
-    except Exception as e:
-        print(f"[PromptManager] Error saving preference: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
