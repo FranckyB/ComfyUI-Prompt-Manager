@@ -5,7 +5,7 @@
 This addon started off as a simple prompt Manager, to help save and retrieve prompts.  
 But has since evolved to be a complete toolset to help Generate prompts also.
 ***
-Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp/releases), preventing install conflicts with ComfyUI.  
+Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp), preventing install conflicts with ComfyUI.  
 Provides options to automatically download Qwen3 and Qwen3VL models.  
 Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
 Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
