@@ -9,6 +9,7 @@ Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp),
 Provides options to automatically download Qwen3 and Qwen3VL models.  
 Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
 Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
+Users can set a custom Llama-server path, if not defined in your System Path.
 
 <div align="center">
   <figcaption>Simple Prompt Generator Usage</figcaption>
@@ -38,7 +39,8 @@ Custom GGUF models can be used if supported by llama.cpp; simply drop them in th
 - **Thinking Support**: Support Thinking models to perform deeper generative reasoning.
 - **Automatic Server Management**: Starts/stops llama.cpp server as needed, with automatic shut off at exit.
 - **Smart Model Selection**: Auto-selects appropriate model (vision or text) based on mode or Thinking mode.
-- **Model Preferences**: Set preferred models in ComfyUI Settings for automatic selection
+- **Model Preferences**: Set preferred models in ComfyUI preferences for automatic selection.
+- **Custom Llama path**: In preferences you can set a custom Llama install Path, if not defined in your System Path.
 
 ### Prompt Generator Options
 - **Model Selection**: Choose from local models or download Qwen3, Qwen3VL and Qwen3VL Thinking models from HuggingFace
@@ -166,6 +168,9 @@ Custom GGUF models can be used if supported by llama.cpp; simply drop them in th
 - **Solution**: You can set your preferred model in the ComfyUI settings. Simply add its full name for both the VL and base models. Enabling Thinking in the Generator might change what is used.
 
 ## Changelog
+
+### Version 1.8.1
+- Added option to set a custom Llama path in preferences, for those that have specific installs.
 
 ### Version 1.8.0
 - Added support for Qwen3VL Thinking model variants, with download options thru the Generator Options node.

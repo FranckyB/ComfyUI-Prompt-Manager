@@ -42,6 +42,25 @@ app.registerExtension({
                     console.error("[PromptManager] Error saving vision model preference:", error);
                 }
             }
+        },
+        {
+            id: "PromptManager.LlamaPath",
+            category: ["Prompt Manager", "Llama Preferences", "Custom Llama Path"],
+            name: "Custom Llama Path",
+            tooltip: "Path to custom Llama installation (Can leave empty if it's defined in your system Path)",
+            type: "text",
+            defaultValue: "",
+            async onChange(value) {
+                try {
+                    await fetch("/prompt-manager/save-preference", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ key: "custom_llama_path", value: value })
+                    });
+                } catch (error) {
+                    console.error("[PromptManager] Error saving Llama path preference:", error);
+                }
+            }
         }
     ],
     async setup() {

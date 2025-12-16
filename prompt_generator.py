@@ -370,6 +370,17 @@ class PromptGenerator:
                 server_cmd = "llama-server"
                 creation_flags = 0
 
+            # If custom llama path is set, use it
+            custom_llama_path = _preferences_cache.get("custom_llama_path", "")
+            if custom_llama_path:
+                custom_llama_path = os.path.normpath(custom_llama_path)
+                if os.path.isdir(custom_llama_path):
+                    print_pg(f"Using custom llama path: {custom_llama_path}")
+                    server_cmd = os.path.join(custom_llama_path, server_cmd)
+                else:
+                    error_msg = f"Error: Custom llama path is not a valid directory: {custom_llama_path}\nWill use system PATH instead."
+                    print_pg(error_msg, RED)
+
             # Build command arguments
             cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-c", str(context_size)]
 
