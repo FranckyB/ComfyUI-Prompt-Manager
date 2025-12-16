@@ -9,7 +9,12 @@ Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp),
 Provides options to automatically download Qwen3 and Qwen3VL models.  
 Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
 Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
-Users can set a custom Llama-server path, if not defined in their System Path.
+Users can now set a custom Llama-server path as well as a custom Model Path in ComfyUI's preferences.  
+If a Custom Model Path is added, it will become the default download folder.
+***
+Since this, as the name implies, comes with a Prompt manager, you could save different system prompts and use a second prompt Manager
+to have fun explorring all the different results you can achieve when tweaking the base LLM Instructions.  
+***
 
 <div align="center">
   <figcaption>Simple Prompt Generator Usage</figcaption>
