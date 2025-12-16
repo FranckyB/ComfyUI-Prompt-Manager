@@ -1,11 +1,23 @@
 # ComfyUI Prompt Manager
 
-A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organizing, generating, and enhancing prompts using local llama.cpp models with vision analysis support.
-
-(**Llama.cpp needs to be installed and accessible from command prompt.**)
+**A custom [ComfyUI](https://github.com/comfyanonymous/ComfyUI) node for Organizing, Generating or Enhancing prompts.**
+This addon started off as a simple prompt Manager, to help save and retrieve prompts.
+But has since evolved to be a complete toolset to help Generate prompts also.
+***
+Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp/releases), preventing install conflicts with ComfyUI.
+Provides options to automatically download Qwen3 and Qwen3VL models.
+Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.
+Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.
 
 <div align="center">
+  <figcaption>Simple Prompt Generator Usage</figcaption>
   <img src="docs/prompt_manager.png" alt="Prompt Manager">
+</div>
+
+
+<div align="center">
+  <figcaption>Advanced Prompt Generator Usage</figcaption>
+  <img src="docs/prompt_manager_advanced.png" alt="Prompt Manager">
 </div>
 
 ### Key features:
@@ -22,16 +34,18 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
 - **Vision Analysis**: Analyze images with Qwen3VL models to generate detailed descriptions
 - **Custom Image Analysis**: Provide your own instructions for image analysis
 - **JSON Output**: Optional structured JSON output with scene breakdown
-- **Automatic Server Management**: Starts/stops llama.cpp server as needed
-- **Smart Model Selection**: Auto-selects appropriate model (vision or text) based on mode
+- **Thinking Support**: Support Thinking models to perform deeper generative reasoning.
+- **Automatic Server Management**: Starts/stops llama.cpp server as needed, with automatic shut off at exit.
+- **Smart Model Selection**: Auto-selects appropriate model (vision or text) based on mode or Thinking mode.
 - **Model Preferences**: Set preferred models in ComfyUI Settings for automatic selection
 
 ### Prompt Generator Options
-- **Model Selection**: Choose from local models or download Qwen3 (1.7B/4B/8B) and Qwen3VL (4B/8B) from HuggingFace
+- **Model Selection**: Choose from local models or download Qwen3 (1.7B/4B/8B), Qwen3VL (4B/8B) and Qwen3VL Thinking (4B/8B) from HuggingFace
 - **Auto-Download**: Automatically downloads both model and required mmproj files for vision models
-- **Context Size**: Adjustable context window (512-32768 tokens)
-- **LLM Parameters**: Fine-tune temperature, top_k, top_p, min_p, repeat_penalty
-- **Custom Instructions**: Override default system prompt for different enhancement styles
+- **LLM Parameters**: Fine-tune temperature, top_k, top_p, min_p, repeat_penalty and context size.
+- **Custom Instructions**: Override default system prompt for different enhancement styles.
+- **Extra Image Inputs**:  Combine up to 5 images to generate your prompt.
+- **Console Debugging**: Enable outputing the entire process to the console for debugging purposes.
 
 ## Installation
 
@@ -55,7 +69,6 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
 
 5. If you have them, place your .gguf models in the models/gguf folder. (Create folder if not present)
 
-
 6. Restart ComfyUI
 
 ## Usage
@@ -77,15 +90,19 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
    - "Analyze Image" - Generate detailed image descriptions
    - "Analyze Image with Prompt" - Analyze images with custom instructions
 3. **Connect inputs**: Connect image for vision modes, or just use text for enhancement mode
+4. **Output as Json**: Use Format_as_Json to experiment with Json prompts.
+5. **Push the LLM**: Use enable_thinking to enable the model to perform deeper generative reasoning before producing the final prompt.
 4. **Save memory**: Toggle "stop_server_after" ON to free VRAM after generation
 5. **Run Workflow**: Generated prompt displays and can be saved to Prompt Manager
 
 **Advanced Usage**:
 1. **Add the Options Node**: Add Node → Prompt Generator Options
 2. **Connect Options**: Connect the options node to the Prompt Generator Options input
-3. **Select from available models**: Select from models found in your modeld\gguf folder. Qwen models will be available to download.
-4. **Adjust settings**: Adjust LLM parameters (temperature, top_k, etc.)
-5. **Customize LLM**: Customize the default LLM instructions to modify the responses llama returns.
+3. **Analyze multiple images**: Connect up to 4 additional images, for a total of 5.
+4. **Select from available models**: Select from models found in your models\gguf folder. Qwen models will be available to download.
+5. **Adjust settings**: Adjust LLM parameters (temperature, top_k, etc.)
+6. **Customize LLM**: Customize the default LLM instructions to modify the responses llama returns.
+7. **Enable Debugging**: Enable complete printout of process to console using show_everything_in_console
 
 **Qwen models found in options**
 - Qwen3-1.7B-Q8_0.gguf: Fastest, lowest VRAM (~2GB)
@@ -93,6 +110,8 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
 - Qwen3-8B-Q8_0.gguf:   Best quality, highest VRAM (~8GB)
 - Qwen3VL-4B-Instruct-Q8_0.gguf: Vision model, balanced performance (~5GB VRAM)
 - Qwen3VL-8B-Instruct-Q8_0.gguf: Vision model, best quality (~9GB VRAM)
+- Qwen3VL-4B-Thinking-Q8_0.gguf: Vision model, Thinking variant, balanced performance (~5GB VRAM)
+- Qwen3VL-8B-Thinking-Q8_0.gguf: Vision model, Thinking variant, best quality (~9GB VRAM)
 
 **Model Management**:
 - Place gguf files in models/gguf folder
@@ -142,7 +161,20 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
 **Problem**: Generation is slow
 - **Solution**: Either, Use a smaller quantized model (Q4 instead of Q8) or toggle 'stop_server_after' to quit llama.cpp after generating prompt.
 
+**Problem**: Default Model used is not what I want
+- **Solution**: You can set your preferred model in the ComfyUI settings. Simply add its full name for both the VL and base models. Enabling Thinking in the Generator might change what is used.
+
 ## Changelog
+
+### Version 1.8.0
+- Added support for Qwen3VL Thinking model variants, with download options thru the Generator Options node.
+- Improved `mmproj` discovery: model manager now searches for relevant `mmproj` files using model-name components for more reliable vision-model linking.
+- Enhanced prompt-generation controls: detailed console output options (debug logging) and a per-node `enable_thinking` toggle to enable/disable the model's reasoning/thinking mode.
+- Options node improvements: `prompt_generator_options.py` now accepts multiple images for analysis and exposes console/debugging options.
+- Better Llama shutdown behavior to force-close the server when Comfy exits and free resources reliably.
+- Refined "Analyze Image with Prompt" system prompt to allow more creative and useful image-description outputs while preserving accuracy.
+- Model-default sampling: generator uses model-reported sampling params by default when available; the Options node can override them per-parameter.
+- Preference refactor: moved preference API endpoints and cache handling into `model_manager.py` for cleaner management and persistence.
 
 ### Version 1.7.0
 - Added three-mode prompt generator: "Enhance User Prompt", "Analyze Image", "Analyze Image with Prompt"
@@ -152,7 +184,7 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
 - Added automatic model preference management (separate settings for base and vision models)
 - Improved model selection with preference fallback to smallest model
 - Filtered mmproj files from model selection dropdowns
-- All preferences stored in ComfyUI settings for persistence across updates
+- Model preferences stored in ComfyUI settings for persistence across updates
 
 ### Version 1.6.0
 - Added Qwen3VL vision model support for image analysis
@@ -165,8 +197,8 @@ A custom node for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for organ
 - Fixed multiple directory support for model search (gguf + LLM folders)
 
 ### Version 1.5.1
-- LLM output remains avaiable when use llm is off. So it can be edited
-- Improved Caching detection, any change to options will be detected and force a new ouput
+- LLM output remains available when use_llm is off, so it can be edited.
+- Improved caching detection: any change to options will be detected and force a new output.
 - Improved some UI quirks
 
 ### Version 1.5.0

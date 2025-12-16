@@ -183,8 +183,49 @@ app.registerExtension({
             // Enforce minimum node width
             const onResize = nodeType.prototype.onResize;
             nodeType.prototype.onResize = function(size) {
-                size[0] = Math.max(400, size[0]);
+                size[0] = Math.max(300, size[0]);
                 return onResize ? onResize.apply(this, arguments) : size;
+            };
+        }
+
+        // Make the Options node taller/wider by default so the system_prompt area is roomier
+        if (nodeData.name === "PromptGenOptions") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const result = onNodeCreated?.apply(this, arguments);
+                // Set a default size (width x height)
+                try {
+                    this.setSize([400, 420]);
+                } catch (e) {
+                    // ignore if method unavailable
+                }
+                return result;
+            };
+            // Enforce sensible minimums when the user resizes the options node
+            const onResizeOpt = nodeType.prototype.onResize;
+            nodeType.prototype.onResize = function(size) {
+                size[0] = Math.max(300, size[0]);
+                return onResizeOpt ? onResizeOpt.apply(this, arguments) : size;
+            };
+        }
+
+        // Enforce minimum size for ModelGenerator node (no default size)
+        if (nodeData.name === "PromptGenerator") {
+           const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const result = onNodeCreated?.apply(this, arguments);
+                // Set a default size (width x height)
+                try {
+                    this.setSize([400, 300]);
+                } catch (e) {
+                    // ignore if method unavailable
+                }
+                return result;
+            };
+            const onResizeModel = nodeType.prototype.onResize;
+            nodeType.prototype.onResize = function(size) {
+                size[0] = Math.max(300, size[0]);
+                return onResizeModel ? onResizeModel.apply(this, arguments) : size;
             };
         }
     }

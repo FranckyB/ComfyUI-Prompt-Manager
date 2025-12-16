@@ -86,10 +86,6 @@ class PromptGenOptions:
                     "step": 512,
                     "tooltip": "Context size (increase for vision models or large prompts)"
                 }),
-                "enable_thinking": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "Enable thinking/reasoning mode for compatible models (DeepSeek format)"
-                }),
                 "show_everything_in_console": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Print system prompt, user prompt, thinking process, and raw model response to console"
@@ -111,7 +107,7 @@ class PromptGenOptions:
                        system_prompt: str = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
                        repeat_penalty: float = None, context_size: int = None,
-                       enable_thinking: bool = None, show_everything_in_console: bool = None) -> dict:
+                       show_everything_in_console: bool = None) -> dict:
         """Create options dictionary with model, LLM parameters, and extra images"""
 
         options = {}
@@ -169,8 +165,6 @@ class PromptGenOptions:
             options["repeat_penalty"] = repeat_penalty
         if context_size is not None:
             options["context_size"] = context_size
-        if enable_thinking is not None:
-            options["enable_thinking"] = enable_thinking
         if show_everything_in_console is not None:
             options["show_everything_in_console"] = show_everything_in_console
 
