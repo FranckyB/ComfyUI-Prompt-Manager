@@ -9,7 +9,7 @@ Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp),
 Provides options to automatically download Qwen3 and Qwen3VL models.  
 Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
 Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
-Users can set a custom Llama-server path, if not defined in your System Path.
+Users can set a custom Llama-server path, if not defined in their System Path.
 
 <div align="center">
   <figcaption>Simple Prompt Generator Usage</figcaption>
