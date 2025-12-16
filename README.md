@@ -1,13 +1,14 @@
 # ComfyUI Prompt Manager
 
 **A custom [ComfyUI](https://github.com/comfyanonymous/ComfyUI) node for Organizing, Generating or Enhancing prompts.**
-This addon started off as a simple prompt Manager, to help save and retrieve prompts.
+
+This addon started off as a simple prompt Manager, to help save and retrieve prompts.  
 But has since evolved to be a complete toolset to help Generate prompts also.
 ***
-Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp/releases), preventing install conflicts with ComfyUI.
-Provides options to automatically download Qwen3 and Qwen3VL models.
-Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.
-Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.
+Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp/releases), preventing install conflicts with ComfyUI.  
+Provides options to automatically download Qwen3 and Qwen3VL models.  
+Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
+Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
 
 <div align="center">
   <figcaption>Simple Prompt Generator Usage</figcaption>
@@ -40,7 +41,7 @@ Custom GGUF models can be used if supported by llama.cpp; simply drop them in th
 - **Model Preferences**: Set preferred models in ComfyUI Settings for automatic selection
 
 ### Prompt Generator Options
-- **Model Selection**: Choose from local models or download Qwen3 (1.7B/4B/8B), Qwen3VL (4B/8B) and Qwen3VL Thinking (4B/8B) from HuggingFace
+- **Model Selection**: Choose from local models or download Qwen3, Qwen3VL and Qwen3VL Thinking models from HuggingFace
 - **Auto-Download**: Automatically downloads both model and required mmproj files for vision models
 - **LLM Parameters**: Fine-tune temperature, top_k, top_p, min_p, repeat_penalty and context size.
 - **Custom Instructions**: Override default system prompt for different enhancement styles.
@@ -168,13 +169,13 @@ Custom GGUF models can be used if supported by llama.cpp; simply drop them in th
 
 ### Version 1.8.0
 - Added support for Qwen3VL Thinking model variants, with download options thru the Generator Options node.
-- Improved `mmproj` discovery: model manager now searches for relevant `mmproj` files using model-name components for more reliable vision-model linking.
-- Enhanced prompt-generation controls: detailed console output options (debug logging) and a per-node `enable_thinking` toggle to enable/disable the model's reasoning/thinking mode.
-- Options node improvements: `prompt_generator_options.py` now accepts multiple images for analysis and exposes console/debugging options.
-- Better Llama shutdown behavior to force-close the server when Comfy exits and free resources reliably.
-- Refined "Analyze Image with Prompt" system prompt to allow more creative and useful image-description outputs while preserving accuracy.
-- Model-default sampling: generator uses model-reported sampling params by default when available; the Options node can override them per-parameter.
-- Preference refactor: moved preference API endpoints and cache handling into `model_manager.py` for cleaner management and persistence.
+- Model manager now searches for relevant `mmproj` files using model-name components for more reliable vision-model linking.
+- Detailed console output options (debug logging)
+- `enable_thinking` toggle to enable/disable the model's reasoning/thinking mode.
+- Options node now accepts multiple images for analysis.
+- Better Llama shutdown behavior to force-close the server when Comfy exits.
+- Uses model-reported sampling params by default when available; the Options node can override them per-parameter.
+- Moved preference API endpoints and cache handling into `model_manager.py` for cleaner management and persistence.
 
 ### Version 1.7.0
 - Added three-mode prompt generator: "Enhance User Prompt", "Analyze Image", "Analyze Image with Prompt"
