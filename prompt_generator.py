@@ -12,7 +12,7 @@ import ctypes
 import numpy as np
 from PIL import Image
 from io import BytesIO
-from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, get_mmproj_for_model, get_models_directory
+from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path
 
 # ComfyUI interrupt helper
 import comfy.model_management
@@ -313,7 +313,7 @@ class PromptGenerator:
             return False
 
     @staticmethod
-    def start_server(model_name, context_size=4096):
+    def start_server(model_name, context_size=4096, use_vision_model=False):
         """Start llama.cpp server with specified model
 
         Args:
@@ -384,19 +384,17 @@ class PromptGenerator:
             # Build command arguments
             cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-c", str(context_size)]
 
-            # Add vision flags for Qwen3VL models
-            if "qwen3vl" in model_name.lower():
+            # Add vision flags for VL models
+            if use_vision_model:
                 mmproj_path = get_mmproj_path(model_name)
                 if mmproj_path:
                     # Only print if mmproj is used
                     print_pg(f"Vision model: using mmproj: {os.path.basename(mmproj_path)}")
                     cmd_args.extend(["--mmproj", mmproj_path])
                 else:
-                    mmproj_name = get_mmproj_for_model(model_name)
-                    if mmproj_name:
-                        error_msg = f"Error: Vision model requires mmproj file '{mmproj_name}' but it was not found. Please use Generator Options node to download the Qwen3VL model and its mmproj file."
-                        print_pg(error_msg, RED)
-                        return (False, error_msg)
+                    error_msg = f"Error: Vision model requires mmproj file for '{model_name}' but it was not found. \nPlease ensure it exists, or use the Generator Options node to download the Qwen3VL model and its mmproj file."
+                    print_pg(error_msg, RED)
+                    return (False, error_msg)
 
             # Prepare popen kwargs for cross-platform parent-death behavior
             popen_kwargs = {
@@ -599,12 +597,16 @@ class PromptGenerator:
 
         # Extract console option from connected options node
         show_everything_in_console = False  # Default to False when options not connected
-        use_model_default_sampling = True  # Default to using model defaults
+        use_model_default_sampling = True   # Default to using model defaults
+        use_vision_model = False            # Default to False, set to True for vision modes
 
         if options and "show_everything_in_console" in options:
             show_everything_in_console = options["show_everything_in_console"]
         if options and "use_model_default_sampling" in options:
             use_model_default_sampling = options["use_model_default_sampling"]
+
+        if mode in ["Analyze Image", "Analyze Image with Prompt"]:
+            use_vision_model = True
 
         images = None  # Will be set for vision modes
 
@@ -618,10 +620,9 @@ class PromptGenerator:
         model_to_use = None
         available_models = get_local_models()
 
-        # If in Analyze Image or Analyze Image with Prompt mode, we need a Qwen3VL model
-        if mode in ["Analyze Image", "Analyze Image with Prompt"]:
+        if use_vision_model:
             # Check if options specifies a Qwen3VL model
-            if options and "model" in options and "qwen3vl" in options["model"].lower() and is_model_local(options["model"]):
+            if options and "model" in options and "vl" in options["model"].lower() and is_model_local(options["model"]):
                 model_to_use = options["model"]
             elif options and "model" in options and is_model_local(options["model"]):
                 # Non-VL model selected but in vision mode
@@ -669,12 +670,13 @@ class PromptGenerator:
             print_pg("Warning: Thinking disabled - model does not support it.")
             enable_thinking = False
 
-        print_pg(f"Using model: {model_to_use}")
-        print_pg(f"Thinking mode: {'ON' if enable_thinking else 'OFF'}")
+        print_pg(f"Vision mode   : {'ON' if use_vision_model else 'OFF'}")
+        print_pg(f"Thinking mode : {'ON' if enable_thinking else 'OFF'}")
+        print_pg(f"Using Model   : {model_to_use}")
 
         # Prepare images for vision modes (needed for cache key)
         images = None
-        if mode in ["Analyze Image", "Analyze Image with Prompt"]:
+        if use_vision_model:
             # Gather all images: main image plus up to 4 extra from options
             images = []
             if image is not None:
@@ -697,7 +699,7 @@ class PromptGenerator:
         if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
             self.stop_server()
             # Get context_size from options or use default
-            success, error_msg = self.start_server(model_to_use, context_size)
+            success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
             if not success:
                 return (error_msg,)
 
@@ -738,7 +740,7 @@ class PromptGenerator:
             cached_token_counts = self._get_token_counts_parallel(system_prompt, user_content)
 
         # If in vision mode, encode images for the request
-        if mode in ["Analyze Image", "Analyze Image with Prompt"]:
+        if use_vision_model:
             image_contents = []
             for idx, img_tensor_batch in enumerate(images):
                 # ComfyUI images are in format (batch, height, width, channels) with values 0-1
@@ -818,7 +820,7 @@ class PromptGenerator:
             if response.status_code == 500:
                 print_pg("Server error 500, restarting server and retrying...", RED)
                 self.stop_server()
-                success, error_msg = self.start_server(model_to_use, context_size)
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
                 if success:
                     response = requests.post(
                         full_url,

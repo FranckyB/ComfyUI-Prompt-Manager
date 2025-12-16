@@ -61,6 +61,25 @@ app.registerExtension({
                     console.error("[PromptManager] Error saving Llama path preference:", error);
                 }
             }
+        },
+        {
+            id: "PromptManager.ModelPath",
+            category: ["Prompt Manager", "Llama Preferences", "Custom Model Path"],
+            name: "Custom Model Path",
+            tooltip: "Path to custom model location (If emtpty, defaults to the models/gguf folder)",
+            type: "text",
+            defaultValue: "",
+            async onChange(value) {
+                try {
+                    await fetch("/prompt-manager/save-preference", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ key: "custom_llama_model_path", value: value })
+                    });
+                } catch (error) {
+                    console.error("[PromptManager] Error saving Model path preference:", error);
+                }
+            }
         }
     ],
     async setup() {

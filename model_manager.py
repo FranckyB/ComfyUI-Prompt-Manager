@@ -3,7 +3,7 @@ Utility functions for managing llama.cpp models
 """
 import os
 import glob
-import json
+import re
 import folder_paths
 import server
 from huggingface_hub import HfApi
@@ -14,14 +14,12 @@ import requests
 _preferences_cache = {
     "preferred_base_model": "",
     "preferred_vision_model": "",
-    "custom_llama_path": ""
+    "custom_llama_path": "",
+    "custom_llama_model_path": ""
 }
 
 # Predefined models - use real filenames as keys
 QWEN_MODELS = {
-    "Qwen3-1.7B-Q8_0.gguf": {
-        "repo": "Qwen/Qwen3-1.7B-GGUF"
-    },
     "Qwen3-4B-Q8_0.gguf": {
         "repo": "Qwen/Qwen3-4B-GGUF"
     },
@@ -60,7 +58,7 @@ async def save_preference(request):
         key = data.get("key")
         value = data.get("value", "")
 
-        if key not in ["preferred_base_model", "preferred_vision_model", "custom_llama_path"]:
+        if key not in ["preferred_base_model", "preferred_vision_model", "custom_llama_path", "custom_llama_model_path"]:
             return server.web.json_response({"success": False, "error": "Invalid preference key"})
 
         # Update in-memory cache
@@ -82,11 +80,16 @@ def get_models_directory():
         llm_dir = os.path.join(folder_paths.models_dir, "LLM")
         folder_paths.add_model_folder_path("LLM", llm_dir)
 
-    # Return gguf as the primary directory (for downloads)
-    models_dir = folder_paths.get_folder_paths("gguf")[0]
+    custom_llama_model_path = _preferences_cache.get("custom_llama_model_path", "")
 
-    # Create directory if it doesn't exist
-    os.makedirs(models_dir, exist_ok=True)
+    if custom_llama_model_path and os.path.isdir(custom_llama_model_path):
+        # Add custom path if not already present
+        if "CustomLLM" not in folder_paths.folder_names_and_paths:
+            folder_paths.add_model_folder_path("CustomLLM", custom_llama_model_path)
+        models_dir = custom_llama_model_path
+    else:
+        models_dir = folder_paths.get_folder_paths("gguf")[0]
+        os.makedirs(models_dir, exist_ok=True)  # Create directory if it doesn't exist
 
     return models_dir
 
@@ -95,7 +98,7 @@ def get_all_model_directories():
     get_models_directory()  # Ensure folders are registered
 
     directories = []
-    for folder_type in ["gguf", "LLM"]:
+    for folder_type in ["gguf", "LLM", "CustomLLM"]:
         if folder_type in folder_paths.folder_names_and_paths:
             dirs = folder_paths.get_folder_paths(folder_type)
             directories.extend(dirs)
@@ -177,7 +180,7 @@ def get_mmproj_path(model_name):
     Searches for mmproj files that contain all parts of the model name
     """
     # Get all parts of the model name (excluding .gguf)
-    model_parts = model_name.replace('.gguf', '').split('-')
+    model_parts = [part for part in re.split(r"[-.]", os.path.splitext(os.path.basename(model_name))[0]) if part]
 
     # Get all local mmproj files
     all_dirs = get_all_model_directories()
@@ -185,12 +188,13 @@ def get_mmproj_path(model_name):
     for models_dir in all_dirs:
         if os.path.exists(models_dir):
             for f in os.listdir(models_dir):
-                if f.startswith('mmproj-') and f.endswith('.gguf'):
+                if 'mmproj' in f.lower() and f.endswith('.gguf'):
                     mmproj_files.append(f)
 
     # Find mmproj that contains all model parts
     for mmproj_file in mmproj_files:
-        mmproj_parts = mmproj_file.replace('mmproj-', '').replace('.gguf', '').split('-')
+        # Let's split the mmproj filename to check for matching bits, we remove extension and mmproj
+        mmproj_parts = [part for part in re.split(r"[-.]", os.path.splitext(os.path.basename(mmproj_file))[0].replace('mmproj', '')) if part]
         if all(part in mmproj_parts for part in model_parts):
             return get_model_path(mmproj_file)
 

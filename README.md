@@ -169,6 +169,9 @@ Users can set a custom Llama-server path, if not defined in your System Path.
 
 ## Changelog
 
+### Version 1.8.2
+- Added custom model path preference and enhance model management
+
 ### Version 1.8.1
 - Added option to set a custom Llama path in preferences, for those that have specific installs.
 
