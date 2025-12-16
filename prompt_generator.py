@@ -24,9 +24,11 @@ except ImportError:
     _preferences_cache = {}
 
 # ANSI color codes
-YELLOW = '\033[93m'
-RED = '\033[91m'
-RESET = '\033[0m'
+YELLOW  = '\033[38;5;226m'
+RED     = '\033[38;5;196m'
+ORANGE1 = '\033[38;5;202m'
+ORANGE2 = '\033[38;5;208m'
+RESET   = '\033[0m'
 
 # Global variable to track the server process
 _server_process = None
@@ -41,18 +43,13 @@ def print_pg_header():
     print(f"{YELLOW}              Prompt Generator{RESET}")
     print(f"{YELLOW}{'=' * 60}{RESET}")
 
+def print_pg(message, color=YELLOW):
+    """Print a message with Prompt Generator formatting and YELLOW color"""
+    print(f"{color}{message}{RESET}")
+
 def print_pg_footer():
     """Print the Prompt Generator footer"""
     print(f"{YELLOW}{'=' * 60}{RESET}")
-
-def print_pg(message):
-    """Print a message with Prompt Generator formatting and yellow color"""
-    print(f"{YELLOW}{message}{RESET}")
-
-
-def print_pg_error(message):
-    """Print an error message in red for visibility"""
-    print(f"{RED}{message}{RESET}")
 
 # --- Windows Job Object helpers ---
 def setup_windows_job_object():
@@ -347,19 +344,19 @@ class PromptGenerator:
                 model_path = download_model(model_name)
                 if not model_path:
                     error_msg = "Error: Failed to download model"
-                    print_pg_error(error_msg)
+                    print_pg(error_msg, RED)
                     return (False, error_msg)
                 print_pg(f"Download complete: {model_path}")
             except Exception as e:
                 error_msg = f"Error downloading model: {e}"
-                print_pg_error(error_msg)
+                print_pg(error_msg, RED)
                 return (False, error_msg)
         else:
             model_path = get_model_path(model_name)
 
         if not os.path.exists(model_path):
             error_msg = f"Error: Model file not found: {model_path}"
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             return (False, error_msg)
 
         try:
@@ -387,7 +384,7 @@ class PromptGenerator:
                     mmproj_name = get_mmproj_for_model(model_name)
                     if mmproj_name:
                         error_msg = f"Error: Vision model requires mmproj file '{mmproj_name}' but it was not found. Please use Generator Options node to download the Qwen3VL model and its mmproj file."
-                        print_pg_error(error_msg)
+                        print_pg(error_msg, RED)
                         return (False, error_msg)
 
             # Prepare popen kwargs for cross-platform parent-death behavior
@@ -447,17 +444,17 @@ class PromptGenerator:
                     return (True, None)
 
             error_msg = "Error: Server did not start in time"
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             PromptGenerator.stop_server()
             return (False, error_msg)
 
         except FileNotFoundError:
             error_msg = "Error: llama-server command not found. Please install llama.cpp and add to PATH.\nInstallation guide: https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md"
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             return (False, error_msg)
         except Exception as e:
             error_msg = f"Error starting server: {e}"
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             return (False, error_msg)
 
     @staticmethod
@@ -475,7 +472,7 @@ class PromptGenerator:
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
                     pass
         except Exception as e:
-            print_pg_error(f"Error killing llama-server processes: {e}")
+            print_pg(f"Error killing llama-server processes: {e}", RED)
 
     @staticmethod
     def stop_server():
@@ -591,15 +588,19 @@ class PromptGenerator:
 
         # Extract console option from connected options node
         show_everything_in_console = False  # Default to False when options not connected
+        use_model_default_sampling = True  # Default to using model defaults
+
         if options and "show_everything_in_console" in options:
             show_everything_in_console = options["show_everything_in_console"]
+        if options and "use_model_default_sampling" in options:
+            use_model_default_sampling = options["use_model_default_sampling"]
 
         images = None  # Will be set for vision modes
 
         # Validate inputs based on mode
         if mode == "Enhance User Prompt" and not prompt.strip():
             error_msg = "Did you perhaps forget to enter a User Prompt?"
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             return (error_msg,)
 
         # Always determine a valid model filename before running server
@@ -617,14 +618,14 @@ class PromptGenerator:
                 model_to_use = self.find_qwen3vl_model(available_models, enable_thinking)
                 if model_to_use is None:
                     error_msg = f"Error: '{mode}' mode requires a Qwen3VL model. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
-                    print_pg_error(error_msg)
+                    print_pg(error_msg, RED)
                     return (error_msg,)
             else:
                 # Try to find a Qwen3VL model automatically
                 model_to_use = self.find_qwen3vl_model(available_models, enable_thinking)
                 if model_to_use is None:
                     error_msg = f"Error: '{mode}' mode requires a Qwen3VL model. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
-                    print_pg_error(error_msg)
+                    print_pg(error_msg, RED)
                     return (error_msg,)
         else:
             # Enhance User Prompt mode - use regular model selection logic (exclude Qwen3VL models)
@@ -636,20 +637,20 @@ class PromptGenerator:
                         print_pg(f"Warning: Qwen3VL model '{options['model']}' selected but 'Enhance User Prompt' mode is active. Ignoring model selection and using {model_to_use} instead.")
                     else:
                         error_msg = "Error: Only Qwen3VL models available but 'Enhance User Prompt' mode is active. Please add a .gguf model or use Generator Options to add a non-vision model."
-                        print_pg_error(error_msg)
+                        print_pg(error_msg, RED)
                         return (error_msg,)
                 else:
                     model_to_use = options["model"]
             else:
                 if not available_models:
                     error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
-                    print_pg_error(error_msg)
+                    print_pg(error_msg, RED)
                     return (error_msg,)
                 # Find smallest non-VL model
                 model_to_use = self.find_non_vl_model(available_models)
                 if not model_to_use:
                     error_msg = "Error: Only Qwen3VL models available but 'Enhance User Prompt' mode is active. Please add a non-vision model or switch to 'Describe Image' mode."
-                    print_pg_error(error_msg)
+                    print_pg(error_msg, RED)
                     return (error_msg,)
 
         # let's make sure thinking is disabled for non-thinking versions of Qwen3VL
@@ -694,7 +695,7 @@ class PromptGenerator:
 
         # Debug output if requested
         if show_everything_in_console:
-            print_pg("DEBUG: Detailed information enabled")
+            print_pg("Detailed information enabled:\n", YELLOW)
 
         # Prepare the system prompt
         if options and "system_prompt" in options:
@@ -778,7 +779,7 @@ class PromptGenerator:
 
         model_defaults = self.get_model_defaults()
 
-        if options:
+        if options and not use_model_default_sampling:
             # Override model defaults with any options provided
             for param in ["temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
                 # we default to model defaults if option not provided
@@ -788,6 +789,12 @@ class PromptGenerator:
             for param in ["temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
                 payload[param] = model_defaults.get(param)
 
+        # Now that payload is ready, print it if requested
+        if show_everything_in_console:
+            print_pg("------ GENERATION PARAMETERS ------", ORANGE1)
+            print_pg(f"enable_thinking = {enable_thinking}", YELLOW)
+            for param in ["seed", "temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
+                print_pg(f"{param} = {payload[param]}", YELLOW)
         try:
             response = requests.post(
                 full_url,
@@ -798,7 +805,7 @@ class PromptGenerator:
 
             # Handle 500 server error by restarting server and retrying once
             if response.status_code == 500:
-                print_pg_error("Server error 500, restarting server and retrying...")
+                print_pg("Server error 500, restarting server and retrying...", RED)
                 self.stop_server()
                 success, error_msg = self.start_server(model_to_use, context_size)
                 if success:
@@ -818,6 +825,9 @@ class PromptGenerator:
             thinking_content = ""
             usage_stats = None
 
+            # Streaming output to console in real-time if enabled
+            first_thinking = True
+            first_content = True
             for line in response.iter_lines():
                 # Check for user interrupt from ComfyUI
                 try:
@@ -844,24 +854,33 @@ class PromptGenerator:
 
                             if 'choices' in chunk and len(chunk['choices']) > 0:
                                 delta = chunk['choices'][0].get('delta', {})
+                                # Stream reasoning_content ("thinking")
                                 if 'reasoning_content' in delta:
                                     reasoning_delta = delta['reasoning_content']
                                     if reasoning_delta is not None:
                                         thinking_content += str(reasoning_delta)
+                                        if show_everything_in_console:
+                                            if first_thinking:
+                                                print_pg("\n--------- THINKING ---------", ORANGE1)
+                                                first_thinking = False
+                                            print(f"{ORANGE2}{str(reasoning_delta)}{RESET}", end='', flush=True)
+                                # Stream content (final answer)
                                 if 'content' in delta:
                                     content_delta = delta['content']
                                     if content_delta is not None:
                                         full_response += str(content_delta)
+                                        if show_everything_in_console:
+                                            if first_content:
+                                                print_pg("\n\n--------- FINAL ANSWER ---------", ORANGE1)
+                                                first_content = False
+                                            print(f"{YELLOW}{str(content_delta)}{RESET}", end='', flush=True)
                         except json.JSONDecodeError:
                             continue
 
-            # Debug output if requested
             if show_everything_in_console:
-                if thinking_content:
-                    print_pg(f"DEBUG: Thinking content: {thinking_content}")
-                    print_pg("")  # New line after thinking
-                print_pg(f"DEBUG: Final response: {full_response}")
-            else:
+                print_pg("\n-------------------------------------------", ORANGE1)
+
+            if not show_everything_in_console:
                 print_pg("Prompt generation complete.")
 
             # Log token usage if available
@@ -880,7 +899,7 @@ class PromptGenerator:
 
                     if total_tokens >= context_size:
                         err_msg = f"Error: Empty response — model likely ran out of context tokens ({total_tokens}/{context_size}). Consider increasing the context size or shortening the prompt."
-                        print_pg_error(err_msg)
+                        print_pg(err_msg, RED)
                         return (err_msg,)
 
                 print_pg("Warning: Empty response from server")
@@ -907,17 +926,17 @@ class PromptGenerator:
             raise
         except requests.exceptions.ConnectionError:
             error_msg = f"Error: Could not connect to server at {full_url}. Server may have crashed."
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             return (error_msg,)
         except requests.exceptions.Timeout:
             error_msg = "Error: Request timed out (>120s)"
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             return (error_msg,)
         except Exception as e:
             error_msg = f"Error: {e}"
-            print_pg_error(error_msg)
+            print_pg(error_msg, RED)
             if response.status_code == 400:
-                print_pg_error("Perhaps your query requires a larger context size.\nConsider increasing it using the Generator Options node.")
+                print_pg("Perhaps your query requires a larger context size.\nConsider increasing it using the Generator Options node.", RED)
                 error_msg += "\nConsider increasing context size using Generator Options node."
             return (error_msg,)
 

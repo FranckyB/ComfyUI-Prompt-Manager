@@ -44,6 +44,10 @@ class PromptGenOptions:
                     "placeholder": "Replace LLM Instructions...",
                     "tooltip": "Custom LLM Instructions (leave empty to use default)\nThe default instructions are designed for generating\ndetailed and imaginative prompts for text-to-image generation."
                 }),
+                "use_model_default_sampling": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Use the model's default sampling parameters (overrides temperature, top_p, etc)"
+                }),
                 "temperature": ("FLOAT", {
                     "default": 0.8,
                     "min": 0.0,
@@ -104,7 +108,7 @@ class PromptGenOptions:
         return _last_model_update
 
     def create_options(self, model: str = None, image2=None, image3=None, image4=None, image5=None,
-                       system_prompt: str = None, temperature: float = None,
+                       system_prompt: str = None, use_model_default_sampling: bool = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
                        repeat_penalty: float = None, context_size: int = None,
                        show_everything_in_console: bool = None) -> dict:
@@ -153,20 +157,15 @@ class PromptGenOptions:
         # Only include LLM parameters that are provided
         if system_prompt and system_prompt.strip():
             options["system_prompt"] = system_prompt
-        if temperature is not None:
-            options["temperature"] = temperature
-        if top_p is not None:
-            options["top_p"] = top_p
-        if top_k is not None:
-            options["top_k"] = top_k
-        if min_p is not None:
-            options["min_p"] = min_p
-        if repeat_penalty is not None:
-            options["repeat_penalty"] = repeat_penalty
-        if context_size is not None:
-            options["context_size"] = context_size
-        if show_everything_in_console is not None:
-            options["show_everything_in_console"] = show_everything_in_console
+
+        options["use_model_default_sampling"] = use_model_default_sampling
+        options["temperature"] = temperature
+        options["top_p"] = top_p
+        options["top_k"] = top_k
+        options["min_p"] = min_p
+        options["repeat_penalty"] = repeat_penalty
+        options["context_size"] = context_size
+        options["show_everything_in_console"] = show_everything_in_console
 
         return (options,)
 
