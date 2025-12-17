@@ -1,20 +1,15 @@
 # ComfyUI Prompt Manager
-
-**A custom [ComfyUI](https://github.com/comfyanonymous/ComfyUI) node for Organizing, Generating or Enhancing prompts.**
+### A custom [ComfyUI](https://github.com/comfyanonymous/ComfyUI) node for Organizing, Generating or Enhancing prompts.
 
 This addon started off as a simple prompt Manager, to help save and retrieve prompts.  
 But has since evolved to be a complete toolset to help Generate prompts also.
-***
+___
 Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp), preventing install conflicts with ComfyUI.  
 Provides options to automatically download Qwen3 and Qwen3VL models.  
 Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
 Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
 Users can now set a custom Llama-server path as well as a custom Model Path in ComfyUI's preferences.  
 If a Custom Model Path is added, it will become the default download folder.
-***
-Since this, as the name implies, comes with a Prompt manager, you could save different system prompts and use a second prompt Manager
-to have fun explorring all the different results you can achieve when tweaking the base LLM Instructions.  
-***
 
 <div align="center">
   <figcaption>Simple Prompt Generator Usage</figcaption>
@@ -66,16 +61,21 @@ to have fun explorring all the different results you can achieve when tweaking t
    ```bash
    git clone https://github.com/FranckyB/ComfyUI-Prompt-Manager.git
    ```
-
 3. Install dependencies:
    ```bash
    cd ComfyUI-Prompt-Manager
    pip install -r requirements.txt
    ```
-
-4. Install llama.cpp. It can be found here: [llama.cpp install](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
-
-5. If you have them, place your .gguf models in the models/gguf folder. (Create folder if not present)
+4. Install [llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master)  
+  Windows:
+   ```bash
+   winget install llama.cpp
+   ```
+   Linux:
+   ```bash
+   brew install llama.cpp
+   ```
+5. If you have them, place your .gguf models in the models/gguf folder or set in prererences your preferred folder path.
 
 6. Restart ComfyUI
 
