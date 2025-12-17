@@ -116,7 +116,7 @@ def get_local_models():
             for f in gguf_files:
                 basename = os.path.basename(f)
                 # Filter out mmproj files
-                if not basename.startswith("mmproj-"):
+                if 'mmproj' not in basename.lower():
                     all_models.add(basename)
 
     # Return sorted list of unique filenames
@@ -129,7 +129,7 @@ def get_huggingface_models():
 def get_all_models():
     """Get combined list of local and HuggingFace models, excluding already downloaded ones and mmproj files"""
     local_models = get_local_models()  # Already filtered
-    models_dir = get_models_directory()
+    models_dir   = get_models_directory()
 
     # List all known filenames, local ones first
     all_models = []
@@ -138,7 +138,7 @@ def get_all_models():
         all_models.extend(local_models)
     # Add remote models (not present locally), excluding mmproj files
     for filename in QWEN_MODELS.keys():
-        if filename not in all_models and not filename.startswith("mmproj-"):
+        if filename not in all_models and 'mmproj' not in filename.lower():
             all_models.append(filename)
     return all_models
 
