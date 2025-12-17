@@ -24,11 +24,13 @@ except ImportError:
     _preferences_cache = {}
 
 # ANSI color codes
-YELLOW  = '\033[38;5;226m'
-RED     = '\033[38;5;196m'
-ORANGE1 = '\033[38;5;202m'
-ORANGE2 = '\033[38;5;208m'
-RESET   = '\033[0m'
+YELLOW     = '\033[38;5;226m'
+RED        = '\033[38;5;196m'
+ORANGE1    = '\033[38;5;202m'
+ORANGE2    = '\033[38;5;208m'
+LIGHT_BLUE = '\033[38;5;39m'
+BLUE       = '\033[38;5;27m'
+RESET      = '\033[0m'
 
 # Global variable to track the server process
 _server_process = None
@@ -50,7 +52,6 @@ def print_pg(message, color=YELLOW):
 def print_pg_footer():
     """Print the Prompt Generator footer"""
     print(f"{YELLOW}{'=' * 60}{RESET}")
-
 # --- Windows Job Object helpers ---
 def setup_windows_job_object():
     """Create a Windows Job Object that kills child processes when parent exits"""
@@ -109,7 +110,6 @@ def setup_windows_job_object():
         _job_handle = job
     except Exception as e:
         print_pg(f"Warning: Failed to create Job Object: {e}")
-
 
 def assign_process_to_job(pid):
     """Assign subprocess pid to job object so it gets killed when parent exits"""
@@ -295,8 +295,8 @@ class PromptGenerator:
         }
 
     CATEGORY = "Prompt Manager"
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("output",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("output", "thoughts")
     FUNCTION = "convert_prompt"
 
     @classmethod
@@ -706,10 +706,6 @@ class PromptGenerator:
         # Build the endpoint URL
         full_url = f"{self.SERVER_URL}/v1/chat/completions"
 
-        # Debug output if requested
-        if show_everything_in_console:
-            print_pg("Detailed information enabled:\n", YELLOW)
-
         # Prepare the system prompt
         if options and "system_prompt" in options:
             system_prompt = options["system_prompt"]
@@ -803,11 +799,18 @@ class PromptGenerator:
                 payload[param] = model_defaults.get(param)
 
         # Now that payload is ready, print it if requested
+        # Debug output if requested
         if show_everything_in_console:
+            print_pg(f"{'=' * 60}", ORANGE1)
+            print_pg("           DETAILED INFORMATION ENABLED", ORANGE2)
+            print_pg(f"{'=' * 60}", ORANGE1)
             print_pg("------ GENERATION PARAMETERS ------", ORANGE1)
-            print_pg(f"enable_thinking = {enable_thinking}", YELLOW)
             for param in ["seed", "temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
-                print_pg(f"{param} = {payload[param]}", YELLOW)
+                print_pg(f"{param} = {payload[param]}", ORANGE2)
+            print_pg("\n--------- SYSTEM PROMPT ---------", ORANGE1)
+            print_pg(f"{system_prompt}", ORANGE2)
+            print_pg("\n--------- USER PROMPT ---------", ORANGE1)
+            print_pg(f"{user_content}", ORANGE2)
         try:
             response = requests.post(
                 full_url,
@@ -884,14 +887,14 @@ class PromptGenerator:
                                         full_response += str(content_delta)
                                         if show_everything_in_console:
                                             if first_content:
-                                                print_pg("\n\n--------- FINAL ANSWER ---------", ORANGE1)
+                                                print_pg("\n\n--------- FINAL ANSWER ---------", BLUE)
                                                 first_content = False
-                                            print(f"{YELLOW}{str(content_delta)}{RESET}", end='', flush=True)
+                                            print(f"{LIGHT_BLUE}{str(content_delta)}{RESET}", end='', flush=True)
                         except json.JSONDecodeError:
                             continue
 
             if show_everything_in_console:
-                print_pg("\n-------------------------------------------", ORANGE1)
+                print('')  # Final newline after streaming
 
             if not show_everything_in_console:
                 print_pg("Prompt generation complete.")
@@ -922,7 +925,7 @@ class PromptGenerator:
             if stop_server_after:
                 self.stop_server()
 
-            return (full_response,)
+            return (full_response, thinking_content)
 
         except comfy.model_management.InterruptProcessingException:
             # User requested interrupt; ensure response is closed and optionally stop server
@@ -955,9 +958,9 @@ class PromptGenerator:
 
     def print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):
         """Print token statistics using pre-cached counts"""
-        print(f"{YELLOW}{'=' * 60}{RESET}")
-        print(f"{YELLOW}              TOKEN USAGE STATISTICS{RESET}")
-        print(f"{YELLOW}{'=' * 60}{RESET}")
+        print(f"{ORANGE2}{'=' * 60}{RESET}")
+        print(f"{ORANGE2}              TOKEN USAGE STATISTICS{RESET}")
+        print(f"{ORANGE2}{'=' * 60}{RESET}")
 
         total_input = usage_stats.get('prompt_tokens', 0) if usage_stats else 0
         total_output = usage_stats.get('completion_tokens', 0) if usage_stats else 0
@@ -988,24 +991,24 @@ class PromptGenerator:
 
         # Display with "N/A" if tokenization failed
         if sys_tokens is not None:
-            print(f"{YELLOW} SYSTEM PROMPT: {sys_tokens:>5} tokens{RESET}")
+            print(f"{ORANGE2} SYSTEM PROMPT: {sys_tokens:>5} tokens{RESET}")
         else:
-            print(f"{YELLOW} SYSTEM PROMPT:   N/A (tokenization failed){RESET}")
+            print(f"{ORANGE2} SYSTEM PROMPT:   N/A (tokenization failed){RESET}")
 
         if usr_tokens is not None:
-            print(f"{YELLOW} USER PROMPT:   {usr_tokens:>5} tokens{RESET}")
+            print(f"{ORANGE2} USER PROMPT:   {usr_tokens:>5} tokens{RESET}")
         else:
-            print(f"{YELLOW} USER PROMPT:     N/A (tokenization failed){RESET}")
+            print(f"{ORANGE2} USER PROMPT:     N/A (tokenization failed){RESET}")
 
         if images and image_tokens > 0:
             image_label = "image" if len(images) == 1 else "images"
-            print(f"{YELLOW} IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label}){RESET}")
-        print(f"{YELLOW} -----------------------------------------{RESET}")
-        print(f"{YELLOW} THINKING:      {think_tokens:>5} tokens{RESET}")
-        print(f"{YELLOW} FINAL ANSWER:  {ans_tokens:>5} tokens{RESET}")
-        print(f"{YELLOW} -----------------------------------------{RESET}")
-        print(f"{YELLOW} TOTAL:         {total_input + total_output:>5} tokens{RESET}")
-        print(f"{YELLOW}{'=' * 60}\n{RESET}")
+            print(f"{ORANGE2} IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label}){RESET}")
+        print(f"{ORANGE2} -----------------------------------------{RESET}")
+        print(f"{ORANGE2} THINKING:      {think_tokens:>5} tokens{RESET}")
+        print(f"{ORANGE2} FINAL ANSWER:  {ans_tokens:>5} tokens{RESET}")
+        print(f"{ORANGE2} -----------------------------------------{RESET}")
+        print(f"{ORANGE2} TOTAL:         {total_input + total_output:>5} tokens{RESET}")
+        print(f"{ORANGE2}{'=' * 60}\n{RESET}")
 
 
 NODE_CLASS_MAPPINGS = {
