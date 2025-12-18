@@ -39,8 +39,6 @@ If a Custom Model Path is added, it will become the default download folder.
 - **Thinking Support**: Support Thinking models to perform deeper generative reasoning.
 - **Automatic Server Management**: Starts/stops llama.cpp server as needed, with automatic shut off at exit.
 - **Smart Model Selection**: Auto-selects appropriate model (vision or text) based on mode or Thinking mode.
-- **Model Preferences**: Set preferred models in ComfyUI preferences for automatic selection.
-- **Custom Llama path**: In preferences you can set a custom Llama install Path, if not defined in your System Path.
 
 ### Prompt Generator Options
 - **Model Selection**: Choose from local models or download Qwen3, Qwen3VL and Qwen3VL Thinking models from HuggingFace
@@ -49,6 +47,11 @@ If a Custom Model Path is added, it will become the default download folder.
 - **Custom Instructions**: Override default system prompt for different enhancement styles.
 - **Extra Image Inputs**:  Combine up to 5 images to generate your prompt.
 - **Console Debugging**: Enable outputing the entire process to the console for debugging purposes.
+
+### Preference Options 
+- Set choices for prefered Model for both base mode and VL model.
+- Set new default model location, previous folder (gguf and llm) will still be scanned, but model will save in new default.
+- Set custom Location for Llama.cpp. If Llama.cpp was not added to the system Path, this option let's you specify it's location.
 
 ## Installation
 
