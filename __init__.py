@@ -2,13 +2,15 @@
 ComfyUI Prompt Manager - A simple custom node for saving and reusing prompts
 A prompt management system for ComfyUI with LLM input support
 """
-__version__ = "1.8.2"
+__version__ = "1.8.3"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
 from .prompt_manager import PromptManager
 from .prompt_generator import PromptGenerator
 from .prompt_generator_options import PromptGenOptions
+from .model_manager import get_local_models
+from server import PromptServer
 
 NODE_CLASS_MAPPINGS = {
     "PromptManager": PromptManager,
@@ -21,7 +23,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptGenerator": "Prompt Generator",
     "PromptGenOptions": "Prompt Generator Options"
 }
-
 
 WEB_DIRECTORY = "./js"
 

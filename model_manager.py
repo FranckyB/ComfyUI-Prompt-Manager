@@ -15,7 +15,9 @@ _preferences_cache = {
     "preferred_base_model": "",
     "preferred_vision_model": "",
     "custom_llama_path": "",
-    "custom_llama_model_path": ""
+    "custom_llama_model_path": "",
+    "close_llama_on_exit": False,
+    "custom_llama_port": 8080
 }
 
 # Predefined models - use real filenames as keys
@@ -58,7 +60,12 @@ async def save_preference(request):
         key = data.get("key")
         value = data.get("value", "")
 
-        if key not in ["preferred_base_model", "preferred_vision_model", "custom_llama_path", "custom_llama_model_path"]:
+        if key not in ["preferred_base_model",
+                       "preferred_vision_model",
+                       "custom_llama_path",
+                       "custom_llama_model_path",
+                       "close_llama_on_exit",
+                       "custom_llama_port"]:
             return server.web.json_response({"success": False, "error": "Invalid preference key"})
 
         # Update in-memory cache

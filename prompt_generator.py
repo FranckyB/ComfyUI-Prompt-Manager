@@ -10,6 +10,7 @@ import json
 import base64
 import ctypes
 import numpy as np
+from colorama import Fore, Style
 from PIL import Image
 from io import BytesIO
 from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path
@@ -24,13 +25,13 @@ except ImportError:
     _preferences_cache = {}
 
 # ANSI color codes
-YELLOW     = '\033[38;5;226m'
-RED        = '\033[38;5;196m'
-ORANGE1    = '\033[38;5;202m'
-ORANGE2    = '\033[38;5;208m'
-LIGHT_BLUE = '\033[38;5;39m'
-BLUE       = '\033[38;5;27m'
-RESET      = '\033[0m'
+YELLOW     = Fore.YELLOW
+RED        = Fore.RED
+MAGENTA    = Fore.MAGENTA
+GREEN      = Fore.GREEN
+CYAN       = Fore.CYAN
+BLUE       = Fore.BLUE
+RESET      = Style.RESET_ALL
 
 # Global variable to track the server process
 _server_process = None
@@ -52,6 +53,7 @@ def print_pg(message, color=YELLOW):
 def print_pg_footer():
     """Print the Prompt Generator footer"""
     print(f"{YELLOW}{'=' * 60}{RESET}")
+
 # --- Windows Job Object helpers ---
 def setup_windows_job_object():
     """Create a Windows Job Object that kills child processes when parent exits"""
@@ -136,27 +138,28 @@ setup_windows_job_object()
 def cleanup_server():
     """Cleanup function to stop server on exit"""
     global _server_process, _job_handle
-    if _server_process:
-        try:
-            _server_process.terminate()
-            _server_process.wait(timeout=5)
-            print_pg("Server stopped on exit")
-        except:
+    if _preferences_cache.get("close_llama_on_exit", True):
+        if _server_process:
             try:
-                _server_process.kill()
+                _server_process.terminate()
+                _server_process.wait(timeout=5)
+                print_pg("Server stopped on exit")
             except:
-                pass
-        finally:
-            _server_process = None
+                try:
+                    _server_process.kill()
+                except:
+                    pass
+            finally:
+                _server_process = None
 
-    # Close and release Windows Job Object if created
-    if os.name == 'nt' and _job_handle:
-        try:
-            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-            kernel32.CloseHandle(_job_handle)
-        except Exception:
-            pass
-        _job_handle = None
+        # Close and release Windows Job Object if created
+        if os.name == 'nt' and _job_handle:
+            try:
+                kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel32.CloseHandle(_job_handle)
+            except Exception:
+                pass
+            _job_handle = None
 
 # Cleanup function for signals, on forced exits
 def _signal_handler(signum, frame):
@@ -169,13 +172,11 @@ atexit.register(cleanup_server)
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 
-
 class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
     # Server configuration
-    SERVER_URL = "http://localhost:8080"
-    SERVER_PORT = 8080
+    SERVER_PORT = _preferences_cache.get("custom_llama_port", 8080)
 
     # Default system prompt for prompt enhancement
     DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". If an element, text or other is not needed or seen, then simply don't mention them.  Only output your newly generated prompt."""
@@ -307,7 +308,7 @@ class PromptGenerator:
     def is_server_alive():
         """Check if llama.cpp server is responding"""
         try:
-            response = requests.get(f"{PromptGenerator.SERVER_URL}/health", timeout=2)
+            response = requests.get(f"http://localhost:{PromptGenerator.SERVER_PORT}/health", timeout=2)
             return response.status_code == 200
         except:
             return False
@@ -319,6 +320,7 @@ class PromptGenerator:
         Args:
             model_name: Name of the model to use
             context_size: Context size (default 4096)
+            use_vision_model: Whether to use the vision model's mmproj
 
         Returns:
             tuple: (success: bool, error_message: str or None)
@@ -406,23 +408,24 @@ class PromptGenerator:
                 popen_kwargs["creationflags"] = creation_flags
             else:
                 # On Unix, set PR_SET_PDEATHSIG so child gets SIGTERM when parent dies
-                def _set_pdeathsig():
-                    try:
-                        # Try common libc names
-                        for libname in ("libc.so.6", "libc.dylib", "libc.so"):
-                            try:
-                                libc = ctypes.CDLL(libname)
-                                break
-                            except Exception:
-                                libc = None
-                        if not libc:
+                if _preferences_cache.get("close_llama_on_exit", True):
+                    def _set_pdeathsig():
+                        try:
+                            # Try common libc names
+                            for libname in ("libc.so.6", "libc.dylib", "libc.so"):
+                                try:
+                                    libc = ctypes.CDLL(libname)
+                                    break
+                                except Exception:
+                                    libc = None
+                            if not libc:
+                                return
+                            PR_SET_PDEATHSIG = 1
+                            libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+                        except Exception:
                             return
-                        PR_SET_PDEATHSIG = 1
-                        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
-                    except Exception:
-                        return
 
-                popen_kwargs["preexec_fn"] = _set_pdeathsig
+                    popen_kwargs["preexec_fn"] = _set_pdeathsig
 
             # Start server process
             _server_process = subprocess.Popen(
@@ -431,7 +434,7 @@ class PromptGenerator:
             )
 
             # On Windows attach process to Job Object so children die if parent exits
-            if os.name == 'nt':
+            if os.name == 'nt' and _preferences_cache.get("close_llama_on_exit", True):
                 try:
                     setup_windows_job_object()
                     assign_process_to_job(_server_process.pid)
@@ -542,7 +545,7 @@ class PromptGenerator:
         """Get exact token count for text using server's tokenize endpoint"""
         try:
             response = requests.post(
-                f"{self.SERVER_URL}/tokenize",
+                f"http://localhost:{self.SERVER_PORT}/tokenize",
                 json={"content": text},
                 timeout=10
             )
@@ -558,7 +561,7 @@ class PromptGenerator:
         """Fetch default generation parameters from the server"""
         global _model_default_params
         try:
-            response = requests.get(f"{PromptGenerator.SERVER_URL}/props", timeout=5)
+            response = requests.get(f"http://localhost:{PromptGenerator.SERVER_PORT}/props", timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 params = data.get("default_generation_settings", {}).get("params", {})
@@ -704,7 +707,7 @@ class PromptGenerator:
                 return (error_msg,)
 
         # Build the endpoint URL
-        full_url = f"{self.SERVER_URL}/v1/chat/completions"
+        full_url = f"http://localhost:{self.SERVER_PORT}/v1/chat/completions"
 
         # Prepare the system prompt
         if options and "system_prompt" in options:
@@ -801,16 +804,16 @@ class PromptGenerator:
         # Now that payload is ready, print it if requested
         # Debug output if requested
         if show_everything_in_console:
-            print_pg(f"{'=' * 60}", ORANGE1)
-            print_pg("           DETAILED INFORMATION ENABLED", ORANGE2)
-            print_pg(f"{'=' * 60}", ORANGE1)
-            print_pg("------ GENERATION PARAMETERS ------", ORANGE1)
+            print_pg(f"{'=' * 60}", GREEN)
+            print_pg("           DETAILED INFORMATION ENABLED", GREEN)
+            print_pg(f"{'=' * 60}", GREEN)
+            print_pg("------ GENERATION PARAMETERS ------", GREEN)
             for param in ["seed", "temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
-                print_pg(f"{param} = {payload[param]}", ORANGE2)
-            print_pg("\n--------- SYSTEM PROMPT ---------", ORANGE1)
-            print_pg(f"{system_prompt}", ORANGE2)
-            print_pg("\n--------- USER PROMPT ---------", ORANGE1)
-            print_pg(f"{user_content}", ORANGE2)
+                print_pg(f"{param} = {payload[param]}", GREEN)
+            print_pg("\n--------- SYSTEM PROMPT ---------", GREEN)
+            print_pg(f"{system_prompt}", GREEN)
+            print_pg("\n--------- USER PROMPT ---------", GREEN)
+            print_pg(f"{user_content}", GREEN)
         try:
             response = requests.post(
                 full_url,
@@ -877,9 +880,9 @@ class PromptGenerator:
                                         thinking_content += str(reasoning_delta)
                                         if show_everything_in_console:
                                             if first_thinking:
-                                                print_pg("\n--------- THINKING ---------", ORANGE1)
+                                                print_pg("\n--------- THINKING ---------", GREEN)
                                                 first_thinking = False
-                                            print(f"{ORANGE2}{str(reasoning_delta)}{RESET}", end='', flush=True)
+                                            print(f"{GREEN}{str(reasoning_delta)}{RESET}", end='', flush=True)
                                 # Stream content (final answer)
                                 if 'content' in delta:
                                     content_delta = delta['content']
@@ -887,9 +890,9 @@ class PromptGenerator:
                                         full_response += str(content_delta)
                                         if show_everything_in_console:
                                             if first_content:
-                                                print_pg("\n\n--------- FINAL ANSWER ---------", BLUE)
+                                                print_pg("\n\n--------- FINAL ANSWER ---------", CYAN)
                                                 first_content = False
-                                            print(f"{LIGHT_BLUE}{str(content_delta)}{RESET}", end='', flush=True)
+                                            print(f"{CYAN}{str(content_delta)}{RESET}", end='', flush=True)
                         except json.JSONDecodeError:
                             continue
 
@@ -958,9 +961,9 @@ class PromptGenerator:
 
     def print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):
         """Print token statistics using pre-cached counts"""
-        print(f"{ORANGE2}{'=' * 60}{RESET}")
-        print(f"{ORANGE2}              TOKEN USAGE STATISTICS{RESET}")
-        print(f"{ORANGE2}{'=' * 60}{RESET}")
+        print_pg(f"{'=' * 60}", GREEN)
+        print_pg("              TOKEN USAGE STATISTICS", GREEN)
+        print_pg(f"{'=' * 60}", GREEN)
 
         total_input = usage_stats.get('prompt_tokens', 0) if usage_stats else 0
         total_output = usage_stats.get('completion_tokens', 0) if usage_stats else 0
@@ -991,24 +994,24 @@ class PromptGenerator:
 
         # Display with "N/A" if tokenization failed
         if sys_tokens is not None:
-            print(f"{ORANGE2} SYSTEM PROMPT: {sys_tokens:>5} tokens{RESET}")
+            print_pg(f" SYSTEM PROMPT: {sys_tokens:>5} tokens", GREEN)
         else:
-            print(f"{ORANGE2} SYSTEM PROMPT:   N/A (tokenization failed){RESET}")
+            print_pg(" SYSTEM PROMPT:   N/A (tokenization failed)", GREEN)
 
         if usr_tokens is not None:
-            print(f"{ORANGE2} USER PROMPT:   {usr_tokens:>5} tokens{RESET}")
+            print_pg(f" USER PROMPT:   {usr_tokens:>5} tokens", GREEN)
         else:
-            print(f"{ORANGE2} USER PROMPT:     N/A (tokenization failed){RESET}")
+            print_pg(" USER PROMPT:     N/A (tokenization failed)", GREEN)
 
         if images and image_tokens > 0:
             image_label = "image" if len(images) == 1 else "images"
-            print(f"{ORANGE2} IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label}){RESET}")
-        print(f"{ORANGE2} -----------------------------------------{RESET}")
-        print(f"{ORANGE2} THINKING:      {think_tokens:>5} tokens{RESET}")
-        print(f"{ORANGE2} FINAL ANSWER:  {ans_tokens:>5} tokens{RESET}")
-        print(f"{ORANGE2} -----------------------------------------{RESET}")
-        print(f"{ORANGE2} TOTAL:         {total_input + total_output:>5} tokens{RESET}")
-        print(f"{ORANGE2}{'=' * 60}\n{RESET}")
+            print_pg(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label})", GREEN)
+        print_pg(" -----------------------------------------", GREEN)
+        print_pg(f" THINKING:      {think_tokens:>5} tokens", GREEN)
+        print_pg(f" FINAL ANSWER:  {ans_tokens:>5} tokens", GREEN)
+        print_pg(" -----------------------------------------", GREEN)
+        print_pg(f" TOTAL:         {total_input + total_output:>5} tokens", GREEN)
+        print_pg(f"{'=' * 60}\n", GREEN)
 
 
 NODE_CLASS_MAPPINGS = {

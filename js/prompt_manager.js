@@ -7,102 +7,150 @@ app.registerExtension({
     settings: [
         {
             id: "PromptManager.PreferredBaseModel",
-            category: ["Prompt Manager", "Model Preferences", "Base Model (text enhancement)"],
+            category: ["Prompt Manager", "1. Model Preferences", "Base Model (text enhancement)"],
             name: "Preferred Base Model",
-            tooltip: "Default model for 'Enhance User Prompt' mode (leave empty to auto-select smallest)",
+            tooltip: "Filename of default model for 'Enhance User Prompt' mode (leave empty to auto-select model)",
             type: "text",
             defaultValue: "",
-            async onChange(value) {
-                try {
-                    await fetch("/prompt-manager/save-preference", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ key: "preferred_base_model", value: value })
-                    });
-                } catch (error) {
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "preferred_base_model", value: value })
+                }).catch(error => {
                     console.error("[PromptManager] Error saving base model preference:", error);
-                }
+                });
             }
         },
         {
             id: "PromptManager.PreferredVisionModel",
-            category: ["Prompt Manager", "Model Preferences", "Vision Model (image analysis)"],
+            category: ["Prompt Manager", "1. Model Preferences", "Vision Model (image analysis)"],
             name: "Preferred Vision Model",
-            tooltip: "Default model for 'Analyze Image' modes (leave empty to auto-select smallest)",
+            tooltip: "Filename of default model for 'Analyze Image' modes (leave empty to auto-select model)",
             type: "text",
             defaultValue: "",
-            async onChange(value) {
-                try {
-                    await fetch("/prompt-manager/save-preference", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ key: "preferred_vision_model", value: value })
-                    });
-                } catch (error) {
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "preferred_vision_model", value: value })
+                }).catch(error => {
                     console.error("[PromptManager] Error saving vision model preference:", error);
-                }
+                });
             }
         },
         {
             id: "PromptManager.LlamaPath",
-            category: ["Prompt Manager", "Llama Preferences", "Custom Llama Path"],
+            category: ["Prompt Manager", "2. Llama Preferences", "Custom Llama Path"],
             name: "Custom Llama Path",
             tooltip: "Path to custom Llama installation (Can leave empty if it's defined in your system Path)",
             type: "text",
             defaultValue: "",
-            async onChange(value) {
-                try {
-                    await fetch("/prompt-manager/save-preference", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ key: "custom_llama_path", value: value })
-                    });
-                } catch (error) {
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "custom_llama_path", value: value })
+                }).catch(error => {
                     console.error("[PromptManager] Error saving Llama path preference:", error);
-                }
+                });
             }
         },
         {
             id: "PromptManager.ModelPath",
-            category: ["Prompt Manager", "Llama Preferences", "Custom Model Path"],
+            category: ["Prompt Manager", "2. Llama Preferences", "Custom Model Path"],
             name: "Custom Model Path",
             tooltip: "Path to custom model location (If emtpty, defaults to the models/gguf folder)",
             type: "text",
             defaultValue: "",
-            async onChange(value) {
-                try {
-                    await fetch("/prompt-manager/save-preference", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ key: "custom_llama_model_path", value: value })
-                    });
-                } catch (error) {
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "custom_llama_model_path", value: value })
+                }).catch(error => {
                     console.error("[PromptManager] Error saving Model path preference:", error);
-                }
+                });
+            }
+        },
+        {
+            id: "PromptManager.Port",
+            category: ["Prompt Manager", "2. Llama Preferences", "Port"],
+            name: "Port",
+            tooltip: "Port number for the Llama server (default 8080)",
+            type: "text",
+            defaultValue: "8080",
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "custom_llama_port", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving Port preference:", error);
+                });
+            }
+        },
+        {
+            id: "PromptManager.CloseLlama",
+            category: ["Prompt Manager", "3. Exit Preferences", "Close Llama on Exit"],
+            name: "Close Llama on Exit",
+            tooltip: "If enabled, Will close Llama when ComfyUI exits",
+            type: "boolean",
+            defaultValue: true,
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "close_llama_on_exit", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving Close Llama preference:", error);
+                });
             }
         }
     ],
     async setup() {
         // Load settings from ComfyUI and sync to Python cache
         try {
+            // Sync current values to Python cache first
             const baseModel = app.ui.settings.getSettingValue("PromptManager.PreferredBaseModel", "");
             const visionModel = app.ui.settings.getSettingValue("PromptManager.PreferredVisionModel", "");
+            const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath", "");
+            const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath", "");
+            const port = app.ui.settings.getSettingValue("PromptManager.Port", "8080");
+            const relaunchOnExit = app.ui.settings.getSettingValue("PromptManager.RelaunchLlama", false);
+            const relaunchModel = app.ui.settings.getSettingValue("PromptManager.RelaunchModelName", "");
             
-            // Sync both settings to Python cache
-            if (baseModel) {
-                await fetch("/prompt-manager/save-preference", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ key: "preferred_base_model", value: baseModel })
-                });
-            }
-            if (visionModel) {
-                await fetch("/prompt-manager/save-preference", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ key: "preferred_vision_model", value: visionModel })
-                });
-            }
+            console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, relaunchOnExit, relaunchModel });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "preferred_base_model", value: baseModel })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "preferred_vision_model", value: visionModel })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "custom_llama_path", value: llamaPath })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "custom_llama_model_path", value: modelPath })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "custom_llama_port", value: port })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "close_llama_on_exit", value: relaunchOnExit })
+            });
         } catch (error) {
             console.error("[PromptManager] Error syncing preferences:", error);
         }
