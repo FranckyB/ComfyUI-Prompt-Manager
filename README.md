@@ -128,12 +128,12 @@ If a Custom Model Path is added, it will become the default download folder.
 - Place gguf files in models/gguf folder
 - Downloaded models are also placed in this folder.
 
-**Model Preferences**:
-- Set preferred models in ComfyUI Settings → Prompt Manager → Model Preferences
-- **Preferred Base Model**: Used for "Enhance User Prompt" mode (text-only models)
-- **Preferred Vision Model**: Used for "Analyze Image" modes (Qwen3VL models)
-- Leave empty to auto-select smallest available model
-- Changes are saved automatically in ComfyUI settings
+**Preferences**:
+Preference settings can be found in ComfyUI Settings → Prompt Manager
+- **Preferred Base Model**: Name of model used for "Enhance User Prompt" mode (text-only models)
+- **Preferred Vision Model**: Name of model Used for "Analyze Image" modes (Qwen3VL models)
+- **Set Default Port** You can set the port used by Llama.cpp
+- **Close Llama on Exit** By default Llama.cpp with be close on exit.
 
 ## Requirements
 
@@ -144,6 +144,7 @@ If a Custom Model Path is added, it will become the default download folder.
 - psutil >= 5.9.0
 - tqdm >= 4.66.0
 - Pillow >= 10.0.0
+- colorama
 - llama-server (from llama.cpp)
 
 ## Troubleshooting
@@ -173,9 +174,13 @@ If a Custom Model Path is added, it will become the default download folder.
 - **Solution**: Either, Use a smaller quantized model (Q4 instead of Q8) or toggle 'stop_server_after' to quit llama.cpp after generating prompt.
 
 **Problem**: Default Model used is not what I want
-- **Solution**: You can set your preferred model in the ComfyUI settings. Simply add its full name for both the VL and base models. Enabling Thinking in the Generator might change what is used.
+- **Solution**: You can set your preferred model in the ComfyUI settings. Simply add its full name, with .gguf extension, for both the VL and base models. Enabling Thinking in the Generator might change what is used for VL models.
+
 
 ## Changelog
+
+### Version 1.8.3
+- Added option to leave Llama server running when closing ComfyUI.
 
 ### Version 1.8.2
 - Added custom model path preference and enhance model management
