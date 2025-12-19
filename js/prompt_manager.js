@@ -94,7 +94,7 @@ app.registerExtension({
             id: "PromptManager.CloseLlama",
             category: ["Prompt Manager", "3. Exit Preferences", "Close Llama on Exit"],
             name: "Close Llama on Exit",
-            tooltip: "If enabled, Will close Llama when ComfyUI exits",
+            tooltip: "If enabled, will close Llama when ComfyUI exits",
             type: "boolean",
             defaultValue: true,
             onChange(value) {
@@ -117,10 +117,9 @@ app.registerExtension({
             const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath", "");
             const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath", "");
             const port = app.ui.settings.getSettingValue("PromptManager.Port", "8080");
-            const relaunchOnExit = app.ui.settings.getSettingValue("PromptManager.RelaunchLlama", false);
-            const relaunchModel = app.ui.settings.getSettingValue("PromptManager.RelaunchModelName", "");
+            const CloseLlama = app.ui.settings.getSettingValue("PromptManager.CloseLlama", true);
             
-            console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, relaunchOnExit, relaunchModel });
+            console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, CloseLlama });
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -149,7 +148,7 @@ app.registerExtension({
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ key: "close_llama_on_exit", value: relaunchOnExit })
+                body: JSON.stringify({ key: "close_llama_on_exit", value: CloseLlama })
             });
         } catch (error) {
             console.error("[PromptManager] Error syncing preferences:", error);

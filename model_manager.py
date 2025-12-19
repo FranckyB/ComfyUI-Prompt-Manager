@@ -16,7 +16,7 @@ _preferences_cache = {
     "preferred_vision_model": "",
     "custom_llama_path": "",
     "custom_llama_model_path": "",
-    "close_llama_on_exit": False,
+    "close_llama_on_exit": True,
     "custom_llama_port": 8080
 }
 

@@ -38,6 +38,7 @@ _server_process = None
 _current_model = None
 _current_context_size = None
 _job_handle = None
+_close_llama_on_exit = True
 _model_default_params = None
 
 def print_pg_header():
@@ -137,8 +138,8 @@ setup_windows_job_object()
 # Cleanup function to stop server on clean exit
 def cleanup_server():
     """Cleanup function to stop server on exit"""
-    global _server_process, _job_handle
-    if _preferences_cache.get("close_llama_on_exit", True):
+    global _server_process, _job_handle, _close_llama_on_exit
+    if _close_llama_on_exit:
         if _server_process:
             try:
                 _server_process.terminate()
@@ -179,7 +180,7 @@ class PromptGenerator:
     SERVER_PORT = _preferences_cache.get("custom_llama_port", 8080)
 
     # Default system prompt for prompt enhancement
-    DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric, and it must never contain meta tags or drawing directives such as "8K" or "masterpiece". If an element, text or other is not needed or seen, then simply don't mention them.  Only output your newly generated prompt."""
+    DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric. If an element, text or other is not needed or seen, then simply don't mention them.  Do not add the original prompt, either by itself or as a title in your reply. Only output your newly generated prompt."""
 
     # System prompt for image description (used with Qwen3VL)
     DEFAULT_IMAGE_SYSTEM_PROMPT = """You are an expert visual analyst creating detailed descriptions for text-to-image generation. Analyze the provided images and create a comprehensive visual description that captures all essential elements: subjects and their characteristics, actions and poses, spatial positioning, composition and framing, lighting and atmosphere, color palette, artistic style, mood and emotion, background details, camera angle and perspective, material textures, and any visible text. Your description must be concrete, objective, and detailed enough that it could be used to recreate a similar image. Focus on visual elements only, avoiding interpretation or metaphor. If there is visible text in the image, enclose it in double quotes (""). If an element, text or other is not needed or seen, then simply don't mention them.  If more than one image is provided you are free to combine them as you see fit. Only output the final description."""
@@ -325,7 +326,10 @@ class PromptGenerator:
         Returns:
             tuple: (success: bool, error_message: str or None)
         """
-        global _server_process, _current_model, _current_context_size, _job_handle
+        global _server_process, _current_model, _current_context_size, _job_handle, _close_llama_on_exit
+
+        # Set the close preference for cleanup
+        _close_llama_on_exit = _preferences_cache.get("close_llama_on_exit", True)
 
         # Kill any existing llama-server processes first
         PromptGenerator.kill_all_llama_servers()
@@ -408,7 +412,7 @@ class PromptGenerator:
                 popen_kwargs["creationflags"] = creation_flags
             else:
                 # On Unix, set PR_SET_PDEATHSIG so child gets SIGTERM when parent dies
-                if _preferences_cache.get("close_llama_on_exit", True):
+                if _close_llama_on_exit:
                     def _set_pdeathsig():
                         try:
                             # Try common libc names
@@ -434,7 +438,7 @@ class PromptGenerator:
             )
 
             # On Windows attach process to Job Object so children die if parent exits
-            if os.name == 'nt' and _preferences_cache.get("close_llama_on_exit", True):
+            if os.name == 'nt' and _close_llama_on_exit:
                 try:
                     setup_windows_job_object()
                     assign_process_to_job(_server_process.pid)
