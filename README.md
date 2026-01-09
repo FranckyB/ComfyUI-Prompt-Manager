@@ -4,7 +4,8 @@
 This addon started off as a simple prompt Manager, to help save and retrieve prompts.  
 But has since evolved to allow generating prompts for Images, video and Image analysis.
 The new advanced version of the manager, now allows the user to save the entire recipe,
-as it allows saving the Lora Stacks that goes with a prompt. Supporting Dual Stack for Wan.
+as it allows saving the Lora Stacks as well as trigger words that goes with a prompt. Supporting Dual Stack for Wan.  
+Once saved, they can be toggled on or off or be adjusted without the need of the lora stacker.
 ___
 For Prompt Generation, it uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp), preventing install conflicts with ComfyUI.  
 Provides options to automatically download Qwen3 and Qwen3VL models.  
@@ -25,7 +26,7 @@ If a Custom Model Path is added, it will become the default download folder.
 </div>
 
 <div align="center">
-  <figcaption>Prompt Manager Advanced, with Lora support</figcaption>
+  <figcaption>Prompt Manager Advanced, with Lora and trigger word support</figcaption>
   <img src="docs/prompt_manager_advanced.png" alt="Prompt Manager">
 </div>
 
@@ -44,11 +45,14 @@ If a Custom Model Path is added, it will become the default download folder.
 - **Visual LoRA Tags**: See connected LoRAs as clickable tags with strength values
 - **Toggle LoRAs On/Off**: Click any LoRA tag to enable/disable it without disconnecting
 - **Editable Strengths**: Click the strength value on any tag to adjust it inline
+- **Trigger Words Support**: Save and display trigger words alongside prompts and LoRAs, can use [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) trigger words.
+- **Right-Click to Delete**: Right-click any LoRA or trigger word tag to remove it
 - **Save LoRAs with Prompts**: When you save a prompt, the current LoRA configuration is saved with it
 - **Override Mode**: Toggle "Override Lora" to ignore connected inputs and use only saved preset LoRAs
 - **Merge Mode**: When override is off, connected LoRAs are merged with saved presets
 - **LoRA Manager Integration**: If [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) is installed, hovering over LoRA tags shows preview images
 - **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
+
 
 ### Apply LoRA Stack:
 - **Simple LoRA Application**: Takes a LORA_STACK and applies it to your model/clip
@@ -222,6 +226,29 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### Version 1.10.0
+- **Unified UI for Prompt Manager and Prompt Manager Advanced**
+  - Three-button layout: Save Prompt, New Prompt, and More (dropdown menu)
+  - New Prompt button creates a temporary prompt that isn't saved until you click Save Prompt
+  - Save Prompt opens a modal with category selection (create new or select existing)
+  - More dropdown includes: Import JSON, Export JSON, Delete Prompt, Delete Category
+- **Import/Export JSON functionality**
+  - Export all prompts to a JSON file
+  - Import prompts with Merge (add to existing) or Replace (overwrite all) options
+  - Proper cancel handling without false success messages
+- **Multi-tab synchronization**
+  - Changing category or prompt reloads data from server
+  - Prevents conflicts when editing prompts in multiple browser tabs
+- **Prompt Manager now preserves LoRA data**
+  - LoRA stacks, trigger words, and active states are preserved when saving from basic Prompt Manager
+  - Seamless compatibility between Prompt Manager and Prompt Manager Advanced
+- **Trigger Words support in Prompt Manager Advanced**
+  - Save and restore trigger words alongside prompts and LoRAs
+  - Trigger words display as editable text when loading saved prompts
+- **Improved unsaved changes detection**
+  - Warning when switching away from newly created (unsaved) prompts
+  - Cancel button properly reverts dropdown to previous selection
 
 ### Version 1.9.0
 - **New Node: Prompt Manager Advanced** - Extended prompt manager with LoRA stack support

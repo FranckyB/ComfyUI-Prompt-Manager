@@ -50,6 +50,12 @@ class PromptManager:
     FUNCTION = "get_prompt"
     OUTPUT_NODE = True
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, name, **kwargs):
+        """Allow any name value, including temporary unsaved prompts"""
+        # Return True to accept any value - this allows new prompts to be tested before saving
+        return True
+
     @staticmethod
     def get_prompts_path():
         """Get the path to the prompts JSON file in user/default folder"""
@@ -179,8 +185,8 @@ async def save_prompt(request):
         name = data.get("name", "").strip()
         text = data.get("text", "").strip()
 
-        if not category or not name or not text:
-            return server.web.json_response({"success": False, "error": "All fields are required"})
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name are required"})
 
         prompts = PromptManager.load_prompts()
 
@@ -197,12 +203,13 @@ async def save_prompt(request):
                 print(f"[PromptManager] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        # Save prompt in dict, preserving any existing lora data from PromptManagerAdvanced
+        # Save prompt in dict, preserving any existing lora data and trigger words from PromptManagerAdvanced
         existing_data = prompts[category].get(name, {})
         prompts[category][name] = {
             "prompt": text,
             "loras_a": existing_data.get("loras_a", []),
-            "loras_b": existing_data.get("loras_b", [])
+            "loras_b": existing_data.get("loras_b", []),
+            "trigger_words": existing_data.get("trigger_words", [])
         }
         PromptManager.save_prompts(prompts)
 
@@ -258,4 +265,46 @@ async def delete_prompt(request):
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
         print(f"[PromptManager] Error in delete_prompt API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/import-prompts")
+async def import_prompts(request):
+    """API endpoint to import prompts from JSON"""
+    try:
+        data = await request.json()
+        imported_data = data.get("data", {})
+        mode = data.get("mode", "merge")
+
+        if not isinstance(imported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        if mode == "replace":
+            # Replace all existing prompts
+            PromptManager.save_prompts(imported_data)
+            return server.web.json_response({"success": True, "prompts": imported_data})
+        else:
+            # Merge with existing prompts
+            prompts = PromptManager.load_prompts()
+            
+            for category, category_prompts in imported_data.items():
+                if not isinstance(category_prompts, dict):
+                    continue
+                    
+                if category not in prompts:
+                    prompts[category] = {}
+                
+                for prompt_name, prompt_data in category_prompts.items():
+                    # Merge prompt data, preserving structure
+                    if isinstance(prompt_data, dict):
+                        prompts[category][prompt_name] = prompt_data
+                    elif isinstance(prompt_data, str):
+                        # Legacy format: just the prompt text
+                        prompts[category][prompt_name] = {"prompt": prompt_data}
+
+            PromptManager.save_prompts(prompts)
+            return server.web.json_response({"success": True, "prompts": prompts})
+
+    except Exception as e:
+        print(f"[PromptManager] Error in import_prompts API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)

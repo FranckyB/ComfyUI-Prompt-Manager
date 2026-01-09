@@ -112,11 +112,13 @@ class PromptManagerAdvanced:
                 "llm_input": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect LLM text input here"}),
                 "lora_stack_a": ("LORA_STACK", {"tooltip": "First LoRA stack input (e.g., for base model)"}),
                 "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
+                "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
                 "loras_a_toggle": "STRING",
                 "loras_b_toggle": "STRING",
+                "trigger_words_toggle": "STRING",
             }
         }
 
@@ -125,6 +127,12 @@ class PromptManagerAdvanced:
     RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b")
     FUNCTION = "get_prompt"
     OUTPUT_NODE = True
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, name, **kwargs):
+        """Allow any name value, including temporary unsaved prompts"""
+        # Return True to accept any value - this allows new prompts to be tested before saving
+        return True
 
     @staticmethod
     def get_prompts_path():
@@ -277,8 +285,8 @@ class PromptManagerAdvanced:
         return filtered_stack
 
     def get_prompt(self, category, name, use_external, text="", override_lora=False, llm_input="",
-                   lora_stack_a=None, lora_stack_b=None,
-                   unique_id=None, loras_a_toggle=None, loras_b_toggle=None):
+                   lora_stack_a=None, lora_stack_b=None, trigger_words=None,
+                   unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
 
         # Choose which text to use based on the toggle
@@ -286,6 +294,12 @@ class PromptManagerAdvanced:
             output_text = llm_input
         else:
             output_text = text
+
+        # Process trigger words
+        trigger_words_display = self._process_trigger_words(
+            trigger_words, trigger_words_toggle
+        )
+        active_trigger_words = self._get_active_trigger_words(trigger_words_toggle)
 
         # Build preset stacks from saved toggle data (these are what we display/manage)
         preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
@@ -322,14 +336,18 @@ class PromptManagerAdvanced:
                 "use_external": use_external,
                 "llm_input": llm_input,
                 "loras_a": loras_a_display,
-                "loras_b": loras_b_display
+                "loras_b": loras_b_display,
+                "trigger_words": trigger_words_display
             })
 
-        return (output_text, processed_stack_a if processed_stack_a else [], processed_stack_b if processed_stack_b else [])
+        # Append active trigger words to output
+        final_output = self._append_trigger_words_to_prompt(output_text, active_trigger_words)
+
+        return (final_output, processed_stack_a if processed_stack_a else [], processed_stack_b if processed_stack_b else [])
 
     def check_lazy_status(self, category, name, use_external, text, override_lora=False, llm_input=None,
-                          lora_stack_a=None, lora_stack_b=None,
-                          unique_id=None, loras_a_toggle=None, loras_b_toggle=None):
+                          lora_stack_a=None, lora_stack_b=None, trigger_words=None,
+                          unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Tell ComfyUI which lazy inputs are needed based on current settings"""
         needed = []
         if use_external:
@@ -363,6 +381,10 @@ class PromptManagerAdvanced:
 
             lora_name = item.get('name', '')
             if not lora_name:
+                continue
+
+            # Skip inactive loras
+            if item.get('active', True) is False:
                 continue
 
             # Resolve the path at runtime
@@ -400,6 +422,101 @@ class PromptManagerAdvanced:
                 "strength": model_strength
             })
         return display_list
+
+    def _process_trigger_words(self, connected_trigger_words, toggle_data):
+        """
+        Process trigger words from connected input and saved toggle states.
+        Returns list of trigger word objects for display.
+        """
+        # Parse saved toggle data
+        saved_words = {}
+        if toggle_data:
+            try:
+                if isinstance(toggle_data, str):
+                    toggle_data = json.loads(toggle_data)
+                if isinstance(toggle_data, list):
+                    for item in toggle_data:
+                        if isinstance(item, dict) and item.get('text'):
+                            word = item['text'].strip()
+                            saved_words[word.lower()] = {
+                                'text': word,
+                                'active': item.get('active', True)
+                            }
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Parse connected trigger words (comma-separated)
+        connected_words = []
+        if connected_trigger_words and isinstance(connected_trigger_words, str):
+            connected_words = [w.strip() for w in connected_trigger_words.split(',') if w.strip()]
+
+        # Merge: saved words + new connected words (no duplicates)
+        result = []
+        seen = set()
+
+        # First, add all saved words (preserving their state)
+        for word_lower, data in saved_words.items():
+            if word_lower not in seen:
+                result.append({
+                    'text': data['text'],
+                    'active': data['active'],
+                    'source': 'saved'
+                })
+                seen.add(word_lower)
+
+        # Then add connected words that aren't already saved
+        for word in connected_words:
+            word_lower = word.lower()
+            if word_lower not in seen:
+                result.append({
+                    'text': word,
+                    'active': True,
+                    'source': 'connected'
+                })
+                seen.add(word_lower)
+
+        return result
+
+    def _get_active_trigger_words(self, toggle_data):
+        """
+        Get list of active trigger word strings from toggle data.
+        """
+        active_words = []
+        if toggle_data:
+            try:
+                if isinstance(toggle_data, str):
+                    toggle_data = json.loads(toggle_data)
+                if isinstance(toggle_data, list):
+                    for item in toggle_data:
+                        if isinstance(item, dict) and item.get('active', True):
+                            word = item.get('text', '').strip()
+                            if word:
+                                active_words.append(word)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return active_words
+
+    def _append_trigger_words_to_prompt(self, prompt, trigger_words):
+        """
+        Append trigger words to the end of the prompt.
+        Adds a period before trigger words if prompt doesn't end with comma or period.
+        """
+        if not trigger_words:
+            return prompt
+
+        prompt = prompt.rstrip()
+        if not prompt:
+            return ', '.join(trigger_words)
+
+        # Check if prompt ends with punctuation
+        if not prompt.endswith((',', '.')):
+            prompt += '.'
+
+        # Add space if needed
+        if not prompt.endswith(' '):
+            prompt += ' '
+
+        return prompt + ', '.join(trigger_words)
 
 
 # API Routes for Advanced Prompt Manager
@@ -454,6 +571,7 @@ async def save_prompt_advanced(request):
         text = data.get("text", "").strip()
         loras_a = data.get("loras_a", [])
         loras_b = data.get("loras_b", [])
+        trigger_words = data.get("trigger_words", [])
 
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and name are required"})
@@ -472,8 +590,7 @@ async def save_prompt_advanced(request):
                 print(f"[PromptManagerAdvanced] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        # Normalize lora data - only save name and strengths
-        # Inactive loras are not saved (filtered out by frontend)
+        # Normalize lora data - save name, strengths, and active state
         # Paths are resolved at runtime for portability
         def normalize_lora_data(loras):
             normalized = []
@@ -482,15 +599,39 @@ async def save_prompt_advanced(request):
                     normalized.append({
                         "name": lora.get('name'),
                         "strength": lora.get('strength', lora.get('model_strength', 1.0)),
-                        "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0))
+                        "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0)),
+                        "active": lora.get('active', True)
                     })
+            return normalized
+
+        # Normalize trigger words data
+        def normalize_trigger_words(words):
+            normalized = []
+            seen = set()
+            for word in words:
+                if isinstance(word, dict) and word.get('text'):
+                    text = word['text'].strip()
+                    text_lower = text.lower()
+                    if text and text_lower not in seen:
+                        normalized.append({
+                            "text": text,
+                            "active": word.get('active', True)
+                        })
+                        seen.add(text_lower)
+                elif isinstance(word, str) and word.strip():
+                    text = word.strip()
+                    text_lower = text.lower()
+                    if text_lower not in seen:
+                        normalized.append({"text": text, "active": True})
+                        seen.add(text_lower)
             return normalized
 
         # Save prompt with normalized lora data (no paths - they're resolved at runtime)
         prompts[category][name] = {
             "prompt": text,
             "loras_a": normalize_lora_data(loras_a),
-            "loras_b": normalize_lora_data(loras_b)
+            "loras_b": normalize_lora_data(loras_b),
+            "trigger_words": normalize_trigger_words(trigger_words)
         }
         PromptManagerAdvanced.save_prompts(prompts)
 
@@ -613,9 +754,56 @@ async def get_prompt_data_advanced(request):
             "data": {
                 "prompt": prompt_data.get("prompt", ""),
                 "loras_a": add_availability(prompt_data.get("loras_a", [])),
-                "loras_b": add_availability(prompt_data.get("loras_b", []))
+                "loras_b": add_availability(prompt_data.get("loras_b", [])),
+                "trigger_words": prompt_data.get("trigger_words", [])
             }
         })
     except Exception as e:
         print(f"[PromptManagerAdvanced] Error in get_prompt_data API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/import-prompts")
+async def import_prompts_advanced(request):
+    """API endpoint to import prompts from JSON"""
+    try:
+        data = await request.json()
+        imported_data = data.get("data", {})
+        mode = data.get("mode", "merge")  # "merge" or "replace"
+
+        if not isinstance(imported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        if mode == "replace":
+            # Replace all existing prompts
+            prompts = {}
+        else:
+            # Merge with existing prompts
+            prompts = PromptManagerAdvanced.load_prompts()
+
+        # Process imported data
+        for category, category_prompts in imported_data.items():
+            if not isinstance(category_prompts, dict):
+                continue
+
+            if category not in prompts:
+                prompts[category] = {}
+
+            for prompt_name, prompt_data in category_prompts.items():
+                if not isinstance(prompt_data, dict):
+                    continue
+
+                # Normalize the prompt data structure
+                prompts[category][prompt_name] = {
+                    "prompt": prompt_data.get("prompt", ""),
+                    "loras_a": prompt_data.get("loras_a", []),
+                    "loras_b": prompt_data.get("loras_b", []),
+                    "trigger_words": prompt_data.get("trigger_words", [])
+                }
+
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in import_prompts API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)

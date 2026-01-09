@@ -220,14 +220,17 @@ app.registerExtension({
                     }
                 });
 
-                // Load prompts on creation
-                loadPrompts(node).then(() => {
-                    addButtonBar(node);
-                    setupCategoryChangeHandler(node);
-                    filterPromptDropdown(node);
-                    setupUseExternalToggleHandler(node);
+                // IMPORTANT: Add DOM widgets SYNCHRONOUSLY during node creation
+                // to ensure proper positioning and rendering within the node bounds
+                addButtonBar(node);
+                setupCategoryChangeHandler(node);
+                setupUseExternalToggleHandler(node);
 
-                    // After buttons are added, ensure height is sufficient
+                // Load prompts asynchronously (data only, not widgets)
+                loadPrompts(node).then(() => {
+                    filterPromptDropdown(node);
+
+                    // Ensure height is sufficient after data is loaded
                     setTimeout(() => {
                         const computedSize = node.computeSize();
                         const minHeight = Math.max(400, computedSize[1] + 20);
@@ -235,7 +238,8 @@ app.registerExtension({
                         if (node.size[1] < minHeight) {
                             node.setSize([Math.max(400, node.size[0]), minHeight]);
                         }
-                    }, 200);
+                        app.graph.setDirtyCanvas(true, true);
+                    }, 100);
                 });
 
                 return result;
@@ -328,6 +332,39 @@ async function loadPrompts(node) {
     }
 }
 
+/**
+ * Check if there are unsaved changes in the prompt
+ */
+function hasUnsavedChanges(node) {
+    // New unsaved prompt always has unsaved changes
+    if (node.isNewUnsavedPrompt) {
+        return true;
+    }
+    
+    // For basic PromptManager, check if text differs from saved
+    const textWidget = node.widgets?.find(w => w.name === "text");
+    const categoryWidget = node.widgets?.find(w => w.name === "category");
+    const promptWidget = node.widgets?.find(w => w.name === "name");
+    
+    if (!textWidget || !categoryWidget || !promptWidget) {
+        return false;
+    }
+    
+    const currentText = textWidget.value || "";
+    const category = categoryWidget.value;
+    const promptName = promptWidget.value;
+    
+    // If no saved prompt exists, no unsaved changes (unless it's a new prompt)
+    if (!node.prompts || !node.prompts[category] || !node.prompts[category][promptName]) {
+        return false;
+    }
+    
+    const savedPrompt = node.prompts[category][promptName];
+    const savedText = savedPrompt?.prompt || "";
+    
+    return currentText !== savedText;
+}
+
 function filterPromptDropdown(node) {
     // Filter name dropdown to only show prompts from current category
     const categoryWidget = node.widgets.find(w => w.name === "category");
@@ -362,88 +399,202 @@ function addButtonBar(node) {
     buttonContainer.style.flexWrap = "nowrap";
     buttonContainer.style.marginTop = "-10px";
 
-    // Create action buttons
-    const createCategoryBtn = createButton("New Category", async () => {
-        const categoryName = await showTextPrompt("New Category", "Enter new category name:");
+    // Save Prompt button with category selection
+    const savePromptBtn = createButton("Save Prompt", async () => {
+        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+        const currentCategory = categoryWidget.value;
         
-        if (categoryName && categoryName.trim()) {
-            // Case-insensitive check for existing category - PREVENT overwriting
-            let existingCategoryName = null;
-            if (node.prompts) {
-                const existingCategories = Object.keys(node.prompts);
-                existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.trim().toLowerCase());
+        const result = await showPromptWithCategory(
+            "Save Prompt",
+            "Enter prompt name:",
+            promptWidget.value || "New Prompt",
+            categories,
+            currentCategory
+        );
+        
+        if (result && result.name && result.name.trim()) {
+            const promptName = result.name.trim();
+            const targetCategory = result.category;
+            const promptText = textWidget.value;
+
+            if (!promptText || !promptText.trim()) {
+                await showInfo("Empty Prompt", "Prompt text cannot be empty");
+                return;
+            }
+            
+            // Case-insensitive check for existing prompt
+            let existingPromptName = null;
+            if (node.prompts[targetCategory]) {
+                const existingNames = Object.keys(node.prompts[targetCategory]);
+                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
             }
 
-            if (existingCategoryName) {
+            // Ask for confirmation before overwriting existing prompt
+            if (existingPromptName) {
+                const confirmed = await showConfirm(
+                    "Overwrite Prompt",
+                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}". Do you want to overwrite it?`,
+                    "Overwrite",
+                    "#f80"
+                );
+
+                if (!confirmed) {
+                    return;
+                }
+            }
+
+            await savePrompt(node, targetCategory, promptName, promptText.trim());
+            
+            // Clear new prompt flag since it's now saved
+            node.isNewUnsavedPrompt = false;
+            node.newPromptCategory = null;
+            node.newPromptName = null;
+            
+            // Update UI to show the saved prompt
+            categoryWidget.value = targetCategory;
+            filterPromptDropdown(node);
+            promptWidget.value = promptName;
+        }
+    });
+
+    // New Prompt button with category selection
+    const newPromptBtn = createButton("New Prompt", async () => {
+        // Check for unsaved changes before creating new prompt
+        const hasUnsaved = hasUnsavedChanges(node);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.warnUnsavedChanges", true);
+        
+        if (hasUnsaved && warnEnabled) {
+            const confirmed = await showConfirm(
+                "Unsaved Changes",
+                "You have unsaved changes to the current prompt. Do you want to discard them and create a new prompt?",
+                "Discard & Continue",
+                "#f80"
+            );
+            if (!confirmed) {
+                return;
+            }
+        }
+        
+        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+        const currentCategory = categoryWidget.value;
+        
+        const result = await showPromptWithCategory(
+            "New Prompt",
+            "Enter new prompt name:",
+            "",
+            categories,
+            currentCategory
+        );
+        
+        if (result && result.name && result.name.trim()) {
+            const promptName = result.name.trim();
+            const targetCategory = result.category;
+            
+            // Check for existing prompt
+            let existingPromptName = null;
+            if (node.prompts[targetCategory]) {
+                const existingNames = Object.keys(node.prompts[targetCategory]);
+                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
+            }
+
+            if (existingPromptName) {
                 await showInfo(
-                    "Category Exists",
-                    `Category already exists as "${existingCategoryName}". Cannot overwrite existing categories.`
+                    "Prompt Exists",
+                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}".`
                 );
                 return;
             }
 
-            await createCategory(node, categoryName.trim());
+            // Set up UI for new prompt (temporary, not saved yet)
+            // User must click "Save Prompt" to persist it
+            categoryWidget.value = targetCategory;
+            
+            // Add prompt name to dropdown temporarily so it can be selected
+            if (!promptWidget.options.values.includes(promptName)) {
+                promptWidget.options.values = [...promptWidget.options.values, promptName].sort((a, b) => a.localeCompare(b));
+            }
+            promptWidget.value = promptName;
+            textWidget.value = "";
+            
+            // Mark as unsaved/new prompt
+            node.isNewUnsavedPrompt = true;
+            node.newPromptCategory = targetCategory;
+            node.newPromptName = promptName;
+            
+            // Update previous values so cancel/revert works correctly
+            node._previousCategory = targetCategory;
+            node._previousPrompt = promptName;
+            
+            node.serialize_widgets = true;
+            app.graph.setDirtyCanvas(true, true);
         }
     });
 
-    const savePromptBtn = createButton("Save Prompt", async () => {
-        const promptName = await showTextPrompt("Save Prompt", "Enter prompt name:", promptWidget.value || "New Prompt");
-        
-        if (promptName && promptName.trim()) {
-            const promptText = textWidget.value;
-
-            if (promptText && promptText.trim()) {
-                const currentCategory = categoryWidget.value;
+    // More dropdown button
+    const moreBtn = createDropdownButton("More ▼", [
+        {
+            label: "New Category",
+            action: async () => {
+                const categoryName = await showTextPrompt("New Category", "Enter new category name:");
                 
-                // Case-insensitive check for existing prompt
-                let existingPromptName = null;
-                if (node.prompts[currentCategory]) {
-                    const existingNames = Object.keys(node.prompts[currentCategory]);
-                    existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.trim().toLowerCase());
-                }
+                if (categoryName && categoryName.trim()) {
+                    let existingCategoryName = null;
+                    if (node.prompts) {
+                        const existingCategories = Object.keys(node.prompts);
+                        existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.trim().toLowerCase());
+                    }
 
-                // Ask for confirmation before overwriting existing prompt
-                if (existingPromptName) {
-                    const confirmed = await showConfirm(
-                        "Overwrite Prompt",
-                        `Prompt "${existingPromptName}" already exists in category "${currentCategory}". Do you want to overwrite it?`,
-                        "Overwrite",
-                        "#f80"
-                    );
-
-                    if (!confirmed) {
+                    if (existingCategoryName) {
+                        await showInfo(
+                            "Category Exists",
+                            `Category already exists as "${existingCategoryName}".`
+                        );
                         return;
                     }
-                }
 
-                await savePrompt(node, categoryWidget.value, promptName.trim(), promptText.trim());
-            } else {
-                await showInfo("Empty Prompt", "Prompt text cannot be empty");
+                    await createCategory(node, categoryName.trim());
+                }
+            }
+        },
+        {
+            label: "Delete Category",
+            action: async () => {
+                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryWidget.value}" and all its prompts?`)) {
+                    await deleteCategory(node, categoryWidget.value);
+                }
+            }
+        },
+        {
+            label: "Delete Prompt",
+            action: async () => {
+                if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptWidget.value}"?`)) {
+                    await deletePrompt(node, categoryWidget.value, promptWidget.value);
+                }
+            }
+        },
+        { divider: true },
+        {
+            label: "Export JSON",
+            action: async () => {
+                await exportPromptsJSON(node);
+            }
+        },
+        {
+            label: "Import JSON",
+            action: async () => {
+                await importPromptsJSON(node);
             }
         }
-    });
-
-    const deleteCategoryBtn = createButton("Del Category", async () => {
-        if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryWidget.value}"?`)) {
-            await deleteCategory(node, categoryWidget.value);
-        }
-    });
-
-    const deletePromptBtn = createButton("Del Prompt", async () => {
-        if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptWidget.value}"?`)) {
-            await deletePrompt(node, categoryWidget.value, promptWidget.value);
-        }
-    });
+    ]);
 
     buttonContainer.appendChild(savePromptBtn);
-    buttonContainer.appendChild(createCategoryBtn);
-    buttonContainer.appendChild(deleteCategoryBtn);
-    buttonContainer.appendChild(deletePromptBtn);
+    buttonContainer.appendChild(newPromptBtn);
+    buttonContainer.appendChild(moreBtn);
 
     // Add button bar to node
     const htmlWidget = node.addDOMWidget("buttons", "div", buttonContainer);
     htmlWidget.computeSize = function(width) {
-        return [width, 34];
+        return [width, 36];
     };
 
     node.buttonBarAttached = true;
@@ -460,10 +611,13 @@ function setupCategoryChangeHandler(node) {
     const originalCallback = categoryWidget.callback;
 
     // Update prompt dropdown when category changes
-    categoryWidget.callback = function(value) {
+    categoryWidget.callback = async function(value) {
         if (originalCallback) {
             originalCallback.apply(this, arguments);
         }
+
+        // Reload prompts from server to get latest changes from other tabs
+        await loadPrompts(node);
 
         const category = value;
         if (node.prompts && node.prompts[category]) {
@@ -493,15 +647,32 @@ function setupCategoryChangeHandler(node) {
     const originalPromptCallback = promptWidget.callback;
 
     // Update text widget when prompt selection changes
-    promptWidget.callback = function(value) {
+    promptWidget.callback = async function(value) {
         if (originalPromptCallback) {
             originalPromptCallback.apply(this, arguments);
+        }
+
+        // Reload prompts from server to get latest changes from other tabs
+        await loadPrompts(node);
+
+        const category = categoryWidget.value;
+        
+        // Update prompt dropdown options in case prompts were deleted/added in another tab
+        if (node.prompts && node.prompts[category]) {
+            const promptNames = Object.keys(node.prompts[category]).sort((a, b) => a.localeCompare(b));
+            promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
+            
+            // Check if selected prompt still exists after reload
+            if (!promptNames.includes(value)) {
+                // Prompt was deleted in another tab, switch to first available
+                value = promptNames.length > 0 ? promptNames[0] : "";
+                promptWidget.value = value;
+            }
         }
 
         // Only update text if not using external
         const useExternal = useExternalWidget ? useExternalWidget.value : false;
         if (!useExternal) {
-            const category = categoryWidget.value;
             if (node.prompts && node.prompts[category] && node.prompts[category][value]) {
                 const promptData = node.prompts[category][value];
                 textWidget.value = promptData?.prompt || "";
@@ -648,6 +819,409 @@ function createButton(text, callback) {
     button.onclick = callback;
 
     return button;
+}
+
+function createDropdownButton(text, items) {
+    const container = document.createElement("div");
+    container.style.position = "relative";
+    container.style.flex = "1";
+    container.style.minWidth = "80px";
+
+    const button = document.createElement("button");
+    button.textContent = text;
+    button.style.width = "100%";
+    button.style.padding = "6px 8px";
+    button.style.cursor = "pointer";
+    button.style.backgroundColor = "#222";
+    button.style.color = "#fff";
+    button.style.border = "1px solid #444";
+    button.style.borderRadius = "6px";
+    button.style.fontSize = "11px";
+    button.style.fontWeight = "normal";
+    button.style.whiteSpace = "nowrap";
+    button.style.height = "28px";
+    button.style.display = "flex";
+    button.style.alignItems = "center";
+    button.style.justifyContent = "center";
+
+    // Create dropdown and append to body to escape stacking context issues
+    const dropdown = document.createElement("div");
+    dropdown.style.cssText = `
+        position: fixed;
+        background: #2a2a2a;
+        border: 1px solid #555;
+        border-radius: 6px;
+        z-index: 999999;
+        display: none;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        min-width: 140px;
+    `;
+    document.body.appendChild(dropdown);
+
+    items.forEach(item => {
+        if (item.divider) {
+            const divider = document.createElement("div");
+            divider.style.cssText = "height: 1px; background: #444; margin: 4px 0;";
+            dropdown.appendChild(divider);
+        } else {
+            const menuItem = document.createElement("div");
+            menuItem.textContent = item.label;
+            menuItem.style.cssText = `
+                padding: 8px 12px;
+                cursor: pointer;
+                font-size: 11px;
+                color: #fff;
+                white-space: nowrap;
+            `;
+            menuItem.addEventListener("mouseenter", () => {
+                menuItem.style.backgroundColor = "#4a4a4a";
+            });
+            menuItem.addEventListener("mouseleave", () => {
+                menuItem.style.backgroundColor = "transparent";
+            });
+            menuItem.addEventListener("click", (e) => {
+                e.stopPropagation();
+                dropdown.style.display = "none";
+                item.action();
+            });
+            dropdown.appendChild(menuItem);
+        }
+    });
+
+    button.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isVisible = dropdown.style.display === "block";
+        if (isVisible) {
+            dropdown.style.display = "none";
+        } else {
+            // Position dropdown below the button
+            const rect = button.getBoundingClientRect();
+            dropdown.style.left = rect.left + "px";
+            dropdown.style.top = (rect.bottom + 2) + "px";
+            dropdown.style.display = "block";
+        }
+    });
+
+    // Close dropdown when clicking elsewhere
+    document.addEventListener("click", (e) => {
+        if (!dropdown.contains(e.target) && e.target !== button) {
+            dropdown.style.display = "none";
+        }
+    });
+
+    container.appendChild(button);
+
+    return container;
+}
+
+function showPromptWithCategory(title, message, defaultName, categories, defaultCategory) {
+    return new Promise((resolve) => {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        // Build category options
+        const categoryOptions = categories.map(cat => 
+            `<option value="${cat}" ${cat === defaultCategory ? 'selected' : ''}>${cat}</option>`
+        ).join('');
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category:</div>
+            <select style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+                ${categoryOptions}
+            </select>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
+            <input type="text" value="${defaultName}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
+            </div>
+        `;
+
+        const selectEl = dialog.querySelector("select");
+        const input = dialog.querySelector("input");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve({ name: input.value, category: selectEl.value });
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleOk();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        input.focus();
+        input.select();
+    });
+}
+
+async function exportPromptsJSON(node) {
+    try {
+        const response = await fetch("/prompt-manager/get-prompts");
+        const data = await response.json();
+        
+        const jsonStr = JSON.stringify(data, null, 2);
+        const blob = new Blob([jsonStr], { type: "application/json" });
+        
+        // Try File System Access API first (works on localhost and https)
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: "prompt_manager_data.json",
+                    types: [{
+                        description: "JSON Files",
+                        accept: { "application/json": [".json"] }
+                    }]
+                });
+                const writable = await handle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                await showInfo("Export Complete", "Prompts exported successfully!");
+                return;
+            } catch (err) {
+                // User cancelled the dialog
+                if (err.name === "AbortError") {
+                    return;
+                }
+                // Fall back to download method if API fails
+                console.log("[PromptManager] Save picker failed, falling back to download:", err);
+            }
+        }
+        
+        // Fallback: Prompt user for filename, then download
+        const filename = await showTextPrompt(
+            "Export Prompts",
+            "Enter filename for export:",
+            "prompt_manager_data.json"
+        );
+        
+        if (!filename) {
+            return; // User cancelled
+        }
+        
+        const finalFilename = filename.endsWith(".json") ? filename : filename + ".json";
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = finalFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        await showInfo("Export Complete", "Prompts exported successfully!");
+    } catch (error) {
+        console.error("[PromptManager] Error exporting prompts:", error);
+        await showInfo("Error", "Failed to export prompts");
+    }
+}
+
+async function importPromptsJSON(node) {
+    return new Promise((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json";
+        
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                resolve(false);
+                return;
+            }
+            
+            try {
+                const text = await file.text();
+                const importedData = JSON.parse(text);
+                
+                // Validate structure
+                if (typeof importedData !== 'object' || Array.isArray(importedData)) {
+                    await showInfo("Error", "Invalid JSON structure. Expected an object with categories.");
+                    resolve(false);
+                    return;
+                }
+                
+                // Ask user how to handle import
+                const importMode = await showImportOptions();
+                
+                if (importMode === null) {
+                    // User cancelled
+                    resolve(false);
+                    return;
+                }
+                
+                // Send to backend
+                const response = await fetch("/prompt-manager/import-prompts", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        data: importedData,
+                        mode: importMode
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    node.prompts = result.prompts;
+                    updateDropdowns(node);
+                    
+                    // Refresh the current prompt text
+                    const categoryWidget = node.widgets.find(w => w.name === "category");
+                    const promptWidget = node.widgets.find(w => w.name === "name");
+                    const textWidget = node.widgets.find(w => w.name === "text");
+                    
+                    if (categoryWidget && promptWidget && textWidget) {
+                        const category = categoryWidget.value;
+                        const promptName = promptWidget.value;
+                        if (node.prompts[category] && node.prompts[category][promptName]) {
+                            textWidget.value = node.prompts[category][promptName].prompt || "";
+                        }
+                    }
+                    
+                    node.serialize_widgets = true;
+                    app.graph.setDirtyCanvas(true, true);
+                    
+                    await showInfo("Import Complete", `Successfully imported prompts!`);
+                    resolve(true);
+                } else {
+                    await showInfo("Error", result.error || "Failed to import prompts");
+                    resolve(false);
+                }
+            } catch (error) {
+                console.error("[PromptManager] Error importing prompts:", error);
+                await showInfo("Error", "Failed to parse JSON file");
+                resolve(false);
+            }
+        };
+        
+        input.click();
+    });
+}
+
+function showImportOptions() {
+    return new Promise((resolve) => {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">Import Prompts</div>
+            <div style="margin-bottom: 20px; color: #ccc;">How do you want to import?<br><br>
+                <strong>Merge:</strong> Keep existing prompts, add/update from import<br>
+                <strong>Replace:</strong> Delete all existing, use import only
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="replace-btn" style="padding: 8px 16px; background: #c00; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Replace</button>
+                <button class="merge-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Merge</button>
+            </div>
+        `;
+
+        const mergeBtn = dialog.querySelector(".merge-btn");
+        const replaceBtn = dialog.querySelector(".replace-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        mergeBtn.onclick = () => {
+            resolve("merge");
+            cleanup();
+        };
+
+        replaceBtn.onclick = () => {
+            resolve("replace");
+            cleanup();
+        };
+
+        cancelBtn.onclick = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        overlay.onclick = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        mergeBtn.focus();
+    });
 }
 
 function showTextPrompt(title, message, defaultValue = "") {
@@ -968,11 +1542,11 @@ async function savePrompt(node, category, name, text) {
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
         } else {
-            alert(`Error: ${data.error}`);
+            await showInfo("Error", data.error || "Failed to save prompt");
         }
     } catch (error) {
         console.error("[PromptManager] Error saving prompt:", error);
-        alert("Error saving prompt");
+        await showInfo("Error", "Failed to save prompt");
     }
 }
 
@@ -993,11 +1567,11 @@ async function deleteCategory(node, category) {
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
         } else {
-            alert(`Error: ${data.error}`);
+            await showInfo("Error", data.error || "Failed to delete category");
         }
     } catch (error) {
         console.error("[PromptManager] Error deleting category:", error);
-        alert("Error deleting category");
+        await showInfo("Error", "Failed to delete category");
     }
 }
 
@@ -1021,11 +1595,11 @@ async function deletePrompt(node, category, name) {
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
         } else {
-            alert(`Error: ${data.error}`);
+            await showInfo("Error", data.error || "Failed to delete prompt");
         }
     } catch (error) {
         console.error("[PromptManager] Error deleting prompt:", error);
-        alert("Error deleting prompt");
+        await showInfo("Error", "Failed to delete prompt");
     }
 }
 

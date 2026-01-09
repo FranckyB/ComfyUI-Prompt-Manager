@@ -53,6 +53,20 @@ async function getLoraManagerPreviewTooltip() {
 // Initialize on load (non-blocking)
 getLoraManagerPreviewTooltip();
 
+// Register setting for unsaved changes warning
+app.registerExtension({
+    name: "PromptManagerAdvanced.Settings",
+    async setup() {
+        app.ui.settings.addSetting({
+            id: "PromptManagerAdvanced.warnUnsavedChanges",
+            name: "Warn about unsaved prompt changes",
+            type: "boolean",
+            defaultValue: true,
+            tooltip: "Show a warning when switching prompts if there are unsaved changes to the current prompt text, LoRAs, or trigger words."
+        });
+    }
+});
+
 app.registerExtension({
     name: "PromptManagerAdvanced",
 
@@ -69,6 +83,16 @@ app.registerExtension({
                 node.currentLorasB = [];
                 node.savedLorasA = [];
                 node.savedLorasB = [];
+                node.currentTriggerWords = [];  // From connected input
+                node.savedTriggerWords = [];    // From saved prompt
+                
+                // Track last saved state for unsaved changes detection
+                node.lastSavedState = {
+                    text: "",
+                    lorasA: "[]",
+                    lorasB: "[]",
+                    triggerWords: "[]"
+                };
                 
                 // Set initial size - taller to accommodate lora displays
                 this.setSize([450, 600]);
@@ -105,18 +129,31 @@ app.registerExtension({
                     if (String(event.detail.node_id) === String(this.id)) {
                         const newLorasA = event.detail.loras_a || [];
                         const newLorasB = event.detail.loras_b || [];
+                        const newTriggerWords = event.detail.trigger_words || [];
                         
                         // Only update lora displays if the data actually changed
                         const lorasAChanged = JSON.stringify(newLorasA) !== JSON.stringify(this.currentLorasA);
                         const lorasBChanged = JSON.stringify(newLorasB) !== JSON.stringify(this.currentLorasB);
+                        const triggerWordsChanged = JSON.stringify(newTriggerWords.filter(t => t.source === 'connected')) !== 
+                            JSON.stringify(this.currentTriggerWords);
                         
-                        if (lorasAChanged || lorasBChanged) {
+                        if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
                             // Update current loras from connected inputs
                             this.currentLorasA = newLorasA;
                             this.currentLorasB = newLorasB;
                             
+                            // Update current trigger words (only connected ones)
+                            this.currentTriggerWords = newTriggerWords.filter(t => t.source === 'connected');
+                            
+                            // Merge with saved trigger words
+                            this.savedTriggerWords = mergeTriggerWordLists(
+                                this.currentTriggerWords,
+                                this.savedTriggerWords
+                            );
+                            
                             // Update the lora display widgets
                             updateLoraDisplays(this);
+                            updateTriggerWordsDisplay(this);
                         }
 
                         // Handle use_external toggle state for text widget
@@ -148,12 +185,20 @@ app.registerExtension({
                 // to ensure proper positioning within the node bounds
                 addButtonBar(node);
                 addLoraDisplays(node);
+                addTriggerWordsDisplay(node);
                 setupCategoryChangeHandler(node);
                 setupUseExternalToggleHandler(node);
 
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
                     filterPromptDropdown(node);
+                    
+                    // Load initial prompt data (LoRAs and trigger words)
+                    const categoryWidget = node.widgets.find(w => w.name === "category");
+                    const promptWidget = node.widgets.find(w => w.name === "name");
+                    if (categoryWidget && promptWidget && promptWidget.value) {
+                        loadPromptData(node, categoryWidget.value, promptWidget.value);
+                    }
 
                     // Ensure height is sufficient after data is loaded
                     setTimeout(() => {
@@ -182,6 +227,7 @@ app.registerExtension({
                     // Find the lora toggle widget indices and restore their values
                     const lorasAIndex = node.widgets?.findIndex(w => w.name === "loras_a_toggle");
                     const lorasBIndex = node.widgets?.findIndex(w => w.name === "loras_b_toggle");
+                    const triggerWordsIndex = node.widgets?.findIndex(w => w.name === "trigger_words_toggle");
                     
                     if (lorasAIndex >= 0 && info.widgets_values[lorasAIndex]) {
                         try {
@@ -197,6 +243,13 @@ app.registerExtension({
                             node.savedLorasB = [];
                         }
                     }
+                    if (triggerWordsIndex >= 0 && info.widgets_values[triggerWordsIndex]) {
+                        try {
+                            node.savedTriggerWords = JSON.parse(info.widgets_values[triggerWordsIndex]);
+                        } catch (e) {
+                            node.savedTriggerWords = [];
+                        }
+                    }
                 }
 
                 // IMPORTANT: Reattach DOM widgets SYNCHRONOUSLY during configure
@@ -208,12 +261,16 @@ app.registerExtension({
                 if (!node.loraDisplaysAttached) {
                     addLoraDisplays(node);
                 }
+                if (!node.triggerWordsDisplayAttached) {
+                    addTriggerWordsDisplay(node);
+                }
                 setupUseExternalToggleHandler(node);
 
                 // Load prompts data asynchronously (data only, widgets already added)
                 loadPrompts(node).then(() => {
                     filterPromptDropdown(node);
                     updateLoraDisplays(node);
+                    updateTriggerWordsDisplay(node);
                     app.graph.setDirtyCanvas(true, true);
                 });
 
@@ -690,7 +747,7 @@ function createLoraTag(lora, index, stackId, node) {
 
     const isActive = lora.active !== false;
     const isAvailable = lora.available !== false;
-    const strength = lora.strength ?? lora.model_strength ?? 1.0;
+    const strength = parseFloat(lora.strength ?? lora.model_strength ?? 1.0) || 1.0;
 
     // Determine colors based on active and available status
     let bgColor, textColor, borderColor;
@@ -856,10 +913,17 @@ function createLoraTag(lora, index, stackId, node) {
         }
     });
 
+    // Right-click handler to show context menu
+    tag.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showLoraContextMenu(e, node, stackId, index, lora.name);
+    });
+
     // Add title for full name on hover
     const availabilityStatus = isAvailable ? "" : "\n⚠️ NOT FOUND - This LoRA is missing from your system";
     const previewHint = loraManagerAvailable && isAvailable ? "\nHover to preview" : "";
-    tag.title = `${lora.name}\nStrength: ${strength.toFixed(2)}${availabilityStatus}${previewHint}\nClick to toggle on/off`;
+    tag.title = `${lora.name}\nStrength: ${strength.toFixed(2)}${availabilityStatus}${previewHint}\nClick to toggle on/off\nRight-click for options`;
 
     return tag;
 }
@@ -923,6 +987,115 @@ function toggleLoraActive(node, stackId, index) {
         app.graph.setDirtyCanvas(true, true);
     }
 }
+
+function showLoraContextMenu(e, node, stackId, index, loraName) {
+    // Remove any existing context menu
+    const existingMenu = document.querySelector(".lora-context-menu");
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+
+    const menu = document.createElement("div");
+    menu.className = "lora-context-menu";
+    menu.style.cssText = `
+        position: fixed;
+        left: ${e.clientX}px;
+        top: ${e.clientY}px;
+        background: #2a2a2a;
+        border: 1px solid #555;
+        border-radius: 6px;
+        z-index: 999999;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        min-width: 120px;
+        padding: 4px 0;
+    `;
+
+    const deleteItem = document.createElement("div");
+    deleteItem.textContent = "Delete";
+    deleteItem.style.cssText = `
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 12px;
+        color: #ff6b6b;
+        white-space: nowrap;
+    `;
+    deleteItem.addEventListener("mouseenter", () => {
+        deleteItem.style.backgroundColor = "#3a3a3a";
+    });
+    deleteItem.addEventListener("mouseleave", () => {
+        deleteItem.style.backgroundColor = "transparent";
+    });
+    deleteItem.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        menu.remove();
+        removeLora(node, stackId, index);
+    });
+    menu.appendChild(deleteItem);
+
+    document.body.appendChild(menu);
+
+    // Close menu when clicking elsewhere
+    const closeMenu = (evt) => {
+        if (!menu.contains(evt.target)) {
+            menu.remove();
+            document.removeEventListener("click", closeMenu);
+            document.removeEventListener("contextmenu", closeMenu);
+        }
+    };
+    
+    // Delay adding listener to prevent immediate close
+    setTimeout(() => {
+        document.addEventListener("click", closeMenu);
+        document.addEventListener("contextmenu", closeMenu);
+    }, 0);
+}
+
+function removeLora(node, stackId, index) {
+    // Check if override_lora is enabled
+    const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
+    const overrideLora = overrideWidget?.value === true;
+    
+    // Get the list that matches what's currently displayed
+    let loraList;
+    if (overrideLora) {
+        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
+    } else {
+        loraList = stackId === "a" ? 
+            mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
+            mergeLoraLists(node.currentLorasB, node.savedLorasB);
+    }
+    
+    if (loraList[index]) {
+        const lora = loraList[index];
+        const loraNameLower = lora.name.toLowerCase();
+        
+        // Remove from saved loras
+        if (stackId === "a") {
+            node.savedLorasA = (node.savedLorasA || []).filter(
+                l => l.name.toLowerCase() !== loraNameLower
+            );
+        } else {
+            node.savedLorasB = (node.savedLorasB || []).filter(
+                l => l.name.toLowerCase() !== loraNameLower
+            );
+        }
+        
+        // Also remove from current loras if present
+        if (stackId === "a") {
+            node.currentLorasA = (node.currentLorasA || []).filter(
+                l => l.name.toLowerCase() !== loraNameLower
+            );
+        } else {
+            node.currentLorasB = (node.currentLorasB || []).filter(
+                l => l.name.toLowerCase() !== loraNameLower
+            );
+        }
+        
+        updateLoraDisplays(node);
+        app.graph.setDirtyCanvas(true, true);
+    }
+}
+
 /**
  * Set LoRA strength to a specific value
  */
@@ -1054,6 +1227,527 @@ function updateToggleWidgets(node) {
     if (node.lorasBToggleWidget) {
         node.lorasBToggleWidget.value = JSON.stringify(formatForBackend(lorasB));
     }
+    
+    // Format and store trigger words
+    const triggerWords = node.savedTriggerWords || [];
+    if (node.triggerWordsToggleWidget) {
+        node.triggerWordsToggleWidget.value = JSON.stringify(triggerWords.map(tw => ({
+            text: tw.text,
+            active: tw.active !== false
+        })));
+    }
+}
+
+// ========================
+// Trigger Words Display Functions
+// ========================
+
+function addTriggerWordsDisplay(node) {
+    if (node.triggerWordsDisplayAttached) {
+        return;
+    }
+
+    // Create Trigger Words display section
+    const triggerWordsContainer = createTriggerWordsDisplayContainer("Trigger Words", node);
+    const triggerWordsWidget = node.addDOMWidget("trigger_words_display", "div", triggerWordsContainer);
+    triggerWordsWidget.computeSize = function(width) {
+        // Try to get actual height from rendered DOM
+        const tagsContainer = triggerWordsContainer.querySelector(".trigger-words-tags-container");
+        if (tagsContainer && tagsContainer.children.length > 0) {
+            // Use actual scrollHeight of tags container + header height (58px)
+            const tagsHeight = tagsContainer.scrollHeight || tagsContainer.offsetHeight;
+            const height = 58 + Math.max(28, tagsHeight + 8);
+            return [width, height];
+        }
+        
+        // Fallback: estimate based on tag count
+        const merged = mergeTriggerWordLists(node.currentTriggerWords || [], node.savedTriggerWords || []);
+        
+        if (merged.length === 0) {
+            return [width, 58 + 28];  // Base height + one row for empty message
+        }
+        
+        // Simple estimate: assume average ~80px per tag
+        const actualWidth = node.size?.[0] || width || 400;
+        const availableWidth = actualWidth - 24;
+        const avgTagWidth = 80;
+        const tagsPerRow = Math.max(1, Math.floor(availableWidth / avgTagWidth));
+        const rows = Math.max(1, Math.ceil(merged.length / tagsPerRow));
+        
+        const height = 58 + rows * 28;
+        return [width, height];
+    };
+    node.triggerWordsWidget = triggerWordsWidget;
+    node.triggerWordsContainer = triggerWordsContainer;
+
+    // Add hidden widget to store toggle states for serialization
+    const triggerWordsToggleWidget = node.addWidget('text', 'trigger_words_toggle', '[]');
+    triggerWordsToggleWidget.type = "converted-widget";
+    triggerWordsToggleWidget.hidden = true;
+    triggerWordsToggleWidget.computeSize = () => [0, -4];
+    node.triggerWordsToggleWidget = triggerWordsToggleWidget;
+
+    node.triggerWordsDisplayAttached = true;
+}
+
+function createTriggerWordsDisplayContainer(title, node) {
+    const container = document.createElement("div");
+    container.className = "trigger-words-display-container";
+    Object.assign(container.style, {
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        padding: "8px",
+        backgroundColor: "rgba(40, 44, 52, 0.6)",
+        borderRadius: "6px",
+        width: "100%",
+        boxSizing: "border-box",
+        marginTop: "4px"
+    });
+
+    // Title bar with label
+    const titleBar = document.createElement("div");
+    Object.assign(titleBar.style, {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: "4px",
+        paddingBottom: "4px",
+        borderBottom: "1px solid rgba(255,255,255,0.1)"
+    });
+
+    const titleLabel = document.createElement("span");
+    titleLabel.textContent = title;
+    Object.assign(titleLabel.style, {
+        fontSize: "12px",
+        fontWeight: "bold",
+        color: "#aaa"
+    });
+    titleBar.appendChild(titleLabel);
+
+    // Button container for right side
+    const buttonContainer = document.createElement("div");
+    Object.assign(buttonContainer.style, {
+        display: "flex",
+        gap: "4px"
+    });
+
+    // Add button
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Add";
+    Object.assign(addBtn.style, {
+        fontSize: "10px",
+        padding: "2px 8px",
+        backgroundColor: "#2a5a3a",
+        color: "#ccc",
+        border: "1px solid #3a7a4a",
+        borderRadius: "6px",
+        cursor: "pointer"
+    });
+    addBtn.onclick = () => addTriggerWordPrompt(node);
+    buttonContainer.appendChild(addBtn);
+
+    // Toggle All button
+    const toggleAllBtn = document.createElement("button");
+    toggleAllBtn.textContent = "Toggle All";
+    Object.assign(toggleAllBtn.style, {
+        fontSize: "10px",
+        padding: "2px 8px",
+        backgroundColor: "#333",
+        color: "#ccc",
+        border: "1px solid #555",
+        borderRadius: "6px",
+        cursor: "pointer"
+    });
+    toggleAllBtn.onclick = () => toggleAllTriggerWords(node);
+    buttonContainer.appendChild(toggleAllBtn);
+
+    titleBar.appendChild(buttonContainer);
+
+    container.appendChild(titleBar);
+
+    // Tags container
+    const tagsContainer = document.createElement("div");
+    tagsContainer.className = "trigger-words-tags-container";
+    Object.assign(tagsContainer.style, {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "4px",
+        minHeight: "30px"
+    });
+    container.appendChild(tagsContainer);
+
+    return container;
+}
+
+function updateTriggerWordsDisplay(node) {
+    if (!node.triggerWordsContainer) return;
+
+    // Merge current (from connected input) and saved (from prompt) trigger words
+    const triggerWords = mergeTriggerWordLists(
+        node.currentTriggerWords || [],
+        node.savedTriggerWords || []
+    );
+
+    // Update display
+    const tagsContainer = node.triggerWordsContainer.querySelector(".trigger-words-tags-container");
+    if (tagsContainer) {
+        renderTriggerWordTags(tagsContainer, triggerWords, node);
+    }
+
+    // Update hidden widget for serialization
+    updateToggleWidgets(node);
+
+    app.graph.setDirtyCanvas(true, true);
+}
+
+function mergeTriggerWordLists(currentWords, savedWords) {
+    // Create a map of saved words to preserve user toggle states
+    const savedMap = new Map();
+    (savedWords || []).forEach(word => {
+        savedMap.set(word.text.toLowerCase(), word);
+    });
+
+    const merged = [];
+    const seen = new Set();
+
+    // First add all current words, but preserve toggle state from saved if exists
+    (currentWords || []).forEach(word => {
+        const wordLower = word.text.toLowerCase();
+        const savedWord = savedMap.get(wordLower);
+        if (savedWord) {
+            // Word exists in both - use saved state
+            merged.push({
+                text: savedWord.text,
+                active: savedWord.active,
+                source: 'saved'
+            });
+        } else {
+            merged.push({ ...word, source: 'current' });
+        }
+        seen.add(wordLower);
+    });
+
+    // Then add saved words that aren't in current
+    (savedWords || []).forEach(word => {
+        const wordLower = word.text.toLowerCase();
+        if (!seen.has(wordLower)) {
+            merged.push({ ...word, source: 'saved' });
+            seen.add(wordLower);
+        }
+    });
+
+    // Sort alphabetically by text to maintain stable order when toggling
+    merged.sort((a, b) => a.text.localeCompare(b.text));
+
+    return merged;
+}
+
+function renderTriggerWordTags(container, triggerWords, node) {
+    // Clear existing tags
+    while (container.firstChild) {
+        container.removeChild(container.firstChild);
+    }
+
+    if (!triggerWords || triggerWords.length === 0) {
+        const emptyMessage = document.createElement("div");
+        emptyMessage.textContent = "No trigger words - click '+ Add' to add some";
+        Object.assign(emptyMessage.style, {
+            color: "rgba(200, 200, 200, 0.5)",
+            fontStyle: "italic",
+            fontSize: "11px",
+            padding: "8px",
+            width: "100%",
+            textAlign: "center"
+        });
+        container.appendChild(emptyMessage);
+        return;
+    }
+
+    triggerWords.forEach((word, index) => {
+        const tag = createTriggerWordTag(word, index, node);
+        container.appendChild(tag);
+    });
+}
+
+function createTriggerWordTag(word, index, node) {
+    const tag = document.createElement("div");
+    tag.className = "trigger-word-tag";
+    tag.dataset.wordIndex = index;
+
+    const isActive = word.active !== false;
+
+    // Determine colors based on active status
+    let bgColor, textColor, borderColor;
+    if (isActive) {
+        // Active - green/teal
+        bgColor = "rgba(72, 187, 120, 0.9)";
+        textColor = "white";
+        borderColor = "rgba(72, 187, 120, 0.9)";
+    } else {
+        // Inactive - gray
+        bgColor = "rgba(45, 55, 72, 0.7)";
+        textColor = "rgba(226, 232, 240, 0.6)";
+        borderColor = "rgba(226, 232, 240, 0.2)";
+    }
+
+    Object.assign(tag.style, {
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "4px 10px",
+        borderRadius: "6px",
+        fontSize: "12px",
+        cursor: "pointer",
+        transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease",
+        backgroundColor: bgColor,
+        color: textColor,
+        border: `1px solid ${borderColor}`,
+        height: "24px",
+        boxSizing: "border-box",
+        userSelect: "none",
+        whiteSpace: "nowrap"
+    });
+
+    // Trigger word text
+    const textSpan = document.createElement("span");
+    textSpan.textContent = word.text;
+    tag.appendChild(textSpan);
+
+    // Click handler to toggle active state
+    tag.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleTriggerWordActive(node, index);
+    });
+
+    // Right-click handler to show context menu
+    tag.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showTriggerWordContextMenu(e, node, index, word.text);
+    });
+
+    // Hover effects
+    tag.addEventListener("mouseenter", () => {
+        tag.style.transform = "translateY(-1px)";
+        tag.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
+    });
+    tag.addEventListener("mouseleave", () => {
+        tag.style.transform = "translateY(0)";
+        tag.style.boxShadow = "none";
+    });
+
+    // Add title for full text on hover
+    tag.title = `${word.text}\nClick to toggle on/off\nRight-click for options`;
+
+    return tag;
+}
+
+function toggleTriggerWordActive(node, index) {
+    // Get the merged list that's currently displayed
+    const triggerWords = mergeTriggerWordLists(
+        node.currentTriggerWords || [],
+        node.savedTriggerWords || []
+    );
+
+    if (triggerWords[index]) {
+        const word = triggerWords[index];
+
+        // Toggle the active state
+        triggerWords[index].active = !triggerWords[index].active;
+
+        // Update savedTriggerWords to preserve the state
+        // Find and update or add to saved list
+        const savedIndex = (node.savedTriggerWords || []).findIndex(
+            w => w.text.toLowerCase() === word.text.toLowerCase()
+        );
+        
+        if (savedIndex >= 0) {
+            node.savedTriggerWords[savedIndex].active = triggerWords[index].active;
+        } else {
+            // Add to saved with current state
+            if (!node.savedTriggerWords) node.savedTriggerWords = [];
+            node.savedTriggerWords.push({
+                text: word.text,
+                active: triggerWords[index].active,
+                source: 'saved'
+            });
+        }
+
+        updateTriggerWordsDisplay(node);
+        app.graph.setDirtyCanvas(true, true);
+    }
+}
+
+function toggleAllTriggerWords(node) {
+    // Get the merged list
+    const triggerWords = mergeTriggerWordLists(
+        node.currentTriggerWords || [],
+        node.savedTriggerWords || []
+    );
+
+    // Determine if we should turn all on or all off
+    const allActive = triggerWords.every(word => word.active !== false);
+    const newState = !allActive;
+
+    // Update all trigger words
+    triggerWords.forEach(word => {
+        word.active = newState;
+        
+        // Update or add to saved list
+        const savedIndex = (node.savedTriggerWords || []).findIndex(
+            w => w.text.toLowerCase() === word.text.toLowerCase()
+        );
+        
+        if (savedIndex >= 0) {
+            node.savedTriggerWords[savedIndex].active = newState;
+        } else {
+            if (!node.savedTriggerWords) node.savedTriggerWords = [];
+            node.savedTriggerWords.push({
+                text: word.text,
+                active: newState,
+                source: 'saved'
+            });
+        }
+    });
+
+    updateTriggerWordsDisplay(node);
+    app.graph.setDirtyCanvas(true, true);
+}
+
+async function addTriggerWordPrompt(node) {
+    const input = await showTextPrompt(
+        "Add Trigger Words",
+        "Enter trigger word(s) separated by commas:",
+        ""
+    );
+    
+    if (input && input.trim()) {
+        // Parse comma-separated words
+        const newWords = input.split(',')
+            .map(w => w.trim())
+            .filter(w => w.length > 0);
+        
+        if (newWords.length === 0) return;
+        
+        // Add each word to savedTriggerWords if not already present
+        if (!node.savedTriggerWords) node.savedTriggerWords = [];
+        
+        const existingLower = new Set(
+            node.savedTriggerWords.map(w => w.text.toLowerCase())
+        );
+        const currentLower = new Set(
+            (node.currentTriggerWords || []).map(w => w.text.toLowerCase())
+        );
+        
+        for (const word of newWords) {
+            const wordLower = word.toLowerCase();
+            // Only add if not already in saved or current
+            if (!existingLower.has(wordLower) && !currentLower.has(wordLower)) {
+                node.savedTriggerWords.push({
+                    text: word,
+                    active: true,
+                    source: 'saved'
+                });
+                existingLower.add(wordLower);
+            }
+        }
+        
+        updateTriggerWordsDisplay(node);
+        app.graph.setDirtyCanvas(true, true);
+    }
+}
+
+function showTriggerWordContextMenu(e, node, index, wordText) {
+    // Remove any existing context menu
+    const existingMenu = document.querySelector(".trigger-word-context-menu");
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+
+    const menu = document.createElement("div");
+    menu.className = "trigger-word-context-menu";
+    menu.style.cssText = `
+        position: fixed;
+        left: ${e.clientX}px;
+        top: ${e.clientY}px;
+        background: #2a2a2a;
+        border: 1px solid #555;
+        border-radius: 6px;
+        z-index: 999999;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        min-width: 120px;
+        padding: 4px 0;
+    `;
+
+    const deleteItem = document.createElement("div");
+    deleteItem.textContent = "Delete";
+    deleteItem.style.cssText = `
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 12px;
+        color: #ff6b6b;
+        white-space: nowrap;
+    `;
+    deleteItem.addEventListener("mouseenter", () => {
+        deleteItem.style.backgroundColor = "#3a3a3a";
+    });
+    deleteItem.addEventListener("mouseleave", () => {
+        deleteItem.style.backgroundColor = "transparent";
+    });
+    deleteItem.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        menu.remove();
+        removeTriggerWord(node, index);
+    });
+    menu.appendChild(deleteItem);
+
+    document.body.appendChild(menu);
+
+    // Close menu when clicking elsewhere
+    const closeMenu = (evt) => {
+        if (!menu.contains(evt.target)) {
+            menu.remove();
+            document.removeEventListener("click", closeMenu);
+            document.removeEventListener("contextmenu", closeMenu);
+        }
+    };
+    
+    // Delay adding listener to prevent immediate close
+    setTimeout(() => {
+        document.addEventListener("click", closeMenu);
+        document.addEventListener("contextmenu", closeMenu);
+    }, 0);
+}
+
+function removeTriggerWord(node, index) {
+    // Get the merged list that's currently displayed
+    const triggerWords = mergeTriggerWordLists(
+        node.currentTriggerWords || [],
+        node.savedTriggerWords || []
+    );
+    
+    if (triggerWords[index]) {
+        const word = triggerWords[index];
+        const wordLower = word.text.toLowerCase();
+        
+        // Remove from savedTriggerWords
+        if (node.savedTriggerWords) {
+            node.savedTriggerWords = node.savedTriggerWords.filter(
+                w => w.text.toLowerCase() !== wordLower
+            );
+        }
+        
+        // Remove from currentTriggerWords (if it came from connected input)
+        if (node.currentTriggerWords) {
+            node.currentTriggerWords = node.currentTriggerWords.filter(
+                w => w.text.toLowerCase() !== wordLower
+            );
+        }
+        
+        updateTriggerWordsDisplay(node);
+        app.graph.setDirtyCanvas(true, true);
+    }
 }
 
 // ========================
@@ -1074,50 +1768,38 @@ function addButtonBar(node) {
     buttonContainer.style.display = "flex";
     buttonContainer.style.gap = "4px";
     buttonContainer.style.padding = "2px 4px 8px 4px";
-    buttonContainer.style.flexWrap = "wrap";
+    buttonContainer.style.flexWrap = "nowrap";
     buttonContainer.style.marginTop = "-10px";
 
-    // Create action buttons
-    const createCategoryBtn = createButton("New Category", async () => {
-        const categoryName = await showTextPrompt("New Category", "Enter new category name:");
-        
-        if (categoryName && categoryName.trim()) {
-            let existingCategoryName = null;
-            if (node.prompts) {
-                const existingCategories = Object.keys(node.prompts);
-                existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.trim().toLowerCase());
-            }
-
-            if (existingCategoryName) {
-                await showInfo(
-                    "Category Exists",
-                    `Category already exists as "${existingCategoryName}". Cannot overwrite existing categories.`
-                );
-                return;
-            }
-
-            await createCategory(node, categoryName.trim());
-        }
-    });
-
+    // Save Prompt button
     const savePromptBtn = createButton("Save Prompt", async () => {
-        const promptName = await showTextPrompt("Save Prompt", "Enter prompt name:", promptWidget.value || "New Prompt");
+        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+        const currentCategory = categoryWidget.value;
         
-        if (promptName && promptName.trim()) {
+        const result = await showPromptWithCategory(
+            "Save Prompt",
+            "Enter prompt name:",
+            promptWidget.value || "New Prompt",
+            categories,
+            currentCategory
+        );
+        
+        if (result && result.name && result.name.trim()) {
+            const promptName = result.name.trim();
+            const targetCategory = result.category;
             const promptText = textWidget.value;
-            const currentCategory = categoryWidget.value;
             
-            // Check for existing prompt
+            // Check for existing prompt in target category
             let existingPromptName = null;
-            if (node.prompts[currentCategory]) {
-                const existingNames = Object.keys(node.prompts[currentCategory]);
-                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.trim().toLowerCase());
+            if (node.prompts[targetCategory]) {
+                const existingNames = Object.keys(node.prompts[targetCategory]);
+                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
             }
 
             if (existingPromptName) {
                 const confirmed = await showConfirm(
                     "Overwrite Prompt",
-                    `Prompt "${existingPromptName}" already exists in category "${currentCategory}". Do you want to overwrite it?`,
+                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}". Do you want to overwrite it?`,
                     "Overwrite",
                     "#f80"
                 );
@@ -1128,7 +1810,6 @@ function addButtonBar(node) {
             }
 
             // Query connected LoRA stacker nodes to get current configurations
-            // Note: extractLorasFromNode only returns ACTIVE loras
             const connectedLorasA = collectAllLorasFromChain(node, "lora_stack_a");
             const connectedLorasB = collectAllLorasFromChain(node, "lora_stack_b");
             
@@ -1136,16 +1817,13 @@ function addButtonBar(node) {
             const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
             const overrideLora = overrideWidget?.value === true;
             
-            // Get loras to save - same logic as display/execution
+            // Get loras to save
             let allLorasA, allLorasB;
             
             if (overrideLora) {
-                // Override ON: only save the saved/preset loras (ignore connected inputs)
-                allLorasA = [...(node.savedLorasA || [])].filter(l => l.active !== false);
-                allLorasB = [...(node.savedLorasB || [])].filter(l => l.active !== false);
+                allLorasA = [...(node.savedLorasA || [])];
+                allLorasB = [...(node.savedLorasB || [])];
             } else {
-                // Override OFF: merge connected + saved, then filter active ones
-                // Use mergeLoraLists to get the same merged view as display
                 const mergedA = mergeLoraLists(
                     connectedLorasA.map(l => ({ ...l, source: 'current' })),
                     node.savedLorasA || []
@@ -1154,48 +1832,199 @@ function addButtonBar(node) {
                     connectedLorasB.map(l => ({ ...l, source: 'current' })),
                     node.savedLorasB || []
                 );
-                
-                // Filter to only active loras
-                allLorasA = mergedA.filter(l => l.active !== false);
-                allLorasB = mergedB.filter(l => l.active !== false);
+                allLorasA = [...mergedA];
+                allLorasB = [...mergedB];
             }
 
-            await savePrompt(node, currentCategory, promptName.trim(), promptText, allLorasA, allLorasB);
+            // Get all trigger words (merged, with their states)
+            const allTriggerWords = mergeTriggerWordLists(
+                node.currentTriggerWords || [],
+                node.savedTriggerWords || []
+            );
+
+            await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords);
             
-            // Update the saved loras to what was just saved
+            // Clear new prompt flag since it's now saved
+            node.isNewUnsavedPrompt = false;
+            node.newPromptCategory = null;
+            node.newPromptName = null;
+            
+            // Update UI to show the saved prompt
+            categoryWidget.value = targetCategory;
+            filterPromptDropdown(node);
+            promptWidget.value = promptName;
+            
+            // Update previous values tracking
+            node._previousCategory = targetCategory;
+            node._previousPrompt = promptName;
+            
             node.savedLorasA = allLorasA;
             node.savedLorasB = allLorasB;
+            node.savedTriggerWords = allTriggerWords;
             updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
+            
+            // Update last saved state after successful save
+            updateLastSavedState(node);
         }
     });
 
-    const deleteCategoryBtn = createButton("Del Category", async () => {
-        if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryWidget.value}"?`)) {
-            await deleteCategory(node, categoryWidget.value);
+    // New Prompt button
+    const newPromptBtn = createButton("New Prompt", async () => {
+        // Check for unsaved changes before creating new prompt
+        const hasUnsaved = hasUnsavedChanges(node);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+        
+        if (hasUnsaved && warnEnabled) {
+            const confirmed = await showConfirm(
+                "Unsaved Changes",
+                "You have unsaved changes to the current prompt. Do you want to discard them and create a new prompt?",
+                "Discard & Continue",
+                "#f80"
+            );
+            if (!confirmed) {
+                return;
+            }
+        }
+        
+        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+        const currentCategory = categoryWidget.value;
+        
+        const result = await showPromptWithCategory(
+            "New Prompt",
+            "Enter new prompt name:",
+            "",
+            categories,
+            currentCategory
+        );
+        
+        if (result && result.name && result.name.trim()) {
+            const promptName = result.name.trim();
+            const targetCategory = result.category;
+            
+            // Check for existing prompt
+            let existingPromptName = null;
+            if (node.prompts[targetCategory]) {
+                const existingNames = Object.keys(node.prompts[targetCategory]);
+                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
+            }
+
+            if (existingPromptName) {
+                await showInfo(
+                    "Prompt Exists",
+                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}".`
+                );
+                return;
+            }
+
+            // Set up UI for new prompt (temporary, not saved yet)
+            // User must click "Save Prompt" to persist it
+            
+            categoryWidget.value = targetCategory;
+            
+            // Add prompt name to dropdown temporarily so it can be selected
+            if (!promptWidget.options.values.includes(promptName)) {
+                promptWidget.options.values = [...promptWidget.options.values, promptName].sort((a, b) => a.localeCompare(b));
+            }
+            promptWidget.value = promptName;
+            textWidget.value = "";
+            
+            // Update previous values to the new prompt so cancel/revert works correctly
+            node._previousCategory = targetCategory;
+            node._previousPrompt = promptName;
+            
+            // Clear all loras and trigger words for the new prompt
+            node.savedLorasA = [];
+            node.savedLorasB = [];
+            node.currentLorasA = [];
+            node.currentLorasB = [];
+            node.savedTriggerWords = [];
+            node.currentTriggerWords = [];
+            
+            updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
+            
+            // Mark as unsaved/new prompt - lastSavedState will be null/undefined
+            // so hasUnsavedChanges() will return false initially, but will return true
+            // once user starts typing or adding content
+            node.isNewUnsavedPrompt = true;
+            node.newPromptCategory = targetCategory;
+            node.newPromptName = promptName;
+            
+            // Clear the last saved state since this is a brand new prompt
+            node.lastSavedState = null;
+            
+            node.serialize_widgets = true;
+            app.graph.setDirtyCanvas(true, true);
         }
     });
 
-    const deletePromptBtn = createButton("Del Prompt", async () => {
-        if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptWidget.value}"?`)) {
-            await deletePrompt(node, categoryWidget.value, promptWidget.value);
+    // More dropdown button
+    const moreBtn = createDropdownButton("More ▼", [
+        {
+            label: "New Category",
+            action: async () => {
+                const categoryName = await showTextPrompt("New Category", "Enter new category name:");
+                
+                if (categoryName && categoryName.trim()) {
+                    let existingCategoryName = null;
+                    if (node.prompts) {
+                        const existingCategories = Object.keys(node.prompts);
+                        existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.trim().toLowerCase());
+                    }
+
+                    if (existingCategoryName) {
+                        await showInfo(
+                            "Category Exists",
+                            `Category already exists as "${existingCategoryName}".`
+                        );
+                        return;
+                    }
+
+                    await createCategory(node, categoryName.trim());
+                }
+            }
+        },
+        {
+            label: "Delete Category",
+            action: async () => {
+                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryWidget.value}" and all its prompts?`)) {
+                    await deleteCategory(node, categoryWidget.value);
+                }
+            }
+        },
+        {
+            label: "Delete Prompt",
+            action: async () => {
+                if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptWidget.value}"?`)) {
+                    await deletePrompt(node, categoryWidget.value, promptWidget.value);
+                }
+            }
+        },
+        { divider: true },
+        {
+            label: "Export JSON",
+            action: async () => {
+                await exportPromptsJSON(node);
+            }
+        },
+        {
+            label: "Import JSON",
+            action: async () => {
+                await importPromptsJSON(node);
+            }
         }
-    });
+    ]);
 
     buttonContainer.appendChild(savePromptBtn);
-    buttonContainer.appendChild(createCategoryBtn);
-    buttonContainer.appendChild(deleteCategoryBtn);
-    buttonContainer.appendChild(deletePromptBtn);
+    buttonContainer.appendChild(newPromptBtn);
+    buttonContainer.appendChild(moreBtn);
 
     // Add button bar to node
     const htmlWidget = node.addDOMWidget("buttons", "div", buttonContainer);
     htmlWidget.computeSize = function(width) {
-        // Allow wrapping - estimate height based on content
-        // Buttons wrap at ~380px width
-        const rows = width < 380 ? 2 : 1;
-        return [width, rows * 28 + 8];
+        return [width, 36];
     };
-
-
 
     node.buttonBarAttached = true;
 }
@@ -1207,12 +2036,51 @@ function setupCategoryChangeHandler(node) {
 
     if (!categoryWidget || !promptWidget || !textWidget) return;
 
+    // Track previous values for cancel/revert
+    node._previousCategory = categoryWidget.value;
+    node._previousPrompt = promptWidget.value;
+
     const originalCallback = categoryWidget.callback;
 
-    categoryWidget.callback = function(value) {
+    categoryWidget.callback = async function(value) {
+        const previousCategory = node._previousCategory;
+        const previousPrompt = node._previousPrompt;
+        
+        // Check for unsaved changes before switching
+        const hasUnsaved = hasUnsavedChanges(node);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+        
+        if (hasUnsaved && warnEnabled) {
+            const confirmed = await showConfirm(
+                "Unsaved Changes",
+                "You have unsaved changes to the current prompt. Do you want to discard them and switch?",
+                "Discard & Switch",
+                "#f80"
+            );
+            if (!confirmed) {
+                // Revert the category dropdown to previous value
+                categoryWidget.value = previousCategory;
+                // Ensure the previous prompt name is in the dropdown options (for unsaved prompts)
+                if (previousPrompt && !promptWidget.options.values.includes(previousPrompt)) {
+                    promptWidget.options.values = [...promptWidget.options.values, previousPrompt].sort((a, b) => a.localeCompare(b));
+                }
+                promptWidget.value = previousPrompt;
+                app.graph.setDirtyCanvas(true, true);
+                return;
+            }
+        }
+        
+        // Clear new prompt flag when switching away
+        node.isNewUnsavedPrompt = false;
+        node.newPromptCategory = null;
+        node.newPromptName = null;
+
         if (originalCallback) {
             originalCallback.apply(this, arguments);
         }
+
+        // Reload prompts from server to get latest changes from other tabs
+        await loadPrompts(node);
 
         const category = value;
         if (node.prompts && node.prompts[category]) {
@@ -1221,17 +2089,26 @@ function setupCategoryChangeHandler(node) {
 
             if (promptNames.length > 0) {
                 promptWidget.value = promptNames[0];
-                loadPromptData(node, category, promptNames[0]);
+                await loadPromptData(node, category, promptNames[0]);
             } else {
                 promptWidget.value = "";
                 textWidget.value = "";
-                // Clear ALL loras when no prompts in category
+                // Clear ALL loras and trigger words when no prompts in category
                 node.savedLorasA = [];
                 node.savedLorasB = [];
                 node.currentLorasA = [];
                 node.currentLorasB = [];
+                node.savedTriggerWords = [];
+                node.currentTriggerWords = [];
                 updateLoraDisplays(node);
+                updateTriggerWordsDisplay(node);
+                // Update last saved state
+                updateLastSavedState(node);
             }
+            
+            // Update previous values after successful switch
+            node._previousCategory = category;
+            node._previousPrompt = promptWidget.value;
 
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
@@ -1240,13 +2117,65 @@ function setupCategoryChangeHandler(node) {
 
     const originalPromptCallback = promptWidget.callback;
 
-    promptWidget.callback = function(value) {
+    promptWidget.callback = async function(value) {
+        const previousCategory = node._previousCategory;
+        const previousPrompt = node._previousPrompt;
+        
+        // Check for unsaved changes before switching
+        const hasUnsaved = hasUnsavedChanges(node);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+        
+        if (hasUnsaved && warnEnabled) {
+            const confirmed = await showConfirm(
+                "Unsaved Changes",
+                "You have unsaved changes to the current prompt. Do you want to discard them and switch?",
+                "Discard & Switch",
+                "#f80"
+            );
+            if (!confirmed) {
+                // Ensure the previous prompt name is in the dropdown options (for unsaved prompts)
+                if (previousPrompt && !promptWidget.options.values.includes(previousPrompt)) {
+                    promptWidget.options.values = [...promptWidget.options.values, previousPrompt].sort((a, b) => a.localeCompare(b));
+                }
+                // Revert the dropdown to previous value
+                promptWidget.value = previousPrompt;
+                app.graph.setDirtyCanvas(true, true);
+                return;
+            }
+        }
+        
+        // Clear new prompt flag when switching away
+        node.isNewUnsavedPrompt = false;
+        node.newPromptCategory = null;
+        node.newPromptName = null;
+
         if (originalPromptCallback) {
             originalPromptCallback.apply(this, arguments);
         }
 
+        // Reload prompts from server to get latest changes from other tabs
+        await loadPrompts(node);
+
         const category = categoryWidget.value;
-        loadPromptData(node, category, value);
+        
+        // Update prompt dropdown options in case prompts were deleted/added in another tab
+        if (node.prompts && node.prompts[category]) {
+            const promptNames = Object.keys(node.prompts[category]).sort((a, b) => a.localeCompare(b));
+            promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
+            
+            // Check if selected prompt still exists after reload
+            if (!promptNames.includes(value)) {
+                // Prompt was deleted in another tab, switch to first available
+                value = promptNames.length > 0 ? promptNames[0] : "";
+                promptWidget.value = value;
+            }
+        }
+        
+        await loadPromptData(node, category, value);
+        
+        // Update previous values after successful switch
+        node._previousCategory = category;
+        node._previousPrompt = value;
 
         node.serialize_widgets = true;
         app.graph.setDirtyCanvas(true, true);
@@ -1378,16 +2307,19 @@ function setupUseExternalToggleHandler(node) {
 async function loadPromptData(node, category, promptName) {
     const textWidget = node.widgets.find(w => w.name === "text");
     
-    // Always clear ALL loras when switching prompts (both saved and current)
-    // This ensures clean state - current loras will be repopulated on next execution
+    // Always clear ALL loras and trigger words when switching prompts
+    // This ensures clean state - current items will be repopulated on next execution
     node.savedLorasA = [];
     node.savedLorasB = [];
     node.currentLorasA = [];
     node.currentLorasB = [];
+    node.savedTriggerWords = [];
+    node.currentTriggerWords = [];
     
     if (!node.prompts || !node.prompts[category] || !node.prompts[category][promptName]) {
         if (textWidget) textWidget.value = "";
         updateLoraDisplays(node);
+        updateTriggerWordsDisplay(node);
         return;
     }
 
@@ -1397,18 +2329,25 @@ async function loadPromptData(node, category, promptName) {
         textWidget.value = promptData.prompt || "";
     }
     
-    // Load saved loras - all saved loras are active (inactive ones weren't saved)
+    // Load saved loras - preserve active state (default true for backward compatibility)
     const lorasA = (promptData.loras_a || []).map(lora => ({
         ...lora,
-        active: true, // All saved loras are active
+        active: lora.active !== false, // Default to true if not specified
         strength: lora.strength ?? lora.model_strength ?? 1.0,
         available: true // Will be updated after check
     }));
     const lorasB = (promptData.loras_b || []).map(lora => ({
         ...lora,
-        active: true, // All saved loras are active
+        active: lora.active !== false, // Default to true if not specified
         strength: lora.strength ?? lora.model_strength ?? 1.0,
         available: true
+    }));
+    
+    // Load saved trigger words - preserve their active state
+    const triggerWords = (promptData.trigger_words || []).map(word => ({
+        text: word.text,
+        active: word.active !== false,
+        source: 'saved'
     }));
     
     // Check availability of all loras
@@ -1442,8 +2381,76 @@ async function loadPromptData(node, category, promptName) {
     
     node.savedLorasA = lorasA;
     node.savedLorasB = lorasB;
+    node.savedTriggerWords = triggerWords;
+    
+    // Update last saved state for change detection
+    updateLastSavedState(node);
     
     updateLoraDisplays(node);
+    updateTriggerWordsDisplay(node);
+}
+
+// ========================
+// Unsaved Changes Detection
+// ========================
+
+/**
+ * Serialize the current state for comparison
+ */
+function getCurrentStateSnapshot(node) {
+    const textWidget = node.widgets?.find(w => w.name === "text");
+    const text = textWidget?.value || "";
+    
+    // Get all loras with their states
+    const lorasA = (node.savedLorasA || [])
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    
+    const lorasB = (node.savedLorasB || [])
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    
+    // Get all trigger words with their states
+    const triggerWords = (node.savedTriggerWords || [])
+        .map(tw => ({ text: tw.text, active: tw.active !== false }))
+        .sort((a, b) => a.text.localeCompare(b.text));
+    
+    return {
+        text: text,
+        lorasA: JSON.stringify(lorasA),
+        lorasB: JSON.stringify(lorasB),
+        triggerWords: JSON.stringify(triggerWords)
+    };
+}
+
+/**
+ * Update the last saved state (call after save or load)
+ */
+function updateLastSavedState(node) {
+    node.lastSavedState = getCurrentStateSnapshot(node);
+}
+
+/**
+ * Check if there are unsaved changes
+ */
+function hasUnsavedChanges(node) {
+    // New unsaved prompt always has unsaved changes
+    if (node.isNewUnsavedPrompt) {
+        return true;
+    }
+    
+    if (!node.lastSavedState) {
+        return false;
+    }
+    
+    const current = getCurrentStateSnapshot(node);
+    
+    return (
+        current.text !== node.lastSavedState.text ||
+        current.lorasA !== node.lastSavedState.lorasA ||
+        current.lorasB !== node.lastSavedState.lorasB ||
+        current.triggerWords !== node.lastSavedState.triggerWords
+    );
 }
 
 // ========================
@@ -1479,7 +2486,10 @@ async function createCategory(node, categoryName) {
 
             node.savedLorasA = [];
             node.savedLorasB = [];
+            node.savedTriggerWords = [];
+            node.currentTriggerWords = [];
             updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
             updateDropdowns(node);
 
             node.serialize_widgets = true;
@@ -1493,7 +2503,7 @@ async function createCategory(node, categoryName) {
     }
 }
 
-async function savePrompt(node, category, name, text, lorasA, lorasB) {
+async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords) {
     try {
         const response = await fetch("/prompt-manager-advanced/save-prompt", {
             method: "POST",
@@ -1502,16 +2512,23 @@ async function savePrompt(node, category, name, text, lorasA, lorasB) {
                 category: category,
                 name: name,
                 text: text,
-                // Only save name and strength - all saved loras are active by definition
+                // Save loras with their active state
                 loras_a: lorasA.map(l => ({
                     name: l.name,
                     strength: l.strength ?? l.model_strength ?? 1.0,
-                    clip_strength: l.clip_strength || l.strength || 1.0
+                    clip_strength: l.clip_strength || l.strength || 1.0,
+                    active: l.active !== false
                 })),
                 loras_b: lorasB.map(l => ({
                     name: l.name,
                     strength: l.strength ?? l.model_strength ?? 1.0,
-                    clip_strength: l.clip_strength || l.strength || 1.0
+                    clip_strength: l.clip_strength || l.strength || 1.0,
+                    active: l.active !== false
+                })),
+                // Save all trigger words with their active states
+                trigger_words: (triggerWords || []).map(tw => ({
+                    text: tw.text,
+                    active: tw.active !== false
                 }))
             })
         });
@@ -1530,12 +2547,12 @@ async function savePrompt(node, category, name, text, lorasA, lorasB) {
             // Update saved loras with what was just saved
             node.savedLorasA = lorasA;
             node.savedLorasB = lorasB;
+            node.savedTriggerWords = triggerWords || [];
             updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
 
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
-            
-            await showInfo("Success", `Prompt "${name}" saved successfully!`);
         } else {
             await showInfo("Error", data.error);
         }
@@ -1559,8 +2576,11 @@ async function deleteCategory(node, category) {
             node.prompts = data.prompts;
             node.savedLorasA = [];
             node.savedLorasB = [];
+            node.savedTriggerWords = [];
+            node.currentTriggerWords = [];
             updateDropdowns(node);
             updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
 
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
@@ -1590,8 +2610,11 @@ async function deletePrompt(node, category, name) {
             node.prompts = data.prompts;
             node.savedLorasA = [];
             node.savedLorasB = [];
+            node.savedTriggerWords = [];
+            node.currentTriggerWords = [];
             updateDropdowns(node);
             updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
 
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
@@ -1676,6 +2699,412 @@ function createButton(text, callback) {
     button.onclick = callback;
 
     return button;
+}
+
+function createDropdownButton(text, items) {
+    const container = document.createElement("div");
+    container.style.position = "relative";
+    container.style.flex = "1";
+    container.style.minWidth = "80px";
+
+    const button = document.createElement("button");
+    button.textContent = text;
+    button.style.width = "100%";
+    button.style.padding = "6px 8px";
+    button.style.cursor = "pointer";
+    button.style.backgroundColor = "#222";
+    button.style.color = "#fff";
+    button.style.border = "1px solid #444";
+    button.style.borderRadius = "6px";
+    button.style.fontSize = "11px";
+    button.style.fontWeight = "normal";
+    button.style.whiteSpace = "nowrap";
+    button.style.height = "28px";
+    button.style.display = "flex";
+    button.style.alignItems = "center";
+    button.style.justifyContent = "center";
+
+    // Create dropdown and append to body to escape stacking context issues
+    const dropdown = document.createElement("div");
+    dropdown.style.cssText = `
+        position: fixed;
+        background: #2a2a2a;
+        border: 1px solid #555;
+        border-radius: 6px;
+        z-index: 999999;
+        display: none;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        min-width: 140px;
+    `;
+    document.body.appendChild(dropdown);
+
+    items.forEach(item => {
+        if (item.divider) {
+            const divider = document.createElement("div");
+            divider.style.cssText = "height: 1px; background: #444; margin: 4px 0;";
+            dropdown.appendChild(divider);
+        } else {
+            const menuItem = document.createElement("div");
+            menuItem.textContent = item.label;
+            menuItem.style.cssText = `
+                padding: 8px 12px;
+                cursor: pointer;
+                font-size: 11px;
+                color: #fff;
+                white-space: nowrap;
+            `;
+            menuItem.addEventListener("mouseenter", () => {
+                menuItem.style.backgroundColor = "#4a4a4a";
+            });
+            menuItem.addEventListener("mouseleave", () => {
+                menuItem.style.backgroundColor = "transparent";
+            });
+            menuItem.addEventListener("click", (e) => {
+                e.stopPropagation();
+                dropdown.style.display = "none";
+                item.action();
+            });
+            dropdown.appendChild(menuItem);
+        }
+    });
+
+    button.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isVisible = dropdown.style.display === "block";
+        if (isVisible) {
+            dropdown.style.display = "none";
+        } else {
+            // Position dropdown below the button
+            const rect = button.getBoundingClientRect();
+            dropdown.style.left = rect.left + "px";
+            dropdown.style.top = (rect.bottom + 2) + "px";
+            dropdown.style.display = "block";
+        }
+    });
+
+    // Close dropdown when clicking elsewhere
+    document.addEventListener("click", (e) => {
+        if (!dropdown.contains(e.target) && e.target !== button) {
+            dropdown.style.display = "none";
+        }
+    });
+
+    container.appendChild(button);
+
+    return container;
+}
+
+function showPromptWithCategory(title, message, defaultName, categories, defaultCategory) {
+    return new Promise((resolve) => {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        // Build category options
+        const categoryOptions = categories.map(cat => 
+            `<option value="${cat}" ${cat === defaultCategory ? 'selected' : ''}>${cat}</option>`
+        ).join('');
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category:</div>
+            <select style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+                ${categoryOptions}
+            </select>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
+            <input type="text" value="${defaultName}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
+            </div>
+        `;
+
+        const selectEl = dialog.querySelector("select");
+        const input = dialog.querySelector("input");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve({ name: input.value, category: selectEl.value });
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleOk();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        input.focus();
+        input.select();
+    });
+}
+
+async function exportPromptsJSON(node) {
+    try {
+        const response = await fetch("/prompt-manager-advanced/get-prompts");
+        const data = await response.json();
+        
+        const jsonStr = JSON.stringify(data, null, 2);
+        const blob = new Blob([jsonStr], { type: "application/json" });
+        
+        // Try File System Access API first (works on localhost and https)
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: "prompt_manager_data.json",
+                    types: [{
+                        description: "JSON Files",
+                        accept: { "application/json": [".json"] }
+                    }]
+                });
+                const writable = await handle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                await showInfo("Export Complete", "Prompts exported successfully!");
+                return;
+            } catch (err) {
+                // User cancelled the dialog
+                if (err.name === "AbortError") {
+                    return;
+                }
+                // Fall back to download method if API fails
+                console.log("[PromptManagerAdvanced] Save picker failed, falling back to download:", err);
+            }
+        }
+        
+        // Fallback: Prompt user for filename, then download
+        const filename = await showTextPrompt(
+            "Export Prompts",
+            "Enter filename for export:",
+            "prompt_manager_data.json"
+        );
+        
+        if (!filename) {
+            return; // User cancelled
+        }
+        
+        const finalFilename = filename.endsWith(".json") ? filename : filename + ".json";
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = finalFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        await showInfo("Export Complete", "Prompts exported successfully!");
+    } catch (error) {
+        console.error("[PromptManagerAdvanced] Error exporting prompts:", error);
+        await showInfo("Error", "Failed to export prompts");
+    }
+}
+
+async function importPromptsJSON(node) {
+    return new Promise((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json";
+        
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                resolve(false);
+                return;
+            }
+            
+            try {
+                const text = await file.text();
+                const importedData = JSON.parse(text);
+                
+                // Validate structure
+                if (typeof importedData !== 'object' || Array.isArray(importedData)) {
+                    await showInfo("Error", "Invalid JSON structure. Expected an object with categories.");
+                    resolve(false);
+                    return;
+                }
+                
+                // Ask user how to handle import
+                const importMode = await showImportOptions();
+                
+                if (importMode === null) {
+                    // User cancelled
+                    resolve(false);
+                    return;
+                }
+                
+                // Send to backend
+                const response = await fetch("/prompt-manager-advanced/import-prompts", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        data: importedData,
+                        mode: importMode
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    node.prompts = result.prompts;
+                    updateDropdowns(node);
+                    
+                    // Reload the current prompt's data (loras and trigger words)
+                    const categoryWidget = node.widgets.find(w => w.name === "category");
+                    const promptWidget = node.widgets.find(w => w.name === "name");
+                    
+                    if (categoryWidget && promptWidget && promptWidget.value) {
+                        await loadPromptData(node, categoryWidget.value, promptWidget.value);
+                    } else {
+                        // Clear current state if no prompt selected
+                        node.savedLorasA = [];
+                        node.savedLorasB = [];
+                        node.savedTriggerWords = [];
+                        node.currentTriggerWords = [];
+                        updateLoraDisplays(node);
+                        updateTriggerWordsDisplay(node);
+                    }
+                    
+                    node.serialize_widgets = true;
+                    app.graph.setDirtyCanvas(true, true);
+                    
+                    await showInfo("Import Complete", `Successfully imported prompts!`);
+                    resolve(true);
+                } else {
+                    await showInfo("Error", result.error || "Failed to import prompts");
+                    resolve(false);
+                }
+            } catch (error) {
+                console.error("[PromptManagerAdvanced] Error importing prompts:", error);
+                await showInfo("Error", "Failed to parse JSON file");
+                resolve(false);
+            }
+        };
+        
+        input.click();
+    });
+}
+
+function showImportOptions() {
+    return new Promise((resolve) => {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">Import Prompts</div>
+            <div style="margin-bottom: 20px; color: #ccc;">How do you want to import?<br><br>
+                <strong>Merge:</strong> Keep existing prompts, add/update from import<br>
+                <strong>Replace:</strong> Delete all existing, use import only
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="replace-btn" style="padding: 8px 16px; background: #c00; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Replace</button>
+                <button class="merge-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Merge</button>
+            </div>
+        `;
+
+        const mergeBtn = dialog.querySelector(".merge-btn");
+        const replaceBtn = dialog.querySelector(".replace-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        mergeBtn.onclick = () => {
+            resolve("merge");
+            cleanup();
+        };
+
+        replaceBtn.onclick = () => {
+            resolve("replace");
+            cleanup();
+        };
+
+        cancelBtn.onclick = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        overlay.onclick = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        mergeBtn.focus();
+    });
 }
 
 function showTextPrompt(title, message, defaultValue = "") {
