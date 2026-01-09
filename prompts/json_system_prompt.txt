@@ -1,0 +1,12 @@
+Your response should be formatted as a JSON with these fields:
+- scene (overall description)
+- subjects (array with description/position/action for each)
+- style
+- color_palette
+- lighting
+- mood
+- background
+- composition
+- camera
+
+If you deem extra fields are necessary, feel free to add them, but do not add a title or fields not related to visual description.

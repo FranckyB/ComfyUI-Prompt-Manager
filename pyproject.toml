@@ -1,11 +1,37 @@
 [project]
-name = "comfyui-prompt-manager"
-description = "Prompt Manager for ComfyUI, with llama.cpp integration for prompt generation and vision analysis. Organize, generate, and save prompts with local LLM support."
-version = "1.8.3"
+name = "prompt-manager"
+description = "Prompt Manager extension for ComfyUI, allowing user to both save and generate prompts, as well as save matching loras for each prompt."
+version = "1.9.0"
+license = {file = "LICENSE"} 
+# classifiers = [
+#     # For OS-independent nodes (works on all operating systems)
+#     "Operating System :: OS Independent",
+#
+#     # OR for OS-specific nodes, specify the supported systems:
+#     "Operating System :: Microsoft :: Windows",  # Windows specific
+#     "Operating System :: POSIX :: Linux",  # Linux specific
+#     "Operating System :: MacOS",  # macOS specific
+#
+#     # GPU Accelerator support. Pick the ones that are supported by your extension.
+#     "Environment :: GPU :: NVIDIA CUDA",    # NVIDIA CUDA support
+#     "Environment :: GPU :: AMD ROCm",       # AMD ROCm support
+#     "Environment :: GPU :: Intel Arc",      # Intel Arc support
+#     "Environment :: NPU :: Huawei Ascend",  # Huawei Ascend support
+#     "Environment :: GPU :: Apple Metal",    # Apple Metal support
+# ]
+
+dependencies = ["requests>=2.31.0", "huggingface_hub>=0.20.0", "psutil>=5.9.0", "tqdm>=4.66.0", "Pillow>=10.0.0", "torch>=2.0.0", "numpy>=1.24.0", "colorama"]
 
 [project.urls]
 Repository = "https://github.com/FranckyB/ComfyUI-Prompt-Manager"
+#  Used by Comfy Registry https://registry.comfy.org
+Documentation = "https://github.com/FranckyB/ComfyUI-Prompt-Manager/wiki"
+"Bug Tracker" = "https://github.com/FranckyB/ComfyUI-Prompt-Manager/issues"
 
 [tool.comfy]
-PublisherId = "FranckyB"
+PublisherId = "franckyb"
 DisplayName = "ComfyUI-Prompt-Manager"
+Icon = ""
+includes = [] 
+# "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
+

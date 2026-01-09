@@ -1,10 +1,12 @@
 # ComfyUI Prompt Manager
-### A custom [ComfyUI](https://github.com/comfyanonymous/ComfyUI) node for Organizing, Generating or Enhancing prompts.
+## A custom [ComfyUI](https://github.com/comfyanonymous/ComfyUI) node for Organizing, Generating or Enhancing prompts.
 
 This addon started off as a simple prompt Manager, to help save and retrieve prompts.  
-But has since evolved to be a complete toolset to help Generate prompts also.
+But has since evolved to allow generating prompts for Images, video and Image analysis.
+The new advanced version of the manager, now allows the user to save the entire recipe,
+as it allows saving the Lora Stacks that goes with a prompt. Supporting Dual Stack for Wan.
 ___
-Uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp), preventing install conflicts with ComfyUI.  
+For Prompt Generation, it uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp), preventing install conflicts with ComfyUI.  
 Provides options to automatically download Qwen3 and Qwen3VL models.  
 Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
 Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
@@ -19,8 +21,14 @@ If a Custom Model Path is added, it will become the default download folder.
 
 <div align="center">
   <figcaption>Advanced Prompt Generator Usage</figcaption>
+  <img src="docs/prompt_generator_advanced.png" alt="Prompt Manager">
+</div>
+
+<div align="center">
+  <figcaption>Prompt Manager Advanced, with Lora support</figcaption>
   <img src="docs/prompt_manager_advanced.png" alt="Prompt Manager">
 </div>
+
 
 ### Key features:
 ### Prompt Manager:
@@ -29,6 +37,23 @@ If a Custom Model Path is added, it will become the default download folder.
 - **LLM Input Toggle**: Connect text outputs from other nodes and toggle between using them or your internal prompts
 - **LLM Input Toggle**: When in use, display of categories and prompt is disabled, allowing user to switch category and save.
 - **Persistent Storage**: All prompts saved in your ComfyUI user folder
+
+### Prompt Manager Advanced:
+- **All Prompt Manager Features**: Everything from the basic Prompt Manager, plus LoRA integration
+- **Dual LoRA Stack Support**: Two separate LoRA stack inputs/outputs for complex workflows (e.g., Wan video with different LoRAs for image and video)
+- **Visual LoRA Tags**: See connected LoRAs as clickable tags with strength values
+- **Toggle LoRAs On/Off**: Click any LoRA tag to enable/disable it without disconnecting
+- **Editable Strengths**: Click the strength value on any tag to adjust it inline
+- **Save LoRAs with Prompts**: When you save a prompt, the current LoRA configuration is saved with it
+- **Override Mode**: Toggle "Override Lora" to ignore connected inputs and use only saved preset LoRAs
+- **Merge Mode**: When override is off, connected LoRAs are merged with saved presets
+- **LoRA Manager Integration**: If [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) is installed, hovering over LoRA tags shows preview images
+- **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
+
+### Apply LoRA Stack:
+- **Simple LoRA Application**: Takes a LORA_STACK and applies it to your model/clip
+- **Works with Any Stacker**: Compatible with LoRA Manager's stacker or any node outputting LORA_STACK
+- **Optional CLIP**: CLIP input is optional for workflows that don't need it
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
@@ -90,6 +115,25 @@ If a Custom Model Path is added, it will become the default download folder.
 2. **Select a Category**: Use the dropdown to choose from your categories
 3. **Choose a Prompt**: Select a saved prompt from the name dropdown
 4. **Connect prompt output**: Connect Prompt Manager output to your clip text encode node.
+
+### Prompt Manager Advanced
+
+1. **Add the Node**: Add Node → Prompt Manager → Prompt Manager Advanced
+2. **Connect LoRA Stackers**: Connect LoRA stacker nodes (e.g., from LoRA Manager) to `lora_stack_a` and/or `lora_stack_b` inputs
+3. **View LoRA Tags**: Connected LoRAs appear as clickable tags showing name and strength
+4. **Toggle LoRAs**: Click a tag to enable/disable that LoRA (disabled tags turn gray)
+5. **Adjust Strength**: Click the strength number on a tag to edit it inline
+6. **Save with LoRAs**: Click "Save Prompt" to save both the prompt text and current LoRA configuration
+7. **Override Mode**: Enable "Override Lora" checkbox to ignore connected inputs and use only the saved preset LoRAs
+8. **Connect Outputs**: Use `lora_stack_a` and `lora_stack_b` outputs with the Apply LoRA Stack node
+
+### Apply LoRA Stack
+
+1. **Add the Node**: Add Node → Prompt Manager → Apply LoRA Stack
+2. **Connect Model**: Connect your model (e.g., from Load Checkpoint) to the `model` input
+3. **Connect LoRA Stack**: Connect a `LORA_STACK` output (from Prompt Manager Advanced or LoRA Manager's stacker)
+4. **Optional CLIP**: Connect CLIP if your workflow needs it (some video workflows don't)
+5. **Use Outputs**: Connect the modified model/clip to your sampler or other nodes
 
 
 ### Prompt Generator
@@ -178,6 +222,20 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### Version 1.9.0
+- **New Node: Prompt Manager Advanced** - Extended prompt manager with LoRA stack support
+  - Dual LoRA stack inputs/outputs for complex workflows (Wan video, etc.)
+  - Visual LoRA tags showing name and editable strength values
+  - Toggle LoRAs on/off by clicking tags
+  - Save LoRA configurations alongside prompts
+  - Override mode to ignore connected inputs and use saved presets
+  - Merge mode combines connected LoRAs with saved presets
+  - Missing LoRA detection with visual warnings
+  - Integration with LoRA Manager for hover previews
+- **New Node: Apply LoRA Stack** - Simple node to apply LORA_STACK to model/clip
+- Categories and prompts now display in alphabetical order
+- Fixed dropdown refresh after saving prompts
 
 ### Version 1.8.3
 - Added option to leave Llama server running when closing ComfyUI.

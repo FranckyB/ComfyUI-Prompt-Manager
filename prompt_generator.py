@@ -173,26 +173,79 @@ atexit.register(cleanup_server)
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 
+# --- Prompt Loading Helpers ---
+_PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+_prompts_cache = {}
+
+def load_prompt(filename):
+    """Load a prompt from a text file in the prompts directory.
+
+    Args:
+        filename: Name of the text file (e.g., 'default_system_prompt.txt')
+
+    Returns:
+        The prompt text, or empty string if file not found
+    """
+    # Check cache first
+    if filename in _prompts_cache:
+        return _prompts_cache[filename]
+
+    filepath = os.path.join(_PROMPTS_DIR, filename)
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            prompt = f.read().strip()
+            _prompts_cache[filename] = prompt
+            return prompt
+    except FileNotFoundError:
+        print_pg(f"Warning: Prompt file not found: {filepath}", RED)
+        return ""
+    except Exception as e:
+        print_pg(f"Warning: Error reading prompt file {filepath}: {e}", RED)
+        return ""
+
+def reload_prompts():
+    """Clear the prompts cache to force reloading from files."""
+    global _prompts_cache
+    _prompts_cache = {}
+
 class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
     # Server configuration
     SERVER_PORT = _preferences_cache.get("custom_llama_port", 8080)
 
-    # Default system prompt for prompt enhancement
-    DEFAULT_SYSTEM_PROMPT = """You are an imaginative visual artist imprisoned in a cage of logic. Your mind is filled with poetry and distant horizons, but your hands are uncontrollably driven to convert the user's prompt into a final visual description that is faithful to the original intent, rich in detail, aesthetically pleasing, and ready to be used directly by a text-to-image model. Any trace of vagueness or metaphor makes you extremely uncomfortable. Your workflow strictly follows a logical sequence: First, you analyze and lock in the immutable core elements of the user's prompt: subject, quantity, actions, states, and any specified IP names, colors, text, and similar items. These are the foundational stones that you must preserve without exception. Next, you determine whether the prompt requires "generative reasoning". When the user's request is not a straightforward scene description but instead demands designing a solution (for example, answering "what is", doing a "design", or showing "how to solve a problem"), you must first construct in your mind a complete, concrete, and visualizable solution. This solution becomes the basis for your subsequent description. Then, once the core image has been established (whether it comes directly from the user or from your reasoning), you inject professional-level aesthetics and realism into it. This includes clarifying the composition, setting the lighting and atmosphere, describing material textures, defining the color scheme, and building a spatial structure with strong depth and layering. Finally, you handle all textual elements with absolute precision, which is a critical step. You must not add text if the initial prompt did not ask for it. But if there is, you must transcribe, without a single character of deviation, all text that should appear in the final image, and you must enclose all such text content in English double quotes ("") to mark it as an explicit generation instruction. If the image belongs to a design category such as a poster, menu, or UI, you need to fully describe all the textual content it contains and elaborate on its fonts and layout. Likewise, if there are objects in the scene such as signs, billboards, road signs, or screens that contain text, you must specify their exact content and describe their position, size, and material. Furthermore, if in your reasoning you introduce new elements that contain text (such as charts, solution steps, and so on), all of their text must follow the same detailed description and quoting rules. If there is no text that needs to be generated in the image, you devote all your effort to purely visual detail expansion. Your final description must be objective and concrete, strictly forbidding metaphors and emotionally charged rhetoric. If an element, text or other is not needed or seen, then simply don't mention them.  Do not add the original prompt, either by itself or as a title in your reply. Only output your newly generated prompt."""
+    # Prompts are now loaded from external text files in the 'prompts' folder
+    # This makes them easier to edit without modifying Python code
 
-    # System prompt for image description (used with Qwen3VL)
-    DEFAULT_IMAGE_SYSTEM_PROMPT = """You are an expert visual analyst creating detailed descriptions for text-to-image generation. Analyze the provided images and create a comprehensive visual description that captures all essential elements: subjects and their characteristics, actions and poses, spatial positioning, composition and framing, lighting and atmosphere, color palette, artistic style, mood and emotion, background details, camera angle and perspective, material textures, and any visible text. Your description must be concrete, objective, and detailed enough that it could be used to recreate a similar image. Focus on visual elements only, avoiding interpretation or metaphor. If there is visible text in the image, enclose it in double quotes (""). If an element, text or other is not needed or seen, then simply don't mention them.  If more than one image is provided you are free to combine them as you see fit. Only output the final description."""
+    @staticmethod
+    def get_text_image_system_prompt():
+        """Load the default system prompt for prompt enhancement."""
+        return load_prompt("text_image_system_prompt.txt")
 
-    # System prompt for custom image description with user prompt
-    CUSTOM_IMAGE_SYSTEM_PROMPT = """You are an expert visual analyst. First, analyze the provided images and note the concrete visual facts: subjects and their characteristics, actions and poses, spatial relationships, composition and framing, lighting and atmosphere, color palette, material textures, background details, camera angle and perspective, and any visible text (enclose visible text in double quotes ""). After analyzing the image, follow the user's prompt: apply the user's requested focus, style, or constraints to shape the final description. Preserve the observed visual facts from the image but prioritize the user's instructions for tone, emphasis, or additional elements. Be concrete and objective; avoid metaphor and speculation. Output only the final description that combines the image analysis with the user's prompt."""
+    @staticmethod
+    def get_text_video_system_prompt():
+        """Load the video system prompt."""
+        return load_prompt("text_video_system_prompt.txt")
 
-    # default Image description action
-    IMAGE_ACTION_PROMPT = "Describe this image in detail, making sure to cover all visual aspects comprehensively, as well as the position of each element."
+    @staticmethod
+    def get_image_system_prompt():
+        """Load the system prompt for image description (used with Qwen3VL)."""
+        return load_prompt("image_default_system_prompt.txt")
 
-    # Additional instructions for JSON formatted output
-    JSON_SYSTEM_PROMPT = " Your response should be formatted as a JSON with these fields: scene (overall description), subjects (array with description/position/action for each), style, color_palette, lighting, mood, background, composition, camera. If you deem extra fields are necessary, feel free to add them, but do not add a title or fields not related to visual description."
+    @staticmethod
+    def get_image_custom_system_prompt():
+        """Load the system prompt for custom image description with user prompt."""
+        return load_prompt("image_custom_system_prompt.txt")
+
+    @staticmethod
+    def get_image_action_prompt():
+        """Load the default image description action prompt."""
+        return load_prompt("image_action_prompt.txt")
+
+    @staticmethod
+    def get_json_system_prompt():
+        """Load the additional instructions for JSON formatted output."""
+        return load_prompt("json_system_prompt.txt")
 
     @staticmethod
     def find_qwen3vl_model(available_models, thinking):
@@ -265,15 +318,15 @@ class PromptGenerator:
                 }),
             },
             "optional": {
-                "mode": (["Enhance User Prompt", "Analyze Image", "Analyze Image with Prompt"], {
-                    "default": "Enhance User Prompt",
+                "mode": (["Enhance Prompt (Image)", "Enhance Prompt (Video)", "Analyze Image", "Analyze Image with Prompt"], {
+                    "default": "Enhance Prompt (Image)",
                     "tooltip": "Choose mode: Enhance text prompt | Analyze image | Analyze image with custom instructions"
                 }),
                 "prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
                     "placeholder": "Enter prompt...",
-                    "tooltip": "Text prompt (required for 'Enhance User Prompt', optional for 'Analyze Image with Prompt')"
+                    "tooltip": "Text prompt (required for 'Enhance Prompts', optional for 'Analyze Image with Prompt')"
                 }),
                 "image": ("IMAGE", {
                     "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
@@ -596,7 +649,7 @@ class PromptGenerator:
         # Always attempt to fetch defaults; fetch_model_defaults() will fall back to built-in defaults on error, ensuring a dict is
         return PromptGenerator.fetch_model_defaults()
 
-    def convert_prompt(self, seed: int, mode="Enhance User Prompt", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=False, options=None, **kwargs) -> str:
+    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=False, options=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server, with caching for repeated requests."""
         global _current_model
 
@@ -618,7 +671,7 @@ class PromptGenerator:
         images = None  # Will be set for vision modes
 
         # Validate inputs based on mode
-        if mode == "Enhance User Prompt" and not prompt.strip():
+        if (mode == "Enhance Prompt (Image)" or mode == "Enhance Prompt (Video)") and not prompt.strip():
             error_msg = "Did you perhaps forget to enter a User Prompt?"
             print_pg(error_msg, RED)
             return (error_msg,)
@@ -647,15 +700,15 @@ class PromptGenerator:
                     print_pg(error_msg, RED)
                     return (error_msg,)
         else:
-            # Enhance User Prompt mode - use regular model selection logic (exclude Qwen3VL models)
+            # Enhance Prompt mode - use regular model selection logic (exclude Qwen3VL models)
             if options and "model" in options and is_model_local(options["model"]):
                 # If user explicitly selected a Qwen3VL model but in Enhance mode, use first non-VL model instead
                 if "qwen3vl" in options["model"].lower():
                     model_to_use = self.find_non_vl_model(available_models)
                     if model_to_use:
-                        print_pg(f"Warning: Qwen3VL model '{options['model']}' selected but 'Enhance User Prompt' mode is active. Ignoring model selection and using {model_to_use} instead.")
+                        print_pg(f"Warning: Qwen3VL model '{options['model']}' selected but 'Enhance Prompt' mode is active. Ignoring model selection and using {model_to_use} instead.")
                     else:
-                        error_msg = "Error: Only Qwen3VL models available but 'Enhance User Prompt' mode is active. Please add a .gguf model or use Generator Options to add a non-vision model."
+                        error_msg = "Error: Only Qwen3VL models available but 'Enhance Prompt' mode is active. Please add a .gguf model or use Generator Options to add a non-vision model."
                         print_pg(error_msg, RED)
                         return (error_msg,)
                 else:
@@ -668,7 +721,7 @@ class PromptGenerator:
                 # Find smallest non-VL model
                 model_to_use = self.find_non_vl_model(available_models)
                 if not model_to_use:
-                    error_msg = "Error: Only Qwen3VL models available but 'Enhance User Prompt' mode is active. Please add a non-vision model or switch to 'Describe Image' mode."
+                    error_msg = "Error: Only Qwen3VL models available but 'Enhance Prompt' mode is active. Please add a non-vision model or switch to 'Describe Image' mode."
                     print_pg(error_msg, RED)
                     return (error_msg,)
 
@@ -696,7 +749,7 @@ class PromptGenerator:
                         images.append(img)
 
             if not images:
-                error_msg = f"Error: '{mode}' mode requires at least one image to be connected. Please connect an image or switch to 'Enhance User Prompt' mode."
+                error_msg = f"Error: '{mode}' mode requires at least one image to be connected. Please connect an image or switch to 'Enhance Prompt' mode."
                 print_pg(error_msg)
                 return (error_msg,)
 
@@ -716,24 +769,29 @@ class PromptGenerator:
         # Prepare the system prompt
         if options and "system_prompt" in options:
             system_prompt = options["system_prompt"]
-        elif mode in ["Analyze Image"]:
-            # Use image description prompt for vision modes
-            system_prompt = self.DEFAULT_IMAGE_SYSTEM_PROMPT
-        elif mode in ["Analyze Image with Prompt"]:
-            system_prompt = self.CUSTOM_IMAGE_SYSTEM_PROMPT
+
+        elif mode == "Analyze Image":
+            system_prompt = self.get_image_system_prompt()
+
+        elif mode == "Analyze Image with Prompt":
+            system_prompt = self.get_image_custom_system_prompt()
+
+        elif mode == "Enhance Prompt (Video)":
+            system_prompt = self.get_text_video_system_prompt()
+
         else:
-            system_prompt = self.DEFAULT_SYSTEM_PROMPT
+            system_prompt = self.get_text_image_system_prompt()
 
         # Add JSON formatting instructions only when `format_as_json` is True
         if format_as_json:
-            system_prompt = system_prompt + self.JSON_SYSTEM_PROMPT
+            system_prompt = system_prompt + self.get_json_system_prompt()
 
         # Determine user content based on mode
         if mode == "Analyze Image":
-            user_content = self.IMAGE_ACTION_PROMPT
+            user_content = self.get_image_action_prompt()
         elif mode == "Analyze Image with Prompt":
             # Use user prompt if provided, otherwise default to generic description
-            user_content = prompt.strip() if prompt.strip() else self.IMAGE_ACTION_PROMPT
+            user_content = prompt.strip() if prompt.strip() else self.get_image_action_prompt()
         else:
             user_content = prompt
 

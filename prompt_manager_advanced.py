@@ -1,0 +1,621 @@
+"""
+ComfyUI Prompt Manager Advanced - Extended prompt management with LoRA stack support
+Saves prompts along with associated LoRA configurations
+"""
+import os
+import json
+import folder_paths
+import server
+
+
+def get_available_loras():
+    """Get all available LoRAs from ComfyUI's folder system"""
+    lora_files = folder_paths.get_filename_list("loras")
+    return lora_files
+
+
+def resolve_lora_path(lora_name):
+    """
+    Resolve a LoRA name to its full path using ComfyUI's folder system.
+    Returns (full_path, found) tuple.
+    """
+    lora_files = get_available_loras()
+
+    # Try exact match first (with extension)
+    for lora_file in lora_files:
+        if lora_file == lora_name:
+            return folder_paths.get_full_path("loras", lora_file), True
+
+    # Try matching by name without extension
+    lora_name_lower = lora_name.lower()
+    for lora_file in lora_files:
+        file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
+        if file_name_no_ext.lower() == lora_name_lower:
+            return folder_paths.get_full_path("loras", lora_file), True
+
+    # Try partial match (lora_name might be just the filename, lora_file might have subdirs)
+    for lora_file in lora_files:
+        file_name = os.path.basename(lora_file)
+        file_name_no_ext = os.path.splitext(file_name)[0]
+        if file_name_no_ext.lower() == lora_name_lower or file_name.lower() == lora_name_lower:
+            return folder_paths.get_full_path("loras", lora_file), True
+
+    # Not found
+    return None, False
+
+
+def get_lora_relative_path(lora_name):
+    """
+    Get the relative path for a LoRA that ComfyUI expects for loading.
+    Returns (relative_path, found) tuple.
+    """
+    lora_files = get_available_loras()
+
+    lora_name_lower = lora_name.lower()
+    for lora_file in lora_files:
+        file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
+        if file_name_no_ext.lower() == lora_name_lower:
+            return lora_file, True
+
+    # Not found
+    return lora_name, False
+
+
+class PromptManagerAdvanced:
+    """
+    Advanced Prompt Manager with LoRA stack integration.
+    Supports saving/loading prompts with associated LoRA configurations.
+    Features two LoRA stack inputs/outputs for dual LoRA workflows (e.g., Wan video).
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        prompts_data = PromptManagerAdvanced.load_prompts()
+        categories = list(prompts_data.keys()) if prompts_data else ["Default"]
+
+        all_prompts = set()
+        for category_prompts in prompts_data.values():
+            all_prompts.update(category_prompts.keys())
+
+        all_prompts.add("")
+        all_prompts_list = sorted(list(all_prompts))
+
+        first_category = categories[0] if categories else "Default"
+
+        # Get first prompt from first category
+        first_prompt = ""
+        first_prompt_text = ""
+        if prompts_data and first_category in prompts_data and prompts_data[first_category]:
+            first_category_prompts = list(prompts_data[first_category].keys())
+            first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
+            if first_prompt:
+                first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
+
+        return {
+            "required": {
+                "category": (categories, {"default": first_category}),
+                "name": (all_prompts_list, {"default": first_prompt}),
+                "use_external": ("BOOLEAN", {"default": False, "label_on": "on", "label_off": "off", "tooltip": "Toggle to use LLM input instead of internal text"}),
+                "override_lora": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "When enabled, ignore connected LoRA stacks and use only the saved preset values"
+                }),
+                "text": ("STRING", {
+                    "multiline": True,
+                    "default": first_prompt_text,
+                    "placeholder": "Enter prompt text",
+                    "dynamicPrompts": False,
+                    "tooltip": "Enter prompt text directly"
+                }),
+            },
+            "optional": {
+                "llm_input": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect LLM text input here"}),
+                "lora_stack_a": ("LORA_STACK", {"tooltip": "First LoRA stack input (e.g., for base model)"}),
+                "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "loras_a_toggle": "STRING",
+                "loras_b_toggle": "STRING",
+            }
+        }
+
+    CATEGORY = "Prompt Manager"
+    RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK")
+    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b")
+    FUNCTION = "get_prompt"
+    OUTPUT_NODE = True
+
+    @staticmethod
+    def get_prompts_path():
+        """Get the path to the prompts JSON file in user/default folder (shared with standard PromptManager)"""
+        return os.path.join(folder_paths.get_user_directory(), "default", "prompt_manager_data.json")
+
+    @staticmethod
+    def get_default_prompts_path():
+        """Get the path to the default prompts JSON file"""
+        return os.path.join(os.path.dirname(__file__), "default_prompts.json")
+
+    @classmethod
+    def load_prompts(cls):
+        """Load prompts from user folder or default (shared with standard PromptManager)"""
+        user_path = cls.get_prompts_path()
+        default_path = cls.get_default_prompts_path()
+
+        if os.path.exists(user_path):
+            try:
+                with open(user_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[PromptManagerAdvanced] Error loading user prompts: {e}")
+
+        if os.path.exists(default_path):
+            try:
+                with open(default_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    cls.save_prompts(data)
+                    return data
+            except Exception as e:
+                print(f"[PromptManagerAdvanced] Error loading default prompts: {e}")
+
+        # Return empty structure if all else fails
+        print("[PromptManagerAdvanced] Warning: No prompt files found, starting with empty data")
+        return {}
+
+    @staticmethod
+    def sort_prompts_data(data):
+        """Sort categories and prompts alphabetically (case-insensitive)"""
+        sorted_data = {}
+        for category in sorted(data.keys(), key=str.lower):
+            sorted_data[category] = dict(sorted(data[category].items(), key=lambda item: item[0].lower()))
+        return sorted_data
+
+    @classmethod
+    def save_prompts(cls, data):
+        """Save prompts to user folder"""
+        user_path = cls.get_prompts_path()
+        sorted_data = cls.sort_prompts_data(data)
+
+        try:
+            os.makedirs(os.path.dirname(user_path), exist_ok=True)
+            with open(user_path, 'w', encoding='utf-8') as f:
+                json.dump(sorted_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[PromptManagerAdvanced] Error saving prompts: {e}")
+
+    def _merge_lora_stacks(self, preset_stack, connected_stack):
+        """
+        Merge preset loras with connected loras, avoiding duplicates.
+        Preset loras come first, then connected loras that aren't already in preset.
+
+        Args:
+            preset_stack: List of tuples from saved preset
+            connected_stack: List of tuples from connected input
+
+        Returns:
+            Combined lora stack with no duplicates (by lora name)
+        """
+        if not connected_stack:
+            return preset_stack if preset_stack else []
+        if not preset_stack:
+            return list(connected_stack)
+
+        # Build set of lora names from preset
+        preset_names = set()
+        for lora_path, _, _ in preset_stack:
+            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            preset_names.add(lora_name)
+
+        # Start with preset, add non-duplicate connected loras
+        merged = list(preset_stack)
+        for lora_path, model_strength, clip_strength in connected_stack:
+            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            if lora_name not in preset_names:
+                merged.append((lora_path, model_strength, clip_strength))
+
+        return merged
+
+    def _process_lora_toggle(self, lora_stack, toggle_data):
+        """
+        Process lora stack with toggle data to filter active loras and apply strength adjustments.
+
+        Args:
+            lora_stack: List of tuples (lora_path, model_strength, clip_strength)
+            toggle_data: JSON string or list of toggle states [{name, active, strength}, ...]
+
+        Returns:
+            Filtered lora stack with adjusted strengths
+        """
+        if not lora_stack:
+            return []
+
+        if not toggle_data:
+            return list(lora_stack)
+
+        # Parse toggle data if it's a string
+        try:
+            if isinstance(toggle_data, str):
+                toggle_data = json.loads(toggle_data)
+        except (json.JSONDecodeError, TypeError):
+            return list(lora_stack)
+
+        if not isinstance(toggle_data, list):
+            return list(lora_stack)
+
+        # Create a map of toggle states by lora name
+        toggle_map = {}
+        for item in toggle_data:
+            if isinstance(item, dict):
+                name = item.get('name', '')
+                toggle_map[name] = {
+                    'active': item.get('active', True),
+                    'strength': item.get('strength')
+                }
+
+        # Filter and adjust lora stack
+        filtered_stack = []
+        for lora_path, model_strength, clip_strength in lora_stack:
+            # Extract lora name from path
+            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+
+            # Check toggle state
+            toggle_state = toggle_map.get(lora_name, {'active': True, 'strength': None})
+
+            if not toggle_state['active']:
+                continue  # Skip inactive loras
+
+            # Apply strength adjustment if provided
+            if toggle_state['strength'] is not None:
+                adjusted_strength = float(toggle_state['strength'])
+                # Scale both model and clip strength proportionally
+                ratio = adjusted_strength / model_strength if model_strength != 0 else 1.0
+                model_strength = adjusted_strength
+                clip_strength = clip_strength * ratio
+
+            filtered_stack.append((lora_path, model_strength, clip_strength))
+
+        return filtered_stack
+
+    def get_prompt(self, category, name, use_external, text="", override_lora=False, llm_input="",
+                   lora_stack_a=None, lora_stack_b=None,
+                   unique_id=None, loras_a_toggle=None, loras_b_toggle=None):
+        """Return the prompt text and filtered lora stacks based on toggle states"""
+
+        # Choose which text to use based on the toggle
+        if use_external and llm_input:
+            output_text = llm_input
+        else:
+            output_text = text
+
+        # Build preset stacks from saved toggle data (these are what we display/manage)
+        preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
+        preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if loras_b_toggle else []
+
+        # When override_lora is enabled, ignore connected stacks and use only saved loras
+        if override_lora:
+            lora_stack_a = preset_stack_a
+            lora_stack_b = preset_stack_b
+        else:
+            # Merge: preset loras + connected loras (avoiding duplicates by lora name)
+            lora_stack_a = self._merge_lora_stacks(preset_stack_a, lora_stack_a)
+            lora_stack_b = self._merge_lora_stacks(preset_stack_b, lora_stack_b)
+
+        # Process lora stacks with toggle data (filter inactive, apply strength)
+        processed_stack_a = self._process_lora_toggle(lora_stack_a, loras_a_toggle)
+        processed_stack_b = self._process_lora_toggle(lora_stack_b, loras_b_toggle)
+
+        # Display logic depends on override mode:
+        # - Override ON: Show only preset loras (what will actually be used)
+        # - Override OFF: Show merged loras (preset + connected) so user sees full picture
+        if override_lora:
+            loras_a_display = self._format_loras_for_display(preset_stack_a) if preset_stack_a else []
+            loras_b_display = self._format_loras_for_display(preset_stack_b) if preset_stack_b else []
+        else:
+            loras_a_display = self._format_loras_for_display(lora_stack_a) if lora_stack_a else []
+            loras_b_display = self._format_loras_for_display(lora_stack_b) if lora_stack_b else []
+
+        # Broadcast update to frontend
+        if unique_id is not None:
+            server.PromptServer.instance.send_sync("prompt-manager-advanced-update", {
+                "node_id": unique_id,
+                "prompt": output_text,
+                "use_external": use_external,
+                "llm_input": llm_input,
+                "loras_a": loras_a_display,
+                "loras_b": loras_b_display
+            })
+
+        return (output_text, processed_stack_a if processed_stack_a else [], processed_stack_b if processed_stack_b else [])
+
+    def check_lazy_status(self, category, name, use_external, text, override_lora=False, llm_input=None,
+                          lora_stack_a=None, lora_stack_b=None,
+                          unique_id=None, loras_a_toggle=None, loras_b_toggle=None):
+        """Tell ComfyUI which lazy inputs are needed based on current settings"""
+        needed = []
+        if use_external:
+            needed.append("llm_input")
+        return needed
+
+    def _build_stack_from_toggle(self, toggle_data):
+        """
+        Build a lora stack from toggle data by resolving paths at runtime.
+        This is used when no input stack is connected but we have saved lora data.
+        """
+        if not toggle_data:
+            return []
+
+        # Parse toggle data if it's a string
+        try:
+            if isinstance(toggle_data, str):
+                toggle_data = json.loads(toggle_data)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+        if not isinstance(toggle_data, list):
+            return []
+
+        stack = []
+        missing_loras = []
+
+        for item in toggle_data:
+            if not isinstance(item, dict):
+                continue
+
+            lora_name = item.get('name', '')
+            if not lora_name:
+                continue
+
+            # Resolve the path at runtime
+            relative_path, found = get_lora_relative_path(lora_name)
+
+            if not found:
+                missing_loras.append(lora_name)
+                continue  # Skip missing loras
+
+            strength = float(item.get('strength', 1.0))
+            clip_strength = float(item.get('clip_strength', strength))
+
+            stack.append((relative_path, strength, clip_strength))
+
+        # Log warning for missing loras
+        if missing_loras:
+            print(f"[PromptManagerAdvanced] Warning: Could not find LoRAs: {', '.join(missing_loras)}")
+
+        return stack
+
+    def _format_loras_for_display(self, lora_stack):
+        """Format lora stack for frontend display"""
+        if not lora_stack:
+            return []
+
+        display_list = []
+        for lora_path, model_strength, clip_strength in lora_stack:
+            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            display_list.append({
+                "name": lora_name,
+                "path": lora_path,
+                "model_strength": model_strength,
+                "clip_strength": clip_strength,
+                "active": True,
+                "strength": model_strength
+            })
+        return display_list
+
+
+# API Routes for Advanced Prompt Manager
+
+@server.PromptServer.instance.routes.get("/prompt-manager-advanced/get-prompts")
+async def get_prompts_advanced(request):
+    """API endpoint to get all advanced prompts"""
+    try:
+        prompts = PromptManagerAdvanced.load_prompts()
+        return server.web.json_response(prompts)
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in get_prompts API: {e}")
+        return server.web.json_response({"error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-category")
+async def save_category_advanced(request):
+    """API endpoint to create a new category"""
+    try:
+        data = await request.json()
+        category_name = data.get("category_name", "").strip()
+
+        if not category_name:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        # Case-insensitive check for existing category
+        existing_categories_lower = {k.lower(): k for k in prompts.keys()}
+        if category_name.lower() in existing_categories_lower:
+            return server.web.json_response({
+                "success": False,
+                "error": f"Category already exists as '{existing_categories_lower[category_name.lower()]}'"
+            })
+
+        prompts[category_name] = {}
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in save_category API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-prompt")
+async def save_prompt_advanced(request):
+    """API endpoint to save a prompt with lora configurations"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+        text = data.get("text", "").strip()
+        loras_a = data.get("loras_a", [])
+        loras_b = data.get("loras_b", [])
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name are required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        if category not in prompts:
+            prompts[category] = {}
+
+        # Case-insensitive check for existing prompt
+        existing_prompts_lower = {k.lower(): k for k in prompts[category].keys()}
+        if name.lower() in existing_prompts_lower:
+            old_name = existing_prompts_lower[name.lower()]
+            if old_name != name:
+                # Delete the old casing version
+                print(f"[PromptManagerAdvanced] Removing old casing '{old_name}' before saving as '{name}'")
+                del prompts[category][old_name]
+
+        # Normalize lora data - only save name and strengths
+        # Inactive loras are not saved (filtered out by frontend)
+        # Paths are resolved at runtime for portability
+        def normalize_lora_data(loras):
+            normalized = []
+            for lora in loras:
+                if isinstance(lora, dict) and lora.get('name'):
+                    normalized.append({
+                        "name": lora.get('name'),
+                        "strength": lora.get('strength', lora.get('model_strength', 1.0)),
+                        "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0))
+                    })
+            return normalized
+
+        # Save prompt with normalized lora data (no paths - they're resolved at runtime)
+        prompts[category][name] = {
+            "prompt": text,
+            "loras_a": normalize_lora_data(loras_a),
+            "loras_b": normalize_lora_data(loras_b)
+        }
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in save_prompt API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/delete-category")
+async def delete_category_advanced(request):
+    """API endpoint to delete a category"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+
+        if not category:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        if category not in prompts:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        del prompts[category]
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in delete_category API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/delete-prompt")
+async def delete_prompt_advanced(request):
+    """API endpoint to delete a prompt"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and prompt name are required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        if category not in prompts or name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        del prompts[category][name]
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in delete_prompt API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/check-loras")
+async def check_loras_advanced(request):
+    """API endpoint to check which LoRAs are available in the system"""
+    try:
+        data = await request.json()
+        lora_names = data.get("lora_names", [])
+
+        results = {}
+        for lora_name in lora_names:
+            _, found = get_lora_relative_path(lora_name)
+            results[lora_name] = found
+
+        return server.web.json_response({"success": True, "results": results})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in check_loras API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/prompt-manager-advanced/available-loras")
+async def get_available_loras_api(request):
+    """API endpoint to get list of all available LoRA names"""
+    try:
+        lora_files = get_available_loras()
+        # Return just the names without extensions for easier matching
+        lora_names = [os.path.splitext(os.path.basename(f))[0] for f in lora_files]
+        return server.web.json_response({"success": True, "loras": sorted(set(lora_names))})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in available_loras API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/get-prompt-data")
+async def get_prompt_data_advanced(request):
+    """API endpoint to get specific prompt data including loras with availability check"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name are required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        if category not in prompts or name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        prompt_data = prompts[category][name]
+
+        # Add availability info to loras
+        def add_availability(loras):
+            result = []
+            for lora in loras:
+                lora_copy = dict(lora)
+                _, found = get_lora_relative_path(lora.get('name', ''))
+                lora_copy['available'] = found
+                result.append(lora_copy)
+            return result
+
+        return server.web.json_response({
+            "success": True,
+            "data": {
+                "prompt": prompt_data.get("prompt", ""),
+                "loras_a": add_availability(prompt_data.get("loras_a", [])),
+                "loras_b": add_availability(prompt_data.get("loras_b", []))
+            }
+        })
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in get_prompt_data API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)

@@ -48,6 +48,7 @@ class PromptManager:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
     FUNCTION = "get_prompt"
+    OUTPUT_NODE = True
 
     @staticmethod
     def get_prompts_path():
@@ -196,8 +197,13 @@ async def save_prompt(request):
                 print(f"[PromptManager] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        # Save prompt in dict
-        prompts[category][name] = {"prompt": text}
+        # Save prompt in dict, preserving any existing lora data from PromptManagerAdvanced
+        existing_data = prompts[category].get(name, {})
+        prompts[category][name] = {
+            "prompt": text,
+            "loras_a": existing_data.get("loras_a", []),
+            "loras_b": existing_data.get("loras_b", [])
+        }
         PromptManager.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})

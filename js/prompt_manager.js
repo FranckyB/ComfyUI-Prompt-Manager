@@ -336,7 +336,7 @@ function filterPromptDropdown(node) {
     if (categoryWidget && promptWidget) {
         const currentCategory = categoryWidget.value;
         if (node.prompts[currentCategory]) {
-            const promptNames = Object.keys(node.prompts[currentCategory]);
+            const promptNames = Object.keys(node.prompts[currentCategory]).sort((a, b) => a.localeCompare(b));
             if (promptNames.length === 0) {
                 promptNames.push("");
             }
@@ -467,7 +467,7 @@ function setupCategoryChangeHandler(node) {
 
         const category = value;
         if (node.prompts && node.prompts[category]) {
-            const promptNames = Object.keys(node.prompts[category]);
+            const promptNames = Object.keys(node.prompts[category]).sort((a, b) => a.localeCompare(b));
             promptWidget.options.values = promptNames;
 
             if (promptNames.length > 0) {
@@ -633,7 +633,7 @@ function createButton(text, callback) {
     button.style.backgroundColor = "#222";
     button.style.color = "#fff";
     button.style.border = "1px solid #444";
-    button.style.borderRadius = "3px";
+    button.style.borderRadius = "6px";
     button.style.fontSize = "11px";
     button.style.fontWeight = "normal";
     button.style.whiteSpace = "nowrap";
@@ -862,18 +862,18 @@ function updateDropdowns(node) {
 
     if (!categoryWidget || !promptWidget || !textWidget) return;
 
-    // Update category dropdown
-    const categories = Object.keys(node.prompts);
+    // Update category dropdown (sorted alphabetically)
+    const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
     categoryWidget.options.values = categories;
 
     if (!node.prompts[categoryWidget.value] && categories.length > 0) {
         categoryWidget.value = categories[0];
     }
 
-    // Update prompt dropdown for current category
+    // Update prompt dropdown for current category (sorted alphabetically)
     const currentCategory = categoryWidget.value;
     if (node.prompts[currentCategory]) {
-        const promptNames = Object.keys(node.prompts[currentCategory]);
+        const promptNames = Object.keys(node.prompts[currentCategory]).sort((a, b) => a.localeCompare(b));
 
         if (promptNames.length === 0) {
             promptNames.push("");
