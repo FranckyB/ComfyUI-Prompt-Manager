@@ -5,6 +5,7 @@ This addon started off as a simple prompt Manager, to help save and retrieve pro
 But has since evolved to allow generating prompts for Images, video and Image analysis.
 The new advanced version of the manager, now allows the user to save the entire recipe,
 as it allows saving the Lora Stacks that goes with a prompt. Supporting Dual Stack for Wan.
+Compatible with [Lora Manager](https://github.com/willmiao/ComfyUI-Lora-Manager).  Allowing the display of Lora previews if found.
 ___
 For Prompt Generation, it uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp), preventing install conflicts with ComfyUI.  
 Provides options to automatically download Qwen3 and Qwen3VL models.  
