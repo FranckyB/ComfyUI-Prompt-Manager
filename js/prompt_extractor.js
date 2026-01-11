@@ -329,6 +329,9 @@ app.registerExtension({
 
                 const node = this;
 
+                // Track workflow metadata status for indicator
+                node.hasWorkflow = false;
+
                 // Find the image widget (combo dropdown)
                 const imageWidget = this.widgets?.find(w => w.name === "image");
                 if (imageWidget) {
@@ -356,6 +359,66 @@ app.registerExtension({
                         loadAndDisplayImage(node, imageWidget.value);
                     }
 
+                    return result;
+                };
+
+                // Load initial image if widget has a value on creation
+                if (imageWidget && imageWidget.value) {
+                    // Use setTimeout to ensure node is fully initialized
+                    setTimeout(() => {
+                        loadAndDisplayImage(node, imageWidget.value);
+                    }, 10);
+                }
+
+                // Add workflow status indicator light
+                const onDrawForeground = node.onDrawForeground;
+                node.onDrawForeground = function(ctx) {
+                    const result = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
+
+                    // Draw status indicator if we have an image and node is not minimized
+                    if (node.imgs && node.imgs.length > 0 && !(node.flags && node.flags.collapsed)) {
+                        const radius = 7;
+                        const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+                        // Position in top-right, raised 20px to be in title bar
+                        const x = node.size[0] - radius - 8;
+                        const y = (titleHeight / 2) - 30;
+
+                        // Draw indicator circle
+                        ctx.beginPath();
+                        ctx.arc(x, y, radius, 0, Math.PI * 2);
+                        ctx.fillStyle = node.hasWorkflow ? '#00ff00' : '#ff3333';
+                        ctx.fill();
+                        ctx.strokeStyle = node.hasWorkflow ? '#054405' : '#550505';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                    }
+
+                    return result;
+                };
+
+                // Add tooltip on hover
+                const onMouseMove = node.onMouseMove;
+                node.onMouseMove = function(e, localPos, canvas) {
+                    const result = onMouseMove ? onMouseMove.apply(this, arguments) : undefined;
+                    
+                    // Check if hovering over indicator
+                    const radius = 7;
+                    const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+                    // Position raised 20px to be in title bar
+                    const indicatorX = node.size[0] - radius - 8;
+                    const indicatorY = (titleHeight / 2) - 30;
+                    
+                    const dist = Math.sqrt(
+                        Math.pow(localPos[0] - indicatorX, 2) + 
+                        Math.pow(localPos[1] - indicatorY, 2)
+                    );
+                    
+                    if (dist <= radius) {
+                        canvas.canvas.title = node.hasWorkflow ? 
+                            'Workflow metadata found' : 
+                            'No workflow metadata';
+                    }
+                    
                     return result;
                 };
 
@@ -423,6 +486,9 @@ async function loadImageFile(node, filename) {
         // Cache metadata (or lack thereof) for Python backend
         await cacheFileMetadata(filename, metadata);
 
+        // Update workflow status flag
+        node.hasWorkflow = !!(metadata && metadata.workflow);
+
         // Load and display the image
         const img = new Image();
         img.onload = () => {
@@ -465,6 +531,9 @@ async function loadJSONFile(node, filename) {
         // Cache metadata (or lack thereof) for Python backend
         await cacheFileMetadata(filename, metadata);
 
+        // Update workflow status flag
+        node.hasWorkflow = !!(metadata && metadata.workflow);
+
         // Show placeholder for JSON files (no visual preview)
         showPlaceholder(node);
     } catch (error) {
@@ -486,6 +555,9 @@ async function loadVideoFirstFrame(node, filename) {
         const metadata = await getVideoMetadata(videoBlob);
         // Cache metadata (or lack thereof) for Python backend
         await cacheFileMetadata(filename, metadata);
+
+        // Update workflow status flag
+        node.hasWorkflow = !!(metadata && metadata.workflow);
 
         // Create a video element for frame extraction
         const video = document.createElement('video');
