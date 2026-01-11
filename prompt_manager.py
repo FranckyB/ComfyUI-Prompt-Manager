@@ -287,14 +287,14 @@ async def import_prompts(request):
         else:
             # Merge with existing prompts
             prompts = PromptManager.load_prompts()
-            
+
             for category, category_prompts in imported_data.items():
                 if not isinstance(category_prompts, dict):
                     continue
-                    
+
                 if category not in prompts:
                     prompts[category] = {}
-                
+
                 for prompt_name, prompt_data in category_prompts.items():
                     # Merge prompt data, preserving structure
                     if isinstance(prompt_data, dict):

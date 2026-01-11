@@ -9,7 +9,7 @@ A complete prompt management solution featuring three core capabilities:
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp). Supports text enhancement, image analysis with vision models (Qwen3VL), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
-**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos (MP4), or JSON workflow files. Automatically parses embedded metadata and outputs ready-to-use LoRA stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai.
+**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs ready-to-use LoRA stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai.  FFMPEG needs to be installed for video Support.
 ___
 
 <div align="center">
@@ -149,11 +149,11 @@ ___
 ### Prompt Extractor
 
 1. **Add the Node**: Add Node → Prompt Manager → Prompt Extractor
-2. **Load Media**: Connect an image or video to the `media` input, or use the Browse button to select a JSON workflow file
-3. **Extract Data**: The node automatically extracts prompts, LoRAs, and trigger words from embedded metadata
-4. **View Results**: Extracted positive/negative prompts display in the text outputs, LoRA stacks output as LORA_STACK
-5. **Use with Manager**: Connect the LoRA stack outputs to Prompt Manager Advanced to view and save the extracted configuration
-6. **JSON Workflows**: Click Browse to load `.json` workflow files directly - useful for extracting from saved workflows
+2. **Load Media**: Select an image or video from your input folder or use the upload button to access file from anywhere.
+3. **JSON Workflows**: Support extracting from JSON, by importing workflow files directly using the upload button.
+4. **Extract Data**: The node automatically extracts prompts, LoRAs, and trigger words from embedded metadata
+5. **View Results**: Extracted positive/negative prompts display in the text outputs, LoRA stacks output as LORA_STACK
+6. **Use with Manager**: Connect the LoRA stack outputs to Prompt Manager Advanced to view and save the extracted configuration
 
 ### Prompt Generator
 
@@ -241,6 +241,9 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### Version 1.11.2
+- Slight adjustement to extractor node to behave exactly like the Load image node, while also supporting Videos. (With extract first frame support)
 
 ### Version 1.11.0
 - **New Node: Prompt Extractor** - Extract prompts and LoRA configurations from images, videos, and JSON workflows

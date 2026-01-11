@@ -1,7 +1,7 @@
 [project]
 name = "prompt-manager"
 description = "Prompt Manager extension for ComfyUI, allowing user to both save and generate prompts, as well as save matching loras for each prompt."
-version = "1.11.1"
+version = "1.11.2"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
@@ -34,4 +34,3 @@ DisplayName = "ComfyUI-Prompt-Manager"
 Icon = ""
 includes = [] 
 # "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
-

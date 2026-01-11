@@ -516,7 +516,7 @@ class PromptManagerAdvanced:
                           lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Tell ComfyUI which lazy inputs are needed based on current settings.
-        
+
         Note: We don't mark prompt_input as required even when use_prompt_input is on.
         This allows the node to gracefully fall back to internal text if nothing is connected,
         rather than throwing a ComfyUI error about missing input.

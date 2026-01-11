@@ -7,6 +7,7 @@ import json
 import re
 import folder_paths
 import torch
+import server
 
 # Import PIL for image metadata reading
 try:
@@ -17,6 +18,31 @@ try:
 except ImportError:
     IMAGE_SUPPORT = False
     print("[PromptExtractor] Warning: PIL/numpy not available, image metadata reading disabled")
+
+
+# API endpoint to list files in input directory for navigation
+@server.PromptServer.instance.routes.get("/prompt-extractor/list-input-files")
+async def list_input_files(request):
+    """API endpoint to get list of supported files in input directory"""
+    try:
+        input_dir = folder_paths.get_input_directory()
+        files = []
+
+        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
+
+        if os.path.exists(input_dir):
+            for filename in os.listdir(input_dir):
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in supported_extensions:
+                    files.append(filename)
+
+        # Sort files alphabetically
+        files.sort()
+
+        return server.web.json_response({"files": files})
+    except Exception as e:
+        print(f"[PromptExtractor] Error listing files: {e}")
+        return server.web.json_response({"files": []}, status=500)
 
 
 def get_available_loras():
@@ -1211,14 +1237,23 @@ class PromptExtractor:
 
     @classmethod
     def INPUT_TYPES(cls):
+        # Get list of supported files from input directory
+        input_dir = folder_paths.get_input_directory()
+        files = []
+        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
+
+        if os.path.exists(input_dir):
+            for filename in os.listdir(input_dir):
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in supported_extensions:
+                    files.append(filename)
+
+        # Sort files alphabetically
+        files.sort()
+
         return {
             "required": {
-                "file_path": ("STRING", {
-                    "default": "",
-                    "multiline": False,
-                    "placeholder": "Path to image, video, or JSON workflow file",
-                    "file_path": True,  # Enables full path browsing
-                }),
+                "image": (sorted(files), {"image_upload": True}),
             },
         }
 
@@ -1228,7 +1263,7 @@ class PromptExtractor:
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
-    def extract(self, file_path=""):
+    def extract(self, image=""):
         """Extract prompts and LoRAs from the specified file."""
 
         # Always initialize with empty strings, never None
@@ -1238,24 +1273,24 @@ class PromptExtractor:
         lora_stack_b = []
         image_tensor = None
 
-        # Handle None or missing file_path
-        if file_path is None:
-            file_path = ""
+        # Handle None or missing image parameter
+        if image is None:
+            image = ""
 
         # Normalize file path
         resolved_path = None
-        if file_path and file_path.strip():
-            file_path = file_path.strip()
+        if image and image.strip():
+            file_path = image.strip()
 
-            # Handle relative paths (check input and temp directories)
+            # Handle relative paths (check input directory first, then temp as fallback)
             if not os.path.isabs(file_path):
-                # Check input directory first
+                # Check input directory first (this is where files should be)
                 input_dir = folder_paths.get_input_directory()
                 potential_path = os.path.join(input_dir, file_path)
                 if os.path.exists(potential_path):
                     resolved_path = potential_path
                 else:
-                    # Check temp directory (uploads from browse go here)
+                    # Check temp directory as fallback (for backwards compatibility)
                     temp_dir = folder_paths.get_temp_directory()
                     potential_path = os.path.join(temp_dir, file_path)
                     if os.path.exists(potential_path):
@@ -1314,7 +1349,7 @@ class PromptExtractor:
                 # Skip inactive LoRAs
                 if not lora.get('active', True):
                     continue
-                    
+
                 lora_name = lora['name']
                 lora_path = lora.get('path', '')
                 model_strength = lora['model_strength']
@@ -1334,7 +1369,7 @@ class PromptExtractor:
                 # Skip inactive LoRAs
                 if not lora.get('active', True):
                     continue
-                    
+
                 lora_name = lora['name']
                 lora_path = lora.get('path', '')
                 model_strength = lora['model_strength']
@@ -1430,14 +1465,14 @@ class PromptExtractor:
         return results
 
     @classmethod
-    def IS_CHANGED(cls, file_path):
+    def IS_CHANGED(cls, image):
         """
         Check if the file has changed.
         Returns file modification time for existing files, or a constant for missing/empty paths.
         Note: float('nan') must NOT be used - NaN != NaN, so ComfyUI would always re-execute.
         """
-        if file_path:
-            file_path = file_path.strip()
+        if image:
+            file_path = image.strip()
             # Handle relative paths
             if not os.path.isabs(file_path):
                 input_dir = folder_paths.get_input_directory()
