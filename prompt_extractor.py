@@ -20,29 +20,32 @@ except ImportError:
     print("[PromptExtractor] Warning: PIL/numpy not available, image metadata reading disabled")
 
 
-# API endpoint to list files in input directory for navigation
-@server.PromptServer.instance.routes.get("/prompt-extractor/list-input-files")
-async def list_input_files(request):
-    """API endpoint to get list of supported files in input directory"""
+# Cache for file metadata (read by JavaScript, used by Python)
+_file_metadata_cache = {}
+
+
+# API endpoint to cache file metadata (sent from JavaScript)
+@server.PromptServer.instance.routes.post("/prompt-extractor/cache-file-metadata")
+async def cache_file_metadata(request):
+    """API endpoint to cache file metadata read by JavaScript"""
     try:
-        input_dir = folder_paths.get_input_directory()
-        files = []
+        data = await request.json()
+        filename = data.get('filename')
+        metadata = data.get('metadata')
 
-        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
+        if not filename:
+            return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
 
-        if os.path.exists(input_dir):
-            for filename in os.listdir(input_dir):
-                ext = os.path.splitext(filename)[1].lower()
-                if ext in supported_extensions:
-                    files.append(filename)
+        if metadata:
+            _file_metadata_cache[filename] = metadata
+            print(f"[PromptExtractor] Cached file metadata for: {filename}")
+        else:
+            print(f"[PromptExtractor] No metadata found in file: {filename}")
 
-        # Sort files alphabetically
-        files.sort()
-
-        return server.web.json_response({"files": files})
+        return server.web.json_response({"success": True})
     except Exception as e:
-        print(f"[PromptExtractor] Error listing files: {e}")
-        return server.web.json_response({"files": []}, status=500)
+        print(f"[PromptExtractor] Error caching file metadata: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 def get_available_loras():
@@ -78,11 +81,29 @@ def resolve_lora_path(lora_name):
 
 
 def extract_metadata_from_png(file_path):
-    """Extract workflow/prompt metadata from PNG file"""
-    if not IMAGE_SUPPORT:
-        return None, None
-
+    """Extract workflow/prompt metadata from PNG file (cached from JavaScript)"""
     try:
+        # Get just the filename from the path
+        filename = os.path.basename(file_path)
+
+        # Check if metadata was cached by JavaScript
+        if filename in _file_metadata_cache:
+            metadata = _file_metadata_cache[filename]
+            print(f"[PromptExtractor] Using cached PNG metadata for: {filename}")
+
+            if isinstance(metadata, dict):
+                prompt_data = metadata.get('prompt')
+                workflow_data = metadata.get('workflow')
+                return prompt_data, workflow_data
+        else:
+            print(f"[PromptExtractor] No cached metadata found for PNG: {filename}")
+            print("[PromptExtractor] Note: Image metadata is read by JavaScript when file is selected")
+
+        # Fallback to PIL if no cached data (backwards compatibility)
+        if not IMAGE_SUPPORT:
+            return None, None
+
+        print(f"[PromptExtractor] Falling back to PIL for: {filename}")
         with Image.open(file_path) as img:
             metadata = img.info
 
@@ -133,11 +154,33 @@ def extract_metadata_from_png(file_path):
 
 
 def extract_metadata_from_jpeg(file_path):
-    """Extract workflow/prompt metadata from JPEG/WebP file"""
-    if not IMAGE_SUPPORT:
-        return None, None
-
+    """Extract workflow/prompt metadata from JPEG/WebP file (cached from JavaScript)"""
     try:
+        # Get just the filename from the path
+        filename = os.path.basename(file_path)
+        
+        # Check if metadata was cached by JavaScript
+        if filename in _file_metadata_cache:
+            metadata = _file_metadata_cache[filename]
+            print(f"[PromptExtractor] Using cached JPEG/WebP metadata for: {filename}")
+            
+            if isinstance(metadata, dict):
+                # Check for prompt/workflow structure
+                if 'prompt' in metadata and 'workflow' in metadata:
+                    return metadata.get('prompt'), metadata.get('workflow')
+                elif 'workflow' in metadata:
+                    return None, metadata.get('workflow')
+                else:
+                    return metadata, None
+        else:
+            print(f"[PromptExtractor] No cached metadata found for JPEG/WebP: {filename}")
+            print("[PromptExtractor] Note: Image metadata is read by JavaScript when file is selected")
+        
+        # Fallback to PIL if no cached data (backwards compatibility)
+        if not IMAGE_SUPPORT:
+            return None, None
+        
+        print(f"[PromptExtractor] Falling back to PIL for: {filename}")
         with Image.open(file_path) as img:
             # Try EXIF data
             exif = img.getexif()
@@ -175,10 +218,21 @@ def extract_metadata_from_jpeg(file_path):
 
 
 def extract_metadata_from_json(file_path):
-    """Extract workflow data from JSON file"""
+    """Extract workflow data from JSON file (cached from JavaScript)"""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        # Get just the filename from the path
+        filename = os.path.basename(file_path)
+
+        # Check if metadata was cached by JavaScript
+        if filename in _file_metadata_cache:
+            data = _file_metadata_cache[filename]
+            print(f"[PromptExtractor] Using cached JSON metadata for: {filename}")
+        else:
+            print(f"[PromptExtractor] No cached metadata found for JSON: {filename}")
+            print("[PromptExtractor] Falling back to file read")
+            # Fallback to reading file (backwards compatibility)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
 
         print(f"[PromptExtractor] JSON loaded, type: {type(data)}, keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
 
@@ -186,7 +240,7 @@ def extract_metadata_from_json(file_path):
         if isinstance(data, dict):
             # API format (prompt) - node_id: {class_type, inputs}
             if any(isinstance(v, dict) and 'class_type' in v for v in data.values()):
-                print(f"[PromptExtractor] JSON detected as API/prompt format")
+                print("[PromptExtractor] JSON detected as API/prompt format")
                 return data, None
             # Workflow format - has 'nodes' array
             if 'nodes' in data:
@@ -194,10 +248,10 @@ def extract_metadata_from_json(file_path):
                 return None, data
             # Could be wrapped
             if 'prompt' in data:
-                print(f"[PromptExtractor] JSON detected as wrapped format")
+                print("[PromptExtractor] JSON detected as wrapped format")
                 return data.get('prompt'), data.get('workflow')
 
-        print(f"[PromptExtractor] JSON format not recognized, returning as-is")
+        print("[PromptExtractor] JSON format not recognized, returning as-is")
         return data, None
     except Exception as e:
         print(f"[PromptExtractor] Error reading JSON file: {e}")
@@ -207,112 +261,53 @@ def extract_metadata_from_json(file_path):
 
 
 def extract_metadata_from_video(file_path):
-    """Extract workflow/prompt metadata from video file using ffprobe"""
+    """Extract workflow/prompt metadata from video file (cached from JavaScript)"""
     try:
-        import subprocess
+        # Get just the filename from the path
+        filename = os.path.basename(file_path)
 
-        # Try ffprobe to read all metadata including streams
-        result = subprocess.run(
-            ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', file_path],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        # Check if metadata was cached by JavaScript
+        if filename in _file_metadata_cache:
+            metadata = _file_metadata_cache[filename]
+            print(f"[PromptExtractor] Using cached video metadata for: {filename}")
 
-        if result.returncode == 0:
-            probe_data = json.loads(result.stdout)
+            # Parse the cached metadata
+            if isinstance(metadata, dict):
+                # Check various structures
+                if 'prompt' in metadata and 'workflow' in metadata:
+                    prompt_val = metadata.get('prompt')
+                    workflow_val = metadata.get('workflow')
+                    # Handle nested JSON strings
+                    if isinstance(prompt_val, str):
+                        try:
+                            prompt_val = json.loads(prompt_val)
+                        except:
+                            pass
+                    if isinstance(workflow_val, str):
+                        try:
+                            workflow_val = json.loads(workflow_val)
+                        except:
+                            pass
+                    return prompt_val, workflow_val
+                elif 'workflow' in metadata:
+                    workflow_val = metadata.get('workflow')
+                    if isinstance(workflow_val, str):
+                        try:
+                            workflow_val = json.loads(workflow_val)
+                        except:
+                            pass
+                    return None, workflow_val
+                elif 'positive' in metadata or 'negative' in metadata:
+                    return metadata, None
+                # Check if metadata itself is the workflow
+                elif 'nodes' in metadata or 'last_node_id' in metadata:
+                    return None, metadata
+                else:
+                    return metadata, None
+        else:
+            print(f"[PromptExtractor] No cached metadata found for video: {filename}")
+            print("[PromptExtractor] Note: Video metadata is read by JavaScript when file is selected")
 
-            # Collect all tags from format and streams
-            all_tags = {}
-
-            # Get format tags
-            format_tags = probe_data.get('format', {}).get('tags', {})
-            all_tags.update({k.lower(): v for k, v in format_tags.items()})
-
-            # Get tags from all streams (some tools embed in video stream metadata)
-            for stream in probe_data.get('streams', []):
-                stream_tags = stream.get('tags', {})
-                all_tags.update({k.lower(): v for k, v in stream_tags.items()})
-
-            print(f"[PromptExtractor] Video metadata keys found: {list(all_tags.keys())}")
-
-            # Look for ComfyUI metadata in various common fields
-            metadata_keys = [
-                'comment', 'description', 'prompt', 'workflow',
-                'comfyui', 'comfyui_prompt', 'comfyui_workflow',
-                'parameters', 'generation_data', 'ai_metadata',
-                'title', 'artist', 'copyright'
-            ]
-
-            for key in metadata_keys:
-                if key in all_tags:
-                    value = all_tags[key]
-                    print(f"[PromptExtractor] Found metadata in '{key}': {value[:200]}..." if len(value) > 200 else f"[PromptExtractor] Found metadata in '{key}': {value}")
-
-                    # Try to parse as JSON
-                    try:
-                        data = json.loads(value)
-                        if isinstance(data, dict):
-                            # Check various structures
-                            if 'prompt' in data:
-                                prompt_val = data.get('prompt')
-                                workflow_val = data.get('workflow')
-                                # Handle nested JSON strings (common in video metadata)
-                                if isinstance(prompt_val, str):
-                                    try:
-                                        prompt_val = json.loads(prompt_val)
-                                    except:
-                                        pass
-                                if isinstance(workflow_val, str):
-                                    try:
-                                        workflow_val = json.loads(workflow_val)
-                                    except:
-                                        pass
-                                return prompt_val, workflow_val
-                            elif 'workflow' in data:
-                                workflow_val = data.get('workflow')
-                                if isinstance(workflow_val, str):
-                                    try:
-                                        workflow_val = json.loads(workflow_val)
-                                    except:
-                                        pass
-                                return None, workflow_val
-                            elif 'positive' in data or 'negative' in data:
-                                # Direct prompt format
-                                return data, None
-                            else:
-                                # Might be the workflow itself
-                                if 'nodes' in data or 'last_node_id' in data:
-                                    return None, data
-                                return data, None
-                    except json.JSONDecodeError:
-                        # Not JSON, might be plain text prompt
-                        # Check if it looks like a prompt (has some length and text)
-                        if len(value) > 10 and not value.startswith('{'):
-                            print(f"[PromptExtractor] Plain text metadata found in '{key}'")
-                            # Return as a simple prompt structure
-                            return {'positive': value}, None
-
-            # Also check for base64 encoded metadata (some tools do this)
-            for key in all_tags:
-                value = all_tags[key]
-                if len(value) > 100 and value.startswith('ey'):  # Base64 JSON starts with 'ey' ('{')
-                    try:
-                        import base64
-                        decoded = base64.b64decode(value).decode('utf-8')
-                        data = json.loads(decoded)
-                        print(f"[PromptExtractor] Found base64 encoded metadata in '{key}'")
-                        if isinstance(data, dict):
-                            if 'prompt' in data:
-                                return data.get('prompt'), data.get('workflow')
-                            return data, None
-                    except:
-                        pass
-
-        return None, None
-    except FileNotFoundError:
-        print("[PromptExtractor] ffprobe not found - video metadata extraction unavailable")
-        print("[PromptExtractor] Install ffmpeg/ffprobe to enable video metadata reading")
         return None, None
     except Exception as e:
         print(f"[PromptExtractor] Error reading video metadata: {e}")
@@ -357,7 +352,7 @@ def extract_first_frame_from_video(file_path):
                 pass
 
             if image_tensor is not None:
-                print(f"[PromptExtractor] Successfully extracted first frame from video")
+                print("[PromptExtractor] Successfully extracted first frame from video")
                 return image_tensor
         else:
             print(f"[PromptExtractor] ffmpeg failed to extract frame: {result.stderr}")

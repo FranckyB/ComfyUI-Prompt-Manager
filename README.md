@@ -9,7 +9,7 @@ A complete prompt management solution featuring three core capabilities:
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp). Supports text enhancement, image analysis with vision models (Qwen3VL), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
-**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs ready-to-use LoRA stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai.  FFMPEG needs to be installed for video Support.
+**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai.
 ___
 
 <div align="center">
@@ -64,7 +64,7 @@ ___
 - **Dual LoRA Stack Output**: Outputs two separate LoRA stacks for workflows using dual stacking (e.g., Wan video)
 - **Active LoRA Filtering**: Only extracts LoRAs that are marked as active in the source workflow
 - **Wide Node Compatibility**: Supports extraction from CLIP Text Encode, various sampler nodes, and LoRA stackers including Power Lora Loader
-- **Preview in Manager**: View extracted data alongside your saved prompts for easy comparison
+- **Preview in Manager**: View extracted data and repathed loras using Manager Advanced.
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
@@ -241,6 +241,9 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### Version 1.11.3
+- Slight adjustement to extractor node, gets metadata in a method more consistent with ComfyUI, removing need for ffmpeg for videos.
 
 ### Version 1.11.2
 - Slight adjustement to extractor node to behave exactly like the Load image node, while also supporting Videos. (With extract first frame support)
