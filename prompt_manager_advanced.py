@@ -4,8 +4,72 @@ Saves prompts along with associated LoRA configurations
 """
 import os
 import json
+import base64
+from io import BytesIO
 import folder_paths
 import server
+
+# Import numpy and PIL for image processing (available in ComfyUI environment)
+try:
+    import numpy as np
+    from PIL import Image
+    IMAGE_SUPPORT = True
+except ImportError:
+    IMAGE_SUPPORT = False
+    print("[PromptManagerAdvanced] Warning: PIL/numpy not available, thumbnail from image input disabled")
+
+
+def image_to_base64_thumbnail(image_tensor, max_size=128):
+    """
+    Convert a ComfyUI image tensor to a base64 thumbnail string.
+
+    Args:
+        image_tensor: ComfyUI image tensor (B, H, W, C) in float32 0-1 range
+        max_size: Maximum dimension for the thumbnail
+
+    Returns:
+        Base64 encoded JPEG string or None if conversion fails
+    """
+    if not IMAGE_SUPPORT or image_tensor is None:
+        return None
+
+    try:
+        # Get first image from batch
+        if len(image_tensor.shape) == 4:
+            img_array = image_tensor[0]
+        else:
+            img_array = image_tensor
+
+        # Convert to numpy and scale to 0-255
+        if hasattr(img_array, 'cpu'):
+            img_array = img_array.cpu().numpy()
+        img_array = (img_array * 255).astype(np.uint8)
+
+        # Create PIL Image
+        img = Image.fromarray(img_array)
+
+        # Resize maintaining aspect ratio
+        width, height = img.size
+        if width > height:
+            if width > max_size:
+                new_height = int((height * max_size) / width)
+                new_width = max_size
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+        else:
+            if height > max_size:
+                new_width = int((width * max_size) / height)
+                new_height = max_size
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+
+        # Convert to JPEG base64
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG', quality=85)
+        base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        return f"data:image/jpeg;base64,{base64_str}"
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error converting image to thumbnail: {e}")
+        return None
 
 
 def get_available_loras():
@@ -95,10 +159,12 @@ class PromptManagerAdvanced:
             "required": {
                 "category": (categories, {"default": first_category}),
                 "name": (all_prompts_list, {"default": first_prompt}),
-                "use_external": ("BOOLEAN", {"default": False, "label_on": "on", "label_off": "off", "tooltip": "Toggle to use LLM input instead of internal text"}),
-                "override_lora": ("BOOLEAN", {
+                "use_prompt_input": ("BOOLEAN", {"default": False, "label_on": "on", "label_off": "off", "tooltip": "Toggle to use connected prompt input instead of internal text"}),
+                "use_lora_input": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "When enabled, ignore connected LoRA stacks and use only the saved preset values"
+                    "label_on": "on",
+                    "label_off": "off",
+                    "tooltip": "When enabled, use LoRAs from connected inputs. When off, use only prompt LoRAs."
                 }),
                 "text": ("STRING", {
                     "multiline": True,
@@ -109,10 +175,11 @@ class PromptManagerAdvanced:
                 }),
             },
             "optional": {
-                "llm_input": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect LLM text input here"}),
+                "prompt_input": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
                 "lora_stack_a": ("LORA_STACK", {"tooltip": "First LoRA stack input (e.g., for base model)"}),
                 "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
+                "thumbnail_image": ("IMAGE", {"tooltip": "Connect an image to use as thumbnail when saving the prompt"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -127,6 +194,20 @@ class PromptManagerAdvanced:
     RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b")
     FUNCTION = "get_prompt"
     OUTPUT_NODE = True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """
+        Always return a unique value to ensure the node re-executes.
+        This is important because:
+        1. The node broadcasts UI updates to the frontend during execution
+        2. After browser refresh, the frontend loses its state and needs fresh data
+        3. Even if upstream nodes are cached, we need to re-broadcast to the new frontend session
+
+        The performance impact is minimal since this node's actual processing is lightweight.
+        """
+        import time
+        return time.time()
 
     @classmethod
     def VALIDATE_INPUTS(cls, name, **kwargs):
@@ -201,44 +282,55 @@ class PromptManagerAdvanced:
             connected_stack: List of tuples from connected input
 
         Returns:
-            Combined lora stack with no duplicates (by lora name)
+            Combined lora stack with no duplicates (by lora name, case-insensitive)
         """
         if not connected_stack:
             return preset_stack if preset_stack else []
         if not preset_stack:
             return list(connected_stack)
 
-        # Build set of lora names from preset
+        # Build set of lora names from preset (case-insensitive)
         preset_names = set()
         for lora_path, _, _ in preset_stack:
-            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            lora_name = os.path.splitext(os.path.basename(lora_path))[0].lower()
             preset_names.add(lora_name)
 
         # Start with preset, add non-duplicate connected loras
         merged = list(preset_stack)
         for lora_path, model_strength, clip_strength in connected_stack:
-            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            lora_name = os.path.splitext(os.path.basename(lora_path))[0].lower()
             if lora_name not in preset_names:
                 merged.append((lora_path, model_strength, clip_strength))
+                preset_names.add(lora_name)  # Prevent duplicates within connected too
 
         return merged
 
     def _process_lora_toggle(self, lora_stack, toggle_data):
         """
         Process lora stack with toggle data to filter active loras and apply strength adjustments.
+        Also attempts to resolve LoRA paths that may not exist locally by searching by name.
 
         Args:
             lora_stack: List of tuples (lora_path, model_strength, clip_strength)
             toggle_data: JSON string or list of toggle states [{name, active, strength}, ...]
 
         Returns:
-            Filtered lora stack with adjusted strengths
+            Filtered lora stack with adjusted strengths and resolved paths
         """
         if not lora_stack:
             return []
 
         if not toggle_data:
-            return list(lora_stack)
+            # Even without toggle data, still try to resolve paths (skip unfound)
+            resolved_stack = []
+            lora_files = get_available_loras()
+            for lora_path, model_strength, clip_strength in lora_stack:
+                resolved_path, found = self._resolve_lora_path_with_status(lora_path, lora_files)
+                if found:
+                    resolved_stack.append((resolved_path, model_strength, clip_strength))
+                else:
+                    print(f"[PromptManagerAdvanced] Skipping unfound LoRA: {lora_path}")
+            return resolved_stack
 
         # Parse toggle data if it's a string
         try:
@@ -262,6 +354,8 @@ class PromptManagerAdvanced:
 
         # Filter and adjust lora stack
         filtered_stack = []
+        lora_files = get_available_loras()
+
         for lora_path, model_strength, clip_strength in lora_stack:
             # Extract lora name from path
             lora_name = os.path.splitext(os.path.basename(lora_path))[0]
@@ -280,18 +374,73 @@ class PromptManagerAdvanced:
                 model_strength = adjusted_strength
                 clip_strength = clip_strength * ratio
 
-            filtered_stack.append((lora_path, model_strength, clip_strength))
+            # Try to resolve the path to a local LoRA - skip if not found
+            resolved_path, found = self._resolve_lora_path_with_status(lora_path, lora_files)
+            if found:
+                filtered_stack.append((resolved_path, model_strength, clip_strength))
+            else:
+                print(f"[PromptManagerAdvanced] Skipping unfound LoRA: {lora_name}")
 
         return filtered_stack
 
-    def get_prompt(self, category, name, use_external, text="", override_lora=False, llm_input="",
-                   lora_stack_a=None, lora_stack_b=None, trigger_words=None,
+    def _resolve_lora_path_with_status(self, lora_path, lora_files):
+        """
+        Try to resolve a LoRA path to an available local LoRA.
+        First checks if the exact path exists, then searches by name.
+
+        Args:
+            lora_path: The original path from the stack
+            lora_files: List of available LoRA files
+
+        Returns:
+            Tuple of (resolved_path, found) - path and whether it was found
+        """
+        # Check if exact path exists
+        if lora_path in lora_files:
+            return lora_path, True
+
+        # Try to find by name
+        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+        found_path, found = get_lora_relative_path(lora_name)
+        if found:
+            return found_path, True
+
+        # Not found
+        return lora_path, False
+
+    def _resolve_lora_path(self, lora_path, lora_files):
+        """
+        Try to resolve a LoRA path to an available local LoRA.
+        First checks if the exact path exists, then searches by name.
+
+        Args:
+            lora_path: The original path from the stack
+            lora_files: List of available LoRA files
+
+        Returns:
+            Resolved path if found, original path otherwise
+        """
+        # Check if exact path exists
+        if lora_path in lora_files:
+            return lora_path
+
+        # Try to find by name
+        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+        found_path, found = get_lora_relative_path(lora_name)
+        if found:
+            return found_path
+
+        # Return original path (will fail at load time, but at least shows in UI)
+        return lora_path
+
+    def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, prompt_input="",
+                   lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
 
         # Choose which text to use based on the toggle
-        if use_external and llm_input:
-            output_text = llm_input
+        if use_prompt_input and prompt_input:
+            output_text = prompt_input
         else:
             output_text = text
 
@@ -299,45 +448,63 @@ class PromptManagerAdvanced:
         trigger_words_display = self._process_trigger_words(
             trigger_words, trigger_words_toggle
         )
-        active_trigger_words = self._get_active_trigger_words(trigger_words_toggle)
+        active_trigger_words = self._get_active_trigger_words(trigger_words_toggle, trigger_words)
 
         # Build preset stacks from saved toggle data (these are what we display/manage)
         preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
         preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if loras_b_toggle else []
 
-        # When override_lora is enabled, ignore connected stacks and use only saved loras
-        if override_lora:
+        # When use_lora_input is disabled, ignore connected stacks and use only saved loras
+        if not use_lora_input:
             lora_stack_a = preset_stack_a
             lora_stack_b = preset_stack_b
         else:
             # Merge: preset loras + connected loras (avoiding duplicates by lora name)
-            lora_stack_a = self._merge_lora_stacks(preset_stack_a, lora_stack_a)
-            lora_stack_b = self._merge_lora_stacks(preset_stack_b, lora_stack_b)
+            # Handle case where connected stack might be None or empty
+            if lora_stack_a:
+                lora_stack_a = self._merge_lora_stacks(preset_stack_a, lora_stack_a)
+            else:
+                lora_stack_a = preset_stack_a if preset_stack_a else []
+
+            if lora_stack_b:
+                lora_stack_b = self._merge_lora_stacks(preset_stack_b, lora_stack_b)
+            else:
+                lora_stack_b = preset_stack_b if preset_stack_b else []
 
         # Process lora stacks with toggle data (filter inactive, apply strength)
         processed_stack_a = self._process_lora_toggle(lora_stack_a, loras_a_toggle)
         processed_stack_b = self._process_lora_toggle(lora_stack_b, loras_b_toggle)
 
-        # Display logic depends on override mode:
-        # - Override ON: Show only preset loras (what will actually be used)
-        # - Override OFF: Show merged loras (preset + connected) so user sees full picture
-        if override_lora:
+        # Display logic depends on use_lora_input mode:
+        # - use_lora_input OFF: Show only preset loras (what will actually be used)
+        # - use_lora_input ON: Show merged loras (preset + connected) so user sees full picture
+        if not use_lora_input:
             loras_a_display = self._format_loras_for_display(preset_stack_a) if preset_stack_a else []
             loras_b_display = self._format_loras_for_display(preset_stack_b) if preset_stack_b else []
         else:
-            loras_a_display = self._format_loras_for_display(lora_stack_a) if lora_stack_a else []
-            loras_b_display = self._format_loras_for_display(lora_stack_b) if lora_stack_b else []
+            # Always call _format_loras_for_display even with empty stacks - it handles empty gracefully
+            loras_a_display = self._format_loras_for_display(lora_stack_a)
+            loras_b_display = self._format_loras_for_display(lora_stack_b)
+
+        # Convert thumbnail image to base64 if provided
+        thumbnail_base64 = None
+        if thumbnail_image is not None and IMAGE_SUPPORT:
+            try:
+                thumbnail_base64 = image_to_base64_thumbnail(thumbnail_image)
+            except Exception as e:
+                print(f"[PromptManagerAdvanced] Failed to convert thumbnail image: {e}")
 
         # Broadcast update to frontend
         if unique_id is not None:
             server.PromptServer.instance.send_sync("prompt-manager-advanced-update", {
                 "node_id": unique_id,
                 "prompt": output_text,
-                "use_external": use_external,
-                "llm_input": llm_input,
+                "use_prompt_input": use_prompt_input,
+                "prompt_input": prompt_input,
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
-                "trigger_words": trigger_words_display
+                "trigger_words": trigger_words_display,
+                "connected_thumbnail": thumbnail_base64
             })
 
         # Append active trigger words to output
@@ -345,14 +512,18 @@ class PromptManagerAdvanced:
 
         return (final_output, processed_stack_a if processed_stack_a else [], processed_stack_b if processed_stack_b else [])
 
-    def check_lazy_status(self, category, name, use_external, text, override_lora=False, llm_input=None,
-                          lora_stack_a=None, lora_stack_b=None, trigger_words=None,
+    def check_lazy_status(self, category, name, use_prompt_input, text, use_lora_input=True, prompt_input=None,
+                          lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
-        """Tell ComfyUI which lazy inputs are needed based on current settings"""
-        needed = []
-        if use_external:
-            needed.append("llm_input")
-        return needed
+        """Tell ComfyUI which lazy inputs are needed based on current settings.
+        
+        Note: We don't mark prompt_input as required even when use_prompt_input is on.
+        This allows the node to gracefully fall back to internal text if nothing is connected,
+        rather than throwing a ComfyUI error about missing input.
+        """
+        # Return empty list - all optional inputs are truly optional
+        # The get_prompt method handles fallback logic gracefully
+        return []
 
     def _build_stack_from_toggle(self, toggle_data):
         """
@@ -406,21 +577,49 @@ class PromptManagerAdvanced:
         return stack
 
     def _format_loras_for_display(self, lora_stack):
-        """Format lora stack for frontend display"""
+        """Format lora stack for frontend display, checking availability and deduplicating by name"""
         if not lora_stack:
             return []
 
         display_list = []
+        seen_names = set()  # Track seen LoRA names (case-insensitive) to avoid duplicates
+        lora_files = get_available_loras()
+
         for lora_path, model_strength, clip_strength in lora_stack:
             lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            lora_name_lower = lora_name.lower()
+
+            # Skip if we've already added this LoRA (case-insensitive)
+            if lora_name_lower in seen_names:
+                continue
+
+            # Check if LoRA is available locally
+            # First try exact path match, then try name-based search
+            available = False
+            resolved_path = lora_path
+
+            # Check if exact path exists in available loras
+            if lora_path in lora_files:
+                available = True
+                resolved_path = lora_path
+            else:
+                # Try to find by name
+                found_path, found = get_lora_relative_path(lora_name)
+                if found:
+                    available = True
+                    resolved_path = found_path
+
             display_list.append({
                 "name": lora_name,
-                "path": lora_path,
+                "path": resolved_path,
                 "model_strength": model_strength,
                 "clip_strength": clip_strength,
                 "active": True,
-                "strength": model_strength
+                "strength": model_strength,
+                "available": available
             })
+            seen_names.add(lora_name_lower)
+
         return display_list
 
     def _process_trigger_words(self, connected_trigger_words, toggle_data):
@@ -477,11 +676,15 @@ class PromptManagerAdvanced:
 
         return result
 
-    def _get_active_trigger_words(self, toggle_data):
+    def _get_active_trigger_words(self, toggle_data, connected_trigger_words=None):
         """
-        Get list of active trigger word strings from toggle data.
+        Get list of active trigger word strings from toggle data and connected input.
+        On first execution, toggle_data may be empty, so we also include connected words.
         """
         active_words = []
+        seen = set()
+
+        # First, get active words from saved toggle data
         if toggle_data:
             try:
                 if isinstance(toggle_data, str):
@@ -492,8 +695,19 @@ class PromptManagerAdvanced:
                             word = item.get('text', '').strip()
                             if word:
                                 active_words.append(word)
+                                seen.add(word.lower())
             except (json.JSONDecodeError, TypeError):
                 pass
+
+        # Also include connected trigger words that aren't already in the saved data
+        # This ensures they work on first execution before the UI syncs
+        if connected_trigger_words and isinstance(connected_trigger_words, str):
+            for word in connected_trigger_words.split(','):
+                word = word.strip()
+                if word and word.lower() not in seen:
+                    active_words.append(word)
+                    seen.add(word.lower())
+
         return active_words
 
     def _append_trigger_words_to_prompt(self, prompt, trigger_words):
@@ -626,13 +840,23 @@ async def save_prompt_advanced(request):
                         seen.add(text_lower)
             return normalized
 
+        # Preserve existing thumbnail if not provided, or use new thumbnail
+        thumbnail = data.get("thumbnail")
+        existing_prompt = prompts.get(category, {}).get(name, {})
+        if thumbnail is None:
+            thumbnail = existing_prompt.get("thumbnail")
+
         # Save prompt with normalized lora data (no paths - they're resolved at runtime)
-        prompts[category][name] = {
+        prompt_data = {
             "prompt": text,
             "loras_a": normalize_lora_data(loras_a),
             "loras_b": normalize_lora_data(loras_b),
             "trigger_words": normalize_trigger_words(trigger_words)
         }
+        if thumbnail:
+            prompt_data["thumbnail"] = thumbnail
+
+        prompts[category][name] = prompt_data
         PromptManagerAdvanced.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
@@ -793,17 +1017,54 @@ async def import_prompts_advanced(request):
                 if not isinstance(prompt_data, dict):
                     continue
 
-                # Normalize the prompt data structure
-                prompts[category][prompt_name] = {
+                # Normalize the prompt data structure (include thumbnail if present)
+                normalized = {
                     "prompt": prompt_data.get("prompt", ""),
                     "loras_a": prompt_data.get("loras_a", []),
                     "loras_b": prompt_data.get("loras_b", []),
                     "trigger_words": prompt_data.get("trigger_words", [])
                 }
 
+                # Include thumbnail if present in imported data
+                if "thumbnail" in prompt_data and prompt_data["thumbnail"]:
+                    normalized["thumbnail"] = prompt_data["thumbnail"]
+
+                prompts[category][prompt_name] = normalized
+
         PromptManagerAdvanced.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
         print(f"[PromptManagerAdvanced] Error in import_prompts API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-thumbnail")
+async def save_thumbnail(request):
+    """API endpoint to save or remove a thumbnail for a prompt"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+        thumbnail = data.get("thumbnail")  # Can be None to remove thumbnail
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        if category not in prompts or name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        # Update or remove thumbnail
+        if thumbnail:
+            prompts[category][name]["thumbnail"] = thumbnail
+        elif "thumbnail" in prompts[category][name]:
+            del prompts[category][name]["thumbnail"]
+
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in save_thumbnail API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)

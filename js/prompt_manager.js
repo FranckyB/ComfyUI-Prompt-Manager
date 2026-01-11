@@ -391,13 +391,16 @@ function addButtonBar(node) {
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
 
-    // Create button container
+    // Create button container with proper styling for DOM widget
     const buttonContainer = document.createElement("div");
     buttonContainer.style.display = "flex";
     buttonContainer.style.gap = "4px";
     buttonContainer.style.padding = "2px 4px 4px 4px";
     buttonContainer.style.flexWrap = "nowrap";
     buttonContainer.style.marginTop = "-10px";
+    buttonContainer.style.width = "100%";
+    buttonContainer.style.boxSizing = "border-box";
+    buttonContainer.style.position = "relative";
 
     // Save Prompt button with category selection
     const savePromptBtn = createButton("Save Prompt", async () => {
@@ -591,8 +594,11 @@ function addButtonBar(node) {
     buttonContainer.appendChild(newPromptBtn);
     buttonContainer.appendChild(moreBtn);
 
-    // Add button bar to node
-    const htmlWidget = node.addDOMWidget("buttons", "div", buttonContainer);
+    // Add button bar to node with proper options to avoid clipping issues
+    const htmlWidget = node.addDOMWidget("buttons", "div", buttonContainer, {
+        hideOnZoom: true,
+        serialize: false
+    });
     htmlWidget.computeSize = function(width) {
         return [width, 36];
     };

@@ -203,13 +203,14 @@ async def save_prompt(request):
                 print(f"[PromptManager] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        # Save prompt in dict, preserving any existing lora data and trigger words from PromptManagerAdvanced
+        # Save prompt in dict, preserving any existing lora data, trigger words, and thumbnail from PromptManagerAdvanced
         existing_data = prompts[category].get(name, {})
         prompts[category][name] = {
             "prompt": text,
             "loras_a": existing_data.get("loras_a", []),
             "loras_b": existing_data.get("loras_b", []),
-            "trigger_words": existing_data.get("trigger_words", [])
+            "trigger_words": existing_data.get("trigger_words", []),
+            "thumbnail": existing_data.get("thumbnail")
         }
         PromptManager.save_prompts(prompts)
 

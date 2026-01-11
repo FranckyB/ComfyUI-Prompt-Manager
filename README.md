@@ -1,24 +1,19 @@
 # ComfyUI Prompt Manager
-## A custom [ComfyUI](https://github.com/comfyanonymous/ComfyUI) node for Organizing, Generating or Enhancing prompts.
+## A comprehensive prompt toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) — Save, Generate, and Extract prompts with full LoRA support.
 
-This addon started off as a simple prompt Manager, to help save and retrieve prompts.  
-But has since evolved to allow generating prompts for Images, video and Image analysis.
-The new advanced version of the manager, now allows the user to save the entire recipe,
-as it allows saving the Lora Stacks as well as trigger words that goes with a prompt. Supporting Dual Stack for Wan.  
-Once saved, they can be toggled on or off or be adjusted without the need of the lora stacker.
+A complete prompt management solution featuring three core capabilities:
+
+**Prompt Manager** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan video. Toggle LoRAs on/off or adjust strengths directly from saved presets.
+
+**Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp). Supports text enhancement, image analysis with vision models (Qwen3VL), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
+
+**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos (MP4), or JSON workflow files. Automatically parses embedded metadata and outputs ready-to-use LoRA stacks.
 ___
-For Prompt Generation, it uses an existing install of [llama.cpp](https://github.com/ggerganov/llama.cpp), preventing install conflicts with ComfyUI.  
-Provides options to automatically download Qwen3 and Qwen3VL models.  
-Supports prompt enhancing, image analysis, or custom image processing, with up to 5 images at once.  
-Custom GGUF models can be used if supported by llama.cpp; simply drop them in the models/gguf folder.  
-Users can now set a custom Llama-server path as well as a custom Model Path in ComfyUI's preferences.  
-If a Custom Model Path is added, it will become the default download folder.
 
 <div align="center">
   <figcaption>Simple Prompt Generator Usage</figcaption>
   <img src="docs/prompt_manager.png" alt="Prompt Manager">
 </div>
-
 
 <div align="center">
   <figcaption>Advanced Prompt Generator Usage</figcaption>
@@ -40,7 +35,8 @@ If a Custom Model Path is added, it will become the default download folder.
 - **Persistent Storage**: All prompts saved in your ComfyUI user folder
 
 ### Prompt Manager Advanced:
-- **All Prompt Manager Features**: Everything from the basic Prompt Manager, plus LoRA integration
+- **All Prompt Manager Features**: Everything from the basic Prompt Manager, plus LoRA and Trigger word integration
+- **Prompt Thumbnails**: Save thumbnail images with your prompts for visual identification in the dropdown
 - **Dual LoRA Stack Support**: Two separate LoRA stack inputs/outputs for complex workflows (e.g., Wan video with different LoRAs for image and video)
 - **Visual LoRA Tags**: See connected LoRAs as clickable tags with strength values
 - **Toggle LoRAs On/Off**: Click any LoRA tag to enable/disable it without disconnecting
@@ -54,10 +50,18 @@ If a Custom Model Path is added, it will become the default download folder.
 - **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
 
 
-### Apply LoRA Stack:
+### Prompt Apply LoRA:
 - **Simple LoRA Application**: Takes a LORA_STACK and applies it to your model/clip
 - **Works with Any Stacker**: Compatible with LoRA Manager's stacker or any node outputting LORA_STACK
 - **Optional CLIP**: CLIP input is optional for workflows that don't need it
+
+### Prompt Extractor:
+- **Extract from Images/Videos**: Load images or videos and extract embedded prompts, LoRAs, and workflow metadata
+- **JSON Workflow Support**: Browse and load JSON workflow files directly to extract prompts and LoRA configurations
+- **Dual LoRA Stack Output**: Outputs two separate LoRA stacks for workflows using dual stacking (e.g., Wan video)
+- **Active LoRA Filtering**: Only extracts LoRAs that are marked as active in the source workflow
+- **Wide Node Compatibility**: Supports extraction from CLIP Text Encode, various sampler nodes, and LoRA stackers including Power Lora Loader
+- **Preview in Manager**: View extracted data alongside your saved prompts for easy comparison
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
@@ -139,6 +143,14 @@ If a Custom Model Path is added, it will become the default download folder.
 4. **Optional CLIP**: Connect CLIP if your workflow needs it (some video workflows don't)
 5. **Use Outputs**: Connect the modified model/clip to your sampler or other nodes
 
+### Prompt Extractor
+
+1. **Add the Node**: Add Node → Prompt Manager → Prompt Extractor
+2. **Load Media**: Connect an image or video to the `media` input, or use the Browse button to select a JSON workflow file
+3. **Extract Data**: The node automatically extracts prompts, LoRAs, and trigger words from embedded metadata
+4. **View Results**: Extracted positive/negative prompts display in the text outputs, LoRA stacks output as LORA_STACK
+5. **Use with Manager**: Connect the LoRA stack outputs to Prompt Manager Advanced to view and save the extracted configuration
+6. **JSON Workflows**: Click Browse to load `.json` workflow files directly - useful for extracting from saved workflows
 
 ### Prompt Generator
 
@@ -226,6 +238,25 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### Version 1.11.0
+- **New Node: Prompt Extractor** - Extract prompts and LoRA configurations from images, videos, and JSON workflows
+  - Loads embedded metadata from PNG, JPEG, WebP images and MP4 videos
+  - Browse and load JSON workflow files directly
+  - Dual LoRA stack output for workflows using two stacks (e.g., Wan video)
+  - Filters inactive LoRAs - only extracts LoRAs marked as active
+  - Supports extraction from CLIP Text Encode, samplers, and LoRA stackers
+  - Compatible with Power Lora Loader, WanMoeKSamplerAdvanced, and other common nodes
+- **Prompt Thumbnails** - Save thumbnail images with prompts in Prompt Manager Advanced
+  - Visual identification of prompts in the dropdown selector
+  - Thumbnails stored alongside prompt data for easy management
+- **Simplified "New Prompt" button**
+  - Now clears fields immediately without asking for a name
+  - Enter the name when saving instead of when creating
+  - Keeps you in the current category for faster workflow
+- **Bug fixes and improvements**
+  - Fixed JSON workflow file path resolution
+  - Improved LoRA extraction for complex workflows
 
 ### Version 1.10.0
 - **Unified UI for Prompt Manager and Prompt Manager Advanced**

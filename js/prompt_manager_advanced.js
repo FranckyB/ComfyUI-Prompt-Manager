@@ -85,6 +85,7 @@ app.registerExtension({
                 node.savedLorasB = [];
                 node.currentTriggerWords = [];  // From connected input
                 node.savedTriggerWords = [];    // From saved prompt
+                node.connectedThumbnail = null; // Thumbnail from connected image (set during execution)
                 
                 // Track last saved state for unsaved changes detection
                 node.lastSavedState = {
@@ -95,7 +96,7 @@ app.registerExtension({
                 };
                 
                 // Set initial size - taller to accommodate lora displays
-                this.setSize([450, 600]);
+                this.setSize([440, 700]);
 
                 // Change widget labels
                 const promptTextWidget = this.widgets.find(w => w.name === "text");
@@ -108,9 +109,9 @@ app.registerExtension({
                     promptNameWidget.label = "name";
                 }
 
-                const useExternalWidget = this.widgets.find(w => w.name === "use_external");
+                const useExternalWidget = this.widgets.find(w => w.name === "use_prompt_input");
                 if (useExternalWidget) {
-                    useExternalWidget.label = "use llm input";
+                    useExternalWidget.label = "use prompt input";
                 }
 
                 // Make text widget scrollable even when disabled
@@ -131,36 +132,36 @@ app.registerExtension({
                         const newLorasB = event.detail.loras_b || [];
                         const newTriggerWords = event.detail.trigger_words || [];
                         
-                        // Only update lora displays if the data actually changed
+                        // Store connected thumbnail for use when saving
+                        this.connectedThumbnail = event.detail.connected_thumbnail || null;
+                        
+                        // Simple comparison: if the entire list is identical (same order, same data), no change
                         const lorasAChanged = JSON.stringify(newLorasA) !== JSON.stringify(this.currentLorasA);
                         const lorasBChanged = JSON.stringify(newLorasB) !== JSON.stringify(this.currentLorasB);
-                        const triggerWordsChanged = JSON.stringify(newTriggerWords.filter(t => t.source === 'connected')) !== 
-                            JSON.stringify(this.currentTriggerWords);
+                        const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
+                        const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
                         
+                        // Update if data changed
                         if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
                             // Update current loras from connected inputs
                             this.currentLorasA = newLorasA;
                             this.currentLorasB = newLorasB;
                             
                             // Update current trigger words (only connected ones)
-                            this.currentTriggerWords = newTriggerWords.filter(t => t.source === 'connected');
+                            // Don't merge into savedTriggerWords - keep them separate
+                            // savedTriggerWords should only contain what was loaded from the prompt
+                            this.currentTriggerWords = newConnectedTriggers;
                             
-                            // Merge with saved trigger words
-                            this.savedTriggerWords = mergeTriggerWordLists(
-                                this.currentTriggerWords,
-                                this.savedTriggerWords
-                            );
-                            
-                            // Update the lora display widgets
+                            // Refresh displays (display function handles merging for UI)
                             updateLoraDisplays(this);
                             updateTriggerWordsDisplay(this);
                         }
 
-                        // Handle use_external toggle state for text widget
+                        // Handle use_prompt_input toggle state for text widget
                         const promptTextWidget = this.widgets.find(w => w.name === "text");
                         if (promptTextWidget) {
-                            const useExternal = event.detail.use_external || false;
-                            const llmInput = event.detail.llm_input || "";
+                            const useExternal = event.detail.use_prompt_input || false;
+                            const llmInput = event.detail.prompt_input || "";
                             
                             if (useExternal && llmInput) {
                                 // When using external, display the LLM input text (grayed out)
@@ -183,6 +184,7 @@ app.registerExtension({
 
                 // IMPORTANT: Add DOM widgets SYNCHRONOUSLY during node creation
                 // to ensure proper positioning within the node bounds
+                createPromptSelectorWidget(node);  // Custom thumbnail selector (before buttons)
                 addButtonBar(node);
                 addLoraDisplays(node);
                 addTriggerWordsDisplay(node);
@@ -192,6 +194,11 @@ app.registerExtension({
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
                     filterPromptDropdown(node);
+                    
+                    // Update custom prompt selector display
+                    if (node.updatePromptSelectorDisplay) {
+                        node.updatePromptSelectorDisplay();
+                    }
                     
                     // Load initial prompt data (LoRAs and trigger words)
                     const categoryWidget = node.widgets.find(w => w.name === "category");
@@ -206,7 +213,7 @@ app.registerExtension({
                         const minHeight = Math.max(600, computedSize[1] + 20);
                         
                         if (node.size[1] < minHeight) {
-                            node.setSize([Math.max(450, node.size[0]), minHeight]);
+                            node.setSize([Math.max(440, node.size[0]), minHeight]);
                         }
                         app.graph.setDirtyCanvas(true, true);
                     }, 100);
@@ -254,6 +261,9 @@ app.registerExtension({
 
                 // IMPORTANT: Reattach DOM widgets SYNCHRONOUSLY during configure
                 // to ensure proper positioning within the node bounds
+                if (!node.promptSelectorWidget) {
+                    createPromptSelectorWidget(node);
+                }
                 if (!node.buttonBarAttached) {
                     addButtonBar(node);
                     setupCategoryChangeHandler(node);
@@ -271,18 +281,27 @@ app.registerExtension({
                     filterPromptDropdown(node);
                     updateLoraDisplays(node);
                     updateTriggerWordsDisplay(node);
+                    
+                    // Update custom prompt selector display
+                    if (node.updatePromptSelectorDisplay) {
+                        node.updatePromptSelectorDisplay();
+                    }
+                    
                     app.graph.setDirtyCanvas(true, true);
                 });
 
                 return result;
             };
 
-            // Enforce minimum node width
+            // Enforce minimum node size
             const onResize = nodeType.prototype.onResize;
             nodeType.prototype.onResize = function(size) {
-                size[0] = Math.max(400, size[0]);
+                size[0] = Math.max(440, size[0]);
+                size[1] = Math.max(600, size[1]);
                 return onResize ? onResize.apply(this, arguments) : size;
             };
+
+
         }
     }
 });
@@ -483,19 +502,22 @@ function addLoraDisplays(node) {
 
     // Create LoRA A display section
     const loraAContainer = createLoraDisplayContainer("LoRAs Stack A", "a", node);
-    const loraAWidget = node.addDOMWidget("loras_a_display", "div", loraAContainer);
+    const loraAWidget = node.addDOMWidget("loras_a_display", "div", loraAContainer, {
+        hideOnZoom: true,
+        serialize: false
+    });
     loraAWidget.computeSize = function(width) {
-        // Check if override_lora is enabled
-        const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-        const overrideLora = overrideWidget?.value === true;
+        // Check if use_lora_input is disabled (use only saved loras)
+        const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+        const useLoraInput = useLoraInputWidget?.value !== false;
         
-        // Count loras based on override mode
+        // Count loras based on mode
         let tagCount;
-        if (overrideLora) {
-            // Override ON: only saved loras
+        if (!useLoraInput) {
+            // use_lora_input OFF: only saved loras
             tagCount = (node.savedLorasA || []).length;
         } else {
-            // Override OFF: unique loras from merged list
+            // use_lora_input ON: unique loras from merged list
             const seen = new Set();
             (node.currentLorasA || []).forEach(l => seen.add(l.name));
             (node.savedLorasA || []).forEach(l => seen.add(l.name));
@@ -517,17 +539,17 @@ function addLoraDisplays(node) {
     const loraBContainer = createLoraDisplayContainer("LoRAs Stack B", "b", node);
     const loraBWidget = node.addDOMWidget("loras_b_display", "div", loraBContainer);
     loraBWidget.computeSize = function(width) {
-        // Check if override_lora is enabled
-        const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-        const overrideLora = overrideWidget?.value === true;
+        // Check if use_lora_input is disabled
+        const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+        const useLoraInput = useLoraInputWidget?.value !== false;
         
-        // Count loras based on override mode
+        // Count loras based on mode
         let tagCount;
-        if (overrideLora) {
-            // Override ON: only saved loras
+        if (!useLoraInput) {
+            // use_lora_input OFF: only saved loras
             tagCount = (node.savedLorasB || []).length;
         } else {
-            // Override OFF: unique loras from merged list
+            // use_lora_input ON: unique loras from merged list
             const seen = new Set();
             (node.currentLorasB || []).forEach(l => seen.add(l.name));
             (node.savedLorasB || []).forEach(l => seen.add(l.name));
@@ -575,6 +597,9 @@ function createLoraDisplayContainer(title, stackId, node) {
         boxSizing: "border-box",
         marginTop: "4px"
     });
+    
+    // Prevent default context menu on container (LoRA tags have their own)
+    container.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // Title bar with label
     const titleBar = document.createElement("div");
@@ -630,16 +655,13 @@ function createLoraDisplayContainer(title, stackId, node) {
 function updateLoraDisplays(node) {
     if (!node.loraAContainer || !node.loraBContainer) return;
 
-    // Check if override_lora is enabled
-    const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-    const overrideLora = overrideWidget?.value === true;
+    // Check if use_lora_input is disabled
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
 
     let lorasA, lorasB;
-    if (overrideLora) {
-        // Override ON: Only show saved loras from the prompt (filter by saved names)
-        const savedNamesA = new Set((node.savedLorasA || []).map(l => l.name));
-        const savedNamesB = new Set((node.savedLorasB || []).map(l => l.name));
-        
+    if (!useLoraInput) {
+        // use_lora_input OFF: Only show saved loras from the prompt
         lorasA = (node.savedLorasA || []).map(l => ({ ...l, source: 'saved' }));
         lorasB = (node.savedLorasB || []).map(l => ({ ...l, source: 'saved' }));
     } else {
@@ -669,10 +691,10 @@ function updateLoraDisplays(node) {
 }
 
 function mergeLoraLists(currentLoras, savedLoras) {
-    // Create a map of saved loras to preserve user toggle states
+    // Create a map of saved loras to preserve user toggle states (case-insensitive)
     const savedMap = new Map();
     (savedLoras || []).forEach(lora => {
-        savedMap.set(lora.name, lora);
+        savedMap.set(lora.name.toLowerCase(), lora);
     });
 
     // Merge loras, preserving toggle states from saved when available
@@ -681,27 +703,30 @@ function mergeLoraLists(currentLoras, savedLoras) {
 
     // First add all current loras, but preserve toggle state from saved if exists
     (currentLoras || []).forEach(lora => {
-        const savedLora = savedMap.get(lora.name);
+        const loraNameLower = lora.name.toLowerCase();
+        const savedLora = savedMap.get(loraNameLower);
         if (savedLora) {
             // Lora exists in both - mark as 'saved' since user has it in their preset
             // This ensures modifications are persisted to savedLoras, not currentLoras
+            // Preserve fromInput flag if it was already set (meaning it was moved from current to saved)
             merged.push({ 
                 ...lora, 
                 active: savedLora.active,
                 strength: savedLora.strength ?? savedLora.model_strength ?? lora.strength ?? 1.0,
-                source: 'saved'  // Important: mark as saved so modifications persist correctly
+                source: 'saved',  // Important: mark as saved so modifications persist correctly
+                fromInput: savedLora.fromInput || false  // Preserve the fromInput flag
             });
         } else {
-            merged.push({ ...lora, source: 'current' });
+            merged.push({ ...lora, source: 'current', fromInput: true });
         }
-        seen.add(lora.name);
+        seen.add(loraNameLower);
     });
 
-    // Then add saved loras that aren't in current
+    // Then add saved loras that aren't in current (case-insensitive)
     (savedLoras || []).forEach(lora => {
-        if (!seen.has(lora.name)) {
+        if (!seen.has(lora.name.toLowerCase())) {
             merged.push({ ...lora, source: 'saved' });
-            seen.add(lora.name);
+            seen.add(lora.name.toLowerCase());
         }
     });
 
@@ -747,6 +772,7 @@ function createLoraTag(lora, index, stackId, node) {
 
     const isActive = lora.active !== false;
     const isAvailable = lora.available !== false;
+    const isFromInput = lora.fromInput === true || lora.source === 'current';  // From connected input
     const strength = parseFloat(lora.strength ?? lora.model_strength ?? 1.0) || 1.0;
 
     // Determine colors based on active and available status
@@ -756,13 +782,24 @@ function createLoraTag(lora, index, stackId, node) {
         bgColor = isActive ? "rgba(220, 53, 69, 0.9)" : "rgba(220, 53, 69, 0.4)";
         textColor = isActive ? "white" : "rgba(255, 200, 200, 0.8)";
         borderColor = "rgba(220, 53, 69, 0.9)";
-    } else if (isActive) {
-        // Available and active - blue
-        bgColor = "rgba(66, 153, 225, 0.9)";
+    } else if (isFromInput) {
+        // From connected input - purple tint
+        if (isActive) {
+        bgColor = "rgba(50, 112, 163, 0.9)";
         textColor = "white";
         borderColor = "rgba(66, 153, 225, 0.9)";
+        } else {
+            bgColor = "rgba(45, 55, 72, 0.7)";
+            textColor = "rgba(226, 232, 240, 0.6)";
+            borderColor = "rgba(226, 232, 240, 0.2)";
+        }
+    } else if (isActive) {
+        // Available and active - blue (saved in prompt)
+        bgColor = "rgba(66, 153, 225, 0.9)";
+        textColor = "white";
+        borderColor = "rgba(122, 188, 243, 0.9)";
     } else {
-        // Available but inactive - gray
+        // Available but inactive - gray (saved in prompt)
         bgColor = "rgba(45, 55, 72, 0.7)";
         textColor = "rgba(226, 232, 240, 0.6)";
         borderColor = "rgba(226, 232, 240, 0.2)";
@@ -917,29 +954,30 @@ function createLoraTag(lora, index, stackId, node) {
     tag.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        showLoraContextMenu(e, node, stackId, index, lora.name);
+        showLoraContextMenu(e, node, stackId, index, lora.name, isAvailable);
     });
 
-    // Add title for full name on hover
-    const availabilityStatus = isAvailable ? "" : "\n⚠️ NOT FOUND - This LoRA is missing from your system";
-    const previewHint = loraManagerAvailable && isAvailable ? "\nHover to preview" : "";
-    tag.title = `${lora.name}\nStrength: ${strength.toFixed(2)}${availabilityStatus}${previewHint}\nClick to toggle on/off\nRight-click for options`;
+    // Only add title if LoRA Manager preview is not available (to not conflict with preview tooltip)
+    if (!loraManagerAvailable || !isAvailable) {
+        const availabilityStatus = isAvailable ? "" : "\n⚠️ NOT FOUND - This LoRA is missing from your system";
+        tag.title = `${lora.name}\nStrength: ${strength.toFixed(2)}${availabilityStatus}\nClick to toggle on/off\nRight-click for options`;
+    }
 
     return tag;
 }
 
 function toggleLoraActive(node, stackId, index) {
-    // Check if override_lora is enabled
-    const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-    const overrideLora = overrideWidget?.value === true;
+    // Check if use_lora_input is disabled
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
     
     // Get the list that matches what's currently displayed
     let loraList;
-    if (overrideLora) {
-        // Override ON: only saved loras are displayed
+    if (!useLoraInput) {
+        // use_lora_input OFF: only saved loras are displayed
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
-        // Override OFF: merged list is displayed
+        // use_lora_input ON: merged list is displayed
         loraList = stackId === "a" ? 
             mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
             mergeLoraLists(node.currentLorasB, node.savedLorasB);
@@ -948,28 +986,19 @@ function toggleLoraActive(node, stackId, index) {
     if (loraList[index]) {
         const lora = loraList[index];
         
-        // Check if this is a connected lora (source: 'current') - can't toggle these off
-        if (lora.source === 'current' && lora.active !== false) {
-            // User tried to turn off a connected lora - flash light blue to indicate it can't be toggled
-            const container = stackId === "a" ? node.loraAContainer : node.loraBContainer;
-            const tags = container?.querySelectorAll('.lora-tag');
-            if (tags && tags[index]) {
-                const tag = tags[index];
-                const originalBg = tag.style.backgroundColor;
-                tag.style.transition = 'background-color 0.1s';
-                tag.style.backgroundColor = 'rgba(100, 180, 255, 0.9)';
-                setTimeout(() => {
-                    tag.style.backgroundColor = originalBg;
-                }, 200);
-            }
-            return;
-        }
-        
+        // Toggle the active state
         loraList[index].active = !loraList[index].active;
         
+        // If this was a connected lora (source: 'current'), move it to saved
+        // so that the toggle state persists across workflow executions
+        if (lora.source === 'current') {
+            loraList[index].source = 'saved';
+            loraList[index].fromInput = true;  // Preserve visual indicator that it came from input
+        }
+        
         // Update the appropriate list
-        if (overrideLora) {
-            // Only update saved loras when override is on
+        if (!useLoraInput) {
+            // Only update saved loras when use_lora_input is off
             if (stackId === "a") {
                 node.savedLorasA = loraList;
             } else {
@@ -988,7 +1017,7 @@ function toggleLoraActive(node, stackId, index) {
     }
 }
 
-function showLoraContextMenu(e, node, stackId, index, loraName) {
+function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = true) {
     // Remove any existing context menu
     const existingMenu = document.querySelector(".lora-context-menu");
     if (existingMenu) {
@@ -1009,6 +1038,33 @@ function showLoraContextMenu(e, node, stackId, index, loraName) {
         min-width: 120px;
         padding: 4px 0;
     `;
+
+    // Search on CivitAI option (only for missing LoRAs)
+    if (!isAvailable) {
+        const searchItem = document.createElement("div");
+        searchItem.textContent = "🔍 Search on CivitAI";
+        searchItem.style.cssText = `
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #4da6ff;
+            white-space: nowrap;
+        `;
+        searchItem.addEventListener("mouseenter", () => {
+            searchItem.style.backgroundColor = "#3a3a3a";
+        });
+        searchItem.addEventListener("mouseleave", () => {
+            searchItem.style.backgroundColor = "transparent";
+        });
+        searchItem.addEventListener("click", (evt) => {
+            evt.stopPropagation();
+            menu.remove();
+            // Open CivitAI search in new tab
+            const searchQuery = encodeURIComponent(loraName);
+            window.open(`https://civitai.com/search/models?sortBy=models_v9&query=${searchQuery}&modelType=LORA`, "_blank");
+        });
+        menu.appendChild(searchItem);
+    }
 
     const deleteItem = document.createElement("div");
     deleteItem.textContent = "Delete";
@@ -1051,13 +1107,13 @@ function showLoraContextMenu(e, node, stackId, index, loraName) {
 }
 
 function removeLora(node, stackId, index) {
-    // Check if override_lora is enabled
-    const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-    const overrideLora = overrideWidget?.value === true;
+    // Check if use_lora_input is disabled
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
     
     // Get the list that matches what's currently displayed
     let loraList;
-    if (overrideLora) {
+    if (!useLoraInput) {
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
         loraList = stackId === "a" ? 
@@ -1100,17 +1156,17 @@ function removeLora(node, stackId, index) {
  * Set LoRA strength to a specific value
  */
 function setLoraStrength(node, stackId, index, newStrength) {
-    // Check if override_lora is enabled
-    const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-    const overrideLora = overrideWidget?.value === true;
+    // Check if use_lora_input is disabled
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
     
     // Get the list that matches what's currently displayed
     let loraList;
-    if (overrideLora) {
-        // Override ON: only saved loras are displayed
+    if (!useLoraInput) {
+        // use_lora_input OFF: only saved loras are displayed
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
-        // Override OFF: merged list is displayed
+        // use_lora_input ON: merged list is displayed
         loraList = stackId === "a" ? 
             mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
             mergeLoraLists(node.currentLorasB, node.savedLorasB);
@@ -1119,8 +1175,8 @@ function setLoraStrength(node, stackId, index, newStrength) {
     if (loraList[index]) {
         loraList[index].strength = newStrength;
         
-        if (overrideLora) {
-            // Only update saved loras when override is on
+        if (!useLoraInput) {
+            // Only update saved loras when use_lora_input is off
             if (stackId === "a") {
                 node.savedLorasA = loraList;
             } else {
@@ -1140,17 +1196,17 @@ function setLoraStrength(node, stackId, index, newStrength) {
 }
 
 function toggleAllLoras(node, stackId) {
-    // Check if override_lora is enabled
-    const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-    const overrideLora = overrideWidget?.value === true;
+    // Check if use_lora_input is disabled
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
     
     // Get the list that matches what's currently displayed
     let loraList;
-    if (overrideLora) {
-        // Override ON: only saved loras are displayed
+    if (!useLoraInput) {
+        // use_lora_input OFF: only saved loras are displayed
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
-        // Override OFF: merged list is displayed
+        // use_lora_input ON: merged list is displayed
         loraList = stackId === "a" ? 
             mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
             mergeLoraLists(node.currentLorasB, node.savedLorasB);
@@ -1162,10 +1218,14 @@ function toggleAllLoras(node, stackId) {
     
     loraList.forEach(lora => {
         lora.active = newState;
+        // Move connected loras to saved so toggle state persists
+        if (lora.source === 'current') {
+            lora.source = 'saved';
+        }
     });
     
-    if (overrideLora) {
-        // Only update saved loras when override is on
+    if (!useLoraInput) {
+        // Only update saved loras when use_lora_input is off
         if (stackId === "a") {
             node.savedLorasA = loraList;
         } else {
@@ -1304,6 +1364,9 @@ function createTriggerWordsDisplayContainer(title, node) {
         boxSizing: "border-box",
         marginTop: "4px"
     });
+    
+    // Prevent default context menu on container (trigger word tags have their own)
+    container.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // Title bar with label
     const titleBar = document.createElement("div");
@@ -1767,9 +1830,12 @@ function addButtonBar(node) {
     const buttonContainer = document.createElement("div");
     buttonContainer.style.display = "flex";
     buttonContainer.style.gap = "4px";
-    buttonContainer.style.padding = "2px 4px 8px 4px";
+    buttonContainer.style.padding = "4px 4px 8px 4px";
     buttonContainer.style.flexWrap = "nowrap";
-    buttonContainer.style.marginTop = "-10px";
+    buttonContainer.style.marginTop = "0";
+    
+    // Prevent default context menu on button bar
+    buttonContainer.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // Save Prompt button
     const savePromptBtn = createButton("Save Prompt", async () => {
@@ -1813,14 +1879,14 @@ function addButtonBar(node) {
             const connectedLorasA = collectAllLorasFromChain(node, "lora_stack_a");
             const connectedLorasB = collectAllLorasFromChain(node, "lora_stack_b");
             
-            // Check if override_lora is enabled
-            const overrideWidget = node.widgets?.find(w => w.name === "override_lora");
-            const overrideLora = overrideWidget?.value === true;
+            // Check if use_lora_input is disabled
+            const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+            const useLoraInput = useLoraInputWidget?.value !== false;
             
             // Get loras to save
             let allLorasA, allLorasB;
             
-            if (overrideLora) {
+            if (!useLoraInput) {
                 allLorasA = [...(node.savedLorasA || [])];
                 allLorasB = [...(node.savedLorasB || [])];
             } else {
@@ -1842,7 +1908,10 @@ function addButtonBar(node) {
                 node.savedTriggerWords || []
             );
 
-            await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords);
+            // Use connected thumbnail if available
+            const thumbnail = node.connectedThumbnail || null;
+            
+            await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail);
             
             // Clear new prompt flag since it's now saved
             node.isNewUnsavedPrompt = false;
@@ -1864,12 +1933,17 @@ function addButtonBar(node) {
             updateLoraDisplays(node);
             updateTriggerWordsDisplay(node);
             
+            // Update custom prompt selector display
+            if (node.updatePromptSelectorDisplay) {
+                node.updatePromptSelectorDisplay();
+            }
+            
             // Update last saved state after successful save
             updateLastSavedState(node);
         }
     });
 
-    // New Prompt button
+    // New Prompt button - simply clears fields for a fresh start
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
@@ -1878,7 +1952,7 @@ function addButtonBar(node) {
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and create a new prompt?",
+                "You have unsaved changes to the current prompt. Do you want to discard them and start fresh?",
                 "Discard & Continue",
                 "#f80"
             );
@@ -1887,76 +1961,43 @@ function addButtonBar(node) {
             }
         }
         
-        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+        // Keep the current category, just clear the prompt selection and content
         const currentCategory = categoryWidget.value;
         
-        const result = await showPromptWithCategory(
-            "New Prompt",
-            "Enter new prompt name:",
-            "",
-            categories,
-            currentCategory
-        );
+        // Clear prompt selection (set to empty/placeholder)
+        promptWidget.value = "";
+        textWidget.value = "";
         
-        if (result && result.name && result.name.trim()) {
-            const promptName = result.name.trim();
-            const targetCategory = result.category;
-            
-            // Check for existing prompt
-            let existingPromptName = null;
-            if (node.prompts[targetCategory]) {
-                const existingNames = Object.keys(node.prompts[targetCategory]);
-                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
-            }
-
-            if (existingPromptName) {
-                await showInfo(
-                    "Prompt Exists",
-                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}".`
-                );
-                return;
-            }
-
-            // Set up UI for new prompt (temporary, not saved yet)
-            // User must click "Save Prompt" to persist it
-            
-            categoryWidget.value = targetCategory;
-            
-            // Add prompt name to dropdown temporarily so it can be selected
-            if (!promptWidget.options.values.includes(promptName)) {
-                promptWidget.options.values = [...promptWidget.options.values, promptName].sort((a, b) => a.localeCompare(b));
-            }
-            promptWidget.value = promptName;
-            textWidget.value = "";
-            
-            // Update previous values to the new prompt so cancel/revert works correctly
-            node._previousCategory = targetCategory;
-            node._previousPrompt = promptName;
-            
-            // Clear all loras and trigger words for the new prompt
-            node.savedLorasA = [];
-            node.savedLorasB = [];
-            node.currentLorasA = [];
-            node.currentLorasB = [];
-            node.savedTriggerWords = [];
-            node.currentTriggerWords = [];
-            
-            updateLoraDisplays(node);
-            updateTriggerWordsDisplay(node);
-            
-            // Mark as unsaved/new prompt - lastSavedState will be null/undefined
-            // so hasUnsavedChanges() will return false initially, but will return true
-            // once user starts typing or adding content
-            node.isNewUnsavedPrompt = true;
-            node.newPromptCategory = targetCategory;
-            node.newPromptName = promptName;
-            
-            // Clear the last saved state since this is a brand new prompt
-            node.lastSavedState = null;
-            
-            node.serialize_widgets = true;
-            app.graph.setDirtyCanvas(true, true);
+        // Update previous values for cancel/revert
+        node._previousCategory = currentCategory;
+        node._previousPrompt = "";
+        
+        // Clear all loras and trigger words for the new prompt
+        node.savedLorasA = [];
+        node.savedLorasB = [];
+        node.currentLorasA = [];
+        node.currentLorasB = [];
+        node.savedTriggerWords = [];
+        node.currentTriggerWords = [];
+        
+        updateLoraDisplays(node);
+        updateTriggerWordsDisplay(node);
+        
+        // Update custom prompt selector display
+        if (node.updatePromptSelectorDisplay) {
+            node.updatePromptSelectorDisplay();
         }
+        
+        // Mark as new unsaved prompt state
+        node.isNewUnsavedPrompt = true;
+        node.newPromptCategory = currentCategory;
+        node.newPromptName = null;
+        
+        // Clear the last saved state since this is a brand new prompt
+        node.lastSavedState = null;
+        
+        node.serialize_widgets = true;
+        app.graph.setDirtyCanvas(true, true);
     });
 
     // More dropdown button
@@ -2046,34 +2087,36 @@ function setupCategoryChangeHandler(node) {
         const previousCategory = node._previousCategory;
         const previousPrompt = node._previousPrompt;
         
-        // Check for unsaved changes before switching
-        const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
-        
-        if (hasUnsaved && warnEnabled) {
-            const confirmed = await showConfirm(
-                "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and switch?",
-                "Discard & Switch",
-                "#f80"
-            );
-            if (!confirmed) {
-                // Revert the category dropdown to previous value
-                categoryWidget.value = previousCategory;
-                // Ensure the previous prompt name is in the dropdown options (for unsaved prompts)
-                if (previousPrompt && !promptWidget.options.values.includes(previousPrompt)) {
-                    promptWidget.options.values = [...promptWidget.options.values, previousPrompt].sort((a, b) => a.localeCompare(b));
+        // Check for unsaved changes before switching (skip if navigating via custom selector)
+        if (!node._skipUnsavedCheck) {
+            const hasUnsaved = hasUnsavedChanges(node);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+            
+            if (hasUnsaved && warnEnabled) {
+                const confirmed = await showConfirm(
+                    "Unsaved Changes",
+                    "You have unsaved changes to the current prompt. Do you want to discard them and switch?",
+                    "Discard & Switch",
+                    "#f80"
+                );
+                if (!confirmed) {
+                    // Revert the category dropdown to previous value
+                    categoryWidget.value = previousCategory;
+                    // Ensure the previous prompt name is in the dropdown options (for unsaved prompts)
+                    if (previousPrompt && !promptWidget.options.values.includes(previousPrompt)) {
+                        promptWidget.options.values = [...promptWidget.options.values, previousPrompt].sort((a, b) => a.localeCompare(b));
+                    }
+                    promptWidget.value = previousPrompt;
+                    app.graph.setDirtyCanvas(true, true);
+                    return;
                 }
-                promptWidget.value = previousPrompt;
-                app.graph.setDirtyCanvas(true, true);
-                return;
             }
+            
+            // Clear new prompt flag when switching away
+            node.isNewUnsavedPrompt = false;
+            node.newPromptCategory = null;
+            node.newPromptName = null;
         }
-        
-        // Clear new prompt flag when switching away
-        node.isNewUnsavedPrompt = false;
-        node.newPromptCategory = null;
-        node.newPromptName = null;
 
         if (originalCallback) {
             originalCallback.apply(this, arguments);
@@ -2109,6 +2152,11 @@ function setupCategoryChangeHandler(node) {
             // Update previous values after successful switch
             node._previousCategory = category;
             node._previousPrompt = promptWidget.value;
+            
+            // Update custom prompt selector display
+            if (node.updatePromptSelectorDisplay) {
+                node.updatePromptSelectorDisplay();
+            }
 
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
@@ -2121,33 +2169,35 @@ function setupCategoryChangeHandler(node) {
         const previousCategory = node._previousCategory;
         const previousPrompt = node._previousPrompt;
         
-        // Check for unsaved changes before switching
-        const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
-        
-        if (hasUnsaved && warnEnabled) {
-            const confirmed = await showConfirm(
-                "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and switch?",
-                "Discard & Switch",
-                "#f80"
-            );
-            if (!confirmed) {
-                // Ensure the previous prompt name is in the dropdown options (for unsaved prompts)
-                if (previousPrompt && !promptWidget.options.values.includes(previousPrompt)) {
-                    promptWidget.options.values = [...promptWidget.options.values, previousPrompt].sort((a, b) => a.localeCompare(b));
+        // Check for unsaved changes before switching (skip if navigating via custom selector)
+        if (!node._skipUnsavedCheck) {
+            const hasUnsaved = hasUnsavedChanges(node);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+            
+            if (hasUnsaved && warnEnabled) {
+                const confirmed = await showConfirm(
+                    "Unsaved Changes",
+                    "You have unsaved changes to the current prompt. Do you want to discard them and switch?",
+                    "Discard & Switch",
+                    "#f80"
+                );
+                if (!confirmed) {
+                    // Ensure the previous prompt name is in the dropdown options (for unsaved prompts)
+                    if (previousPrompt && !promptWidget.options.values.includes(previousPrompt)) {
+                        promptWidget.options.values = [...promptWidget.options.values, previousPrompt].sort((a, b) => a.localeCompare(b));
+                    }
+                    // Revert the dropdown to previous value
+                    promptWidget.value = previousPrompt;
+                    app.graph.setDirtyCanvas(true, true);
+                    return;
                 }
-                // Revert the dropdown to previous value
-                promptWidget.value = previousPrompt;
-                app.graph.setDirtyCanvas(true, true);
-                return;
             }
+            
+            // Clear new prompt flag when switching away
+            node.isNewUnsavedPrompt = false;
+            node.newPromptCategory = null;
+            node.newPromptName = null;
         }
-        
-        // Clear new prompt flag when switching away
-        node.isNewUnsavedPrompt = false;
-        node.newPromptCategory = null;
-        node.newPromptName = null;
 
         if (originalPromptCallback) {
             originalPromptCallback.apply(this, arguments);
@@ -2176,6 +2226,11 @@ function setupCategoryChangeHandler(node) {
         // Update previous values after successful switch
         node._previousCategory = category;
         node._previousPrompt = value;
+        
+        // Update custom prompt selector display
+        if (node.updatePromptSelectorDisplay) {
+            node.updatePromptSelectorDisplay();
+        }
 
         node.serialize_widgets = true;
         app.graph.setDirtyCanvas(true, true);
@@ -2214,29 +2269,92 @@ function setupCategoryChangeHandler(node) {
 
 function setupUseExternalToggleHandler(node) {
     const textWidget = node.widgets?.find(w => w.name === "text");
-    const useExternalWidget = node.widgets?.find(w => w.name === "use_external");
-    const overrideLoraWidget = node.widgets?.find(w => w.name === "override_lora");
+    const useExternalWidget = node.widgets?.find(w => w.name === "use_prompt_input");
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
     const categoryWidget = node.widgets?.find(w => w.name === "category");
     const promptWidget = node.widgets?.find(w => w.name === "name");
     
     if (!textWidget || !useExternalWidget) return;
 
-    // Setup override_lora toggle handler to update lora display
-    if (overrideLoraWidget) {
-        const originalOverrideCallback = overrideLoraWidget.callback;
-        overrideLoraWidget.callback = function(value) {
-            if (originalOverrideCallback) {
-                originalOverrideCallback.apply(this, arguments);
+    // Setup use_lora_input toggle handler to update lora display
+    if (useLoraInputWidget) {
+        const originalLoraInputCallback = useLoraInputWidget.callback;
+        useLoraInputWidget.callback = async function(value) {
+            if (originalLoraInputCallback) {
+                originalLoraInputCallback.apply(this, arguments);
             }
-            // Update lora displays when override changes
+            
+            // Clear current (connected) loras and reload saved from prompt
+            // This ensures toggled-off connected loras don't persist
+            node.currentLorasA = [];
+            node.currentLorasB = [];
+            node.currentTriggerWords = [];
+            
+            // Reload saved loras from the current prompt to get clean state
+            if (node.prompts) {
+                const promptData = node.prompts[categoryWidget?.value]?.[promptWidget?.value];
+                if (promptData) {
+                    const lorasA = (promptData.loras_a || []).map(lora => ({
+                        ...lora,
+                        active: lora.active !== false,
+                        strength: lora.strength ?? lora.model_strength ?? 1.0,
+                        source: 'saved',
+                        available: true  // Will be updated after check
+                    }));
+                    const lorasB = (promptData.loras_b || []).map(lora => ({
+                        ...lora,
+                        active: lora.active !== false,
+                        strength: lora.strength ?? lora.model_strength ?? 1.0,
+                        source: 'saved',
+                        available: true  // Will be updated after check
+                    }));
+                    
+                    // Check availability of all loras
+                    const allLoraNames = [
+                        ...lorasA.map(l => l.name),
+                        ...lorasB.map(l => l.name)
+                    ].filter(name => name);
+                    
+                    if (allLoraNames.length > 0) {
+                        try {
+                            const response = await fetch("/prompt-manager-advanced/check-loras", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ lora_names: allLoraNames })
+                            });
+                            const data = await response.json();
+                            
+                            if (data.success && data.results) {
+                                // Update availability status
+                                lorasA.forEach(lora => {
+                                    lora.available = data.results[lora.name] !== false;
+                                });
+                                lorasB.forEach(lora => {
+                                    lora.available = data.results[lora.name] !== false;
+                                });
+                            }
+                        } catch (error) {
+                            console.error("[PromptManagerAdvanced] Error checking LoRA availability:", error);
+                        }
+                    }
+                    
+                    node.savedLorasA = lorasA;
+                    node.savedLorasB = lorasB;
+                } else {
+                    node.savedLorasA = [];
+                    node.savedLorasB = [];
+                }
+            }
+            
+            // Update lora displays when toggle changes
             updateLoraDisplays(node);
         };
     }
 
     // Apply initial state on load/reload
     const applyToggleState = (value) => {
-        const llmInputConnection = node.inputs?.find(inp => inp.name === "llm_input");
-        const isLlmConnected = llmInputConnection && llmInputConnection.link != null;
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt_input");
+        const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
 
         if (value && isLlmConnected) {
             // Using LLM and it's connected - disable text widget immediately
@@ -2247,9 +2365,9 @@ function setupUseExternalToggleHandler(node) {
                 textWidget.inputEl.readOnly = true;
             }
             
-            // Try to show LLM value if available
+            // Try to show prompt input value if available
             const graph = app.graph;
-            const link = graph.links[llmInputConnection.link];
+            const link = graph.links[promptInputConnection.link];
             if (link) {
                 const originNode = graph.getNodeById(link.origin_id);
                 if (originNode) {
@@ -2281,9 +2399,9 @@ function setupUseExternalToggleHandler(node) {
     // Store original callback and add our handler
     const originalCallback = useExternalWidget.callback;
     useExternalWidget.callback = function(value) {
-        // Check if llm_input is connected
-        const llmInputConnection = node.inputs?.find(inp => inp.name === "llm_input");
-        const isLlmConnected = llmInputConnection && llmInputConnection.link != null;
+        // Check if prompt_input is connected
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt_input");
+        const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
 
         // Prevent turning on if nothing is connected
         if (value && !isLlmConnected) {
@@ -2503,34 +2621,41 @@ async function createCategory(node, categoryName) {
     }
 }
 
-async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords) {
+async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null) {
     try {
+        const requestBody = {
+            category: category,
+            name: name,
+            text: text,
+            // Save loras with their active state
+            loras_a: lorasA.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0,
+                clip_strength: l.clip_strength || l.strength || 1.0,
+                active: l.active !== false
+            })),
+            loras_b: lorasB.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0,
+                clip_strength: l.clip_strength || l.strength || 1.0,
+                active: l.active !== false
+            })),
+            // Save all trigger words with their active states
+            trigger_words: (triggerWords || []).map(tw => ({
+                text: tw.text,
+                active: tw.active !== false
+            }))
+        };
+        
+        // Include thumbnail if provided
+        if (thumbnail) {
+            requestBody.thumbnail = thumbnail;
+        }
+        
         const response = await fetch("/prompt-manager-advanced/save-prompt", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                category: category,
-                name: name,
-                text: text,
-                // Save loras with their active state
-                loras_a: lorasA.map(l => ({
-                    name: l.name,
-                    strength: l.strength ?? l.model_strength ?? 1.0,
-                    clip_strength: l.clip_strength || l.strength || 1.0,
-                    active: l.active !== false
-                })),
-                loras_b: lorasB.map(l => ({
-                    name: l.name,
-                    strength: l.strength ?? l.model_strength ?? 1.0,
-                    clip_strength: l.clip_strength || l.strength || 1.0,
-                    active: l.active !== false
-                })),
-                // Save all trigger words with their active states
-                trigger_words: (triggerWords || []).map(tw => ({
-                    text: tw.text,
-                    active: tw.active !== false
-                }))
-            })
+            body: JSON.stringify(requestBody)
         });
 
         const data = await response.json();
@@ -3313,3 +3438,844 @@ function showInfo(title, message) {
 }
 
 console.log("[PromptManagerAdvanced] Extension loaded");
+
+// ========================
+// Thumbnail Browser Functions
+// ========================
+
+// Default placeholder image - loaded from shared static PNG file
+const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
+
+/**
+ * Resize an image to fit within maxSize while maintaining aspect ratio
+ * Returns a base64 data URL
+ */
+function resizeImageToThumbnail(file, maxSize = 128) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                // Calculate new dimensions maintaining aspect ratio
+                let width = img.width;
+                let height = img.height;
+                
+                if (width > height) {
+                    if (width > maxSize) {
+                        height = Math.round((height * maxSize) / width);
+                        width = maxSize;
+                    }
+                } else {
+                    if (height > maxSize) {
+                        width = Math.round((width * maxSize) / height);
+                        height = maxSize;
+                    }
+                }
+                
+                // Create canvas and draw resized image
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                // Convert to JPEG for smaller file size
+                resolve(canvas.toDataURL('image/jpeg', 0.85));
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+/**
+ * Show thumbnail browser popup for selecting prompts
+ * Returns { category, prompt } or null if cancelled
+ */
+function showThumbnailBrowser(node, currentCategory, currentPrompt) {
+    return new Promise((resolve) => {
+        let selectedCategory = currentCategory;
+        
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1a1a1a;
+            border: 2px solid #444;
+            border-radius: 12px;
+            padding: 16px;
+            z-index: 10000;
+            width: 634px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+        `;
+        
+        // Prevent default context menu on dialog (thumbnail cards have their own)
+        dialog.addEventListener("contextmenu", (e) => e.preventDefault());
+
+        // Header with close button
+        const header = document.createElement("div");
+        header.style.cssText = `
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #444;
+        `;
+
+        const title = document.createElement("div");
+        title.textContent = "Select Prompt";
+        title.style.cssText = `
+            font-size: 18px;
+            font-weight: bold;
+            color: #fff;
+        `;
+
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "✕";
+        closeBtn.style.cssText = `
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+        `;
+        closeBtn.onmouseover = () => closeBtn.style.color = "#fff";
+        closeBtn.onmouseout = () => closeBtn.style.color = "#888";
+
+        header.appendChild(title);
+        header.appendChild(closeBtn);
+
+        // Category selector
+        const categoryContainer = document.createElement("div");
+        categoryContainer.style.cssText = `
+            display: flex;
+            gap: 6px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        `;
+
+        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+        const categoryButtons = [];
+        
+        const updateCategoryButtons = () => {
+            categoryButtons.forEach(btn => {
+                const isSelected = btn.dataset.category === selectedCategory;
+                btn.style.background = isSelected ? '#4a8ad4' : '#2a2a2a';
+                btn.style.borderColor = isSelected ? '#5a9ae4' : '#444';
+                btn.style.color = isSelected ? '#fff' : '#aaa';
+            });
+        };
+
+        categories.forEach(cat => {
+            const btn = document.createElement("button");
+            btn.textContent = cat;
+            btn.dataset.category = cat;
+            btn.style.cssText = `
+                padding: 6px 14px;
+                border-radius: 6px;
+                border: 1px solid #444;
+                background: #2a2a2a;
+                color: #aaa;
+                cursor: pointer;
+                font-size: 13px;
+                transition: all 0.15s ease;
+            `;
+            btn.onclick = () => {
+                selectedCategory = cat;
+                updateCategoryButtons();
+                createThumbnailCards(searchInput.value);
+            };
+            categoryButtons.push(btn);
+            categoryContainer.appendChild(btn);
+        });
+        updateCategoryButtons();
+
+        // Search bar
+        const searchContainer = document.createElement("div");
+        searchContainer.style.cssText = `
+            margin-bottom: 12px;
+        `;
+
+        const searchInput = document.createElement("input");
+        searchInput.type = "text";
+        searchInput.placeholder = "Search prompts...";
+        searchInput.style.cssText = `
+            width: 100%;
+            padding: 10px 12px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+            box-sizing: border-box;
+            outline: none;
+        `;
+        searchInput.onfocus = () => searchInput.style.borderColor = "#666";
+        searchInput.onblur = () => searchInput.style.borderColor = "#444";
+
+        searchContainer.appendChild(searchInput);
+
+        // Thumbnails grid container - fixed size for 4x5 grid
+        const gridContainer = document.createElement("div");
+        gridContainer.className = "thumbnail-grid-container";
+        gridContainer.style.cssText = `
+            overflow-y: auto;
+            height: 680px;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        `;
+        // Hide scrollbar for webkit browsers
+        const style = document.createElement("style");
+        style.textContent = `.thumbnail-grid-container::-webkit-scrollbar { display: none; }`;
+        document.head.appendChild(style);
+
+        const grid = document.createElement("div");
+        grid.style.cssText = `
+            display: grid;
+            grid-template-columns: repeat(4, 140px);
+            gap: 12px;
+            padding: 4px 0;
+        `;
+
+        // Create thumbnail cards for selected category
+        const createThumbnailCards = (filter = "") => {
+            grid.innerHTML = "";
+            
+            // Get prompts for selected category
+            const categoryPrompts = node.prompts[selectedCategory] || {};
+            const promptNames = Object.keys(categoryPrompts).sort((a, b) => a.localeCompare(b));
+            
+            const filteredPrompts = filter 
+                ? promptNames.filter(name => name.toLowerCase().includes(filter.toLowerCase()))
+                : promptNames;
+
+            if (filteredPrompts.length === 0) {
+                const emptyMsg = document.createElement("div");
+                emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
+                emptyMsg.style.cssText = `
+                    grid-column: 1 / -1;
+                    text-align: center;
+                    color: #666;
+                    padding: 40px;
+                    font-style: italic;
+                `;
+                grid.appendChild(emptyMsg);
+                return;
+            }
+
+            filteredPrompts.forEach(promptName => {
+                const promptData = categoryPrompts[promptName];
+                const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
+                const isSelected = promptName === currentPrompt;
+
+                const card = document.createElement("div");
+                card.style.cssText = `
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    padding: 8px;
+                    background: ${isSelected ? '#2a4a6a' : '#2a2a2a'};
+                    border: 2px solid ${isSelected ? '#4a8ad4' : '#3a3a3a'};
+                    border-radius: 8px;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                `;
+
+                card.onmouseover = () => {
+                    if (!isSelected) {
+                        card.style.background = '#3a3a3a';
+                        card.style.borderColor = '#555';
+                    }
+                };
+                card.onmouseout = () => {
+                    if (!isSelected) {
+                        card.style.background = '#2a2a2a';
+                        card.style.borderColor = '#3a3a3a';
+                    }
+                };
+
+                // Thumbnail image
+                const img = document.createElement("img");
+                img.src = thumbnail;
+                img.style.cssText = `
+                    width: 100px;
+                    height: 100px;
+                    object-fit: cover;
+                    border-radius: 6px;
+                    background: #1a1a1a;
+                `;
+
+                // Prompt name
+                const nameLabel = document.createElement("div");
+                nameLabel.textContent = promptName;
+                nameLabel.title = promptName;
+                nameLabel.style.cssText = `
+                    margin-top: 8px;
+                    font-size: 12px;
+                    color: #ccc;
+                    text-align: center;
+                    width: 100%;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                `;
+
+                card.appendChild(img);
+                card.appendChild(nameLabel);
+
+                // Click to select - return both category and prompt
+                card.onclick = () => {
+                    resolve({ category: selectedCategory, prompt: promptName });
+                    cleanup();
+                };
+
+                // Right-click context menu for setting thumbnail
+                card.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    showThumbnailContextMenu(e, node, selectedCategory, promptName, () => {
+                        // Refresh the grid after thumbnail change
+                        createThumbnailCards(searchInput.value);
+                    });
+                };
+
+                grid.appendChild(card);
+            });
+        };
+
+        // Initial render
+        createThumbnailCards();
+
+        // Search filtering
+        searchInput.oninput = () => {
+            createThumbnailCards(searchInput.value);
+        };
+
+        gridContainer.appendChild(grid);
+
+        // Footer with hint
+        const footer = document.createElement("div");
+        footer.style.cssText = `
+            margin-top: 4px;
+            margin-bottom: -8px;
+            padding-top: 6px;
+            border-top: 1px solid #444;
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+        `;
+        footer.textContent = "Right-click a prompt to set or remove its thumbnail";
+
+        dialog.appendChild(header);
+        dialog.appendChild(categoryContainer);
+        dialog.appendChild(searchContainer);
+        dialog.appendChild(gridContainer);
+        dialog.appendChild(footer);
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        closeBtn.onclick = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        overlay.onclick = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        // Prevent dialog click from closing
+        dialog.onclick = (e) => e.stopPropagation();
+
+        // Keyboard shortcuts
+        dialog.onkeydown = (e) => {
+            if (e.key === "Escape") {
+                resolve(null);
+                cleanup();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        searchInput.focus();
+    });
+}
+
+/**
+ * Show context menu for thumbnail operations
+ */
+function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
+    // Remove any existing context menu
+    const existing = document.querySelector('.thumbnail-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement("div");
+    menu.className = "thumbnail-context-menu";
+    menu.style.cssText = `
+        position: fixed;
+        left: ${event.clientX}px;
+        top: ${event.clientY}px;
+        background: #2a2a2a;
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 4px 0;
+        z-index: 10001;
+        min-width: 150px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    `;
+
+    const createMenuItem = (label, onClick) => {
+        const item = document.createElement("div");
+        item.textContent = label;
+        item.style.cssText = `
+            padding: 8px 16px;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 13px;
+        `;
+        item.onmouseover = () => item.style.background = '#3a3a3a';
+        item.onmouseout = () => item.style.background = 'transparent';
+        item.onclick = () => {
+            menu.remove();
+            onClick();
+        };
+        return item;
+    };
+
+    // Set thumbnail from file
+    menu.appendChild(createMenuItem("📁 Set Thumbnail from File...", async () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                try {
+                    const thumbnail = await resizeImageToThumbnail(file, 128);
+                    await saveThumbnail(node, category, promptName, thumbnail);
+                    onUpdate();
+                } catch (error) {
+                    console.error("[PromptManagerAdvanced] Error setting thumbnail:", error);
+                    await showInfo("Error", "Failed to set thumbnail");
+                }
+            }
+        };
+        input.click();
+    }));
+
+    // Set thumbnail from clipboard
+    menu.appendChild(createMenuItem("📋 Set Thumbnail from Clipboard", async () => {
+        try {
+            const clipboardItems = await navigator.clipboard.read();
+            for (const item of clipboardItems) {
+                const imageType = item.types.find(type => type.startsWith('image/'));
+                if (imageType) {
+                    const blob = await item.getType(imageType);
+                    const file = new File([blob], 'clipboard.png', { type: imageType });
+                    const thumbnail = await resizeImageToThumbnail(file, 128);
+                    await saveThumbnail(node, category, promptName, thumbnail);
+                    onUpdate();
+                    return;
+                }
+            }
+            await showInfo("No Image", "No image found in clipboard");
+        } catch (error) {
+            console.error("[PromptManagerAdvanced] Error reading clipboard:", error);
+            await showInfo("Error", "Failed to read clipboard. Make sure you have an image copied.");
+        }
+    }));
+
+    // Remove thumbnail (only show if there is one)
+    const promptData = node.prompts[category]?.[promptName];
+    if (promptData?.thumbnail) {
+        const divider = document.createElement("div");
+        divider.style.cssText = `
+            height: 1px;
+            background: #444;
+            margin: 4px 0;
+        `;
+        menu.appendChild(divider);
+
+        menu.appendChild(createMenuItem("🗑️ Remove Thumbnail", async () => {
+            await saveThumbnail(node, category, promptName, null);
+            onUpdate();
+        }));
+    }
+
+    // Close menu when clicking outside of it
+    const closeMenu = (e) => {
+        // Only close if clicking outside the menu
+        if (!menu.contains(e.target)) {
+            menu.remove();
+            document.removeEventListener('mousedown', closeMenu, true);
+        }
+    };
+    // Use mousedown with capture to catch clicks before they propagate
+    setTimeout(() => {
+        document.addEventListener('mousedown', closeMenu, true);
+    }, 10);
+
+    document.body.appendChild(menu);
+}
+
+/**
+ * Save thumbnail to prompt data
+ */
+async function saveThumbnail(node, category, promptName, thumbnail) {
+    try {
+        const response = await fetch("/prompt-manager-advanced/save-thumbnail", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                category: category,
+                name: promptName,
+                thumbnail: thumbnail
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            // Update local data
+            if (node.prompts[category] && node.prompts[category][promptName]) {
+                if (thumbnail) {
+                    node.prompts[category][promptName].thumbnail = thumbnail;
+                } else {
+                    delete node.prompts[category][promptName].thumbnail;
+                }
+            }
+        } else {
+            await showInfo("Error", data.error || "Failed to save thumbnail");
+        }
+    } catch (error) {
+        console.error("[PromptManagerAdvanced] Error saving thumbnail:", error);
+        await showInfo("Error", "Failed to save thumbnail");
+    }
+}
+
+/**
+ * Create custom prompt selector widget with arrows and thumbnail browser
+ */
+function createPromptSelectorWidget(node) {
+    const categoryWidget = node.widgets.find(w => w.name === "category");
+    const promptWidget = node.widgets.find(w => w.name === "name");
+    
+    if (!categoryWidget || !promptWidget) return;
+    
+    // Hide the original category and prompt widgets visually but keep them functional
+    categoryWidget.type = "converted-widget";
+    categoryWidget.computeSize = () => [0, -4];
+    promptWidget.type = "converted-widget";
+    promptWidget.computeSize = () => [0, -4];
+    
+    // Create custom selector container
+    const container = document.createElement("div");
+    container.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 0;
+        background: #1a1a1a;
+        border-radius: 4px;
+        overflow: visible;
+        height: 26px;
+        margin: 0;
+        position: relative;
+    `;
+    
+    // Prevent default context menu on prompt selector
+    container.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Left arrow button
+    const leftArrow = document.createElement("button");
+    leftArrow.textContent = "◀";
+    leftArrow.style.cssText = `
+        background: #2a2a2a;
+        border: none;
+        color: #888;
+        padding: 0 10px;
+        height: 100%;
+        cursor: pointer;
+        font-size: 10px;
+        transition: all 0.15s ease;
+    `;
+    leftArrow.onmouseover = () => {
+        leftArrow.style.background = '#3a3a3a';
+        leftArrow.style.color = '#fff';
+    };
+    leftArrow.onmouseout = () => {
+        leftArrow.style.background = '#2a2a2a';
+        leftArrow.style.color = '#888';
+    };
+
+    // Center name display (clickable to open browser)
+    const nameDisplay = document.createElement("div");
+    nameDisplay.style.cssText = `
+        flex: 1;
+        text-align: center;
+        color: #ddd;
+        font-size: 13px;
+        padding: 0 10px;
+        cursor: pointer;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        background: #1a1a1a;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s ease;
+    `;
+    nameDisplay.onmouseover = () => nameDisplay.style.background = '#252525';
+    nameDisplay.onmouseout = () => nameDisplay.style.background = '#1a1a1a';
+
+    // Thumbnail preview tooltip
+    const thumbnailPreview = document.createElement("div");
+    thumbnailPreview.style.cssText = `
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #2a2a2a;
+        border: 1px solid #444;
+        border-radius: 8px;
+        padding: 8px;
+        display: none;
+        z-index: 1000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        margin-bottom: 8px;
+    `;
+    const thumbnailImg = document.createElement("img");
+    thumbnailImg.style.cssText = `
+        width: 128px;
+        height: 128px;
+        object-fit: cover;
+        border-radius: 4px;
+        display: block;
+    `;
+    thumbnailPreview.appendChild(thumbnailImg);
+    container.appendChild(thumbnailPreview);
+
+    // Show/hide thumbnail on hover
+    let hoverTimeout = null;
+    nameDisplay.addEventListener("mouseenter", () => {
+        hoverTimeout = setTimeout(() => {
+            const category = categoryWidget.value;
+            const prompt = promptWidget.value;
+            const promptData = node.prompts?.[category]?.[prompt];
+            const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
+            thumbnailImg.src = thumbnail;
+            thumbnailPreview.style.display = "block";
+        }, 300);
+    });
+    nameDisplay.addEventListener("mouseleave", () => {
+        if (hoverTimeout) clearTimeout(hoverTimeout);
+        thumbnailPreview.style.display = "none";
+    });
+
+    // Right arrow button
+    const rightArrow = document.createElement("button");
+    rightArrow.textContent = "▶";
+    rightArrow.style.cssText = `
+        background: #2a2a2a;
+        border: none;
+        color: #888;
+        padding: 0 10px;
+        height: 100%;
+        cursor: pointer;
+        font-size: 10px;
+        transition: all 0.15s ease;
+    `;
+    rightArrow.onmouseover = () => {
+        rightArrow.style.background = '#3a3a3a';
+        rightArrow.style.color = '#fff';
+    };
+    rightArrow.onmouseout = () => {
+        rightArrow.style.background = '#2a2a2a';
+        rightArrow.style.color = '#888';
+    };
+
+    container.appendChild(leftArrow);
+    container.appendChild(nameDisplay);
+    container.appendChild(rightArrow);
+
+    // Update display function - show CATEGORY : PROMPT
+    const updateDisplay = () => {
+        const category = categoryWidget.value || "";
+        const prompt = promptWidget.value || "new prompt";
+        nameDisplay.textContent = `${category} : ${prompt}`;
+        nameDisplay.title = `${category} : ${prompt}`;
+    };
+
+    // Get flattened list of all prompts across all categories for navigation
+    const getAllPromptsFlat = () => {
+        const allPrompts = [];
+        if (!node.prompts) return allPrompts;
+        
+        const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
+        for (const cat of categories) {
+            const prompts = Object.keys(node.prompts[cat]).sort((a, b) => a.localeCompare(b));
+            for (const prompt of prompts) {
+                allPrompts.push({ category: cat, prompt: prompt });
+            }
+        }
+        return allPrompts;
+    };
+
+    // Find current position in flattened list
+    const getCurrentIndex = (allPrompts) => {
+        return allPrompts.findIndex(p => 
+            p.category === categoryWidget.value && p.prompt === promptWidget.value
+        );
+    };
+
+    // Navigate to a specific prompt (handles category change)
+    const navigateTo = async (item, skipUnsavedCheck = false) => {
+        // Check for unsaved changes before switching (unless skipped)
+        if (!skipUnsavedCheck) {
+            const hasUnsaved = hasUnsavedChanges(node);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+            
+            if (hasUnsaved && warnEnabled) {
+                const confirmed = await showConfirm(
+                    "Unsaved Changes",
+                    "You have unsaved changes to the current prompt. Do you want to discard them and switch?",
+                    "Discard & Switch",
+                    "#f80"
+                );
+                if (!confirmed) {
+                    return false;  // User cancelled, don't navigate
+                }
+            }
+            
+            // Clear new prompt flag when switching away
+            node.isNewUnsavedPrompt = false;
+            node.newPromptCategory = null;
+            node.newPromptName = null;
+        }
+        
+        // Set flag to skip unsaved check in the widget callbacks (we already checked above)
+        node._skipUnsavedCheck = true;
+        
+        try {
+            const categoryChanged = item.category !== categoryWidget.value;
+            
+            if (categoryChanged) {
+                // Change category first
+                categoryWidget.value = item.category;
+                if (categoryWidget.callback) {
+                    await categoryWidget.callback(item.category);
+                }
+            }
+            
+            // Then change prompt
+            if (promptWidget.callback) {
+                await promptWidget.callback(item.prompt);
+            }
+            promptWidget.value = item.prompt;
+            updateDisplay();
+            app.graph.setDirtyCanvas(true, true);
+        } finally {
+            // Clear the skip flag
+            node._skipUnsavedCheck = false;
+        }
+        
+        return true;
+    };
+
+    // Navigate to previous prompt (wraps across categories)
+    leftArrow.onclick = async (e) => {
+        e.stopPropagation();
+        const allPrompts = getAllPromptsFlat();
+        if (allPrompts.length === 0) return;
+
+        const currentIndex = getCurrentIndex(allPrompts);
+        const newIndex = currentIndex <= 0 ? allPrompts.length - 1 : currentIndex - 1;
+        await navigateTo(allPrompts[newIndex]);
+    };
+
+    // Navigate to next prompt (wraps across categories)
+    rightArrow.onclick = async (e) => {
+        e.stopPropagation();
+        const allPrompts = getAllPromptsFlat();
+        if (allPrompts.length === 0) return;
+
+        const currentIndex = getCurrentIndex(allPrompts);
+        const newIndex = currentIndex >= allPrompts.length - 1 ? 0 : currentIndex + 1;
+        await navigateTo(allPrompts[newIndex]);
+    };
+
+    // Open thumbnail browser on click
+    nameDisplay.onclick = async (e) => {
+        e.stopPropagation();
+        
+        // Check for unsaved changes before opening browser
+        const hasUnsaved = hasUnsavedChanges(node);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+        
+        if (hasUnsaved && warnEnabled) {
+            const confirmed = await showConfirm(
+                "Unsaved Changes",
+                "You have unsaved changes to the current prompt. Do you want to discard them and browse prompts?",
+                "Discard & Browse",
+                "#f80"
+            );
+            if (!confirmed) {
+                return;  // User cancelled, don't open browser
+            }
+        }
+        
+        const category = categoryWidget.value;
+        const currentPrompt = promptWidget.value;
+        
+        const selection = await showThumbnailBrowser(node, category, currentPrompt);
+        
+        if (selection) {
+            // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
+            await navigateTo(selection, true);
+            
+            // Clear new prompt flag after successful navigation
+            node.isNewUnsavedPrompt = false;
+            node.newPromptCategory = null;
+            node.newPromptName = null;
+        }
+    };
+
+    // Initial display update
+    updateDisplay();
+
+    // Add DOM widget
+    const widget = node.addDOMWidget("prompt_selector", "div", container);
+    widget.computeSize = function(width) {
+        return [width, 28];
+    };
+
+    // Store reference for updates
+    node.promptSelectorWidget = widget;
+    node.updatePromptSelectorDisplay = updateDisplay;
+
+    return widget;
+}
