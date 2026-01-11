@@ -3,28 +3,31 @@
 
 A complete prompt management solution featuring three core capabilities:
 
-**Prompt Manager** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan video. Toggle LoRAs on/off or adjust strengths directly from saved presets.
+**Prompt Manager** — Save and organize prompts with categories, simple UI with minimal feature.
+
+**Prompt Manager Advanced** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan videos. Toggle LoRAs on/off or adjust strengths directly from saved presets. Will also remap Loras if path differs.
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp). Supports text enhancement, image analysis with vision models (Qwen3VL), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
-**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos (MP4), or JSON workflow files. Automatically parses embedded metadata and outputs ready-to-use LoRA stacks.
+**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos (MP4), or JSON workflow files. Automatically parses embedded metadata and outputs ready-to-use LoRA stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai.
 ___
 
 <div align="center">
   <figcaption>Simple Prompt Generator Usage</figcaption>
   <img src="docs/prompt_manager.png" alt="Prompt Manager">
 </div>
-
 <div align="center">
   <figcaption>Advanced Prompt Generator Usage</figcaption>
   <img src="docs/prompt_generator_advanced.png" alt="Prompt Manager">
 </div>
-
 <div align="center">
   <figcaption>Prompt Manager Advanced, with Lora and trigger word support</figcaption>
   <img src="docs/prompt_manager_advanced.png" alt="Prompt Manager">
 </div>
-
+<div align="center">
+  <figcaption>Prompt Extractor connected to Manager Advanced, so workflow can be saved with Loras</figcaption>
+  <img src="docs/prompt_extractor.png" alt="Prompt Manager">
+</div>
 
 ### Key features:
 ### Prompt Manager:
