@@ -48,6 +48,28 @@ async def cache_file_metadata(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+# API endpoint to list files in input directory
+@server.PromptServer.instance.routes.get("/prompt-extractor/list-files")
+async def list_input_files(request):
+    """API endpoint to get list of supported files in input directory"""
+    try:
+        input_dir = folder_paths.get_input_directory()
+        files = []
+        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
+
+        if os.path.exists(input_dir):
+            for filename in os.listdir(input_dir):
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in supported_extensions:
+                    files.append(filename)
+
+        files.sort()
+        return server.web.json_response({"files": files})
+    except Exception as e:
+        print(f"[PromptExtractor] Error listing files: {e}")
+        return server.web.json_response({"files": [], "error": str(e)}, status=500)
+
+
 def get_available_loras():
     """Get all available LoRAs from ComfyUI's folder system"""
     return folder_paths.get_filename_list("loras")

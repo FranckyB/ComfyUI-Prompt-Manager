@@ -370,6 +370,86 @@ app.registerExtension({
                     }, 10);
                 }
 
+                // Add drag-and-drop support for file uploads
+                node.onDragOver = function(e) {
+                    if (e.dataTransfer && e.dataTransfer.items) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return true; // Allow drop
+                    }
+                    return false;
+                };
+
+                node.onDragDrop = async function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    if (!e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) {
+                        return false;
+                    }
+
+                    const file = e.dataTransfer.files[0];
+                    const filename = file.name;
+                    const ext = filename.split('.').pop().toLowerCase();
+                    const supportedExtensions = ['png', 'jpg', 'jpeg', 'webp', 'json', 'mp4', 'webm', 'mov', 'avi'];
+
+                    if (!supportedExtensions.includes(ext)) {
+                        console.warn(`[PromptExtractor] Unsupported file type: ${ext}`);
+                        return false;
+                    }
+
+                    // Upload file to input directory
+                    const formData = new FormData();
+                    formData.append('image', file);
+                    formData.append('subfolder', '');
+                    formData.append('type', 'input');
+
+                    try {
+                        const response = await api.fetchApi('/upload/image', {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            const uploadedFilename = data.name;
+
+                            // Update widget with new file
+                            if (imageWidget) {
+                                // Fetch updated file list from server
+                                try {
+                                    const listResponse = await api.fetchApi('/prompt-extractor/list-files');
+                                    if (listResponse.ok) {
+                                        const result = await listResponse.json();
+                                        if (result.files && result.files.length > 0) {
+                                            // Update widget options with fresh file list
+                                            imageWidget.options.values = result.files;
+                                        }
+                                    }
+                                } catch (err) {
+                                    console.warn('[PromptExtractor] Could not fetch file list:', err);
+                                }
+                                
+                                // Set the value and trigger callback
+                                imageWidget.value = uploadedFilename;
+                                
+                                // Trigger the original callback to load and display
+                                if (imageWidget.callback) {
+                                    imageWidget.callback(uploadedFilename);
+                                }
+                            }
+
+                            console.log(`[PromptExtractor] Uploaded file: ${uploadedFilename}`);
+                        } else {
+                            console.error('[PromptExtractor] Upload failed:', response.status);
+                        }
+                    } catch (error) {
+                        console.error('[PromptExtractor] Error uploading file:', error);
+                    }
+
+                    return true;
+                };
+
                 // Add workflow status indicator light
                 const onDrawForeground = node.onDrawForeground;
                 node.onDrawForeground = function(ctx) {
@@ -532,7 +612,8 @@ async function loadJSONFile(node, filename) {
         await cacheFileMetadata(filename, metadata);
 
         // Update workflow status flag
-        node.hasWorkflow = !!(metadata && metadata.workflow);
+        // Check if metadata has workflow property OR if metadata itself is a workflow (has nodes/links)
+        node.hasWorkflow = !!(metadata && (metadata.workflow || (metadata.nodes && metadata.links)));
 
         // Show placeholder for JSON files (no visual preview)
         showPlaceholder(node);

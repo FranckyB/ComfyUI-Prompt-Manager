@@ -2,7 +2,7 @@
 ComfyUI Prompt Manager - A simple custom node for saving and reusing prompts
 A prompt management system for ComfyUI with LLM input support
 """
-__version__ = "1.11.4"
+__version__ = "1.11.5"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 

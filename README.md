@@ -242,7 +242,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
-### Version 1.11.4
+### Version 1.11.5
 - Slight adjustement to extractor node, gets metadata in a method more consistent with ComfyUI, removing need for ffmpeg for videos.
 
 ### Version 1.11.2
