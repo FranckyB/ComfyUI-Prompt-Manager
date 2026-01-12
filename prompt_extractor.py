@@ -38,9 +38,6 @@ async def cache_file_metadata(request):
 
         if metadata:
             _file_metadata_cache[filename] = metadata
-            print(f"[PromptExtractor] Cached file metadata for: {filename}")
-        else:
-            print(f"[PromptExtractor] No metadata found in file: {filename}")
 
         return server.web.json_response({"success": True})
     except Exception as e:
@@ -291,7 +288,6 @@ def extract_metadata_from_video(file_path):
         # Check if metadata was cached by JavaScript
         if filename in _file_metadata_cache:
             metadata = _file_metadata_cache[filename]
-            print(f"[PromptExtractor] Using cached video metadata for: {filename}")
 
             # Parse the cached metadata
             if isinstance(metadata, dict):
@@ -1002,8 +998,6 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         # Default to positive if no clear indicator
                         connection_type = 'positive'
 
-                print(f"[PromptExtractor] Node {node_id} ({title or 'no title'}) determined as: {connection_type}")
-
                 # First try to get text directly from widgets
                 text_found = ""
                 for val in widgets_values:
@@ -1026,7 +1020,6 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                                 text_found = traversed_text
 
                 if text_found:
-                    print(f"[PromptExtractor] Found text ({len(text_found)} chars): {text_found[:100]}...")
                     if connection_type == 'negative':
                         negative_prompts.append(text_found)
                     else:
@@ -1121,9 +1114,6 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         terminal_stackers = [nid for nid in stacker_nodes.keys() if nid not in stackers_feeding_stackers]
 
         for terminal_id in terminal_stackers:
-            if terminal_id in processed_lora_nodes:
-                continue
-
             node = stacker_nodes[terminal_id]
             chain_loras, chain_titles = collect_lora_stack_chain(terminal_id, node_map, link_map)
 
@@ -1264,8 +1254,6 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     result['negative_prompt'] = ', '.join(clean_negative) if clean_negative else ''
     result['loras_a'] = loras_a
     result['loras_b'] = loras_b
-
-    print(f"[PromptExtractor] Final prompt counts - positive: {len(clean_positive)}, negative: {len(clean_negative)}")
 
     return result
 
@@ -1480,16 +1468,12 @@ class PromptExtractor:
 
             # Parse the extracted data
             if prompt_data or workflow_data:
-                print(f"[PromptExtractor] Calling parse_workflow_for_prompts with prompt_data={prompt_data is not None}, workflow_data={workflow_data is not None}")
+                print("[PromptExtractor] Successfully extracted metadata")
                 parsed = parse_workflow_for_prompts(prompt_data, workflow_data)
                 positive_prompt = parsed['positive_prompt'] or ""
                 negative_prompt = parsed['negative_prompt'] or ""
                 loras_a = parsed['loras_a']
                 loras_b = parsed['loras_b']
-                print(f"[PromptExtractor] Parsed result: positive={len(positive_prompt)} chars, negative={len(negative_prompt)} chars, loras_a={len(loras_a)}, loras_b={len(loras_b)}")
-
-            # Build LORA_STACK format
-            lora_files = get_available_loras()
 
             # Process loras_a into stack A (only active LoRAs)
             for lora in loras_a:
@@ -1502,14 +1486,10 @@ class PromptExtractor:
                 model_strength = lora['model_strength']
                 clip_strength = lora['clip_strength']
 
-                matched_filename = self._match_lora(lora_name, lora_path, lora_files)
-                if matched_filename:
-                    extracted_lora_stack_a.append((matched_filename, model_strength, clip_strength))
-                else:
-                    # Include the LoRA even if not found locally - PromptManager handles missing LoRAs
-                    fallback_name = lora_path if lora_path else f"{lora_name}.safetensors"
-                    extracted_lora_stack_a.append((fallback_name, model_strength, clip_strength))
-                    print(f"[PromptExtractor] Note: LoRA not found locally (Stack A): {lora_name}")
+                # Use path if available, otherwise construct from name
+                # PromptManagerAdvanced handles matching to actual files
+                filename = lora_path if lora_path else f"{lora_name}.safetensors"
+                extracted_lora_stack_a.append((filename, model_strength, clip_strength))
 
             # Process loras_b into stack B (only active LoRAs)
             for lora in loras_b:
@@ -1522,13 +1502,10 @@ class PromptExtractor:
                 model_strength = lora['model_strength']
                 clip_strength = lora['clip_strength']
 
-                matched_filename = self._match_lora(lora_name, lora_path, lora_files)
-                if matched_filename:
-                    extracted_lora_stack_b.append((matched_filename, model_strength, clip_strength))
-                else:
-                    fallback_name = lora_path if lora_path else f"{lora_name}.safetensors"
-                    extracted_lora_stack_b.append((fallback_name, model_strength, clip_strength))
-                    print(f"[PromptExtractor] Note: LoRA not found locally (Stack B): {lora_name}")
+                # Use path if available, otherwise construct from name
+                # PromptManagerAdvanced handles matching to actual files
+                filename = lora_path if lora_path else f"{lora_name}.safetensors"
+                extracted_lora_stack_b.append((filename, model_strength, clip_strength))
         else:
             if file_path:
                 print(f"[PromptExtractor] File not found: {file_path}")
@@ -1557,7 +1534,6 @@ class PromptExtractor:
                     added_count += 1
                 else:
                     skipped_count += 1
-            print(f"[PromptExtractor] Stack A - Added {added_count} input LoRAs, skipped {skipped_count} duplicates")
 
         if lora_stack_b is not None and isinstance(lora_stack_b, list):
             added_count = 0
@@ -1569,9 +1545,6 @@ class PromptExtractor:
                     added_count += 1
                 else:
                     skipped_count += 1
-            print(f"[PromptExtractor] Stack B - Added {added_count} input LoRAs, skipped {skipped_count} duplicates")
-
-        print(f"[PromptExtractor] Final lora counts - Stack A: {len(final_lora_stack_a)}, Stack B: {len(final_lora_stack_b)}")
 
         # Provide placeholder image tensor if none loaded (e.g., for JSON files)
         if image_tensor is None:
@@ -1587,42 +1560,10 @@ class PromptExtractor:
         if not negative_prompt:
             negative_prompt = " "
 
-        print(f"[PromptExtractor] Final output: positive_prompt type={type(positive_prompt)}, value='{positive_prompt[:50] if positive_prompt else ''}...'")
-
         return {
             "ui": {"images": preview_images},
             "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor)
         }
-
-    def _match_lora(self, lora_name, lora_path, lora_files):
-        """Find the matching lora filename from available loras"""
-        lora_name_lower = lora_name.lower()
-
-        # If we have a path, try to match it first
-        if lora_path:
-            # Try exact path match
-            for lora_file in lora_files:
-                if lora_file == lora_path:
-                    return lora_file
-                # Try path ending match (handles different base directories)
-                if lora_file.replace('\\', '/').endswith(lora_path.replace('\\', '/')):
-                    return lora_file
-                if lora_path.replace('\\', '/').endswith(lora_file.replace('\\', '/')):
-                    return lora_file
-
-        # Try name-based matching
-        for lora_file in lora_files:
-            # Try exact name match
-            file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
-            if file_name_no_ext.lower() == lora_name_lower:
-                return lora_file
-
-        # Try partial match
-        for lora_file in lora_files:
-            if lora_name_lower in lora_file.lower():
-                return lora_file
-
-        return None
 
     def save_preview_images(self, images):
         """Save images temporarily for preview display"""

@@ -26,14 +26,14 @@ async function getLoraManagerPreviewTooltip() {
     if (loraManagerCheckDone) {
         return loraManagerPreviewTooltip;
     }
-    
+
     loraManagerCheckDone = true;
-    
+
     try {
         // Try to dynamically import the PreviewTooltip from LoRA Manager
         // ComfyUI serves extension files from /extensions/<folder_name>/
         const previewModule = await import("/extensions/ComfyUI-Lora-Manager/preview_tooltip.js");
-        
+
         if (previewModule && previewModule.PreviewTooltip) {
             loraManagerPreviewTooltip = new previewModule.PreviewTooltip({
                 modelType: "loras"
@@ -46,7 +46,7 @@ async function getLoraManagerPreviewTooltip() {
         console.log("[PromptManagerAdvanced] LoRA Manager preview not available:", error.message);
         loraManagerAvailable = false;
     }
-    
+
     return loraManagerPreviewTooltip;
 }
 
@@ -86,7 +86,7 @@ app.registerExtension({
                 node.currentTriggerWords = [];  // From connected input
                 node.savedTriggerWords = [];    // From saved prompt
                 node.connectedThumbnail = null; // Thumbnail from connected image (set during execution)
-                
+
                 // Track last saved state for unsaved changes detection
                 node.lastSavedState = {
                     text: "",
@@ -94,7 +94,7 @@ app.registerExtension({
                     lorasB: "[]",
                     triggerWords: "[]"
                 };
-                
+
                 // Set initial size - taller to accommodate lora displays
                 this.setSize([440, 700]);
 
@@ -131,27 +131,27 @@ app.registerExtension({
                         const newLorasA = event.detail.loras_a || [];
                         const newLorasB = event.detail.loras_b || [];
                         const newTriggerWords = event.detail.trigger_words || [];
-                        
+
                         // Store connected thumbnail for use when saving
                         this.connectedThumbnail = event.detail.connected_thumbnail || null;
-                        
+
                         // Simple comparison: if the entire list is identical (same order, same data), no change
                         const lorasAChanged = JSON.stringify(newLorasA) !== JSON.stringify(this.currentLorasA);
                         const lorasBChanged = JSON.stringify(newLorasB) !== JSON.stringify(this.currentLorasB);
                         const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                         const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
-                        
+
                         // Update if data changed
                         if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
                             // Update current loras from connected inputs
                             this.currentLorasA = newLorasA;
                             this.currentLorasB = newLorasB;
-                            
+
                             // Update current trigger words (only connected ones)
                             // Don't merge into savedTriggerWords - keep them separate
                             // savedTriggerWords should only contain what was loaded from the prompt
                             this.currentTriggerWords = newConnectedTriggers;
-                            
+
                             // Refresh displays (display function handles merging for UI)
                             updateLoraDisplays(this);
                             updateTriggerWordsDisplay(this);
@@ -162,7 +162,7 @@ app.registerExtension({
                         if (promptTextWidget) {
                             const useExternal = event.detail.use_prompt_input || false;
                             const llmInput = event.detail.prompt_input || "";
-                            
+
                             if (useExternal && llmInput) {
                                 // When using external, display the LLM input text (grayed out)
                                 promptTextWidget.value = llmInput;
@@ -175,7 +175,7 @@ app.registerExtension({
                                 // When using internal, enable the widget
                                 promptTextWidget.disabled = false;
                             }
-                            
+
                             this.serialize_widgets = true;
                             app.graph.setDirtyCanvas(true, true);
                         }
@@ -194,12 +194,12 @@ app.registerExtension({
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
                     filterPromptDropdown(node);
-                    
+
                     // Update custom prompt selector display
                     if (node.updatePromptSelectorDisplay) {
                         node.updatePromptSelectorDisplay();
                     }
-                    
+
                     // Load initial prompt data (LoRAs and trigger words)
                     const categoryWidget = node.widgets.find(w => w.name === "category");
                     const promptWidget = node.widgets.find(w => w.name === "name");
@@ -211,7 +211,7 @@ app.registerExtension({
                     setTimeout(() => {
                         const computedSize = node.computeSize();
                         const minHeight = Math.max(600, computedSize[1] + 20);
-                        
+
                         if (node.size[1] < minHeight) {
                             node.setSize([Math.max(440, node.size[0]), minHeight]);
                         }
@@ -229,13 +229,19 @@ app.registerExtension({
 
                 const node = this;
 
+                // Detect if this is a fresh workflow load (page refresh) vs tab switch
+                // If widgets_values doesn't have current_loras_a or it's a fresh session, clear currentLoras
+                const isFreshLoad = !info.widgets_values || info.widgets_values.every(v => v === null || v === undefined);
+
                 // Restore saved lora toggle states if they exist
                 if (info.widgets_values) {
                     // Find the lora toggle widget indices and restore their values
                     const lorasAIndex = node.widgets?.findIndex(w => w.name === "loras_a_toggle");
                     const lorasBIndex = node.widgets?.findIndex(w => w.name === "loras_b_toggle");
                     const triggerWordsIndex = node.widgets?.findIndex(w => w.name === "trigger_words_toggle");
-                    
+                    const currentLorasAIndex = node.widgets?.findIndex(w => w.name === "current_loras_a");
+                    const currentLorasBIndex = node.widgets?.findIndex(w => w.name === "current_loras_b");
+
                     if (lorasAIndex >= 0 && info.widgets_values[lorasAIndex]) {
                         try {
                             node.savedLorasA = JSON.parse(info.widgets_values[lorasAIndex]);
@@ -256,6 +262,28 @@ app.registerExtension({
                         } catch (e) {
                             node.savedTriggerWords = [];
                         }
+                    }
+
+                    // Restore current loras for tab-switch persistence, but clear on fresh load
+                    if (!isFreshLoad) {
+                        if (currentLorasAIndex >= 0 && info.widgets_values[currentLorasAIndex]) {
+                            try {
+                                node.currentLorasA = JSON.parse(info.widgets_values[currentLorasAIndex]);
+                            } catch (e) {
+                                node.currentLorasA = [];
+                            }
+                        }
+                        if (currentLorasBIndex >= 0 && info.widgets_values[currentLorasBIndex]) {
+                            try {
+                                node.currentLorasB = JSON.parse(info.widgets_values[currentLorasBIndex]);
+                            } catch (e) {
+                                node.currentLorasB = [];
+                            }
+                        }
+                    } else {
+                        // Fresh load - clear current loras
+                        node.currentLorasA = [];
+                        node.currentLorasB = [];
                     }
                 }
 
@@ -281,12 +309,12 @@ app.registerExtension({
                     filterPromptDropdown(node);
                     updateLoraDisplays(node);
                     updateTriggerWordsDisplay(node);
-                    
+
                     // Update custom prompt selector display
                     if (node.updatePromptSelectorDisplay) {
                         node.updatePromptSelectorDisplay();
                     }
-                    
+
                     app.graph.setDirtyCanvas(true, true);
                 });
 
@@ -328,29 +356,29 @@ async function loadPrompts(node) {
  */
 function getLorasFromConnectedNodes(node, inputName) {
     const loras = [];
-    
+
     // Find the input slot
     const inputIndex = node.inputs?.findIndex(input => input.name === inputName);
     if (inputIndex === -1 || inputIndex === undefined) {
         return loras;
     }
-    
+
     const input = node.inputs[inputIndex];
     if (!input || !input.link) {
         return loras;
     }
-    
+
     // Get the link and find the source node
     const link = app.graph.links[input.link];
     if (!link) {
         return loras;
     }
-    
+
     const sourceNode = app.graph.getNodeById(link.origin_id);
     if (!sourceNode) {
         return loras;
     }
-    
+
     // Try to extract LoRA data based on node type
     return extractLorasFromNode(sourceNode);
 }
@@ -360,7 +388,7 @@ function getLorasFromConnectedNodes(node, inputName) {
  */
 function extractLorasFromNode(sourceNode) {
     const loras = [];
-    
+
     // Check for LoRA Manager's loras widget (most reliable source)
     const lorasWidget = sourceNode.widgets?.find(w => w.name === "loras");
     if (lorasWidget && lorasWidget.value) {
@@ -380,7 +408,7 @@ function extractLorasFromNode(sourceNode) {
         }
         return loras;
     }
-    
+
     // Check for text widget with LoRA syntax (e.g., <lora:name:strength>)
     const textWidget = sourceNode.widgets?.find(w => w.name === "text");
     if (textWidget && textWidget.value) {
@@ -389,7 +417,7 @@ function extractLorasFromNode(sourceNode) {
             const name = match[1].trim();
             const modelStrength = parseFloat(match[2]) || 1.0;
             const clipStrength = match[3] ? parseFloat(match[3]) : modelStrength;
-            
+
             loras.push({
                 name: name,
                 path: "",
@@ -401,20 +429,20 @@ function extractLorasFromNode(sourceNode) {
         }
         return loras;
     }
-    
+
     // Check for lora_name and strength widgets (individual LoRA loader nodes)
     const loraNameWidget = sourceNode.widgets?.find(w => w.name === "lora_name");
-    const strengthWidget = sourceNode.widgets?.find(w => 
+    const strengthWidget = sourceNode.widgets?.find(w =>
         w.name === "strength" || w.name === "strength_model" || w.name === "model_strength"
     );
-    const clipStrengthWidget = sourceNode.widgets?.find(w => 
+    const clipStrengthWidget = sourceNode.widgets?.find(w =>
         w.name === "strength_clip" || w.name === "clip_strength"
     );
-    
+
     if (loraNameWidget && loraNameWidget.value) {
         const modelStrength = strengthWidget ? parseFloat(strengthWidget.value) || 1.0 : 1.0;
         const clipStrength = clipStrengthWidget ? parseFloat(clipStrengthWidget.value) || modelStrength : modelStrength;
-        
+
         loras.push({
             name: loraNameWidget.value.replace(/\.[^/.]+$/, ""), // Remove file extension
             path: loraNameWidget.value,
@@ -424,7 +452,7 @@ function extractLorasFromNode(sourceNode) {
             strength: modelStrength
         });
     }
-    
+
     return loras;
 }
 
@@ -433,37 +461,37 @@ function extractLorasFromNode(sourceNode) {
  */
 function collectAllLorasFromChain(node, inputName, visited = new Set()) {
     const allLoras = [];
-    
+
     // Find the input slot
     const inputIndex = node.inputs?.findIndex(input => input.name === inputName);
     if (inputIndex === -1 || inputIndex === undefined) {
         return allLoras;
     }
-    
+
     const input = node.inputs[inputIndex];
     if (!input || !input.link) {
         return allLoras;
     }
-    
+
     // Get the link and find the source node
     const link = app.graph.links[input.link];
     if (!link) {
         return allLoras;
     }
-    
+
     const sourceNode = app.graph.getNodeById(link.origin_id);
     if (!sourceNode || visited.has(sourceNode.id)) {
         return allLoras;
     }
-    
+
     visited.add(sourceNode.id);
-    
+
     // Extract LoRAs from this node
     const nodeLoras = extractLorasFromNode(sourceNode);
     allLoras.push(...nodeLoras);
-    
+
     // Check if this node has a lora_stack input (for chained stackers)
-    const loraStackInput = sourceNode.inputs?.find(inp => 
+    const loraStackInput = sourceNode.inputs?.find(inp =>
         inp.name === "lora_stack" || inp.name === "loras"
     );
     if (loraStackInput && loraStackInput.link) {
@@ -471,7 +499,7 @@ function collectAllLorasFromChain(node, inputName, visited = new Set()) {
         // Prepend upstream loras (they come first in the chain)
         allLoras.unshift(...upstreamLoras);
     }
-    
+
     return allLoras;
 }
 
@@ -510,7 +538,7 @@ function addLoraDisplays(node) {
         // Check if use_lora_input is disabled (use only saved loras)
         const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
         const useLoraInput = useLoraInputWidget?.value !== false;
-        
+
         // Count loras based on mode
         let tagCount;
         if (!useLoraInput) {
@@ -523,7 +551,7 @@ function addLoraDisplays(node) {
             (node.savedLorasA || []).forEach(l => seen.add(l.name));
             tagCount = seen.size;
         }
-        
+
         // Use node's actual width, not the passed width which may be stale
         // Subtract ~32px for container padding (8px) + widget margins (~24px)
         const actualWidth = node.size?.[0] || width || 400;
@@ -542,7 +570,7 @@ function addLoraDisplays(node) {
         // Check if use_lora_input is disabled
         const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
         const useLoraInput = useLoraInputWidget?.value !== false;
-        
+
         // Count loras based on mode
         let tagCount;
         if (!useLoraInput) {
@@ -555,7 +583,7 @@ function addLoraDisplays(node) {
             (node.savedLorasB || []).forEach(l => seen.add(l.name));
             tagCount = seen.size;
         }
-        
+
         // Use node's actual width, not the passed width which may be stale
         // Subtract ~32px for container padding (8px) + widget margins (~24px)
         const actualWidth = node.size?.[0] || width || 400;
@@ -580,6 +608,19 @@ function addLoraDisplays(node) {
     lorasBToggleWidget.computeSize = () => [0, -4];
     node.lorasBToggleWidget = lorasBToggleWidget;
 
+    // Add hidden widgets to store current (connected) loras for tab-switch persistence
+    const currentLorasAWidget = node.addWidget('text', 'current_loras_a', '[]');
+    currentLorasAWidget.type = "converted-widget";
+    currentLorasAWidget.hidden = true;
+    currentLorasAWidget.computeSize = () => [0, -4];
+    node.currentLorasAWidget = currentLorasAWidget;
+
+    const currentLorasBWidget = node.addWidget('text', 'current_loras_b', '[]');
+    currentLorasBWidget.type = "converted-widget";
+    currentLorasBWidget.hidden = true;
+    currentLorasBWidget.computeSize = () => [0, -4];
+    node.currentLorasBWidget = currentLorasBWidget;
+
     node.loraDisplaysAttached = true;
 }
 
@@ -597,7 +638,7 @@ function createLoraDisplayContainer(title, stackId, node) {
         boxSizing: "border-box",
         marginTop: "4px"
     });
-    
+
     // Prevent default context menu on container (LoRA tags have their own)
     container.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -709,8 +750,8 @@ function mergeLoraLists(currentLoras, savedLoras) {
             // Lora exists in both - mark as 'saved' since user has it in their preset
             // This ensures modifications are persisted to savedLoras, not currentLoras
             // Preserve fromInput flag if it was already set (meaning it was moved from current to saved)
-            merged.push({ 
-                ...lora, 
+            merged.push({
+                ...lora,
                 active: savedLora.active,
                 strength: savedLora.strength ?? savedLora.model_strength ?? lora.strength ?? 1.0,
                 source: 'saved',  // Important: mark as saved so modifications persist correctly
@@ -864,7 +905,7 @@ function createLoraTag(lora, index, stackId, node) {
         outline: "none",
         cursor: "text"
     });
-    
+
     // Handle focus - select all text
     strengthInput.addEventListener("focus", (e) => {
         e.stopPropagation();
@@ -872,12 +913,12 @@ function createLoraTag(lora, index, stackId, node) {
         strengthInput.style.backgroundColor = "rgba(255,255,255,0.25)";
         strengthInput.style.border = "1px solid rgba(66, 153, 225, 0.6)";
     });
-    
+
     // Handle blur - apply value
     strengthInput.addEventListener("blur", () => {
         strengthInput.style.backgroundColor = "rgba(255,255,255,0.15)";
         strengthInput.style.border = "1px solid transparent";
-        
+
         const newValue = parseFloat(strengthInput.value);
         if (!isNaN(newValue) && newValue >= 0) {
             setLoraStrength(node, stackId, index, newValue);
@@ -886,7 +927,7 @@ function createLoraTag(lora, index, stackId, node) {
             strengthInput.value = strength.toFixed(2);
         }
     });
-    
+
     // Handle Enter key
     strengthInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -899,12 +940,12 @@ function createLoraTag(lora, index, stackId, node) {
         }
         e.stopPropagation();
     });
-    
+
     // Prevent click from toggling the tag
     strengthInput.addEventListener("click", (e) => {
         e.stopPropagation();
     });
-    
+
     tag.appendChild(strengthInput);
 
     // Click handler to toggle active state (but not when clicking on input)
@@ -920,7 +961,7 @@ function createLoraTag(lora, index, stackId, node) {
     tag.addEventListener("mouseenter", (e) => {
         tag.style.transform = "translateY(-1px)";
         tag.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
-        
+
         // Show LoRA Manager preview tooltip if available (with small delay)
         // Position it to the right/below to not cover the tag
         if (loraManagerAvailable && isAvailable) {
@@ -939,7 +980,7 @@ function createLoraTag(lora, index, stackId, node) {
     tag.addEventListener("mouseleave", () => {
         tag.style.transform = "translateY(0)";
         tag.style.boxShadow = "none";
-        
+
         // Clear hover timeout and hide tooltip
         if (hoverTimeout) {
             clearTimeout(hoverTimeout);
@@ -970,7 +1011,7 @@ function toggleLoraActive(node, stackId, index) {
     // Check if use_lora_input is disabled
     const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
     const useLoraInput = useLoraInputWidget?.value !== false;
-    
+
     // Get the list that matches what's currently displayed
     let loraList;
     if (!useLoraInput) {
@@ -978,24 +1019,24 @@ function toggleLoraActive(node, stackId, index) {
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
         // use_lora_input ON: merged list is displayed
-        loraList = stackId === "a" ? 
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
+        loraList = stackId === "a" ?
+            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
             mergeLoraLists(node.currentLorasB, node.savedLorasB);
     }
-    
+
     if (loraList[index]) {
         const lora = loraList[index];
-        
+
         // Toggle the active state
         loraList[index].active = !loraList[index].active;
-        
+
         // If this was a connected lora (source: 'current'), move it to saved
         // so that the toggle state persists across workflow executions
         if (lora.source === 'current') {
             loraList[index].source = 'saved';
             loraList[index].fromInput = true;  // Preserve visual indicator that it came from input
         }
-        
+
         // Update the appropriate list
         if (!useLoraInput) {
             // Only update saved loras when use_lora_input is off
@@ -1011,7 +1052,7 @@ function toggleLoraActive(node, stackId, index) {
                 updateLoraListFromMerged(node, "b", loraList);
             }
         }
-        
+
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
     }
@@ -1098,7 +1139,7 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
             document.removeEventListener("contextmenu", closeMenu);
         }
     };
-    
+
     // Delay adding listener to prevent immediate close
     setTimeout(() => {
         document.addEventListener("click", closeMenu);
@@ -1110,21 +1151,21 @@ function removeLora(node, stackId, index) {
     // Check if use_lora_input is disabled
     const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
     const useLoraInput = useLoraInputWidget?.value !== false;
-    
+
     // Get the list that matches what's currently displayed
     let loraList;
     if (!useLoraInput) {
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
-        loraList = stackId === "a" ? 
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
+        loraList = stackId === "a" ?
+            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
             mergeLoraLists(node.currentLorasB, node.savedLorasB);
     }
-    
+
     if (loraList[index]) {
         const lora = loraList[index];
         const loraNameLower = lora.name.toLowerCase();
-        
+
         // Remove from saved loras
         if (stackId === "a") {
             node.savedLorasA = (node.savedLorasA || []).filter(
@@ -1135,7 +1176,7 @@ function removeLora(node, stackId, index) {
                 l => l.name.toLowerCase() !== loraNameLower
             );
         }
-        
+
         // Also remove from current loras if present
         if (stackId === "a") {
             node.currentLorasA = (node.currentLorasA || []).filter(
@@ -1146,7 +1187,7 @@ function removeLora(node, stackId, index) {
                 l => l.name.toLowerCase() !== loraNameLower
             );
         }
-        
+
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
     }
@@ -1159,7 +1200,7 @@ function setLoraStrength(node, stackId, index, newStrength) {
     // Check if use_lora_input is disabled
     const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
     const useLoraInput = useLoraInputWidget?.value !== false;
-    
+
     // Get the list that matches what's currently displayed
     let loraList;
     if (!useLoraInput) {
@@ -1167,14 +1208,14 @@ function setLoraStrength(node, stackId, index, newStrength) {
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
         // use_lora_input ON: merged list is displayed
-        loraList = stackId === "a" ? 
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
+        loraList = stackId === "a" ?
+            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
             mergeLoraLists(node.currentLorasB, node.savedLorasB);
     }
-    
+
     if (loraList[index]) {
         loraList[index].strength = newStrength;
-        
+
         if (!useLoraInput) {
             // Only update saved loras when use_lora_input is off
             if (stackId === "a") {
@@ -1189,7 +1230,7 @@ function setLoraStrength(node, stackId, index, newStrength) {
                 updateLoraListFromMerged(node, "b", loraList);
             }
         }
-        
+
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
     }
@@ -1199,7 +1240,7 @@ function toggleAllLoras(node, stackId) {
     // Check if use_lora_input is disabled
     const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
     const useLoraInput = useLoraInputWidget?.value !== false;
-    
+
     // Get the list that matches what's currently displayed
     let loraList;
     if (!useLoraInput) {
@@ -1207,15 +1248,15 @@ function toggleAllLoras(node, stackId) {
         loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
     } else {
         // use_lora_input ON: merged list is displayed
-        loraList = stackId === "a" ? 
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) : 
+        loraList = stackId === "a" ?
+            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
             mergeLoraLists(node.currentLorasB, node.savedLorasB);
     }
-    
+
     // Determine if we should turn all on or all off
     const allActive = loraList.every(lora => lora.active !== false);
     const newState = !allActive;
-    
+
     loraList.forEach(lora => {
         lora.active = newState;
         // Move connected loras to saved so toggle state persists
@@ -1223,7 +1264,7 @@ function toggleAllLoras(node, stackId) {
             lora.source = 'saved';
         }
     });
-    
+
     if (!useLoraInput) {
         // Only update saved loras when use_lora_input is off
         if (stackId === "a") {
@@ -1238,7 +1279,7 @@ function toggleAllLoras(node, stackId) {
             updateLoraListFromMerged(node, "b", loraList);
         }
     }
-    
+
     updateLoraDisplays(node);
     app.graph.setDirtyCanvas(true, true);
 }
@@ -1247,7 +1288,7 @@ function updateLoraListFromMerged(node, stackId, mergedList) {
     // Separate back into current and saved lists based on source
     const currentLoras = [];
     const savedLoras = [];
-    
+
     mergedList.forEach(lora => {
         if (lora.source === 'current') {
             currentLoras.push(lora);
@@ -1255,7 +1296,7 @@ function updateLoraListFromMerged(node, stackId, mergedList) {
             savedLoras.push(lora);
         }
     });
-    
+
     if (stackId === "a") {
         node.currentLorasA = currentLoras;
         node.savedLorasA = savedLoras;
@@ -1276,18 +1317,26 @@ function updateToggleWidgets(node) {
             strength: lora.strength ?? lora.model_strength ?? 1.0
         }));
     };
-    
+
     // Only serialize saved loras (not current/connected ones)
     const lorasA = node.savedLorasA || [];
     const lorasB = node.savedLorasB || [];
-    
+
     if (node.lorasAToggleWidget) {
         node.lorasAToggleWidget.value = JSON.stringify(formatForBackend(lorasA));
     }
     if (node.lorasBToggleWidget) {
         node.lorasBToggleWidget.value = JSON.stringify(formatForBackend(lorasB));
     }
-    
+
+    // Store current loras for tab-switch persistence
+    if (node.currentLorasAWidget) {
+        node.currentLorasAWidget.value = JSON.stringify(node.currentLorasA || []);
+    }
+    if (node.currentLorasBWidget) {
+        node.currentLorasBWidget.value = JSON.stringify(node.currentLorasB || []);
+    }
+
     // Format and store trigger words
     const triggerWords = node.savedTriggerWords || [];
     if (node.triggerWordsToggleWidget) {
@@ -1319,21 +1368,21 @@ function addTriggerWordsDisplay(node) {
             const height = 58 + Math.max(28, tagsHeight + 8);
             return [width, height];
         }
-        
+
         // Fallback: estimate based on tag count
         const merged = mergeTriggerWordLists(node.currentTriggerWords || [], node.savedTriggerWords || []);
-        
+
         if (merged.length === 0) {
             return [width, 58 + 28];  // Base height + one row for empty message
         }
-        
+
         // Simple estimate: assume average ~80px per tag
         const actualWidth = node.size?.[0] || width || 400;
         const availableWidth = actualWidth - 24;
         const avgTagWidth = 80;
         const tagsPerRow = Math.max(1, Math.floor(availableWidth / avgTagWidth));
         const rows = Math.max(1, Math.ceil(merged.length / tagsPerRow));
-        
+
         const height = 58 + rows * 28;
         return [width, height];
     };
@@ -1364,7 +1413,7 @@ function createTriggerWordsDisplayContainer(title, node) {
         boxSizing: "border-box",
         marginTop: "4px"
     });
-    
+
     // Prevent default context menu on container (trigger word tags have their own)
     container.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -1624,7 +1673,7 @@ function toggleTriggerWordActive(node, index) {
         const savedIndex = (node.savedTriggerWords || []).findIndex(
             w => w.text.toLowerCase() === word.text.toLowerCase()
         );
-        
+
         if (savedIndex >= 0) {
             node.savedTriggerWords[savedIndex].active = triggerWords[index].active;
         } else {
@@ -1656,12 +1705,12 @@ function toggleAllTriggerWords(node) {
     // Update all trigger words
     triggerWords.forEach(word => {
         word.active = newState;
-        
+
         // Update or add to saved list
         const savedIndex = (node.savedTriggerWords || []).findIndex(
             w => w.text.toLowerCase() === word.text.toLowerCase()
         );
-        
+
         if (savedIndex >= 0) {
             node.savedTriggerWords[savedIndex].active = newState;
         } else {
@@ -1684,25 +1733,25 @@ async function addTriggerWordPrompt(node) {
         "Enter trigger word(s) separated by commas:",
         ""
     );
-    
+
     if (input && input.trim()) {
         // Parse comma-separated words
         const newWords = input.split(',')
             .map(w => w.trim())
             .filter(w => w.length > 0);
-        
+
         if (newWords.length === 0) return;
-        
+
         // Add each word to savedTriggerWords if not already present
         if (!node.savedTriggerWords) node.savedTriggerWords = [];
-        
+
         const existingLower = new Set(
             node.savedTriggerWords.map(w => w.text.toLowerCase())
         );
         const currentLower = new Set(
             (node.currentTriggerWords || []).map(w => w.text.toLowerCase())
         );
-        
+
         for (const word of newWords) {
             const wordLower = word.toLowerCase();
             // Only add if not already in saved or current
@@ -1715,7 +1764,7 @@ async function addTriggerWordPrompt(node) {
                 existingLower.add(wordLower);
             }
         }
-        
+
         updateTriggerWordsDisplay(node);
         app.graph.setDirtyCanvas(true, true);
     }
@@ -1775,7 +1824,7 @@ function showTriggerWordContextMenu(e, node, index, wordText) {
             document.removeEventListener("contextmenu", closeMenu);
         }
     };
-    
+
     // Delay adding listener to prevent immediate close
     setTimeout(() => {
         document.addEventListener("click", closeMenu);
@@ -1789,25 +1838,25 @@ function removeTriggerWord(node, index) {
         node.currentTriggerWords || [],
         node.savedTriggerWords || []
     );
-    
+
     if (triggerWords[index]) {
         const word = triggerWords[index];
         const wordLower = word.text.toLowerCase();
-        
+
         // Remove from savedTriggerWords
         if (node.savedTriggerWords) {
             node.savedTriggerWords = node.savedTriggerWords.filter(
                 w => w.text.toLowerCase() !== wordLower
             );
         }
-        
+
         // Remove from currentTriggerWords (if it came from connected input)
         if (node.currentTriggerWords) {
             node.currentTriggerWords = node.currentTriggerWords.filter(
                 w => w.text.toLowerCase() !== wordLower
             );
         }
-        
+
         updateTriggerWordsDisplay(node);
         app.graph.setDirtyCanvas(true, true);
     }
@@ -1833,7 +1882,7 @@ function addButtonBar(node) {
     buttonContainer.style.padding = "4px 4px 8px 4px";
     buttonContainer.style.flexWrap = "nowrap";
     buttonContainer.style.marginTop = "0";
-    
+
     // Prevent default context menu on button bar
     buttonContainer.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -1841,7 +1890,7 @@ function addButtonBar(node) {
     const savePromptBtn = createButton("Save Prompt", async () => {
         const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
         const currentCategory = categoryWidget.value;
-        
+
         const result = await showPromptWithCategory(
             "Save Prompt",
             "Enter prompt name:",
@@ -1849,12 +1898,12 @@ function addButtonBar(node) {
             categories,
             currentCategory
         );
-        
+
         if (result && result.name && result.name.trim()) {
             const promptName = result.name.trim();
             const targetCategory = result.category;
             const promptText = textWidget.value;
-            
+
             // Check for existing prompt in target category
             let existingPromptName = null;
             if (node.prompts[targetCategory]) {
@@ -1879,19 +1928,19 @@ function addButtonBar(node) {
             // Also use node.currentLorasA/B which are populated from backend (works for PromptExtractor)
             const chainLorasA = collectAllLorasFromChain(node, "lora_stack_a");
             const chainLorasB = collectAllLorasFromChain(node, "lora_stack_b");
-            
+
             // Combine chain loras with currentLoras (from backend update)
             // This handles both widget-based stackers and output-only nodes like PromptExtractor
             const connectedLorasA = chainLorasA.length > 0 ? chainLorasA : (node.currentLorasA || []);
             const connectedLorasB = chainLorasB.length > 0 ? chainLorasB : (node.currentLorasB || []);
-            
+
             // Check if use_lora_input is disabled
             const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
             const useLoraInput = useLoraInputWidget?.value !== false;
-            
+
             // Get loras to save
             let allLorasA, allLorasB;
-            
+
             if (!useLoraInput) {
                 allLorasA = [...(node.savedLorasA || [])];
                 allLorasB = [...(node.savedLorasB || [])];
@@ -1916,34 +1965,34 @@ function addButtonBar(node) {
 
             // Use connected thumbnail if available
             const thumbnail = node.connectedThumbnail || null;
-            
+
             await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail);
-            
+
             // Clear new prompt flag since it's now saved
             node.isNewUnsavedPrompt = false;
             node.newPromptCategory = null;
             node.newPromptName = null;
-            
+
             // Update UI to show the saved prompt
             categoryWidget.value = targetCategory;
             filterPromptDropdown(node);
             promptWidget.value = promptName;
-            
+
             // Update previous values tracking
             node._previousCategory = targetCategory;
             node._previousPrompt = promptName;
-            
+
             node.savedLorasA = allLorasA;
             node.savedLorasB = allLorasB;
             node.savedTriggerWords = allTriggerWords;
             updateLoraDisplays(node);
             updateTriggerWordsDisplay(node);
-            
+
             // Update custom prompt selector display
             if (node.updatePromptSelectorDisplay) {
                 node.updatePromptSelectorDisplay();
             }
-            
+
             // Update last saved state after successful save
             updateLastSavedState(node);
         }
@@ -1954,7 +2003,7 @@ function addButtonBar(node) {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
         const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
-        
+
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
@@ -1966,18 +2015,18 @@ function addButtonBar(node) {
                 return;
             }
         }
-        
+
         // Keep the current category, just clear the prompt selection and content
         const currentCategory = categoryWidget.value;
-        
+
         // Clear prompt selection (set to empty/placeholder)
         promptWidget.value = "";
         textWidget.value = "";
-        
+
         // Update previous values for cancel/revert
         node._previousCategory = currentCategory;
         node._previousPrompt = "";
-        
+
         // Clear all loras and trigger words for the new prompt
         node.savedLorasA = [];
         node.savedLorasB = [];
@@ -1985,23 +2034,23 @@ function addButtonBar(node) {
         node.currentLorasB = [];
         node.savedTriggerWords = [];
         node.currentTriggerWords = [];
-        
+
         updateLoraDisplays(node);
         updateTriggerWordsDisplay(node);
-        
+
         // Update custom prompt selector display
         if (node.updatePromptSelectorDisplay) {
             node.updatePromptSelectorDisplay();
         }
-        
+
         // Mark as new unsaved prompt state
         node.isNewUnsavedPrompt = true;
         node.newPromptCategory = currentCategory;
         node.newPromptName = null;
-        
+
         // Clear the last saved state since this is a brand new prompt
         node.lastSavedState = null;
-        
+
         node.serialize_widgets = true;
         app.graph.setDirtyCanvas(true, true);
     });
@@ -2012,7 +2061,7 @@ function addButtonBar(node) {
             label: "New Category",
             action: async () => {
                 const categoryName = await showTextPrompt("New Category", "Enter new category name:");
-                
+
                 if (categoryName && categoryName.trim()) {
                     let existingCategoryName = null;
                     if (node.prompts) {
@@ -2092,12 +2141,12 @@ function setupCategoryChangeHandler(node) {
     categoryWidget.callback = async function(value) {
         const previousCategory = node._previousCategory;
         const previousPrompt = node._previousPrompt;
-        
+
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
             const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
-            
+
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
                     "Unsaved Changes",
@@ -2117,7 +2166,7 @@ function setupCategoryChangeHandler(node) {
                     return;
                 }
             }
-            
+
             // Clear new prompt flag when switching away
             node.isNewUnsavedPrompt = false;
             node.newPromptCategory = null;
@@ -2154,11 +2203,11 @@ function setupCategoryChangeHandler(node) {
                 // Update last saved state
                 updateLastSavedState(node);
             }
-            
+
             // Update previous values after successful switch
             node._previousCategory = category;
             node._previousPrompt = promptWidget.value;
-            
+
             // Update custom prompt selector display
             if (node.updatePromptSelectorDisplay) {
                 node.updatePromptSelectorDisplay();
@@ -2174,12 +2223,12 @@ function setupCategoryChangeHandler(node) {
     promptWidget.callback = async function(value) {
         const previousCategory = node._previousCategory;
         const previousPrompt = node._previousPrompt;
-        
+
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
             const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
-            
+
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
                     "Unsaved Changes",
@@ -2198,7 +2247,7 @@ function setupCategoryChangeHandler(node) {
                     return;
                 }
             }
-            
+
             // Clear new prompt flag when switching away
             node.isNewUnsavedPrompt = false;
             node.newPromptCategory = null;
@@ -2213,12 +2262,12 @@ function setupCategoryChangeHandler(node) {
         await loadPrompts(node);
 
         const category = categoryWidget.value;
-        
+
         // Update prompt dropdown options in case prompts were deleted/added in another tab
         if (node.prompts && node.prompts[category]) {
             const promptNames = Object.keys(node.prompts[category]).sort((a, b) => a.localeCompare(b));
             promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
-            
+
             // Check if selected prompt still exists after reload
             if (!promptNames.includes(value)) {
                 // Prompt was deleted in another tab, switch to first available
@@ -2226,13 +2275,13 @@ function setupCategoryChangeHandler(node) {
                 promptWidget.value = value;
             }
         }
-        
+
         await loadPromptData(node, category, value);
-        
+
         // Update previous values after successful switch
         node._previousCategory = category;
         node._previousPrompt = value;
-        
+
         // Update custom prompt selector display
         if (node.updatePromptSelectorDisplay) {
             node.updatePromptSelectorDisplay();
@@ -2279,7 +2328,7 @@ function setupUseExternalToggleHandler(node) {
     const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
     const categoryWidget = node.widgets?.find(w => w.name === "category");
     const promptWidget = node.widgets?.find(w => w.name === "name");
-    
+
     if (!textWidget || !useExternalWidget) return;
 
     // Setup use_lora_input toggle handler to update lora display
@@ -2289,13 +2338,13 @@ function setupUseExternalToggleHandler(node) {
             if (originalLoraInputCallback) {
                 originalLoraInputCallback.apply(this, arguments);
             }
-            
+
             // Clear current (connected) loras and reload saved from prompt
             // This ensures toggled-off connected loras don't persist
             node.currentLorasA = [];
             node.currentLorasB = [];
             node.currentTriggerWords = [];
-            
+
             // Reload saved loras from the current prompt to get clean state
             if (node.prompts) {
                 const promptData = node.prompts[categoryWidget?.value]?.[promptWidget?.value];
@@ -2314,13 +2363,13 @@ function setupUseExternalToggleHandler(node) {
                         source: 'saved',
                         available: true  // Will be updated after check
                     }));
-                    
+
                     // Check availability of all loras
                     const allLoraNames = [
                         ...lorasA.map(l => l.name),
                         ...lorasB.map(l => l.name)
                     ].filter(name => name);
-                    
+
                     if (allLoraNames.length > 0) {
                         try {
                             const response = await fetch("/prompt-manager-advanced/check-loras", {
@@ -2329,7 +2378,7 @@ function setupUseExternalToggleHandler(node) {
                                 body: JSON.stringify({ lora_names: allLoraNames })
                             });
                             const data = await response.json();
-                            
+
                             if (data.success && data.results) {
                                 // Update availability status
                                 lorasA.forEach(lora => {
@@ -2343,7 +2392,7 @@ function setupUseExternalToggleHandler(node) {
                             console.error("[PromptManagerAdvanced] Error checking LoRA availability:", error);
                         }
                     }
-                    
+
                     node.savedLorasA = lorasA;
                     node.savedLorasB = lorasB;
                 } else {
@@ -2351,7 +2400,7 @@ function setupUseExternalToggleHandler(node) {
                     node.savedLorasB = [];
                 }
             }
-            
+
             // Update lora displays when toggle changes
             updateLoraDisplays(node);
         };
@@ -2370,7 +2419,7 @@ function setupUseExternalToggleHandler(node) {
                 textWidget.inputEl.style.pointerEvents = "auto";
                 textWidget.inputEl.readOnly = true;
             }
-            
+
             // Try to show prompt input value if available
             const graph = app.graph;
             const link = graph.links[promptInputConnection.link];
@@ -2430,7 +2479,7 @@ function setupUseExternalToggleHandler(node) {
 
 async function loadPromptData(node, category, promptName) {
     const textWidget = node.widgets.find(w => w.name === "text");
-    
+
     // Always clear ALL loras and trigger words when switching prompts
     // This ensures clean state - current items will be repopulated on next execution
     node.savedLorasA = [];
@@ -2439,7 +2488,7 @@ async function loadPromptData(node, category, promptName) {
     node.currentLorasB = [];
     node.savedTriggerWords = [];
     node.currentTriggerWords = [];
-    
+
     if (!node.prompts || !node.prompts[category] || !node.prompts[category][promptName]) {
         if (textWidget) textWidget.value = "";
         updateLoraDisplays(node);
@@ -2448,11 +2497,11 @@ async function loadPromptData(node, category, promptName) {
     }
 
     const promptData = node.prompts[category][promptName];
-    
+
     if (textWidget) {
         textWidget.value = promptData.prompt || "";
     }
-    
+
     // Load saved loras - preserve active state (default true for backward compatibility)
     const lorasA = (promptData.loras_a || []).map(lora => ({
         ...lora,
@@ -2466,20 +2515,20 @@ async function loadPromptData(node, category, promptName) {
         strength: lora.strength ?? lora.model_strength ?? 1.0,
         available: true
     }));
-    
+
     // Load saved trigger words - preserve their active state
     const triggerWords = (promptData.trigger_words || []).map(word => ({
         text: word.text,
         active: word.active !== false,
         source: 'saved'
     }));
-    
+
     // Check availability of all loras
     const allLoraNames = [
         ...lorasA.map(l => l.name),
         ...lorasB.map(l => l.name)
     ].filter(name => name);
-    
+
     if (allLoraNames.length > 0) {
         try {
             const response = await fetch("/prompt-manager-advanced/check-loras", {
@@ -2488,7 +2537,7 @@ async function loadPromptData(node, category, promptName) {
                 body: JSON.stringify({ lora_names: allLoraNames })
             });
             const data = await response.json();
-            
+
             if (data.success && data.results) {
                 // Update availability status
                 lorasA.forEach(lora => {
@@ -2502,14 +2551,14 @@ async function loadPromptData(node, category, promptName) {
             console.error("[PromptManagerAdvanced] Error checking LoRA availability:", error);
         }
     }
-    
+
     node.savedLorasA = lorasA;
     node.savedLorasB = lorasB;
     node.savedTriggerWords = triggerWords;
-    
+
     // Update last saved state for change detection
     updateLastSavedState(node);
-    
+
     updateLoraDisplays(node);
     updateTriggerWordsDisplay(node);
 }
@@ -2524,21 +2573,21 @@ async function loadPromptData(node, category, promptName) {
 function getCurrentStateSnapshot(node) {
     const textWidget = node.widgets?.find(w => w.name === "text");
     const text = textWidget?.value || "";
-    
+
     // Get all loras with their states
     const lorasA = (node.savedLorasA || [])
         .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
         .sort((a, b) => a.name.localeCompare(b.name));
-    
+
     const lorasB = (node.savedLorasB || [])
         .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
         .sort((a, b) => a.name.localeCompare(b.name));
-    
+
     // Get all trigger words with their states
     const triggerWords = (node.savedTriggerWords || [])
         .map(tw => ({ text: tw.text, active: tw.active !== false }))
         .sort((a, b) => a.text.localeCompare(b.text));
-    
+
     return {
         text: text,
         lorasA: JSON.stringify(lorasA),
@@ -2562,13 +2611,13 @@ function hasUnsavedChanges(node) {
     if (node.isNewUnsavedPrompt) {
         return true;
     }
-    
+
     if (!node.lastSavedState) {
         return false;
     }
-    
+
     const current = getCurrentStateSnapshot(node);
-    
+
     return (
         current.text !== node.lastSavedState.text ||
         current.lorasA !== node.lastSavedState.lorasA ||
@@ -2652,12 +2701,12 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
                 active: tw.active !== false
             }))
         };
-        
+
         // Include thumbnail if provided
         if (thumbnail) {
             requestBody.thumbnail = thumbnail;
         }
-        
+
         const response = await fetch("/prompt-manager-advanced/save-prompt", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2954,7 +3003,7 @@ function showPromptWithCategory(title, message, defaultName, categories, default
         `;
 
         // Build category options
-        const categoryOptions = categories.map(cat => 
+        const categoryOptions = categories.map(cat =>
             `<option value="${cat}" ${cat === defaultCategory ? 'selected' : ''}>${cat}</option>`
         ).join('');
 
@@ -3019,10 +3068,10 @@ async function exportPromptsJSON(node) {
     try {
         const response = await fetch("/prompt-manager-advanced/get-prompts");
         const data = await response.json();
-        
+
         const jsonStr = JSON.stringify(data, null, 2);
         const blob = new Blob([jsonStr], { type: "application/json" });
-        
+
         // Try File System Access API first (works on localhost and https)
         if (window.showSaveFilePicker) {
             try {
@@ -3047,20 +3096,20 @@ async function exportPromptsJSON(node) {
                 console.log("[PromptManagerAdvanced] Save picker failed, falling back to download:", err);
             }
         }
-        
+
         // Fallback: Prompt user for filename, then download
         const filename = await showTextPrompt(
             "Export Prompts",
             "Enter filename for export:",
             "prompt_manager_data.json"
         );
-        
+
         if (!filename) {
             return; // User cancelled
         }
-        
+
         const finalFilename = filename.endsWith(".json") ? filename : filename + ".json";
-        
+
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -3069,7 +3118,7 @@ async function exportPromptsJSON(node) {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        
+
         await showInfo("Export Complete", "Prompts exported successfully!");
     } catch (error) {
         console.error("[PromptManagerAdvanced] Error exporting prompts:", error);
@@ -3082,34 +3131,34 @@ async function importPromptsJSON(node) {
         const input = document.createElement("input");
         input.type = "file";
         input.accept = ".json";
-        
+
         input.onchange = async (e) => {
             const file = e.target.files[0];
             if (!file) {
                 resolve(false);
                 return;
             }
-            
+
             try {
                 const text = await file.text();
                 const importedData = JSON.parse(text);
-                
+
                 // Validate structure
                 if (typeof importedData !== 'object' || Array.isArray(importedData)) {
                     await showInfo("Error", "Invalid JSON structure. Expected an object with categories.");
                     resolve(false);
                     return;
                 }
-                
+
                 // Ask user how to handle import
                 const importMode = await showImportOptions();
-                
+
                 if (importMode === null) {
                     // User cancelled
                     resolve(false);
                     return;
                 }
-                
+
                 // Send to backend
                 const response = await fetch("/prompt-manager-advanced/import-prompts", {
                     method: "POST",
@@ -3119,17 +3168,17 @@ async function importPromptsJSON(node) {
                         mode: importMode
                     })
                 });
-                
+
                 const result = await response.json();
-                
+
                 if (result.success) {
                     node.prompts = result.prompts;
                     updateDropdowns(node);
-                    
+
                     // Reload the current prompt's data (loras and trigger words)
                     const categoryWidget = node.widgets.find(w => w.name === "category");
                     const promptWidget = node.widgets.find(w => w.name === "name");
-                    
+
                     if (categoryWidget && promptWidget && promptWidget.value) {
                         await loadPromptData(node, categoryWidget.value, promptWidget.value);
                     } else {
@@ -3141,10 +3190,10 @@ async function importPromptsJSON(node) {
                         updateLoraDisplays(node);
                         updateTriggerWordsDisplay(node);
                     }
-                    
+
                     node.serialize_widgets = true;
                     app.graph.setDirtyCanvas(true, true);
-                    
+
                     await showInfo("Import Complete", `Successfully imported prompts!`);
                     resolve(true);
                 } else {
@@ -3157,7 +3206,7 @@ async function importPromptsJSON(node) {
                 resolve(false);
             }
         };
-        
+
         input.click();
     });
 }
@@ -3465,7 +3514,7 @@ function resizeImageToThumbnail(file, maxSize = 128) {
                 // Calculate new dimensions maintaining aspect ratio
                 let width = img.width;
                 let height = img.height;
-                
+
                 if (width > height) {
                     if (width > maxSize) {
                         height = Math.round((height * maxSize) / width);
@@ -3477,14 +3526,14 @@ function resizeImageToThumbnail(file, maxSize = 128) {
                         height = maxSize;
                     }
                 }
-                
+
                 // Create canvas and draw resized image
                 const canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = height;
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0, width, height);
-                
+
                 // Convert to JPEG for smaller file size
                 resolve(canvas.toDataURL('image/jpeg', 0.85));
             };
@@ -3503,7 +3552,7 @@ function resizeImageToThumbnail(file, maxSize = 128) {
 function showThumbnailBrowser(node, currentCategory, currentPrompt) {
     return new Promise((resolve) => {
         let selectedCategory = currentCategory;
-        
+
         const overlay = document.createElement("div");
         overlay.style.cssText = `
             position: fixed;
@@ -3532,7 +3581,7 @@ function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             flex-direction: column;
             box-shadow: 0 8px 32px rgba(0,0,0,0.6);
         `;
-        
+
         // Prevent default context menu on dialog (thumbnail cards have their own)
         dialog.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -3583,7 +3632,7 @@ function showThumbnailBrowser(node, currentCategory, currentPrompt) {
 
         const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
         const categoryButtons = [];
-        
+
         const updateCategoryButtons = () => {
             categoryButtons.forEach(btn => {
                 const isSelected = btn.dataset.category === selectedCategory;
@@ -3667,12 +3716,12 @@ function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         // Create thumbnail cards for selected category
         const createThumbnailCards = (filter = "") => {
             grid.innerHTML = "";
-            
+
             // Get prompts for selected category
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const promptNames = Object.keys(categoryPrompts).sort((a, b) => a.localeCompare(b));
-            
-            const filteredPrompts = filter 
+
+            const filteredPrompts = filter
                 ? promptNames.filter(name => name.toLowerCase().includes(filter.toLowerCase()))
                 : promptNames;
 
@@ -3988,15 +4037,15 @@ async function saveThumbnail(node, category, promptName, thumbnail) {
 function createPromptSelectorWidget(node) {
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
-    
+
     if (!categoryWidget || !promptWidget) return;
-    
+
     // Hide the original category and prompt widgets visually but keep them functional
     categoryWidget.type = "converted-widget";
     categoryWidget.computeSize = () => [0, -4];
     promptWidget.type = "converted-widget";
     promptWidget.computeSize = () => [0, -4];
-    
+
     // Create custom selector container
     const container = document.createElement("div");
     container.style.cssText = `
@@ -4010,7 +4059,7 @@ function createPromptSelectorWidget(node) {
         margin: 0;
         position: relative;
     `;
-    
+
     // Prevent default context menu on prompt selector
     container.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -4140,7 +4189,7 @@ function createPromptSelectorWidget(node) {
     const getAllPromptsFlat = () => {
         const allPrompts = [];
         if (!node.prompts) return allPrompts;
-        
+
         const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
         for (const cat of categories) {
             const prompts = Object.keys(node.prompts[cat]).sort((a, b) => a.localeCompare(b));
@@ -4153,7 +4202,7 @@ function createPromptSelectorWidget(node) {
 
     // Find current position in flattened list
     const getCurrentIndex = (allPrompts) => {
-        return allPrompts.findIndex(p => 
+        return allPrompts.findIndex(p =>
             p.category === categoryWidget.value && p.prompt === promptWidget.value
         );
     };
@@ -4164,7 +4213,7 @@ function createPromptSelectorWidget(node) {
         if (!skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
             const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
-            
+
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
                     "Unsaved Changes",
@@ -4176,19 +4225,19 @@ function createPromptSelectorWidget(node) {
                     return false;  // User cancelled, don't navigate
                 }
             }
-            
+
             // Clear new prompt flag when switching away
             node.isNewUnsavedPrompt = false;
             node.newPromptCategory = null;
             node.newPromptName = null;
         }
-        
+
         // Set flag to skip unsaved check in the widget callbacks (we already checked above)
         node._skipUnsavedCheck = true;
-        
+
         try {
             const categoryChanged = item.category !== categoryWidget.value;
-            
+
             if (categoryChanged) {
                 // Change category first
                 categoryWidget.value = item.category;
@@ -4196,7 +4245,7 @@ function createPromptSelectorWidget(node) {
                     await categoryWidget.callback(item.category);
                 }
             }
-            
+
             // Then change prompt
             if (promptWidget.callback) {
                 await promptWidget.callback(item.prompt);
@@ -4208,7 +4257,7 @@ function createPromptSelectorWidget(node) {
             // Clear the skip flag
             node._skipUnsavedCheck = false;
         }
-        
+
         return true;
     };
 
@@ -4237,11 +4286,11 @@ function createPromptSelectorWidget(node) {
     // Open thumbnail browser on click
     nameDisplay.onclick = async (e) => {
         e.stopPropagation();
-        
+
         // Check for unsaved changes before opening browser
         const hasUnsaved = hasUnsavedChanges(node);
         const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
-        
+
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
@@ -4253,16 +4302,16 @@ function createPromptSelectorWidget(node) {
                 return;  // User cancelled, don't open browser
             }
         }
-        
+
         const category = categoryWidget.value;
         const currentPrompt = promptWidget.value;
-        
+
         const selection = await showThumbnailBrowser(node, category, currentPrompt);
-        
+
         if (selection) {
             // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
             await navigateTo(selection, true);
-            
+
             // Clear new prompt flag after successful navigation
             node.isNewUnsavedPrompt = false;
             node.newPromptCategory = null;

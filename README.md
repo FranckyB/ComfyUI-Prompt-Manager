@@ -245,6 +245,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 ### version 1.12.0
 - Added Lora input to extractor node, so it can be used as a passthrough, with a None Choice at top, to easily deactivate it.
 - Improved logic for determining Positive prompts in Worfklow.
+- Improved logic for finding High and Low Lora Stacks
 
 ### Version 1.11.5
 - Slight adjustement to extractor node, gets metadata in a method more consistent with ComfyUI, removing need for ffmpeg for videos.
