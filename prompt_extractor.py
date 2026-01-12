@@ -180,12 +180,12 @@ def extract_metadata_from_jpeg(file_path):
     try:
         # Get just the filename from the path
         filename = os.path.basename(file_path)
-        
+
         # Check if metadata was cached by JavaScript
         if filename in _file_metadata_cache:
             metadata = _file_metadata_cache[filename]
             print(f"[PromptExtractor] Using cached JPEG/WebP metadata for: {filename}")
-            
+
             if isinstance(metadata, dict):
                 # Check for prompt/workflow structure
                 if 'prompt' in metadata and 'workflow' in metadata:
@@ -197,11 +197,11 @@ def extract_metadata_from_jpeg(file_path):
         else:
             print(f"[PromptExtractor] No cached metadata found for JPEG/WebP: {filename}")
             print("[PromptExtractor] Note: Image metadata is read by JavaScript when file is selected")
-        
+
         # Fallback to PIL if no cached data (backwards compatibility)
         if not IMAGE_SUPPORT:
             return None, None
-        
+
         print(f"[PromptExtractor] Falling back to PIL for: {filename}")
         with Image.open(file_path) as img:
             # Try EXIF data
@@ -422,6 +422,37 @@ def build_node_map(workflow_data):
         if node_id is not None:
             node_map[node_id] = node
     return node_map
+
+
+def determine_clip_text_encode_type(node_id, workflow_data, node_map):
+    """
+    Determine if a CLIPTextEncode node is positive or negative by checking
+    what input it connects to in downstream nodes.
+    Returns: 'positive', 'negative', or None if unclear
+    """
+    links = workflow_data.get('links', [])
+
+    # Find all links where this node is the source
+    for link in links:
+        if len(link) >= 5:
+            source_node_id = link[1]
+            dest_node_id = link[3]
+            dest_slot = link[4]
+
+            if source_node_id == node_id:
+                # This node is the source, check where it connects
+                dest_node = node_map.get(dest_node_id)
+                if dest_node:
+                    dest_inputs = dest_node.get('inputs', [])
+                    # Check the destination input name
+                    if dest_slot < len(dest_inputs):
+                        input_name = dest_inputs[dest_slot].get('name', '').lower()
+                        if 'positive' in input_name:
+                            return 'positive'
+                        elif 'negative' in input_name:
+                            return 'negative'
+
+    return None
 
 
 def traverse_to_find_text(node_id, input_slot, node_map, link_map, visited=None, max_depth=20):
@@ -830,24 +861,71 @@ def find_lora_chain_terminals(workflow_data, node_map, link_map):
             continue
 
         # Check if this node receives MODEL input
+        # NOTE: Some nodes have multiple MODEL inputs (e.g., model, model_1 for high/low)
         inputs = node.get('inputs', [])
         for inp in inputs:
-            if inp.get('name') in model_input_names and inp.get('link'):
+            inp_name = inp.get('name', '')
+            inp_type = inp.get('type', '')
+
+            # Check if this is a MODEL type input (by type or by name matching)
+            if (inp_type == 'MODEL' or inp_name in model_input_names) and inp.get('link'):
                 link_id = inp['link']
                 link_info = link_map.get(link_id)
                 if link_info:
                     source_id = link_info['source_node']
-                    source_node = node_map.get(source_id)
-                    if source_node and is_lora_node(source_node.get('type', '')):
-                        # This node receives MODEL from a LoRA loader
+
+                    # Trace back through the MODEL chain to find a LoRA loader
+                    # (might go through intermediate nodes like ModelSamplingSD3)
+                    lora_source_id = trace_to_lora_loader(source_id, node_map, link_map, set())
+
+                    if lora_source_id:
+                        # Get the label to better identify high/low
+                        inp_label = inp.get('label', '').lower()
+
+                        # This node receives MODEL from a LoRA loader (possibly through intermediate nodes)
                         terminals.append({
                             'terminal_id': node_id,
                             'terminal_type': node_type,
                             'terminal_title': node.get('title', ''),
-                            'lora_source_id': source_id
+                            'lora_source_id': lora_source_id,
+                            'input_name': inp_name,  # Track which input (model, model_1, etc)
+                            'input_label': inp_label  # Track the label (model H, model L)
                         })
 
     return terminals
+
+
+def trace_to_lora_loader(node_id, node_map, link_map, visited, max_depth=10):
+    """
+    Trace backwards through MODEL connections to find the first LoRA loader node.
+    Returns the LoRA loader node ID, or None if no LoRA loader is found.
+    """
+    if max_depth <= 0 or node_id in visited:
+        return None
+
+    visited.add(node_id)
+
+    node = node_map.get(node_id)
+    if not node:
+        return None
+
+    # Check if this node is a LoRA loader
+    if is_lora_node(node.get('type', '')):
+        return node_id
+
+    # Otherwise, trace back through MODEL input
+    inputs = node.get('inputs', [])
+    for inp in inputs:
+        if inp.get('name') in ['model', 'MODEL'] and inp.get('link'):
+            link_id = inp['link']
+            link_info = link_map.get(link_id)
+            if link_info:
+                source_node_id = link_info['source_node']
+                result = trace_to_lora_loader(source_node_id, node_map, link_map, visited, max_depth - 1)
+                if result:
+                    return result
+
+    return None
 
 
 def parse_workflow_for_prompts(prompt_data, workflow_data=None):
@@ -910,7 +988,21 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
             # Extract prompts - with traversal if needed
             if node_type in ['CLIPTextEncode', 'CLIPTextEncodeSDXL', 'CLIPTextEncodeFlux']:
-                is_negative = 'negative' in title.lower()
+                # Determine positive/negative by checking output connections (most reliable)
+                connection_type = determine_clip_text_encode_type(node_id, workflow_data, node_map)
+
+                # Fallback to title checking if connections don't give us an answer
+                if not connection_type:
+                    title_lower = title.lower() if title else ""
+                    if 'negative' in title_lower:
+                        connection_type = 'negative'
+                    elif 'positive' in title_lower:
+                        connection_type = 'positive'
+                    else:
+                        # Default to positive if no clear indicator
+                        connection_type = 'positive'
+
+                print(f"[PromptExtractor] Node {node_id} ({title or 'no title'}) determined as: {connection_type}")
 
                 # First try to get text directly from widgets
                 text_found = ""
@@ -934,7 +1026,8 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                                 text_found = traversed_text
 
                 if text_found:
-                    if is_negative:
+                    print(f"[PromptExtractor] Found text ({len(text_found)} chars): {text_found[:100]}...")
+                    if connection_type == 'negative':
                         negative_prompts.append(text_found)
                     else:
                         positive_prompts.append(text_found)
@@ -948,8 +1041,11 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
             # PrimitiveStringMultiline - direct prompt text (only add if connected to something)
             elif node_type == 'PrimitiveStringMultiline':
-                # Check title for hints
-                is_negative = 'negative' in title.lower()
+                # Check title for hints (must be explicit)
+                title_lower = title.lower() if title else ""
+                is_negative = 'negative' in title_lower
+                is_positive = 'positive' in title_lower or not is_negative  # Default to positive if not explicitly negative
+
                 for val in widgets_values:
                     if isinstance(val, str) and len(val) > 20:
                         if is_negative:
@@ -965,31 +1061,37 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # and traversing backwards through MODEL connections
 
     lora_chains = []
-    processed_lora_nodes = set()
+    processed_terminals = set()  # Track by (terminal_id, input_name) tuple to allow multiple inputs per node
 
     if workflow_data and 'nodes' in workflow_data:
         # Method 1: Find chains ending at non-LoRA nodes (MODEL input chains)
         terminals = find_lora_chain_terminals(workflow_data, node_map, link_map)
 
         for terminal_info in terminals:
+            terminal_id = terminal_info['terminal_id']
+            input_name = terminal_info.get('input_name', '')
             source_id = terminal_info['lora_source_id']
-            if source_id in processed_lora_nodes:
+
+            # Track by (terminal_id, input_name) to allow same terminal with multiple model inputs
+            terminal_key = (terminal_id, input_name)
+            if terminal_key in processed_terminals:
                 continue
 
             # Collect all LoRAs in this chain
             chain_loras, chain_titles = collect_lora_model_chain(source_id, node_map, link_map)
 
-            # Mark all LoRA nodes in this chain as processed
-            for node in workflow_data['nodes']:
-                if is_lora_node(node.get('type', '')) and node.get('id') in [source_id]:
-                    processed_lora_nodes.add(node.get('id'))
+            # Mark this terminal input as processed
+            processed_terminals.add(terminal_key)
 
             if chain_loras:
                 lora_chains.append({
                     'titles': chain_titles,
                     'loras': chain_loras,
                     'terminal_title': terminal_info.get('terminal_title', ''),
-                    'source_id': source_id
+                    'terminal_id': terminal_id,
+                    'source_id': source_id,
+                    'input_name': terminal_info.get('input_name', ''),
+                    'input_label': terminal_info.get('input_label', '')
                 })
 
         # Method 2: Find LORA_STACK chains (for Lora Stacker nodes)
@@ -1044,8 +1146,22 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         # Check ALL titles in the chain for high/low hints
         all_titles = chain.get('titles', []) + [chain.get('terminal_title', '')]
         all_titles_lower = ' '.join(all_titles).lower()
-        has_high = 'high' in all_titles_lower
-        has_low = 'low' in all_titles_lower
+
+        # ALSO check the input_name and input_label which are the most reliable indicators
+        input_name = chain.get('input_name', '').lower()
+        input_label = chain.get('input_label', '').lower()
+
+        # More specific matching - look for whole words or clear patterns
+        has_high = (
+            'high' in all_titles_lower or
+            'high' in input_name or
+            'high' in input_label
+        )
+        has_low = (
+            'low' in all_titles_lower or
+            'low' in input_name or
+            'low' in input_label
+        )
 
         # Determine which stack based on title hints
         if has_high and not has_low:
@@ -1142,11 +1258,14 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         if cleaned:
             clean_negative.append(cleaned)
 
-    # Use the longest prompt as the primary (usually the most complete)
-    result['positive_prompt'] = max(clean_positive, key=len) if clean_positive else ''
-    result['negative_prompt'] = max(clean_negative, key=len) if clean_negative else ''
+    # Use the first prompt from each list (our connection logic already determined which is which)
+    # If multiple prompts exist, concatenate them with commas
+    result['positive_prompt'] = ', '.join(clean_positive) if clean_positive else ''
+    result['negative_prompt'] = ', '.join(clean_negative) if clean_negative else ''
     result['loras_a'] = loras_a
     result['loras_b'] = loras_b
+
+    print(f"[PromptExtractor] Final prompt counts - positive: {len(clean_positive)}, negative: {len(clean_negative)}")
 
     return result
 
@@ -1256,7 +1375,7 @@ class PromptExtractor:
     def INPUT_TYPES(cls):
         # Get list of supported files from input directory
         input_dir = folder_paths.get_input_directory()
-        files = []
+        files = ["(none)"]  # Add empty option at the top for passthrough
         supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
 
         if os.path.exists(input_dir):
@@ -1265,12 +1384,18 @@ class PromptExtractor:
                 if ext in supported_extensions:
                     files.append(filename)
 
-        # Sort files alphabetically
-        files.sort()
+        # Sort files alphabetically (except first entry which is "(none)")
+        files_to_sort = files[1:]
+        files_to_sort.sort()
+        files = ["(none)"] + files_to_sort
 
         return {
             "required": {
-                "image": (sorted(files), {"image_upload": True}),
+                "image": (files, {"image_upload": True}),
+            },
+            "optional": {
+                "lora_stack_a": ("LORA_STACK",),
+                "lora_stack_b": ("LORA_STACK",),
             },
         }
 
@@ -1280,22 +1405,27 @@ class PromptExtractor:
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
-    def extract(self, image=""):
+    def extract(self, image="", lora_stack_a=None, lora_stack_b=None):
         """Extract prompts and LoRAs from the specified file."""
 
         # Always initialize with empty strings, never None
         positive_prompt = ""
         negative_prompt = ""
-        lora_stack_a = []
-        lora_stack_b = []
+        extracted_lora_stack_a = []
+        extracted_lora_stack_b = []
         image_tensor = None
 
         # Handle None or missing image parameter
         if image is None:
             image = ""
 
+        # Skip metadata extraction if "(none)" is selected (passthrough mode)
+        if image == "(none)":
+            image = ""
+
         # Normalize file path
         resolved_path = None
+        file_path = ""  # Initialize file_path to avoid UnboundLocalError
         if image and image.strip():
             file_path = image.strip()
 
@@ -1374,11 +1504,11 @@ class PromptExtractor:
 
                 matched_filename = self._match_lora(lora_name, lora_path, lora_files)
                 if matched_filename:
-                    lora_stack_a.append((matched_filename, model_strength, clip_strength))
+                    extracted_lora_stack_a.append((matched_filename, model_strength, clip_strength))
                 else:
                     # Include the LoRA even if not found locally - PromptManager handles missing LoRAs
                     fallback_name = lora_path if lora_path else f"{lora_name}.safetensors"
-                    lora_stack_a.append((fallback_name, model_strength, clip_strength))
+                    extracted_lora_stack_a.append((fallback_name, model_strength, clip_strength))
                     print(f"[PromptExtractor] Note: LoRA not found locally (Stack A): {lora_name}")
 
             # Process loras_b into stack B (only active LoRAs)
@@ -1394,14 +1524,54 @@ class PromptExtractor:
 
                 matched_filename = self._match_lora(lora_name, lora_path, lora_files)
                 if matched_filename:
-                    lora_stack_b.append((matched_filename, model_strength, clip_strength))
+                    extracted_lora_stack_b.append((matched_filename, model_strength, clip_strength))
                 else:
                     fallback_name = lora_path if lora_path else f"{lora_name}.safetensors"
-                    lora_stack_b.append((fallback_name, model_strength, clip_strength))
+                    extracted_lora_stack_b.append((fallback_name, model_strength, clip_strength))
                     print(f"[PromptExtractor] Note: LoRA not found locally (Stack B): {lora_name}")
         else:
             if file_path:
                 print(f"[PromptExtractor] File not found: {file_path}")
+
+        # Combine input lora stacks with extracted loras
+        # Extracted loras come first (to preserve workflow strengths), then input loras are appended (avoiding duplicates)
+        final_lora_stack_a = []
+        final_lora_stack_b = []
+
+        # Start with extracted loras (these have the correct strengths from the workflow)
+        final_lora_stack_a.extend(extracted_lora_stack_a)
+        final_lora_stack_b.extend(extracted_lora_stack_b)
+
+        # Build set of existing lora names (compare by base name only, without path or extension)
+        existing_names_a = {os.path.splitext(os.path.basename(lora[0]))[0].lower() for lora in final_lora_stack_a}
+        existing_names_b = {os.path.splitext(os.path.basename(lora[0]))[0].lower() for lora in final_lora_stack_b}
+
+        # Add input loras (skip duplicates)
+        if lora_stack_a is not None and isinstance(lora_stack_a, list):
+            added_count = 0
+            skipped_count = 0
+            for lora in lora_stack_a:
+                lora_basename = os.path.splitext(os.path.basename(lora[0]))[0].lower()
+                if lora_basename not in existing_names_a:
+                    final_lora_stack_a.append(lora)
+                    added_count += 1
+                else:
+                    skipped_count += 1
+            print(f"[PromptExtractor] Stack A - Added {added_count} input LoRAs, skipped {skipped_count} duplicates")
+
+        if lora_stack_b is not None and isinstance(lora_stack_b, list):
+            added_count = 0
+            skipped_count = 0
+            for lora in lora_stack_b:
+                lora_basename = os.path.splitext(os.path.basename(lora[0]))[0].lower()
+                if lora_basename not in existing_names_b:
+                    final_lora_stack_b.append(lora)
+                    added_count += 1
+                else:
+                    skipped_count += 1
+            print(f"[PromptExtractor] Stack B - Added {added_count} input LoRAs, skipped {skipped_count} duplicates")
+
+        print(f"[PromptExtractor] Final lora counts - Stack A: {len(final_lora_stack_a)}, Stack B: {len(final_lora_stack_b)}")
 
         # Provide placeholder image tensor if none loaded (e.g., for JSON files)
         if image_tensor is None:
@@ -1421,7 +1591,7 @@ class PromptExtractor:
 
         return {
             "ui": {"images": preview_images},
-            "result": (positive_prompt, negative_prompt, lora_stack_a, lora_stack_b, image_tensor)
+            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor)
         }
 
     def _match_lora(self, lora_name, lora_path, lora_files):
