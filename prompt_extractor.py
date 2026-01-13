@@ -367,27 +367,27 @@ def base64_to_tensor(base64_data):
         import base64
         import io
         from PIL import Image
-        
+
         # Remove data URL prefix (data:image/png;base64,)
         if ',' in base64_data:
             base64_data = base64_data.split(',', 1)[1]
-        
+
         # Decode base64 to bytes
         img_bytes = base64.b64decode(base64_data)
-        
+
         # Load as PIL Image
         img = Image.open(io.BytesIO(img_bytes))
-        
+
         # Convert to RGB if needed
         if img.mode != 'RGB':
             img = img.convert('RGB')
-        
+
         # Convert to numpy array and normalize to 0-1
         img_array = np.array(img).astype(np.float32) / 255.0
-        
+
         # Convert to torch tensor with batch dimension (B, H, W, C)
         img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-        
+
         return img_tensor
     except Exception as e:
         print(f"[PromptExtractor] Error converting base64 to tensor: {e}")
@@ -399,16 +399,41 @@ def get_cached_video_frame(filename, frame_position):
     Retrieve cached video frame extracted by JavaScript at the specified position.
     frame_position: float from 0.0 to 1.0 representing position in video
     Returns a single frame tensor.
+    If cache is missing, requests extraction from JavaScript and waits briefly.
     """
+    import time
+
     if filename not in _video_frames_cache:
-        print(f"[PromptExtractor] No cached frame for: {filename}")
-        return None
-    
+        print(f"[PromptExtractor] Cache missing for: {filename}, requesting extraction...")
+
+        # Broadcast directly to JavaScript clients
+        try:
+            server.PromptServer.instance.send_sync("prompt-extractor-extract-frame", {
+                "filename": filename,
+                "frame_position": frame_position
+            })
+
+            # Wait briefly for JavaScript to extract and cache the frame
+            max_wait = 5  # seconds
+            start_time = time.time()
+            while filename not in _video_frames_cache and (time.time() - start_time) < max_wait:
+                time.sleep(0.1)
+
+            if filename in _video_frames_cache:
+                print(f"[PromptExtractor] Frame cached successfully for: {filename}")
+            else:
+                print(f"[PromptExtractor] Timeout waiting for frame extraction: {filename}")
+                return None
+
+        except Exception as e:
+            print(f"[PromptExtractor] Error requesting frame extraction: {e}")
+            return None
+
     frame_data = _video_frames_cache[filename]
-    
+
     # Convert base64 frame to tensor
     frame_tensor = base64_to_tensor(frame_data)
-    
+
     return frame_tensor
 
 
@@ -1426,7 +1451,6 @@ class PromptExtractor:
         extracted_lora_stack_a = []
         extracted_lora_stack_b = []
         image_tensor = None
-        needs_cache_refresh = False
 
         # Handle None or missing image parameter
         if image is None:
@@ -1491,13 +1515,10 @@ class PromptExtractor:
                 # Get frame cached by JavaScript at the specified position
                 filename = os.path.basename(resolved_path)
                 image_tensor = get_cached_video_frame(filename, frame_position)
-                
-                # If no cached data, flag for JavaScript re-extraction
-                if image_tensor is None or prompt_data is None:
-                    print("[PromptExtractor] Cache missing - requesting JavaScript to re-extract")
-                    needs_cache_refresh = True
-                    if image_tensor is None:
-                        image_tensor = get_placeholder_image_tensor()
+
+                # If no cached frame, use placeholder (JavaScript will cache before execution)
+                if image_tensor is None:
+                    image_tensor = get_placeholder_image_tensor()
 
             # Parse the extracted data
             if prompt_data or workflow_data:
@@ -1586,14 +1607,6 @@ class PromptExtractor:
         # Save preview image for display
         preview_images = self.save_preview_images(image_tensor)
 
-        # If cache was missing, send event to frontend to trigger re-extraction
-        if needs_cache_refresh and unique_id and image:
-            server.PromptServer.instance.send_sync("prompt-extractor-refresh-cache", {
-                "node_id": unique_id,
-                "filename": image,
-                "frame_position": frame_position
-            })
-
         # Ensure strings are never empty - ComfyUI treats "" as "no connection"
         # Use single space " " to indicate "connected but no content found"
         if not positive_prompt:
@@ -1637,8 +1650,7 @@ class PromptExtractor:
     def IS_CHANGED(cls, image, frame_position, **kwargs):
         """
         Check if the file has changed or if frame position changed.
-        Returns a tuple of (file_modification_time, frame_position) to track both changes.
-        Note: float('nan') must NOT be used - NaN != NaN, so ComfyUI would always re-execute.
+        Returns a tuple of (file_modification_time, frame_position) to track changes.
         """
         mtime = "no_file"
         if image:
@@ -1651,7 +1663,5 @@ class PromptExtractor:
                     mtime = os.path.getmtime(potential_path)
             elif os.path.exists(file_path):
                 mtime = os.path.getmtime(file_path)
-        
-        # Return tuple of (file_mtime, frame_position) to track both changes
-        # This ensures re-execution only when file OR frame position changes
+
         return (mtime, frame_position)

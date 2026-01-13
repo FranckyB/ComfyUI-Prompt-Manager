@@ -342,17 +342,31 @@ app.registerExtension({
     name: "PromptExtractor",
 
     async setup() {
-        // Listen for cache refresh requests from Python backend
-        api.addEventListener("prompt-extractor-refresh-cache", (event) => {
-            const { node_id, filename, frame_position } = event.detail;
+        // Listen for frame extraction requests from Python backend
+        api.addEventListener("prompt-extractor-extract-frame", async (event) => {
+            const { filename, frame_position } = event.detail;
+            console.log(`[PromptExtractor] Received extraction request for ${filename} at position ${frame_position}`);
             
-            console.log(`[PromptExtractor] Received cache refresh request for node ${node_id}: ${filename}`);
-            
-            // Find the node by ID
-            const node = app.graph._nodes_by_id?.[node_id];
-            if (node && filename) {
-                // Trigger re-extraction
-                loadAndDisplayImage(node, filename);
+            // Find the node with this filename
+            if (app.graph && app.graph._nodes) {
+                for (const node of app.graph._nodes) {
+                    if (node.type === "PromptExtractor") {
+                        const imageWidget = node.widgets?.find(w => w.name === "image");
+                        const frameWidget = node.widgets?.find(w => w.name === "frame_position");
+                        
+                        if (imageWidget && imageWidget.value === filename) {
+                            // Update frame position if provided
+                            if (frameWidget && frame_position !== undefined) {
+                                frameWidget.value = frame_position;
+                            }
+                            
+                            // Trigger extraction
+                            await loadAndDisplayImage(node, filename);
+                            console.log(`[PromptExtractor] Extracted and cached frame for ${filename}`);
+                            break;
+                        }
+                    }
+                }
             }
         });
     },
