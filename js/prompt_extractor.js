@@ -341,6 +341,22 @@ async function cacheVideoFrame(filename, frameData, framePosition) {
 app.registerExtension({
     name: "PromptExtractor",
 
+    async setup() {
+        // Listen for cache refresh requests from Python backend
+        api.addEventListener("prompt-extractor-refresh-cache", (event) => {
+            const { node_id, filename, frame_position } = event.detail;
+            
+            console.log(`[PromptExtractor] Received cache refresh request for node ${node_id}: ${filename}`);
+            
+            // Find the node by ID
+            const node = app.graph._nodes_by_id?.[node_id];
+            if (node && filename) {
+                // Trigger re-extraction
+                loadAndDisplayImage(node, filename);
+            }
+        });
+    },
+
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "PromptExtractor") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;

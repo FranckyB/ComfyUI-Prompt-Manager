@@ -130,7 +130,7 @@ def fuzzy_match_lora(lora_name, lora_files):
         Returns list of remaining non-empty parts in lowercase.
         """
         name_lower = name.lower()
-        
+
         # Remove anything in parentheses (e.g., " (1)", "(copy)", etc.)
         name_lower = re.sub(r'\s*\([^)]*\)', '', name_lower)
 
@@ -283,18 +283,30 @@ class PromptManagerAdvanced:
     OUTPUT_NODE = True
 
     @classmethod
-    def IS_CHANGED(cls, **kwargs):
+    def IS_CHANGED(cls, category, name, text, use_prompt_input, use_lora_input, **kwargs):
         """
-        Always return a unique value to ensure the node re-executes.
-        This is important because:
-        1. The node broadcasts UI updates to the frontend during execution
-        2. After browser refresh, the frontend loses its state and needs fresh data
-        3. Even if upstream nodes are cached, we need to re-broadcast to the new frontend session
-
-        The performance impact is minimal since this node's actual processing is lightweight.
+        Track changes to the node's inputs to determine if re-execution is needed.
+        Returns a tuple of relevant values that should trigger re-execution when changed.
         """
-        import time
-        return time.time()
+        # Get optional inputs
+        prompt_input = kwargs.get('prompt_input', None)
+        lora_stack_a = kwargs.get('lora_stack_a', None)
+        lora_stack_b = kwargs.get('lora_stack_b', None)
+        trigger_words = kwargs.get('trigger_words', None)
+        
+        # Return tuple of all values that should trigger re-execution when changed
+        # Convert lists/objects to strings for hashable comparison
+        return (
+            category,
+            name,
+            text,
+            use_prompt_input,
+            use_lora_input,
+            str(prompt_input) if prompt_input else None,
+            str(lora_stack_a) if lora_stack_a else None,
+            str(lora_stack_b) if lora_stack_b else None,
+            trigger_words
+        )
 
     @classmethod
     def VALIDATE_INPUTS(cls, name, **kwargs):

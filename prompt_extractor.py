@@ -1406,6 +1406,9 @@ class PromptExtractor:
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
             },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+            },
         }
 
     CATEGORY = "Prompt Manager"
@@ -1414,7 +1417,7 @@ class PromptExtractor:
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
-    def extract(self, image="", frame_position=0.0, lora_stack_a=None, lora_stack_b=None):
+    def extract(self, image="", frame_position=0.0, lora_stack_a=None, lora_stack_b=None, unique_id=None):
         """Extract prompts and LoRAs from the specified file."""
 
         # Always initialize with empty strings, never None
@@ -1423,6 +1426,7 @@ class PromptExtractor:
         extracted_lora_stack_a = []
         extracted_lora_stack_b = []
         image_tensor = None
+        needs_cache_refresh = False
 
         # Handle None or missing image parameter
         if image is None:
@@ -1488,10 +1492,12 @@ class PromptExtractor:
                 filename = os.path.basename(resolved_path)
                 image_tensor = get_cached_video_frame(filename, frame_position)
                 
-                # If no cached frame, use placeholder
-                if image_tensor is None:
-                    print("[PromptExtractor] Using placeholder frame (no cached frame from JavaScript)")
-                    image_tensor = get_placeholder_image_tensor()
+                # If no cached data, flag for JavaScript re-extraction
+                if image_tensor is None or prompt_data is None:
+                    print("[PromptExtractor] Cache missing - requesting JavaScript to re-extract")
+                    needs_cache_refresh = True
+                    if image_tensor is None:
+                        image_tensor = get_placeholder_image_tensor()
 
             # Parse the extracted data
             if prompt_data or workflow_data:
@@ -1580,6 +1586,14 @@ class PromptExtractor:
         # Save preview image for display
         preview_images = self.save_preview_images(image_tensor)
 
+        # If cache was missing, send event to frontend to trigger re-extraction
+        if needs_cache_refresh and unique_id and image:
+            server.PromptServer.instance.send_sync("prompt-extractor-refresh-cache", {
+                "node_id": unique_id,
+                "filename": image,
+                "frame_position": frame_position
+            })
+
         # Ensure strings are never empty - ComfyUI treats "" as "no connection"
         # Use single space " " to indicate "connected but no content found"
         if not positive_prompt:
@@ -1620,12 +1634,13 @@ class PromptExtractor:
         return results
 
     @classmethod
-    def IS_CHANGED(cls, image):
+    def IS_CHANGED(cls, image, frame_position, **kwargs):
         """
-        Check if the file has changed.
-        Returns file modification time for existing files, or a constant for missing/empty paths.
+        Check if the file has changed or if frame position changed.
+        Returns a tuple of (file_modification_time, frame_position) to track both changes.
         Note: float('nan') must NOT be used - NaN != NaN, so ComfyUI would always re-execute.
         """
+        mtime = "no_file"
         if image:
             file_path = image.strip()
             # Handle relative paths
@@ -1633,8 +1648,10 @@ class PromptExtractor:
                 input_dir = folder_paths.get_input_directory()
                 potential_path = os.path.join(input_dir, file_path)
                 if os.path.exists(potential_path):
-                    return os.path.getmtime(potential_path)
+                    mtime = os.path.getmtime(potential_path)
             elif os.path.exists(file_path):
-                return os.path.getmtime(file_path)
-        # Return constant for empty/missing files - this ensures no re-execution
-        return "no_file"
+                mtime = os.path.getmtime(file_path)
+        
+        # Return tuple of (file_mtime, frame_position) to track both changes
+        # This ensures re-execution only when file OR frame position changes
+        return (mtime, frame_position)

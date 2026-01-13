@@ -242,6 +242,9 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.12.6
+- Tweak to caching behavior for prompt extractor and prompt manager advanced
+
 ### version 1.12.5
 - Some dependencies to FFMpeg were still present, remove them and added a frame_position value, so we can specify what frame to get from video.
 
