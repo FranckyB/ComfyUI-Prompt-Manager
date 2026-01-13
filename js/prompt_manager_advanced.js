@@ -87,6 +87,12 @@ app.registerExtension({
                 node.savedTriggerWords = [];    // From saved prompt
                 node.connectedThumbnail = null; // Thumbnail from connected image (set during execution)
 
+                // Track the last known state of inputs and prompt to detect changes
+                // When any of these change, we clear toggle states and reload fresh
+                node.lastKnownPromptKey = "";  // "category|promptName" 
+                node.lastKnownInputLorasA = "";  // Signature of input loras
+                node.lastKnownInputLorasB = "";  // Signature of input loras
+
                 // Track last saved state for unsaved changes detection
                 node.lastSavedState = {
                     text: "",
@@ -131,30 +137,90 @@ app.registerExtension({
                         const newLorasA = event.detail.loras_a || [];
                         const newLorasB = event.detail.loras_b || [];
                         const newTriggerWords = event.detail.trigger_words || [];
+                        const inputLorasA = event.detail.input_loras_a || [];
+                        const inputLorasB = event.detail.input_loras_b || [];
+                        // Explicit list of unavailable lora names from Python
+                        const unavailableLorasA = new Set((event.detail.unavailable_loras_a || []).map(n => n.toLowerCase()));
+                        const unavailableLorasB = new Set((event.detail.unavailable_loras_b || []).map(n => n.toLowerCase()));
 
                         // Store connected thumbnail for use when saving
                         this.connectedThumbnail = event.detail.connected_thumbnail || null;
 
-                        // Simple comparison: if the entire list is identical (same order, same data), no change
-                        const lorasAChanged = JSON.stringify(newLorasA) !== JSON.stringify(this.currentLorasA);
-                        const lorasBChanged = JSON.stringify(newLorasB) !== JSON.stringify(this.currentLorasB);
-                        const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
-                        const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
+                        // Get current prompt key from widgets
+                        const categoryWidget = this.widgets?.find(w => w.name === "category");
+                        const promptWidget = this.widgets?.find(w => w.name === "name");
+                        const currentPromptKey = `${categoryWidget?.value || ""}|${promptWidget?.value || ""}`;
 
-                        // Update if data changed
-                        if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
-                            // Update current loras from connected inputs
-                            this.currentLorasA = newLorasA;
-                            this.currentLorasB = newLorasB;
+                        // Create signatures of input loras (just names, sorted)
+                        const inputLorasASignature = inputLorasA.map(l => l.name).sort().join('|');
+                        const inputLorasBSignature = inputLorasB.map(l => l.name).sort().join('|');
 
-                            // Update current trigger words (only connected ones)
-                            // Don't merge into savedTriggerWords - keep them separate
-                            // savedTriggerWords should only contain what was loaded from the prompt
+                        // Check if prompt or input loras have changed
+                        const promptChanged = currentPromptKey !== this.lastKnownPromptKey;
+                        const inputLorasAChanged = inputLorasASignature !== this.lastKnownInputLorasA;
+                        const inputLorasBChanged = inputLorasBSignature !== this.lastKnownInputLorasB;
+
+                        // If prompt OR inputs changed, clear everything and reload from prompt
+                        if (promptChanged || inputLorasAChanged || inputLorasBChanged) {
+                            console.log("[PromptManagerAdvanced] State changed - clearing and reloading. Prompt changed:", promptChanged, "InputA changed:", inputLorasAChanged, "InputB changed:", inputLorasBChanged);
+
+                            // Update tracking
+                            this.lastKnownPromptKey = currentPromptKey;
+                            this.lastKnownInputLorasA = inputLorasASignature;
+                            this.lastKnownInputLorasB = inputLorasBSignature;
+
+                            // Clear ALL loras - we'll reload fresh
+                            this.currentLorasA = [];
+                            this.currentLorasB = [];
+                            this.savedLorasA = [];
+                            this.savedLorasB = [];
+
+                            // Reload saved loras from prompt to get clean toggle states
+                            // Use Python's unavailable list directly - it's the source of truth
+                            if (this.prompts && categoryWidget && promptWidget) {
+                                const promptData = this.prompts[categoryWidget.value]?.[promptWidget.value];
+                                if (promptData) {
+                                    this.savedLorasA = (promptData.loras_a || []).map(lora => ({
+                                        ...lora,
+                                        active: lora.active !== false,
+                                        strength: lora.strength ?? lora.model_strength ?? 1.0,
+                                        available: !unavailableLorasA.has(lora.name.toLowerCase())
+                                    }));
+                                    this.savedLorasB = (promptData.loras_b || []).map(lora => ({
+                                        ...lora,
+                                        active: lora.active !== false,
+                                        strength: lora.strength ?? lora.model_strength ?? 1.0,
+                                        available: !unavailableLorasB.has(lora.name.toLowerCase())
+                                    }));
+                                }
+                            }
+
+                            // Set current loras from input (these are the loras from connected nodes)
+                            this.currentLorasA = inputLorasA.map(l => ({ ...l, source: 'current' }));
+                            this.currentLorasB = inputLorasB.map(l => ({ ...l, source: 'current' }));
+
+                            // Update connected trigger words
+                            const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             this.currentTriggerWords = newConnectedTriggers;
 
-                            // Refresh displays (display function handles merging for UI)
+                            // Refresh displays
                             updateLoraDisplays(this);
                             updateTriggerWordsDisplay(this);
+                        } else {
+                            // No major change - just update current loras if they differ
+                            const lorasAChanged = JSON.stringify(inputLorasA) !== JSON.stringify(this.currentLorasA.map(l => ({ name: l.name, strength: l.strength })));
+                            const lorasBChanged = JSON.stringify(inputLorasB) !== JSON.stringify(this.currentLorasB.map(l => ({ name: l.name, strength: l.strength })));
+                            const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
+                            const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
+
+                            if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
+                                this.currentLorasA = inputLorasA.map(l => ({ ...l, source: 'current' }));
+                                this.currentLorasB = inputLorasB.map(l => ({ ...l, source: 'current' }));
+                                this.currentTriggerWords = newConnectedTriggers;
+
+                                updateLoraDisplays(this);
+                                updateTriggerWordsDisplay(this);
+                            }
                         }
 
                         // Handle use_prompt_input toggle state for text widget
@@ -281,9 +347,12 @@ app.registerExtension({
                             }
                         }
                     } else {
-                        // Fresh load - clear current loras
+                        // Fresh load - clear current loras and reset tracking
                         node.currentLorasA = [];
                         node.currentLorasB = [];
+                        node.lastKnownPromptKey = "";
+                        node.lastKnownInputLorasA = "";
+                        node.lastKnownInputLorasB = "";
                     }
                 }
 
@@ -812,7 +881,7 @@ function createLoraTag(lora, index, stackId, node) {
     tag.dataset.stackId = stackId;
 
     const isActive = lora.active !== false;
-    const isAvailable = lora.available !== false;
+    const isAvailable = lora.available === true;
     const isFromInput = lora.fromInput === true || lora.source === 'current';  // From connected input
     const strength = parseFloat(lora.strength ?? lora.model_strength ?? 1.0) || 1.0;
 
@@ -2177,6 +2246,20 @@ function setupCategoryChangeHandler(node) {
             originalCallback.apply(this, arguments);
         }
 
+        // Clear all lora and trigger word data BEFORE loading new prompt
+        // This ensures stale toggle states don't persist (same as "New Prompt" button)
+        node.savedLorasA = [];
+        node.savedLorasB = [];
+        node.currentLorasA = [];
+        node.currentLorasB = [];
+        node.savedTriggerWords = [];
+        node.currentTriggerWords = [];
+        node.lastKnownPromptKey = "";
+        node.lastKnownInputLorasA = "";
+        node.lastKnownInputLorasB = "";
+        updateLoraDisplays(node);
+        updateTriggerWordsDisplay(node);
+
         // Reload prompts from server to get latest changes from other tabs
         await loadPrompts(node);
 
@@ -2257,6 +2340,20 @@ function setupCategoryChangeHandler(node) {
         if (originalPromptCallback) {
             originalPromptCallback.apply(this, arguments);
         }
+
+        // Clear all lora and trigger word data BEFORE loading new prompt
+        // This ensures stale toggle states don't persist (same as "New Prompt" button)
+        node.savedLorasA = [];
+        node.savedLorasB = [];
+        node.currentLorasA = [];
+        node.currentLorasB = [];
+        node.savedTriggerWords = [];
+        node.currentTriggerWords = [];
+        node.lastKnownPromptKey = "";
+        node.lastKnownInputLorasA = "";
+        node.lastKnownInputLorasB = "";
+        updateLoraDisplays(node);
+        updateTriggerWordsDisplay(node);
 
         // Reload prompts from server to get latest changes from other tabs
         await loadPrompts(node);
@@ -2489,6 +2586,11 @@ async function loadPromptData(node, category, promptName) {
     node.savedTriggerWords = [];
     node.currentTriggerWords = [];
 
+    // Reset tracking - forces a full reload on next execution
+    node.lastKnownPromptKey = "";
+    node.lastKnownInputLorasA = "";
+    node.lastKnownInputLorasB = "";
+
     if (!node.prompts || !node.prompts[category] || !node.prompts[category][promptName]) {
         if (textWidget) textWidget.value = "";
         updateLoraDisplays(node);
@@ -2540,11 +2642,12 @@ async function loadPromptData(node, category, promptName) {
 
             if (data.success && data.results) {
                 // Update availability status
+                // Use explicit check - if not found in results OR false, mark unavailable
                 lorasA.forEach(lora => {
-                    lora.available = data.results[lora.name] !== false;
+                    lora.available = data.results[lora.name] === true;
                 });
                 lorasB.forEach(lora => {
-                    lora.available = data.results[lora.name] !== false;
+                    lora.available = data.results[lora.name] === true;
                 });
             }
         } catch (error) {

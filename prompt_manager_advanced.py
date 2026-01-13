@@ -78,36 +78,6 @@ def get_available_loras():
     return lora_files
 
 
-def resolve_lora_path(lora_name):
-    """
-    Resolve a LoRA name to its full path using ComfyUI's folder system.
-    Returns (full_path, found) tuple.
-    """
-    lora_files = get_available_loras()
-
-    # Try exact match first (with extension)
-    for lora_file in lora_files:
-        if lora_file == lora_name:
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    # Try matching by name without extension
-    lora_name_lower = lora_name.lower()
-    for lora_file in lora_files:
-        file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
-        if file_name_no_ext.lower() == lora_name_lower:
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    # Try partial match (lora_name might be just the filename, lora_file might have subdirs)
-    for lora_file in lora_files:
-        file_name = os.path.basename(lora_file)
-        file_name_no_ext = os.path.splitext(file_name)[0]
-        if file_name_no_ext.lower() == lora_name_lower or file_name.lower() == lora_name_lower:
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    # Not found
-    return None, False
-
-
 def fuzzy_match_lora(lora_name, lora_files):
     """
     Attempt to find a matching LoRA using fuzzy matching.
@@ -118,6 +88,17 @@ def fuzzy_match_lora(lora_name, lora_files):
     Returns (matched_file, True) if found, (None, False) otherwise.
     """
     import re
+
+    # Known LoRA file extensions - only strip these, not arbitrary dots in names
+    lora_extensions = {'.safetensors', '.ckpt', '.pt', '.bin', '.pth'}
+
+    def strip_lora_extension(name):
+        """Remove only known LoRA file extensions, not arbitrary dots in names."""
+        name_lower = name.lower()
+        for ext in lora_extensions:
+            if name_lower.endswith(ext):
+                return name[:-len(ext)]
+        return name
 
     # Tokens to remove for fuzzy matching (case-insensitive)
     # Order matters: remove longer tokens first to avoid partial matches
@@ -145,13 +126,17 @@ def fuzzy_match_lora(lora_name, lora_files):
         parts = [p for p in re.split(r'[_-]', name_lower) if p]
         return parts
 
-    # Normalize the search name
-    search_parts = normalize_name(os.path.splitext(lora_name)[0])
+    # Normalize the search name - use our extension stripper, not splitext
+    search_parts = normalize_name(strip_lora_extension(lora_name))
     search_set = set(search_parts)
+
+    # If search_set is empty after normalization, we can't do fuzzy matching
+    if not search_set:
+        return None, False
 
     candidates = []
     for lora_file in lora_files:
-        file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
+        file_name_no_ext = strip_lora_extension(os.path.basename(lora_file))
         file_parts = normalize_name(file_name_no_ext)
         file_set = set(file_parts)
 
@@ -507,31 +492,6 @@ class PromptManagerAdvanced:
         # Not found
         return lora_path, False
 
-    def _resolve_lora_path(self, lora_path, lora_files):
-        """
-        Try to resolve a LoRA path to an available local LoRA.
-        First checks if the exact path exists, then searches by name.
-
-        Args:
-            lora_path: The original path from the stack
-            lora_files: List of available LoRA files
-
-        Returns:
-            Resolved path if found, original path otherwise
-        """
-        # Check if exact path exists
-        if lora_path in lora_files:
-            return lora_path
-
-        # Try to find by name
-        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-        found_path, found = get_lora_relative_path(lora_name)
-        if found:
-            return found_path
-
-        # Return original path (will fail at load time, but at least shows in UI)
-        return lora_path
-
     def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, prompt_input="",
                    lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
@@ -543,6 +503,12 @@ class PromptManagerAdvanced:
         else:
             output_text = text
 
+        # Capture the original input loras BEFORE any processing
+        # These are used by the frontend to detect when inputs change
+        # and clear toggle states accordingly
+        input_loras_a = self._format_loras_for_display(lora_stack_a) if lora_stack_a else []
+        input_loras_b = self._format_loras_for_display(lora_stack_b) if lora_stack_b else []
+
         # Process trigger words
         trigger_words_display = self._process_trigger_words(
             trigger_words, trigger_words_toggle
@@ -552,6 +518,10 @@ class PromptManagerAdvanced:
         # Build preset stacks from saved toggle data (these are what we display/manage)
         preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
         preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if loras_b_toggle else []
+
+        # Get ALL preset loras including unavailable ones (for display purposes)
+        all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
+        all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if loras_b_toggle else []
 
         # When use_lora_input is disabled, ignore connected stacks and use only saved loras
         if not use_lora_input:
@@ -574,16 +544,14 @@ class PromptManagerAdvanced:
         processed_stack_a = self._process_lora_toggle(lora_stack_a, loras_a_toggle)
         processed_stack_b = self._process_lora_toggle(lora_stack_b, loras_b_toggle)
 
-        # Display logic depends on use_lora_input mode:
-        # - use_lora_input OFF: Show only preset loras (what will actually be used)
-        # - use_lora_input ON: Show merged loras (preset + connected) so user sees full picture
+        # Display logic: Include ALL loras (available + unavailable) so UI shows complete picture
+        # Build display from available loras first, then add unavailable ones
         if not use_lora_input:
-            loras_a_display = self._format_loras_for_display(preset_stack_a) if preset_stack_a else []
-            loras_b_display = self._format_loras_for_display(preset_stack_b) if preset_stack_b else []
+            loras_a_display = self._format_loras_for_display_with_unavailable(preset_stack_a, all_preset_loras_a)
+            loras_b_display = self._format_loras_for_display_with_unavailable(preset_stack_b, all_preset_loras_b)
         else:
-            # Always call _format_loras_for_display even with empty stacks - it handles empty gracefully
-            loras_a_display = self._format_loras_for_display(lora_stack_a)
-            loras_b_display = self._format_loras_for_display(lora_stack_b)
+            loras_a_display = self._format_loras_for_display_with_unavailable(lora_stack_a, all_preset_loras_a)
+            loras_b_display = self._format_loras_for_display_with_unavailable(lora_stack_b, all_preset_loras_b)
 
         # Convert thumbnail image to base64 if provided
         thumbnail_base64 = None
@@ -592,6 +560,10 @@ class PromptManagerAdvanced:
                 thumbnail_base64 = image_to_base64_thumbnail(thumbnail_image)
             except Exception as e:
                 print(f"[PromptManagerAdvanced] Failed to convert thumbnail image: {e}")
+
+        # Build explicit list of unavailable lora names for frontend
+        unavailable_loras_a = [lora['name'] for lora in all_preset_loras_a if not lora.get('available', False)]
+        unavailable_loras_b = [lora['name'] for lora in all_preset_loras_b if not lora.get('available', False)]
 
         # Broadcast update to frontend
         if unique_id is not None:
@@ -602,6 +574,10 @@ class PromptManagerAdvanced:
                 "prompt_input": prompt_input,
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
+                "input_loras_a": input_loras_a,  # Original input loras for change detection
+                "input_loras_b": input_loras_b,  # Original input loras for change detection
+                "unavailable_loras_a": unavailable_loras_a,  # Explicit list of unavailable lora names
+                "unavailable_loras_b": unavailable_loras_b,  # Explicit list of unavailable lora names
                 "trigger_words": trigger_words_display,
                 "connected_thumbnail": thumbnail_base64
             })
@@ -718,6 +694,73 @@ class PromptManagerAdvanced:
                 "available": available
             })
             seen_names.add(lora_name_lower)
+
+        return display_list
+
+    def _get_all_loras_from_toggle(self, toggle_data):
+        """
+        Get ALL loras from toggle data including unavailable ones.
+        Returns list of dicts with name, strength, active, and available status.
+        Used for building complete display list.
+        """
+        if not toggle_data:
+            return []
+
+        try:
+            if isinstance(toggle_data, str):
+                toggle_data = json.loads(toggle_data)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+        if not isinstance(toggle_data, list):
+            return []
+
+        all_loras = []
+        for item in toggle_data:
+            if not isinstance(item, dict):
+                continue
+
+            lora_name = item.get('name', '')
+            if not lora_name:
+                continue
+
+            # Check availability using same fuzzy matching as actual loading
+            # UI should match what Python will actually do
+            _, found = get_lora_relative_path(lora_name)
+
+            all_loras.append({
+                "name": lora_name,
+                "strength": float(item.get('strength', 1.0)),
+                "clip_strength": float(item.get('clip_strength', item.get('strength', 1.0))),
+                "active": item.get('active', True),
+                "available": found
+            })
+
+        return all_loras
+
+    def _format_loras_for_display_with_unavailable(self, lora_stack, all_preset_loras):
+        """
+        Format lora stack for frontend display, including unavailable preset loras.
+        This ensures the UI shows all saved loras even if they're not found locally.
+        """
+        # Start with the available loras from the stack
+        display_list = self._format_loras_for_display(lora_stack) if lora_stack else []
+        seen_names = set(item['name'].lower() for item in display_list)
+
+        # Add any unavailable preset loras that aren't already in the list
+        for lora in all_preset_loras:
+            lora_name_lower = lora['name'].lower()
+            if lora_name_lower not in seen_names:
+                display_list.append({
+                    "name": lora['name'],
+                    "path": lora['name'],  # Just use name as path for unavailable
+                    "model_strength": lora['strength'],
+                    "clip_strength": lora['clip_strength'],
+                    "active": lora['active'],
+                    "strength": lora['strength'],
+                    "available": lora['available']
+                })
+                seen_names.add(lora_name_lower)
 
         return display_list
 
