@@ -278,7 +278,7 @@ class PromptManagerAdvanced:
         lora_stack_a = kwargs.get('lora_stack_a', None)
         lora_stack_b = kwargs.get('lora_stack_b', None)
         trigger_words = kwargs.get('trigger_words', None)
-        
+
         # Return tuple of all values that should trigger re-execution when changed
         # Convert lists/objects to strings for hashable comparison
         return (
@@ -426,14 +426,15 @@ class PromptManagerAdvanced:
         if not isinstance(toggle_data, list):
             return list(lora_stack)
 
-        # Create a map of toggle states by lora name
+        # Create a map of toggle states by lora name (case-insensitive)
         toggle_map = {}
         for item in toggle_data:
             if isinstance(item, dict):
                 name = item.get('name', '')
-                toggle_map[name] = {
+                toggle_map[name.lower()] = {
                     'active': item.get('active', True),
-                    'strength': item.get('strength')
+                    'strength': item.get('strength'),
+                    'original_name': name  # Keep original for debugging
                 }
 
         # Filter and adjust lora stack
@@ -444,8 +445,11 @@ class PromptManagerAdvanced:
             # Extract lora name from path
             lora_name = os.path.splitext(os.path.basename(lora_path))[0]
 
-            # Check toggle state
-            toggle_state = toggle_map.get(lora_name, {'active': True, 'strength': None})
+            # Check toggle state (case-insensitive lookup)
+            toggle_state = toggle_map.get(lora_name.lower(), {'active': True, 'strength': None})
+
+            # Debug logging
+            print(f"[PromptManagerAdvanced] Processing LoRA: {lora_name}, original_strength={model_strength}, toggle_strength={toggle_state.get('strength')}, active={toggle_state.get('active')}")
 
             if not toggle_state['active']:
                 continue  # Skip inactive loras

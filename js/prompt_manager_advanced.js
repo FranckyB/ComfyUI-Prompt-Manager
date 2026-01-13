@@ -7,6 +7,39 @@ import { api } from "../../scripts/api.js";
  */
 
 // ========================
+// Canvas Wheel Event Helper
+// ========================
+
+/**
+ * Forward wheel events from a DOM element to the LiteGraph canvas for zooming
+ * This allows users to zoom the canvas even when hovering over node UI elements
+ */
+function forwardWheelToCanvas(element) {
+    element.addEventListener("wheel", (e) => {
+        // Get the LiteGraph canvas element
+        const canvas = app.canvas?.canvas || document.querySelector("canvas.lgraphcanvas");
+        if (canvas) {
+            // Create and dispatch a new wheel event to the canvas
+            const newEvent = new WheelEvent("wheel", {
+                bubbles: true,
+                cancelable: true,
+                clientX: e.clientX,
+                clientY: e.clientY,
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                deltaZ: e.deltaZ,
+                deltaMode: e.deltaMode,
+                ctrlKey: e.ctrlKey,
+                shiftKey: e.shiftKey,
+                altKey: e.altKey,
+                metaKey: e.metaKey
+            });
+            canvas.dispatchEvent(newEvent);
+        }
+    }, { passive: true });
+}
+
+// ========================
 // LoRA Manager Integration
 // ========================
 
@@ -83,6 +116,8 @@ app.registerExtension({
                 node.currentLorasB = [];
                 node.savedLorasA = [];
                 node.savedLorasB = [];
+                node.originalLorasA = [];  // Original strengths for reset
+                node.originalLorasB = [];  // Original strengths for reset
                 node.currentTriggerWords = [];  // From connected input
                 node.savedTriggerWords = [];    // From saved prompt
                 node.connectedThumbnail = null; // Thumbnail from connected image (set during execution)
@@ -92,6 +127,7 @@ app.registerExtension({
                 node.lastKnownPromptKey = "";  // "category|promptName" 
                 node.lastKnownInputLorasA = "";  // Signature of input loras
                 node.lastKnownInputLorasB = "";  // Signature of input loras
+                node.lastKnownPromptInput = "";  // Text from connected prompt input (extractor)
 
                 // Track last saved state for unsaved changes detection
                 node.lastSavedState = {
@@ -155,25 +191,54 @@ app.registerExtension({
                         const inputLorasASignature = inputLorasA.map(l => l.name).sort().join('|');
                         const inputLorasBSignature = inputLorasB.map(l => l.name).sort().join('|');
 
-                        // Check if prompt or input loras have changed
+                        // Get the prompt input text (from extractor)
+                        const promptInputText = event.detail.prompt_input || "";
+
+                        // Check what has changed
                         const promptChanged = currentPromptKey !== this.lastKnownPromptKey;
-                        const inputLorasAChanged = inputLorasASignature !== this.lastKnownInputLorasA;
-                        const inputLorasBChanged = inputLorasBSignature !== this.lastKnownInputLorasB;
+                        const inputLorasChanged = inputLorasASignature !== this.lastKnownInputLorasA || 
+                                                  inputLorasBSignature !== this.lastKnownInputLorasB;
+                        const promptInputChanged = promptInputText !== this.lastKnownPromptInput;
 
-                        // If prompt OR inputs changed, clear everything and reload from prompt
-                        if (promptChanged || inputLorasAChanged || inputLorasBChanged) {
-                            console.log("[PromptManagerAdvanced] State changed - clearing and reloading. Prompt changed:", promptChanged, "InputA changed:", inputLorasAChanged, "InputB changed:", inputLorasBChanged);
+                        // Determine if we should reset:
+                        // 1. Prompt dropdown changed → reset
+                        // 2. BOTH prompt input text AND loras changed → new extraction, reset
+                        // 3. ONLY loras changed → user modified strengths, don't reset
+                        const isNewExtraction = promptInputChanged && inputLorasChanged;
+                        const shouldReset = promptChanged || isNewExtraction;
 
-                            // Update tracking
+                        // DEBUG: Always log the state
+                        console.log("[PromptManagerAdvanced] Update received:", {
+                            promptChanged,
+                            inputLorasChanged,
+                            promptInputChanged,
+                            isNewExtraction,
+                            shouldReset,
+                            promptInputText: promptInputText.substring(0, 50) + "...",
+                            lastKnownPromptInput: this.lastKnownPromptInput.substring(0, 50) + "...",
+                            inputLorasASignature,
+                            lastKnownInputLorasA: this.lastKnownInputLorasA
+                        });
+
+                        // Always update tracking signatures
+                        this.lastKnownInputLorasA = inputLorasASignature;
+                        this.lastKnownInputLorasB = inputLorasBSignature;
+                        this.lastKnownPromptInput = promptInputText;
+
+                        // Clear and reload when needed
+                        if (shouldReset) {
+                            console.log("[PromptManagerAdvanced] Resetting - Prompt changed:", promptChanged, "New extraction:", isNewExtraction);
+
+                            // Update prompt tracking
                             this.lastKnownPromptKey = currentPromptKey;
-                            this.lastKnownInputLorasA = inputLorasASignature;
-                            this.lastKnownInputLorasB = inputLorasBSignature;
 
                             // Clear ALL loras - we'll reload fresh
                             this.currentLorasA = [];
                             this.currentLorasB = [];
                             this.savedLorasA = [];
                             this.savedLorasB = [];
+                            this.originalLorasA = [];  // Clear original strengths too
+                            this.originalLorasB = [];
 
                             // Reload saved loras from prompt to get clean toggle states
                             // Use Python's unavailable list directly - it's the source of truth
@@ -192,12 +257,33 @@ app.registerExtension({
                                         strength: lora.strength ?? lora.model_strength ?? 1.0,
                                         available: !unavailableLorasB.has(lora.name.toLowerCase())
                                     }));
+                                    // Store original strengths for reset functionality
+                                    this.originalLorasA = (promptData.loras_a || []).map(lora => ({
+                                        name: lora.name,
+                                        strength: lora.strength ?? lora.model_strength ?? 1.0
+                                    }));
+                                    this.originalLorasB = (promptData.loras_b || []).map(lora => ({
+                                        name: lora.name,
+                                        strength: lora.strength ?? lora.model_strength ?? 1.0
+                                    }));
                                 }
                             }
 
                             // Set current loras from input (these are the loras from connected nodes)
                             this.currentLorasA = inputLorasA.map(l => ({ ...l, source: 'current' }));
                             this.currentLorasB = inputLorasB.map(l => ({ ...l, source: 'current' }));
+
+                            // Also store input lora original strengths for reset
+                            inputLorasA.forEach(l => {
+                                if (!this.originalLorasA.find(o => o.name.toLowerCase() === l.name.toLowerCase())) {
+                                    this.originalLorasA.push({ name: l.name, strength: l.strength ?? l.model_strength ?? 1.0 });
+                                }
+                            });
+                            inputLorasB.forEach(l => {
+                                if (!this.originalLorasB.find(o => o.name.toLowerCase() === l.name.toLowerCase())) {
+                                    this.originalLorasB.push({ name: l.name, strength: l.strength ?? l.model_strength ?? 1.0 });
+                                }
+                            });
 
                             // Update connected trigger words
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
@@ -311,15 +397,27 @@ app.registerExtension({
                     if (lorasAIndex >= 0 && info.widgets_values[lorasAIndex]) {
                         try {
                             node.savedLorasA = JSON.parse(info.widgets_values[lorasAIndex]);
+                            // Store original strengths for reset functionality
+                            node.originalLorasA = node.savedLorasA.map(lora => ({
+                                name: lora.name,
+                                strength: lora.strength ?? lora.model_strength ?? 1.0
+                            }));
                         } catch (e) {
                             node.savedLorasA = [];
+                            node.originalLorasA = [];
                         }
                     }
                     if (lorasBIndex >= 0 && info.widgets_values[lorasBIndex]) {
                         try {
                             node.savedLorasB = JSON.parse(info.widgets_values[lorasBIndex]);
+                            // Store original strengths for reset functionality
+                            node.originalLorasB = node.savedLorasB.map(lora => ({
+                                name: lora.name,
+                                strength: lora.strength ?? lora.model_strength ?? 1.0
+                            }));
                         } catch (e) {
                             node.savedLorasB = [];
+                            node.originalLorasB = [];
                         }
                     }
                     if (triggerWordsIndex >= 0 && info.widgets_values[triggerWordsIndex]) {
@@ -353,6 +451,7 @@ app.registerExtension({
                         node.lastKnownPromptKey = "";
                         node.lastKnownInputLorasA = "";
                         node.lastKnownInputLorasB = "";
+                        // Note: originalLoras are preserved from savedLoras restoration above
                     }
                 }
 
@@ -711,6 +810,9 @@ function createLoraDisplayContainer(title, stackId, node) {
     // Prevent default context menu on container (LoRA tags have their own)
     container.addEventListener("contextmenu", (e) => e.preventDefault());
 
+    // Forward wheel events to canvas for zooming
+    forwardWheelToCanvas(container);
+
     // Title bar with label
     const titleBar = document.createElement("div");
     Object.assign(titleBar.style, {
@@ -731,6 +833,29 @@ function createLoraDisplayContainer(title, stackId, node) {
     });
     titleBar.appendChild(titleLabel);
 
+    // Button container for Reset and Toggle All
+    const btnContainer = document.createElement("div");
+    Object.assign(btnContainer.style, {
+        display: "flex",
+        gap: "4px"
+    });
+
+    // Reset button to restore original strength values
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "Reset Strength";
+    resetBtn.title = "Reset all strength values to their original values";
+    Object.assign(resetBtn.style, {
+        fontSize: "10px",
+        padding: "2px 8px",
+        backgroundColor: "#333",
+        color: "#ccc",
+        border: "1px solid #555",
+        borderRadius: "6px",
+        cursor: "pointer"
+    });
+    resetBtn.onclick = () => resetLoraStrengths(node, stackId);
+    btnContainer.appendChild(resetBtn);
+
     // Toggle All button
     const toggleAllBtn = document.createElement("button");
     toggleAllBtn.textContent = "Toggle All";
@@ -744,7 +869,9 @@ function createLoraDisplayContainer(title, stackId, node) {
         cursor: "pointer"
     });
     toggleAllBtn.onclick = () => toggleAllLoras(node, stackId);
-    titleBar.appendChild(toggleAllBtn);
+    btnContainer.appendChild(toggleAllBtn);
+
+    titleBar.appendChild(btnContainer);
 
     container.appendChild(titleBar);
 
@@ -1284,6 +1411,10 @@ function setLoraStrength(node, stackId, index, newStrength) {
 
     if (loraList[index]) {
         loraList[index].strength = newStrength;
+        // Move to saved so the strength persists (connected loras need to become saved to persist changes)
+        if (loraList[index].source === 'current') {
+            loraList[index].source = 'saved';
+        }
 
         if (!useLoraInput) {
             // Only update saved loras when use_lora_input is off
@@ -1336,6 +1467,57 @@ function toggleAllLoras(node, stackId) {
 
     if (!useLoraInput) {
         // Only update saved loras when use_lora_input is off
+        if (stackId === "a") {
+            node.savedLorasA = loraList;
+        } else {
+            node.savedLorasB = loraList;
+        }
+    } else {
+        if (stackId === "a") {
+            updateLoraListFromMerged(node, "a", loraList);
+        } else {
+            updateLoraListFromMerged(node, "b", loraList);
+        }
+    }
+
+    updateLoraDisplays(node);
+    app.graph.setDirtyCanvas(true, true);
+}
+
+function resetLoraStrengths(node, stackId) {
+    // Reset all lora strengths to their original values
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
+
+    // Get original strengths
+    const originalLoras = stackId === "a" ? (node.originalLorasA || []) : (node.originalLorasB || []);
+
+    // Build a map of original strengths by name (case-insensitive)
+    const originalMap = new Map();
+    originalLoras.forEach(lora => {
+        originalMap.set(lora.name.toLowerCase(), lora.strength);
+    });
+
+    // Get the list that matches what's currently displayed
+    let loraList;
+    if (!useLoraInput) {
+        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
+    } else {
+        loraList = stackId === "a" ?
+            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
+            mergeLoraLists(node.currentLorasB, node.savedLorasB);
+    }
+
+    // Reset strengths to original values
+    loraList.forEach(lora => {
+        const originalStrength = originalMap.get(lora.name.toLowerCase());
+        if (originalStrength !== undefined) {
+            lora.strength = originalStrength;
+        }
+    });
+
+    // Update the lists
+    if (!useLoraInput) {
         if (stackId === "a") {
             node.savedLorasA = loraList;
         } else {
@@ -1485,6 +1667,9 @@ function createTriggerWordsDisplayContainer(title, node) {
 
     // Prevent default context menu on container (trigger word tags have their own)
     container.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Forward wheel events to canvas for zooming
+    forwardWheelToCanvas(container);
 
     // Title bar with label
     const titleBar = document.createElement("div");
@@ -1955,6 +2140,9 @@ function addButtonBar(node) {
     // Prevent default context menu on button bar
     buttonContainer.addEventListener("contextmenu", (e) => e.preventDefault());
 
+    // Forward wheel events to canvas for zooming
+    forwardWheelToCanvas(buttonContainer);
+
     // Save Prompt button
     const savePromptBtn = createButton("Save Prompt", async () => {
         const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
@@ -2101,6 +2289,8 @@ function addButtonBar(node) {
         node.savedLorasB = [];
         node.currentLorasA = [];
         node.currentLorasB = [];
+        node.originalLorasA = [];  // Clear original strengths too
+        node.originalLorasB = [];
         node.savedTriggerWords = [];
         node.currentTriggerWords = [];
 
@@ -2252,6 +2442,8 @@ function setupCategoryChangeHandler(node) {
         node.savedLorasB = [];
         node.currentLorasA = [];
         node.currentLorasB = [];
+        node.originalLorasA = [];  // Clear original strengths too
+        node.originalLorasB = [];
         node.savedTriggerWords = [];
         node.currentTriggerWords = [];
         node.lastKnownPromptKey = "";
@@ -2279,6 +2471,8 @@ function setupCategoryChangeHandler(node) {
                 node.savedLorasB = [];
                 node.currentLorasA = [];
                 node.currentLorasB = [];
+                node.originalLorasA = [];
+                node.originalLorasB = [];
                 node.savedTriggerWords = [];
                 node.currentTriggerWords = [];
                 updateLoraDisplays(node);
@@ -2347,6 +2541,8 @@ function setupCategoryChangeHandler(node) {
         node.savedLorasB = [];
         node.currentLorasA = [];
         node.currentLorasB = [];
+        node.originalLorasA = [];  // Clear original strengths too
+        node.originalLorasB = [];
         node.savedTriggerWords = [];
         node.currentTriggerWords = [];
         node.lastKnownPromptKey = "";
@@ -2492,9 +2688,20 @@ function setupUseExternalToggleHandler(node) {
 
                     node.savedLorasA = lorasA;
                     node.savedLorasB = lorasB;
+                    // Store original strengths for reset functionality
+                    node.originalLorasA = lorasA.map(lora => ({
+                        name: lora.name,
+                        strength: lora.strength ?? lora.model_strength ?? 1.0
+                    }));
+                    node.originalLorasB = lorasB.map(lora => ({
+                        name: lora.name,
+                        strength: lora.strength ?? lora.model_strength ?? 1.0
+                    }));
                 } else {
                     node.savedLorasA = [];
                     node.savedLorasB = [];
+                    node.originalLorasA = [];
+                    node.originalLorasB = [];
                 }
             }
 
@@ -2583,6 +2790,8 @@ async function loadPromptData(node, category, promptName) {
     node.savedLorasB = [];
     node.currentLorasA = [];
     node.currentLorasB = [];
+    node.originalLorasA = [];  // Clear original strengths too
+    node.originalLorasB = [];
     node.savedTriggerWords = [];
     node.currentTriggerWords = [];
 
@@ -2658,6 +2867,16 @@ async function loadPromptData(node, category, promptName) {
     node.savedLorasA = lorasA;
     node.savedLorasB = lorasB;
     node.savedTriggerWords = triggerWords;
+
+    // Store original strengths for reset functionality
+    node.originalLorasA = lorasA.map(lora => ({
+        name: lora.name,
+        strength: lora.strength ?? lora.model_strength ?? 1.0
+    }));
+    node.originalLorasB = lorasB.map(lora => ({
+        name: lora.name,
+        strength: lora.strength ?? lora.model_strength ?? 1.0
+    }));
 
     // Update last saved state for change detection
     updateLastSavedState(node);
@@ -2762,6 +2981,8 @@ async function createCategory(node, categoryName) {
 
             node.savedLorasA = [];
             node.savedLorasB = [];
+            node.originalLorasA = [];
+            node.originalLorasB = [];
             node.savedTriggerWords = [];
             node.currentTriggerWords = [];
             updateLoraDisplays(node);
@@ -2831,6 +3052,17 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             node.savedLorasA = lorasA;
             node.savedLorasB = lorasB;
             node.savedTriggerWords = triggerWords || [];
+
+            // Update original strengths to match saved values (Reset now resets to saved state)
+            node.originalLorasA = lorasA.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0
+            }));
+            node.originalLorasB = lorasB.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0
+            }));
+
             updateLoraDisplays(node);
             updateTriggerWordsDisplay(node);
 
@@ -2859,6 +3091,8 @@ async function deleteCategory(node, category) {
             node.prompts = data.prompts;
             node.savedLorasA = [];
             node.savedLorasB = [];
+            node.originalLorasA = [];
+            node.originalLorasB = [];
             node.savedTriggerWords = [];
             node.currentTriggerWords = [];
             updateDropdowns(node);
@@ -2893,6 +3127,8 @@ async function deletePrompt(node, category, name) {
             node.prompts = data.prompts;
             node.savedLorasA = [];
             node.savedLorasB = [];
+            node.originalLorasA = [];
+            node.originalLorasB = [];
             node.savedTriggerWords = [];
             node.currentTriggerWords = [];
             updateDropdowns(node);
@@ -3288,6 +3524,8 @@ async function importPromptsJSON(node) {
                         // Clear current state if no prompt selected
                         node.savedLorasA = [];
                         node.savedLorasB = [];
+                        node.originalLorasA = [];
+                        node.originalLorasB = [];
                         node.savedTriggerWords = [];
                         node.currentTriggerWords = [];
                         updateLoraDisplays(node);
@@ -4165,6 +4403,9 @@ function createPromptSelectorWidget(node) {
 
     // Prevent default context menu on prompt selector
     container.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Forward wheel events to canvas for zooming
+    forwardWheelToCanvas(container);
 
     // Left arrow button
     const leftArrow = document.createElement("button");

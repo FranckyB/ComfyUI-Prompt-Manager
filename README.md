@@ -242,6 +242,9 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.12.7
+- Quality of life improvements and added option to change the Strenght of any Lora in Manager, so we can tweak Extracted Workflows Live.
+
 ### version 1.12.6
 - Tweak to caching behavior for prompt extractor and prompt manager advanced
 
