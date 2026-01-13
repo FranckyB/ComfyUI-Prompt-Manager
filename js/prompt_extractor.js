@@ -317,6 +317,27 @@ async function cacheFileMetadata(filename, metadata) {
     }
 }
 
+/**
+ * Send video frame to Python backend for caching
+ */
+async function cacheVideoFrame(filename, frameData, framePosition) {
+    try {
+        const response = await api.fetchApi("/prompt-extractor/cache-video-frame", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename, frame: frameData, frame_position: framePosition })
+        });
+
+        if (response.ok) {
+            console.log(`[PromptExtractor] Cached video frame at position ${framePosition.toFixed(2)} for: ${filename}`);
+        } else {
+            console.error("[PromptExtractor] Failed to cache video frame:", response.status);
+        }
+    } catch (error) {
+        console.error("[PromptExtractor] Error caching video frame:", error);
+    }
+}
+
 app.registerExtension({
     name: "PromptExtractor",
 
@@ -346,6 +367,42 @@ app.registerExtension({
 
                         // Load and display the image
                         loadAndDisplayImage(node, value);
+                    };
+                }
+
+                // Find the frame_position widget (slider)
+                const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
+                if (framePositionWidget) {
+                    // Store original callback
+                    const originalFrameCallback = framePositionWidget.callback;
+                    
+                    // Debounce timer to prevent excessive frame extraction during slider drag
+                    let frameUpdateTimer = null;
+
+                    // Override callback to reload video frame when position changes
+                    framePositionWidget.callback = function(value) {
+                        if (originalFrameCallback) {
+                            originalFrameCallback.apply(this, arguments);
+                        }
+
+                        // Clear any pending frame update
+                        if (frameUpdateTimer) {
+                            clearTimeout(frameUpdateTimer);
+                        }
+
+                        // Debounce: only extract frame after user stops moving slider for 300ms
+                        frameUpdateTimer = setTimeout(() => {
+                            // If a video is currently loaded, reload it with new frame position
+                            if (imageWidget && imageWidget.value) {
+                                const filename = imageWidget.value;
+                                const ext = filename.split('.').pop().toLowerCase();
+                                const videoExtensions = ['mp4', 'webm', 'mov', 'avi'];
+                                
+                                if (videoExtensions.includes(ext)) {
+                                    loadVideoFrame(node, filename);
+                                }
+                            }
+                        }, 300);
                     };
                 }
 
@@ -524,8 +581,8 @@ async function loadAndDisplayImage(node, filename) {
     const videoExtensions = ['mp4', 'webm', 'mov', 'avi'];
 
     if (videoExtensions.includes(ext)) {
-        // It's a video - extract and display first frame
-        loadVideoFirstFrame(node, filename);
+        // It's a video - extract and display frame at specified position
+        loadVideoFrame(node, filename);
         return;
     }
 
@@ -624,10 +681,14 @@ async function loadJSONFile(node, filename) {
 }
 
 /**
- * Load first frame from a video file and extract metadata
+ * Load frame from a video file at specified position and extract metadata
  */
-async function loadVideoFirstFrame(node, filename) {
+async function loadVideoFrame(node, filename) {
     try {
+        // Get frame position from the widget (0.0 to 1.0)
+        const framePositionWidget = node.widgets?.find(w => w.name === "frame_position");
+        const framePosition = framePositionWidget ? framePositionWidget.value : 0.0;
+
         // Fetch the video file to extract metadata
         const videoBlob = await fetch(`/view?filename=${encodeURIComponent(filename)}&type=input`)
             .then(res => res.blob());
@@ -646,8 +707,9 @@ async function loadVideoFirstFrame(node, filename) {
         video.preload = 'metadata';
 
         video.onloadedmetadata = () => {
-            // Seek to first frame
-            video.currentTime = 0;
+            // Calculate frame time based on position (0.0 = start, 1.0 = end)
+            const frameTime = framePosition * Math.max(0, video.duration - 0.1);
+            video.currentTime = frameTime;
         };
 
         video.onseeked = () => {
@@ -663,8 +725,13 @@ async function loadVideoFirstFrame(node, filename) {
             // Convert canvas to image
             const img = new Image();
             img.onload = () => {
+                // Display the frame
                 node.imgs = [img];
                 node.imageIndex = 0;
+
+                // Cache frame as base64 for Python backend
+                const frameData = canvas.toDataURL('image/png');
+                cacheVideoFrame(filename, frameData, framePosition);
 
                 // Resize node to fit image
                 const targetWidth = Math.max(node.size[0], 256);
@@ -676,7 +743,7 @@ async function loadVideoFirstFrame(node, filename) {
             };
 
             img.onerror = () => {
-                console.error(`[PromptExtractor] Failed to create image from video frame`);
+                console.error(`[PromptExtractor] Failed to create image from video frame at position ${framePosition.toFixed(2)}`);
                 showPlaceholder(node);
             };
 

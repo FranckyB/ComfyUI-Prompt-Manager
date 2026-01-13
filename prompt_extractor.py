@@ -22,6 +22,8 @@ except ImportError:
 
 # Cache for file metadata (read by JavaScript, used by Python)
 _file_metadata_cache = {}
+# Cache for video frames extracted by JavaScript
+_video_frames_cache = {}
 
 
 # API endpoint to cache file metadata (sent from JavaScript)
@@ -42,6 +44,29 @@ async def cache_file_metadata(request):
         return server.web.json_response({"success": True})
     except Exception as e:
         print(f"[PromptExtractor] Error caching file metadata: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+# API endpoint to cache video frame (sent from JavaScript)
+@server.PromptServer.instance.routes.post("/prompt-extractor/cache-video-frame")
+async def cache_video_frame(request):
+    """API endpoint to cache a single video frame extracted by JavaScript"""
+    try:
+        data = await request.json()
+        filename = data.get('filename')
+        frame = data.get('frame')  # Single base64 data URL
+        frame_position = data.get('frame_position', 0.0)
+
+        if not filename:
+            return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
+
+        if frame:
+            _video_frames_cache[filename] = frame
+            print(f"[PromptExtractor] Cached frame at position {frame_position:.2f} for: {filename}")
+
+        return server.web.json_response({"success": True})
+    except Exception as e:
+        print(f"[PromptExtractor] Error caching video frame: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -334,62 +359,57 @@ def extract_metadata_from_video(file_path):
         return None, None
 
 
-def extract_first_frame_from_video(file_path):
-    """Extract the first frame from a video file using ffmpeg"""
+def base64_to_tensor(base64_data):
+    """
+    Convert base64 data URL to ComfyUI tensor format.
+    """
     try:
-        import subprocess
-        import tempfile
-
-        # Create a temporary file for the extracted frame
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-
-        # Use ffmpeg to extract the first frame
-        result = subprocess.run(
-            [
-                'ffmpeg', '-y',  # Overwrite output file
-                '-i', file_path,  # Input file
-                '-vf', 'select=eq(n\\,0)',  # Select first frame
-                '-vframes', '1',  # Only one frame
-                '-f', 'image2',  # Output format
-                tmp_path  # Output file
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-
-        if result.returncode == 0 and os.path.exists(tmp_path):
-            # Load the extracted frame as tensor
-            image_tensor = load_image_as_tensor(tmp_path)
-
-            # Clean up temporary file
-            try:
-                os.remove(tmp_path)
-            except:
-                pass
-
-            if image_tensor is not None:
-                print("[PromptExtractor] Successfully extracted first frame from video")
-                return image_tensor
-        else:
-            print(f"[PromptExtractor] ffmpeg failed to extract frame: {result.stderr}")
-            # Clean up temporary file on failure
-            try:
-                os.remove(tmp_path)
-            except:
-                pass
-
-        return None
-    except FileNotFoundError:
-        print("[PromptExtractor] ffmpeg not found - video frame extraction unavailable")
-        print("[PromptExtractor] Install ffmpeg to enable video frame extraction")
-        return None
+        import base64
+        import io
+        from PIL import Image
+        
+        # Remove data URL prefix (data:image/png;base64,)
+        if ',' in base64_data:
+            base64_data = base64_data.split(',', 1)[1]
+        
+        # Decode base64 to bytes
+        img_bytes = base64.b64decode(base64_data)
+        
+        # Load as PIL Image
+        img = Image.open(io.BytesIO(img_bytes))
+        
+        # Convert to RGB if needed
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Convert to numpy array and normalize to 0-1
+        img_array = np.array(img).astype(np.float32) / 255.0
+        
+        # Convert to torch tensor with batch dimension (B, H, W, C)
+        img_tensor = torch.from_numpy(img_array).unsqueeze(0)
+        
+        return img_tensor
     except Exception as e:
-        print(f"[PromptExtractor] Error extracting video frame: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[PromptExtractor] Error converting base64 to tensor: {e}")
         return None
+
+
+def get_cached_video_frame(filename, frame_position):
+    """
+    Retrieve cached video frame extracted by JavaScript at the specified position.
+    frame_position: float from 0.0 to 1.0 representing position in video
+    Returns a single frame tensor.
+    """
+    if filename not in _video_frames_cache:
+        print(f"[PromptExtractor] No cached frame for: {filename}")
+        return None
+    
+    frame_data = _video_frames_cache[filename]
+    
+    # Convert base64 frame to tensor
+    frame_tensor = base64_to_tensor(frame_data)
+    
+    return frame_tensor
 
 
 def build_link_map(workflow_data):
@@ -1380,6 +1400,7 @@ class PromptExtractor:
         return {
             "required": {
                 "image": (files, {"image_upload": True}),
+                "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
             },
             "optional": {
                 "lora_stack_a": ("LORA_STACK",),
@@ -1393,7 +1414,7 @@ class PromptExtractor:
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
-    def extract(self, image="", lora_stack_a=None, lora_stack_b=None):
+    def extract(self, image="", frame_position=0.0, lora_stack_a=None, lora_stack_b=None):
         """Extract prompts and LoRAs from the specified file."""
 
         # Always initialize with empty strings, never None
@@ -1463,8 +1484,14 @@ class PromptExtractor:
 
             elif ext in ['.mp4', '.webm', '.mov', '.avi']:
                 prompt_data, workflow_data = extract_metadata_from_video(resolved_path)
-                # Extract first frame as image
-                image_tensor = extract_first_frame_from_video(resolved_path)
+                # Get frame cached by JavaScript at the specified position
+                filename = os.path.basename(resolved_path)
+                image_tensor = get_cached_video_frame(filename, frame_position)
+                
+                # If no cached frame, use placeholder
+                if image_tensor is None:
+                    print("[PromptExtractor] Using placeholder frame (no cached frame from JavaScript)")
+                    image_tensor = get_placeholder_image_tensor()
 
             # Parse the extracted data
             if prompt_data or workflow_data:

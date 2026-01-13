@@ -242,6 +242,9 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.12.5
+- Some dependencies to FFMpeg were still present, remove them and added a frame_position value, so we can specify what frame to get from video.
+
 ### version 1.12.0
 - Prompt Extractor: Added Lora inputs, so it can be used as a passthrough, with a None Choice at top, to easily deactivate it.
 - Prompt Extractor: Improved logic for determining Positive prompts in Worfklow.
