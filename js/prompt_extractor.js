@@ -387,6 +387,10 @@ app.registerExtension({
                 // Find the image widget (combo dropdown)
                 const imageWidget = this.widgets?.find(w => w.name === "image");
                 if (imageWidget) {
+                    // Track the last known value to detect changes
+                    let lastImageValue = imageWidget.value;
+                    let extractionInProgress = false;
+                    
                     // Store original callback
                     const originalCallback = imageWidget.callback;
 
@@ -396,8 +400,25 @@ app.registerExtension({
                             originalCallback.apply(this, arguments);
                         }
 
-                        // Load and display the image
+                        // Load and display the image/video (handles all display logic)
                         loadAndDisplayImage(node, value);
+                    };
+                    
+                    // Watch for value changes to update metadata indicator
+                    const originalOnDrawForeground = node.onDrawForeground;
+                    node.onDrawForeground = function(ctx) {
+                        if (originalOnDrawForeground) {
+                            originalOnDrawForeground.call(this, ctx);
+                        }
+                        
+                        // Check if image value changed and not already extracting
+                        if (imageWidget.value !== lastImageValue && !extractionInProgress) {
+                            extractionInProgress = true;
+                            lastImageValue = imageWidget.value;
+                            extractAndUpdateMetadata(node, imageWidget.value).finally(() => {
+                                extractionInProgress = false;
+                            });
+                        }
                     };
                     
                     // Add custom "Browse Files" button AFTER the image widget
@@ -644,6 +665,80 @@ app.registerExtension({
 });
 
 /**
+ * Extract metadata and update workflow indicator (without affecting display)
+ */
+async function extractAndUpdateMetadata(node, filename) {
+    if (!filename || filename === "(none)") {
+        node.hasWorkflow = false;
+        node.setDirtyCanvas(true, true);
+        return;
+    }
+
+    try {
+        const ext = filename.split('.').pop().toLowerCase();
+        
+        // Split path into filename and subfolder for proper URL handling
+        let actualFilename = filename;
+        let subfolder = "";
+        
+        if (filename.includes('/')) {
+            const lastSlash = filename.lastIndexOf('/');
+            subfolder = filename.substring(0, lastSlash);
+            actualFilename = filename.substring(lastSlash + 1);
+        }
+        
+        // Build URL with subfolder parameter if present
+        let fileUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+        if (subfolder) {
+            fileUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
+        }
+        
+        // Fetch the file to extract metadata
+        const response = await fetch(fileUrl);
+        if (!response.ok) {
+            console.warn(`[PromptExtractor] Failed to fetch file for metadata: ${filename}`);
+            node.hasWorkflow = false;
+            node.setDirtyCanvas(true, true);
+            return;
+        }
+        
+        const fileBlob = await response.blob();
+        let metadata = null;
+
+        // Extract based on file type
+        if (ext === 'png') {
+            metadata = await getPNGMetadata(fileBlob);
+        } else if (['jpg', 'jpeg', 'webp'].includes(ext)) {
+            metadata = await getJPEGMetadata(fileBlob);
+        } else if (ext === 'json') {
+            metadata = await getJSONMetadata(fileBlob);
+        } else if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
+            metadata = await getVideoMetadata(fileBlob);
+        }
+
+        // Cache metadata for Python backend
+        if (metadata !== null) {
+            await cacheFileMetadata(filename, metadata);
+        }
+
+        // Update workflow status
+        if (ext === 'json') {
+            node.hasWorkflow = !!(metadata && (metadata.workflow || (metadata.nodes && metadata.links)));
+        } else {
+            node.hasWorkflow = !!(metadata && metadata.workflow);
+        }
+
+        // Force canvas redraw to update indicator
+        node.setDirtyCanvas(true, true);
+        app.graph.setDirtyCanvas(true, true);
+    } catch (error) {
+        console.error("[PromptExtractor] Error extracting metadata:", error);
+        node.hasWorkflow = false;
+        node.setDirtyCanvas(true, true);
+    }
+}
+
+/**
  * Load and display an image in the node
  */
 async function loadAndDisplayImage(node, filename) {
@@ -703,6 +798,10 @@ async function loadImageFile(node, filename) {
 
         // Update workflow status flag
         node.hasWorkflow = !!(metadata && metadata.workflow);
+        
+        // Force canvas redraw to update indicator immediately
+        node.setDirtyCanvas(true, true);
+        app.graph.setDirtyCanvas(true, true);
 
         // Load and display the image
         const img = new Image();
@@ -749,6 +848,10 @@ async function loadJSONFile(node, filename) {
         // Update workflow status flag
         // Check if metadata has workflow property OR if metadata itself is a workflow (has nodes/links)
         node.hasWorkflow = !!(metadata && (metadata.workflow || (metadata.nodes && metadata.links)));
+        
+        // Force canvas redraw to update indicator immediately
+        node.setDirtyCanvas(true, true);
+        app.graph.setDirtyCanvas(true, true);
 
         // Show placeholder for JSON files (no visual preview)
         showPlaceholder(node);
@@ -794,6 +897,10 @@ async function loadVideoFrame(node, filename) {
 
         // Update workflow status flag
         node.hasWorkflow = !!(metadata && metadata.workflow);
+        
+        // Force canvas redraw to update indicator immediately
+        node.setDirtyCanvas(true, true);
+        app.graph.setDirtyCanvas(true, true);
 
         // Create a video element for frame extraction
         const video = document.createElement('video');
