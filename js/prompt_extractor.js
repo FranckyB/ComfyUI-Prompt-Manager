@@ -485,8 +485,13 @@ app.registerExtension({
                     }
 
                     // After workflow is configured, load the preview if a file is selected
+                    // Only reload if we don't already have a preview image displayed
                     if (imageWidget && imageWidget.value) {
-                        loadAndDisplayImage(node, imageWidget.value);
+                        const previewWidget = this.widgets?.find(w => w.name === "preview" && w.type === "image");
+                        // Only load if preview is not already showing this image
+                        if (!previewWidget || !previewWidget.value) {
+                            loadAndDisplayImage(node, imageWidget.value);
+                        }
                     }
 
                     return result;
