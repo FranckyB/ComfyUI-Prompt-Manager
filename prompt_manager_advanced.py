@@ -547,12 +547,18 @@ class PromptManagerAdvanced:
         prompt_input_changed = current_prompt_input_text != last_state['prompt_input_text']
         toggle_data_changed = (current_toggle_data_a != last_state['toggle_data_a'] or current_toggle_data_b != last_state['toggle_data_b'])
 
+        # Check if input loras were cleared (had loras before, now empty)
+        had_loras = last_state['input_loras_a'] or last_state['input_loras_b']
+        now_has_no_loras = not current_input_loras_a and not current_input_loras_b
+        loras_were_cleared = had_loras and now_has_no_loras
+
         # Reset conditions:
         # 1. Prompt dropdown changed
         # 2. Input loras AND prompt text both changed (new extraction)
-        # 3. Don't reset if ONLY toggle data changed (user is adjusting toggles)
+        # 3. Input loras were cleared (switching from image with workflow to one without)
+        # 4. Don't reset if ONLY toggle data changed (user is adjusting toggles)
         is_new_extraction = input_loras_changed and prompt_input_changed
-        should_reset = prompt_changed or is_new_extraction
+        should_reset = prompt_changed or is_new_extraction or loras_were_cleared
 
         # Update tracked state
         self._last_known_state[node_state_key] = {

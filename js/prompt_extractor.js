@@ -5,6 +5,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { createFileBrowserModal } from "./file_browser.js";
 
 // Placeholder image path - loaded from static PNG file
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
@@ -398,11 +399,44 @@ app.registerExtension({
                         // Load and display the image
                         loadAndDisplayImage(node, value);
                     };
+                    
+                    // Add custom "Browse Files" button AFTER the image widget
+                    const imageWidgetIndex = this.widgets.indexOf(imageWidget);
+                    const browseButton = {
+                        type: "button",
+                        name: "📁 Browse Files",
+                        value: null,
+                        callback: () => {
+                            const currentFile = imageWidget.value === "(none)" ? null : imageWidget.value;
+                            
+                            // Open file browser modal
+                            createFileBrowserModal(currentFile, (selectedFile) => {
+                                // Update the dropdown value
+                                imageWidget.value = selectedFile;
+                                
+                                // Trigger the callback to load/display the file
+                                if (imageWidget.callback) {
+                                    imageWidget.callback(selectedFile);
+                                }
+                                
+                                // Mark node as needing update
+                                node.setDirtyCanvas(true);
+                            });
+                        },
+                        serialize: false // Don't save button state
+                    };
+                    
+                    // Insert button right after the image widget
+                    this.widgets.splice(imageWidgetIndex + 1, 0, browseButton);
+                    Object.defineProperty(browseButton, "node", { value: node });
                 }
 
                 // Find the frame_position widget (slider)
                 const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
                 if (framePositionWidget) {
+                    // Ensure the widget is serialized (saved in workflows)
+                    framePositionWidget.serialize = true;
+                    
                     // Store original callback
                     const originalFrameCallback = framePositionWidget.callback;
                     
@@ -440,6 +474,15 @@ app.registerExtension({
                 const onConfigure = node.onConfigure;
                 node.onConfigure = function(info) {
                     const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+
+                    // Restore frame_position if it exists in the workflow data
+                    if (info && info.widgets_values && framePositionWidget) {
+                        // Find the frame_position widget's index
+                        const frameWidgetIndex = this.widgets.findIndex(w => w.name === "frame_position");
+                        if (frameWidgetIndex >= 0 && info.widgets_values[frameWidgetIndex] !== undefined) {
+                            framePositionWidget.value = info.widgets_values[frameWidgetIndex];
+                        }
+                    }
 
                     // After workflow is configured, load the preview if a file is selected
                     if (imageWidget && imageWidget.value) {
@@ -719,8 +762,24 @@ async function loadVideoFrame(node, filename) {
         const framePositionWidget = node.widgets?.find(w => w.name === "frame_position");
         const framePosition = framePositionWidget ? framePositionWidget.value : 0.0;
 
+        // Split path into filename and subfolder for ComfyUI's /view endpoint
+        let actualFilename = filename;
+        let subfolder = "";
+        
+        if (filename.includes('/')) {
+            const lastSlash = filename.lastIndexOf('/');
+            subfolder = filename.substring(0, lastSlash);
+            actualFilename = filename.substring(lastSlash + 1);
+        }
+        
+        // Build URL with subfolder parameter if present
+        let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+        if (subfolder) {
+            videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
+        }
+
         // Fetch the video file to extract metadata
-        const videoBlob = await fetch(`/view?filename=${encodeURIComponent(filename)}&type=input`)
+        const videoBlob = await fetch(videoUrl)
             .then(res => res.blob());
 
         // Extract metadata from video file
@@ -785,8 +844,8 @@ async function loadVideoFrame(node, filename) {
             showPlaceholder(node);
         };
 
-        // Load video from input directory
-        video.src = `/view?filename=${encodeURIComponent(filename)}&type=input&${Date.now()}`;
+        // Load video from input directory (using same URL with subfolder support)
+        video.src = videoUrl + `&${Date.now()}`;
     } catch (error) {
         console.error("[PromptExtractor] Error loading video:", error);
         showPlaceholder(node);

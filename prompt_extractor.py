@@ -39,7 +39,9 @@ async def cache_file_metadata(request):
             return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
 
         if metadata:
-            _file_metadata_cache[filename] = metadata
+            # Normalize path separators and replace for cache key
+            cache_key = filename.replace('\\', '/').replace('/', '_')
+            _file_metadata_cache[cache_key] = metadata
 
         return server.web.json_response({"success": True})
     except Exception as e:
@@ -56,13 +58,20 @@ async def cache_video_frame(request):
         filename = data.get('filename')
         frame = data.get('frame')  # Single base64 data URL
         frame_position = data.get('frame_position', 0.0)
+        # Handle None or null from JavaScript
+        if frame_position is None:
+            frame_position = 0.0
 
         if not filename:
             return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
 
         if frame:
-            _video_frames_cache[filename] = frame
-            print(f"[PromptExtractor] Cached frame at position {frame_position:.2f} for: {filename}")
+            # Normalize path separators and replace for cache key (matching JavaScript)
+            # Note: We don't include frame_position in the cache key because the video 
+            # frame changes when the user adjusts the slider, and we only cache one frame per video
+            path_key = filename.replace('\\', '/').replace('/', '_')
+            _video_frames_cache[path_key] = frame
+            print(f"[PromptExtractor] Cached frame at position {frame_position:.2f} for: {filename} (cache_key: {path_key})")
 
         return server.web.json_response({"success": True})
     except Exception as e:
@@ -73,17 +82,24 @@ async def cache_video_frame(request):
 # API endpoint to list files in input directory
 @server.PromptServer.instance.routes.get("/prompt-extractor/list-files")
 async def list_input_files(request):
-    """API endpoint to get list of supported files in input directory"""
+    """API endpoint to get list of supported files in input directory, including subfolders"""
     try:
         input_dir = folder_paths.get_input_directory()
         files = []
         supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
 
         if os.path.exists(input_dir):
-            for filename in os.listdir(input_dir):
-                ext = os.path.splitext(filename)[1].lower()
-                if ext in supported_extensions:
-                    files.append(filename)
+            # Walk through directory recursively
+            for root, dirs, filenames in os.walk(input_dir):
+                for filename in filenames:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext in supported_extensions:
+                        # Get relative path from input directory
+                        full_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(full_path, input_dir)
+                        # Convert Windows backslashes to forward slashes
+                        rel_path = rel_path.replace('\\', '/')
+                        files.append(rel_path)
 
         files.sort()
         return server.web.json_response({"files": files})
@@ -307,12 +323,19 @@ def extract_metadata_from_json(file_path):
 def extract_metadata_from_video(file_path):
     """Extract workflow/prompt metadata from video file (cached from JavaScript)"""
     try:
-        # Get just the filename from the path
-        filename = os.path.basename(file_path)
+        # Get the relative path from input directory to match JavaScript cache keys
+        input_dir = folder_paths.get_input_directory()
+        if file_path.startswith(input_dir):
+            relative_path = os.path.relpath(file_path, input_dir)
+            # Normalize path separators to forward slashes and replace for cache key
+            cache_key = relative_path.replace('\\', '/').replace('/', '_')
+        else:
+            # Fallback to basename for absolute paths outside input dir
+            cache_key = os.path.basename(file_path)
 
         # Check if metadata was cached by JavaScript
-        if filename in _file_metadata_cache:
-            metadata = _file_metadata_cache[filename]
+        if cache_key in _file_metadata_cache:
+            metadata = _file_metadata_cache[cache_key]
 
             # Parse the cached metadata
             if isinstance(metadata, dict):
@@ -348,7 +371,7 @@ def extract_metadata_from_video(file_path):
                 else:
                     return metadata, None
         else:
-            print(f"[PromptExtractor] No cached metadata found for video: {filename}")
+            print(f"[PromptExtractor] No cached metadata found for video: {cache_key}")
             print("[PromptExtractor] Note: Video metadata is read by JavaScript when file is selected")
 
         return None, None
@@ -394,42 +417,58 @@ def base64_to_tensor(base64_data):
         return None
 
 
-def get_cached_video_frame(filename, frame_position):
+def get_cached_video_frame(relative_path, frame_position):
     """
     Retrieve cached video frame extracted by JavaScript at the specified position.
-    frame_position: float from 0.0 to 1.0 representing position in video
-    Returns a single frame tensor.
-    If cache is missing, requests extraction from JavaScript and waits briefly.
+    
+    Args:
+        relative_path: The video file path relative to input directory (e.g., "workflow/video.mp4")
+        frame_position: float from 0.0 to 1.0 representing position in video (used for requesting new extraction)
+    
+    Returns:
+        A single frame tensor or None if cache is missing.
     """
     import time
+    
+    # Handle None frame_position
+    if frame_position is None:
+        frame_position = 0.01
 
-    if filename not in _video_frames_cache:
-        print(f"[PromptExtractor] Cache missing for: {filename}, requesting extraction...")
+    # Normalize path separators and replace for cache key (matching JavaScript)
+    # Note: Cache key does NOT include frame_position - we only cache one frame per video
+    # When user adjusts the slider, JavaScript recaches with the new frame
+    path_key = relative_path.replace('\\', '/').replace('/', '_')
+    
+    print(f"[PromptExtractor] Looking for cached frame: {path_key}")
+    print(f"[PromptExtractor] Available cache keys: {list(_video_frames_cache.keys())}")
+
+    if path_key not in _video_frames_cache:
+        print(f"[PromptExtractor] Cache missing for: {relative_path} at position {frame_position}, requesting extraction...")
 
         # Broadcast directly to JavaScript clients
         try:
             server.PromptServer.instance.send_sync("prompt-extractor-extract-frame", {
-                "filename": filename,
+                "filename": relative_path,
                 "frame_position": frame_position
             })
 
             # Wait briefly for JavaScript to extract and cache the frame
             max_wait = 5  # seconds
             start_time = time.time()
-            while filename not in _video_frames_cache and (time.time() - start_time) < max_wait:
+            while path_key not in _video_frames_cache and (time.time() - start_time) < max_wait:
                 time.sleep(0.1)
 
-            if filename in _video_frames_cache:
-                print(f"[PromptExtractor] Frame cached successfully for: {filename}")
+            if path_key in _video_frames_cache:
+                print(f"[PromptExtractor] Frame cached successfully for: {relative_path}")
             else:
-                print(f"[PromptExtractor] Timeout waiting for frame extraction: {filename}")
+                print(f"[PromptExtractor] Timeout waiting for frame extraction: {relative_path}")
                 return None
 
         except Exception as e:
             print(f"[PromptExtractor] Error requesting frame extraction: {e}")
             return None
 
-    frame_data = _video_frames_cache[filename]
+    frame_data = _video_frames_cache[path_key]
 
     # Convert base64 frame to tensor
     frame_tensor = base64_to_tensor(frame_data)
@@ -1451,16 +1490,23 @@ class PromptExtractor:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # Get list of supported files from input directory
+        # Get list of supported files from input directory, including subfolders
         input_dir = folder_paths.get_input_directory()
         files = ["(none)"]  # Add empty option at the top for passthrough
         supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
 
         if os.path.exists(input_dir):
-            for filename in os.listdir(input_dir):
-                ext = os.path.splitext(filename)[1].lower()
-                if ext in supported_extensions:
-                    files.append(filename)
+            # Walk through directory recursively
+            for root, dirs, filenames in os.walk(input_dir):
+                for filename in filenames:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext in supported_extensions:
+                        # Get relative path from input directory
+                        full_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(full_path, input_dir)
+                        # Convert Windows backslashes to forward slashes
+                        rel_path = rel_path.replace('\\', '/')
+                        files.append(rel_path)
 
         # Sort files alphabetically (except first entry which is "(none)")
         files_to_sort = files[1:]
@@ -1489,6 +1535,10 @@ class PromptExtractor:
 
     def extract(self, image="", frame_position=0.0, lora_stack_a=None, lora_stack_b=None, unique_id=None):
         """Extract prompts and LoRAs from the specified file."""
+
+        # Handle None for frame_position (workflow compatibility)
+        if frame_position is None:
+            frame_position = 0.0
 
         # Always initialize with empty strings, never None
         positive_prompt = ""
@@ -1558,8 +1608,14 @@ class PromptExtractor:
             elif ext in ['.mp4', '.webm', '.mov', '.avi']:
                 prompt_data, workflow_data = extract_metadata_from_video(resolved_path)
                 # Get frame cached by JavaScript at the specified position
-                filename = os.path.basename(resolved_path)
-                image_tensor = get_cached_video_frame(filename, frame_position)
+                # Get relative path from input directory to match JavaScript cache keys
+                input_dir = folder_paths.get_input_directory()
+                if resolved_path.startswith(input_dir):
+                    relative_path = os.path.relpath(resolved_path, input_dir)
+                    relative_path = relative_path.replace('\\', '/')  # Normalize to forward slashes
+                else:
+                    relative_path = os.path.basename(resolved_path)
+                image_tensor = get_cached_video_frame(relative_path, frame_position)
 
                 # If no cached frame, use placeholder (JavaScript will cache before execution)
                 if image_tensor is None:
@@ -1590,7 +1646,8 @@ class PromptExtractor:
                 model_strength = lora['model_strength']
                 clip_strength = lora['clip_strength']
 
-                extracted_lora_stack_a.append((lora_name, model_strength, clip_strength))
+                # PromptManagerAdvanced handles matching to actual files
+                extracted_lora_stack_a.append((lora_path, model_strength, clip_strength))
 
             # Process loras_b into stack B (only active LoRAs)
             for lora in loras_b:
@@ -1608,7 +1665,8 @@ class PromptExtractor:
                 model_strength = lora['model_strength']
                 clip_strength = lora['clip_strength']
 
-                extracted_lora_stack_b.append((lora_name, model_strength, clip_strength))
+                # PromptManagerAdvanced handles matching to actual files
+                extracted_lora_stack_b.append((lora_path, model_strength, clip_strength))
         else:
             if file_path:
                 print(f"[PromptExtractor] File not found: {file_path}")

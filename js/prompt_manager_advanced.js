@@ -173,7 +173,46 @@ app.registerExtension({
                         const unavailableLorasB = new Set((event.detail.unavailable_loras_b || []).map(n => n.toLowerCase()));
                         
                         // Python decides if we should reset - JavaScript just obeys
-                        const shouldReset = event.detail.should_reset || false;
+                        let shouldReset = event.detail.should_reset || false;
+                        
+                        // CRITICAL: Verify JavaScript state matches Python's truth
+                        // If what we're displaying doesn't match what Python sent, force a reset
+                        if (!shouldReset) {
+                            // Check if use_lora_input is enabled to know what should be displayed
+                            const useLoraInputWidget = this.widgets?.find(w => w.name === "use_lora_input");
+                            const useLoraInput = useLoraInputWidget?.value !== false;
+                            
+                            // Get what JavaScript would currently display
+                            let currentDisplayA, currentDisplayB;
+                            if (!useLoraInput) {
+                                // Only saved loras
+                                currentDisplayA = (this.savedLorasA || []).map(l => l.name.toLowerCase()).sort();
+                                currentDisplayB = (this.savedLorasB || []).map(l => l.name.toLowerCase()).sort();
+                            } else {
+                                // Merge of current + saved
+                                const mergedA = mergeLoraLists(this.currentLorasA, this.savedLorasA);
+                                const mergedB = mergeLoraLists(this.currentLorasB, this.savedLorasB);
+                                currentDisplayA = mergedA.map(l => l.name.toLowerCase()).sort();
+                                currentDisplayB = mergedB.map(l => l.name.toLowerCase()).sort();
+                            }
+                            
+                            // Get what Python says should be displayed
+                            const pythonLorasA = newLorasA.map(l => l.name.toLowerCase()).sort();
+                            const pythonLorasB = newLorasB.map(l => l.name.toLowerCase()).sort();
+                            
+                            // If they don't match, we're out of sync - force reset
+                            const lorasOutOfSyncA = JSON.stringify(currentDisplayA) !== JSON.stringify(pythonLorasA);
+                            const lorasOutOfSyncB = JSON.stringify(currentDisplayB) !== JSON.stringify(pythonLorasB);
+                            
+                            if (lorasOutOfSyncA || lorasOutOfSyncB) {
+                                console.log("[PromptManagerAdvanced] JavaScript state out of sync with Python - forcing reset");
+                                console.log("  Current A:", currentDisplayA);
+                                console.log("  Python A:", pythonLorasA);
+                                console.log("  Current B:", currentDisplayB);
+                                console.log("  Python B:", pythonLorasB);
+                                shouldReset = true;
+                            }
+                        }
                         
                         // Store original strengths from Python (for Reset Strength button)
                         this.originalStrengthsA = event.detail.original_strengths_a || {};
@@ -188,7 +227,7 @@ app.registerExtension({
 
                         console.log("[PromptManagerAdvanced] Update received, shouldReset:", shouldReset);
 
-                        // Clear and reload when Python tells us to
+                        // Clear and reload when Python tells us to (or when we detect desync)
                         if (shouldReset) {
                             console.log("[PromptManagerAdvanced] Resetting toggles as instructed by Python");
 
