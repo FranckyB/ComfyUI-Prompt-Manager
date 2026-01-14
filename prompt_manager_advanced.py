@@ -513,6 +513,61 @@ class PromptManagerAdvanced:
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
 
+        # ========================================
+        # RESET LOGIC - Determine if we should clear toggles and start fresh
+        # ========================================
+        # Track state for this node instance (stored in class variable per node)
+        if not hasattr(self, '_last_known_state'):
+            self._last_known_state = {}
+
+        node_state_key = str(unique_id) if unique_id else "default"
+        if node_state_key not in self._last_known_state:
+            self._last_known_state[node_state_key] = {
+                'prompt_key': '',
+                'input_loras_a': [],
+                'input_loras_b': [],
+                'prompt_input_text': '',
+                'toggle_data_a': '',
+                'toggle_data_b': ''
+            }
+
+        last_state = self._last_known_state[node_state_key]
+
+        # Current state signatures (using LoRA file paths directly - NO splitext)
+        current_prompt_key = f"{category}|{name}"
+        current_input_loras_a = [lora_path for lora_path, _, _ in lora_stack_a] if lora_stack_a else []
+        current_input_loras_b = [lora_path for lora_path, _, _ in lora_stack_b] if lora_stack_b else []
+        current_prompt_input_text = prompt_input if prompt_input else ""
+        current_toggle_data_a = loras_a_toggle if loras_a_toggle else ""
+        current_toggle_data_b = loras_b_toggle if loras_b_toggle else ""
+
+        # Determine if reset is needed
+        prompt_changed = current_prompt_key != last_state['prompt_key']
+        input_loras_changed = (current_input_loras_a != last_state['input_loras_a'] or current_input_loras_b != last_state['input_loras_b'])
+        prompt_input_changed = current_prompt_input_text != last_state['prompt_input_text']
+        toggle_data_changed = (current_toggle_data_a != last_state['toggle_data_a'] or current_toggle_data_b != last_state['toggle_data_b'])
+
+        # Reset conditions:
+        # 1. Prompt dropdown changed
+        # 2. Input loras AND prompt text both changed (new extraction)
+        # 3. Don't reset if ONLY toggle data changed (user is adjusting toggles)
+        is_new_extraction = input_loras_changed and prompt_input_changed
+        should_reset = prompt_changed or is_new_extraction
+
+        # Update tracked state
+        self._last_known_state[node_state_key] = {
+            'prompt_key': current_prompt_key,
+            'input_loras_a': current_input_loras_a,
+            'input_loras_b': current_input_loras_b,
+            'prompt_input_text': current_prompt_input_text,
+            'toggle_data_a': current_toggle_data_a,
+            'toggle_data_b': current_toggle_data_b
+        }
+
+        # ========================================
+        # CONTINUE WITH NORMAL PROCESSING
+        # ========================================
+
         # Choose which text to use based on the toggle
         if use_prompt_input and prompt_input:
             output_text = prompt_input
@@ -524,6 +579,35 @@ class PromptManagerAdvanced:
         # and clear toggle states accordingly
         input_loras_a = self._format_loras_for_display(lora_stack_a) if lora_stack_a else []
         input_loras_b = self._format_loras_for_display(lora_stack_b) if lora_stack_b else []
+
+        # Build map of ORIGINAL strengths (before any user adjustments via toggles)
+        # This is used for "Reset Strength" functionality
+        original_strengths_a = {}
+        original_strengths_b = {}
+
+        # Get original strengths from saved prompt dict
+        prompts = self.load_prompts()
+        if prompts and category and name:
+            prompt_data = prompts.get(category, {}).get(name, {})
+            if prompt_data:
+                for lora in prompt_data.get('loras_a', []):
+                    lora_name = lora.get('name', '')
+                    if lora_name:
+                        original_strengths_a[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
+                for lora in prompt_data.get('loras_b', []):
+                    lora_name = lora.get('name', '')
+                    if lora_name:
+                        original_strengths_b[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
+
+        # Add original strengths from connected input loras
+        for lora in input_loras_a:
+            lora_name = lora.get('name', '')
+            if lora_name and lora_name not in original_strengths_a:
+                original_strengths_a[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
+        for lora in input_loras_b:
+            lora_name = lora.get('name', '')
+            if lora_name and lora_name not in original_strengths_b:
+                original_strengths_b[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
 
         # Process trigger words
         trigger_words_display = self._process_trigger_words(
@@ -595,7 +679,10 @@ class PromptManagerAdvanced:
                 "unavailable_loras_a": unavailable_loras_a,  # Explicit list of unavailable lora names
                 "unavailable_loras_b": unavailable_loras_b,  # Explicit list of unavailable lora names
                 "trigger_words": trigger_words_display,
-                "connected_thumbnail": thumbnail_base64
+                "connected_thumbnail": thumbnail_base64,
+                "should_reset": should_reset,  # Python tells JavaScript when to reset toggles
+                "original_strengths_a": original_strengths_a,  # For "Reset Strength" button
+                "original_strengths_b": original_strengths_b   # For "Reset Strength" button
             })
 
         # Append active trigger words to output
