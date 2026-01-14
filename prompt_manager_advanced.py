@@ -78,6 +78,24 @@ def get_available_loras():
     return lora_files
 
 
+def normalize_path_separators(path):
+    """Normalize path separators based on OS - for basename extraction only"""
+    if os.name == 'nt':  # Windows
+        return path.replace('/', '\\')
+    else:  # Linux/Mac
+        return path.replace('\\', '/')
+
+
+def strip_lora_extension(name):
+    """Remove only known LoRA file extensions, not arbitrary dots in names."""
+    lora_extensions = ['.safetensors', '.ckpt', '.pt', '.bin', '.pth']
+    name_lower = name.lower()
+    for ext in lora_extensions:
+        if name_lower.endswith(ext):
+            return name[:-len(ext)]
+    return name
+
+
 def fuzzy_match_lora(lora_name, lora_files):
     """
     Attempt to find a matching LoRA using fuzzy matching.
@@ -88,17 +106,6 @@ def fuzzy_match_lora(lora_name, lora_files):
     Returns (matched_file, True) if found, (None, False) otherwise.
     """
     import re
-
-    # Known LoRA file extensions - only strip these, not arbitrary dots in names
-    lora_extensions = {'.safetensors', '.ckpt', '.pt', '.bin', '.pth'}
-
-    def strip_lora_extension(name):
-        """Remove only known LoRA file extensions, not arbitrary dots in names."""
-        name_lower = name.lower()
-        for ext in lora_extensions:
-            if name_lower.endswith(ext):
-                return name[:-len(ext)]
-        return name
 
     # Tokens to remove for fuzzy matching (case-insensitive)
     # Order matters: remove longer tokens first to avoid partial matches
@@ -184,7 +191,7 @@ def get_lora_relative_path(lora_name):
 
     # Try exact match first
     for lora_file in lora_files:
-        file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
+        file_name_no_ext = strip_lora_extension(os.path.basename(lora_file))
         if file_name_no_ext.lower() == lora_name_lower:
             return lora_file, True
 
@@ -376,13 +383,17 @@ class PromptManagerAdvanced:
         # Build set of lora names from preset (case-insensitive)
         preset_names = set()
         for lora_path, _, _ in preset_stack:
-            lora_name = os.path.splitext(os.path.basename(lora_path))[0].lower()
+            # Normalize path separators for OS-aware basename extraction
+            normalized_path = normalize_path_separators(lora_path)
+            lora_name = strip_lora_extension(os.path.basename(normalized_path)).lower()
             preset_names.add(lora_name)
 
         # Start with preset, add non-duplicate connected loras
         merged = list(preset_stack)
         for lora_path, model_strength, clip_strength in connected_stack:
-            lora_name = os.path.splitext(os.path.basename(lora_path))[0].lower()
+            # Normalize path separators for OS-aware basename extraction
+            normalized_path = normalize_path_separators(lora_path)
+            lora_name = strip_lora_extension(os.path.basename(normalized_path)).lower()
             if lora_name not in preset_names:
                 merged.append((lora_path, model_strength, clip_strength))
                 preset_names.add(lora_name)  # Prevent duplicates within connected too
@@ -442,8 +453,9 @@ class PromptManagerAdvanced:
         lora_files = get_available_loras()
 
         for lora_path, model_strength, clip_strength in lora_stack:
-            # Extract lora name from path
-            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            # Extract lora name from path - normalize separators for OS-aware basename extraction
+            normalized_path = normalize_path_separators(lora_path)
+            lora_name = strip_lora_extension(os.path.basename(normalized_path))
 
             # Check toggle state (case-insensitive lookup)
             toggle_state = toggle_map.get(lora_name.lower(), {'active': True, 'strength': None})
@@ -488,7 +500,7 @@ class PromptManagerAdvanced:
             return lora_path, True
 
         # Try to find by name
-        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+        lora_name = strip_lora_extension(os.path.basename(lora_path))
         found_path, found = get_lora_relative_path(lora_name)
         if found:
             return found_path, True
@@ -665,7 +677,9 @@ class PromptManagerAdvanced:
         lora_files = get_available_loras()
 
         for lora_path, model_strength, clip_strength in lora_stack:
-            lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+            # Normalize path separators for OS-aware basename extraction
+            normalized_path = normalize_path_separators(lora_path)
+            lora_name = strip_lora_extension(os.path.basename(normalized_path))
             lora_name_lower = lora_name.lower()
 
             # Skip if we've already added this LoRA (case-insensitive)
@@ -1084,7 +1098,7 @@ async def get_available_loras_api(request):
     try:
         lora_files = get_available_loras()
         # Return just the names without extensions for easier matching
-        lora_names = [os.path.splitext(os.path.basename(f))[0] for f in lora_files]
+        lora_names = [strip_lora_extension(os.path.basename(f)) for f in lora_files]
         return server.web.json_response({"success": True, "loras": sorted(set(lora_names))})
     except Exception as e:
         print(f"[PromptManagerAdvanced] Error in available_loras API: {e}")

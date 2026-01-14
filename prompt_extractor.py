@@ -1580,15 +1580,17 @@ class PromptExtractor:
                 if not lora.get('active', True):
                     continue
 
-                lora_name = lora['name']
-                lora_path = lora.get('path', '')
+                # Normalize path separators based on OS
+                lora_path = lora['name']
+                if os.name == 'nt':  # Windows
+                    lora_path = lora_path.replace('/', '\\')
+                else:  # Linux/Mac
+                    lora_path = lora_path.replace('\\', '/')
+                lora_name = os.path.basename(lora_path)
                 model_strength = lora['model_strength']
                 clip_strength = lora['clip_strength']
 
-                # Use path if available, otherwise construct from name
-                # PromptManagerAdvanced handles matching to actual files
-                filename = lora_path if lora_path else f"{lora_name}.safetensors"
-                extracted_lora_stack_a.append((filename, model_strength, clip_strength))
+                extracted_lora_stack_a.append((lora_name, model_strength, clip_strength))
 
             # Process loras_b into stack B (only active LoRAs)
             for lora in loras_b:
@@ -1596,15 +1598,17 @@ class PromptExtractor:
                 if not lora.get('active', True):
                     continue
 
-                lora_name = lora['name']
-                lora_path = lora.get('path', '')
+                # Normalize path separators based on OS
+                lora_path = lora['name']
+                if os.name == 'nt':  # Windows
+                    lora_path = lora_path.replace('/', '\\')
+                else:  # Linux/Mac
+                    lora_path = lora_path.replace('\\', '/')
+                lora_name = os.path.basename(lora_path)
                 model_strength = lora['model_strength']
                 clip_strength = lora['clip_strength']
 
-                # Use path if available, otherwise construct from name
-                # PromptManagerAdvanced handles matching to actual files
-                filename = lora_path if lora_path else f"{lora_name}.safetensors"
-                extracted_lora_stack_b.append((filename, model_strength, clip_strength))
+                extracted_lora_stack_b.append((lora_name, model_strength, clip_strength))
         else:
             if file_path:
                 print(f"[PromptExtractor] File not found: {file_path}")
