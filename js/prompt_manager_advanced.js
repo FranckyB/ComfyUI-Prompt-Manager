@@ -1159,14 +1159,14 @@ function createLoraTag(lora, index, stackId, node) {
         tag.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
 
         // Show LoRA Manager preview tooltip if available (with small delay)
-        // Position it to the right/below to not cover the tag
+        // Position it centered below the tag
         if (loraManagerAvailable && isAvailable) {
             const tagRect = tag.getBoundingClientRect();
             hoverTimeout = setTimeout(async () => {
                 const tooltip = await getLoraManagerPreviewTooltip();
                 if (tooltip) {
-                    // Position tooltip to the right of the tag, or below if no space
-                    const tooltipX = tagRect.right + 10;
+                    // Center horizontally under the tag
+                    const tooltipX = tagRect.right;
                     const tooltipY = tagRect.top;
                     tooltip.show(lora.name, tooltipX, tooltipY);
                 }
@@ -1196,8 +1196,13 @@ function createLoraTag(lora, index, stackId, node) {
 
     // Only add title if LoRA Manager preview is not available (to not conflict with preview tooltip)
     if (!loraManagerAvailable || !isAvailable) {
-        const availabilityStatus = isAvailable ? "" : "\n⚠️ NOT FOUND - This LoRA is missing from your system";
-        tag.title = `${lora.name}\nStrength: ${strength.toFixed(2)}${availabilityStatus}\nClick to toggle on/off\nRight-click for options`;
+        if (!isAvailable) {
+            // Missing LoRA tooltip
+            tag.title = `${lora.name}\n⚠️ NOT FOUND - This LoRA is missing from your system\nRight-click for options`;
+        } else {
+            // LoRA Manager not available, show normal tooltip
+            tag.title = `${lora.name}\nStrength: ${strength.toFixed(2)}\nClick to toggle on/off\nRight-click for options`;
+        }
     }
 
     return tag;
@@ -1275,6 +1280,20 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
         min-width: 120px;
         padding: 4px 0;
     `;
+
+    // Title showing full LoRA name
+    const titleItem = document.createElement("div");
+    titleItem.textContent = loraName;
+    titleItem.style.cssText = `
+        padding: 8px 12px;
+        font-size: 12px;
+        color: #aaa;
+        font-weight: bold;
+        border-bottom: 1px solid #444;
+        margin-bottom: 4px;
+        white-space: nowrap;
+    `;
+    menu.appendChild(titleItem);
 
     // Search on CivitAI option (only for missing LoRAs)
     if (!isAvailable) {
@@ -1872,12 +1891,19 @@ function createTriggerWordTag(word, index, node) {
         height: "24px",
         boxSizing: "border-box",
         userSelect: "none",
-        whiteSpace: "nowrap"
+        whiteSpace: "nowrap",
+        maxWidth: "100%",
+        overflow: "hidden"
     });
 
     // Trigger word text
     const textSpan = document.createElement("span");
     textSpan.textContent = word.text;
+    Object.assign(textSpan.style, {
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+    });
     tag.appendChild(textSpan);
 
     // Click handler to toggle active state

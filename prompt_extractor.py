@@ -794,13 +794,28 @@ def collect_lora_model_chain(start_node_id, node_map, link_map, visited=None):
     all_loras = []
     all_titles = []
 
-    # Extract LoRAs from this node if it's a LoRA loader
+    # Extract LoRAs from this node if it's a LoRA loader AND it's actually connected
     if is_lora_node(node_type):
-        node_loras = extract_loras_from_node(node)
-        all_loras.extend(node_loras)
-        title = node.get('title', '')
-        if title:
-            all_titles.append(title)
+        # Check if this LoRA node's MODEL output is connected to something
+        outputs = node.get('outputs', [])
+        has_connected_output = False
+        for output in outputs:
+            output_type = output.get('type', '')
+            # Check if this is a MODEL or LORA_STACK output with connections
+            if output_type in ['MODEL', 'LORA_STACK']:
+                links = output.get('links')
+                # links can be None, [], or a list with items
+                if links is not None and len(links) > 0:
+                    has_connected_output = True
+                    break
+        
+        # Only extract LoRAs if this node's output is connected
+        if has_connected_output:
+            node_loras = extract_loras_from_node(node)
+            all_loras.extend(node_loras)
+            title = node.get('title', '')
+            if title:
+                all_titles.append(title)
 
     # Look for MODEL or lora_stack input connections and traverse backwards
     inputs = node.get('inputs', [])
@@ -1155,11 +1170,26 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         if link_info and link_info['source_node'] in stacker_nodes:
                             stackers_feeding_stackers.add(link_info['source_node'])
 
-        # Terminal stackers
+        # Terminal stackers - but only include them if their output is actually connected
         terminal_stackers = [nid for nid in stacker_nodes.keys() if nid not in stackers_feeding_stackers]
 
         for terminal_id in terminal_stackers:
             node = stacker_nodes[terminal_id]
+            
+            # Check if this stacker's output is actually connected to something
+            # A disconnected stacker should not be included
+            outputs = node.get('outputs', [])
+            has_connected_output = False
+            for output in outputs:
+                # Check if any link exists from this output
+                if output.get('links') and len(output.get('links', [])) > 0:
+                    has_connected_output = True
+                    break
+            
+            # Skip this stacker if it's not connected to anything
+            if not has_connected_output:
+                continue
+            
             chain_loras, chain_titles = collect_lora_stack_chain(terminal_id, node_map, link_map)
 
             if chain_loras:
@@ -1250,6 +1280,21 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
         # Standard LoRA loaders (API format)
         elif class_type in ['LoraLoader', 'LoraLoaderModelOnly']:
+            # Check if this node's MODEL output is connected
+            if node_map:
+                node = node_map.get(int(node_id) if str(node_id).isdigit() else node_id)
+                if node:
+                    outputs = node.get('outputs', [])
+                    has_connected_output = False
+                    for output in outputs:
+                        if output.get('type') == 'MODEL':
+                            links = output.get('links')
+                            if links and isinstance(links, list) and len(links) > 0:
+                                has_connected_output = True
+                                break
+                    if not has_connected_output:
+                        continue  # Skip disconnected nodes
+            
             lora_name = inputs.get('lora_name', '')
             if lora_name and lora_name not in lora_names_seen_a:
                 lora_names_seen_a.add(lora_name)

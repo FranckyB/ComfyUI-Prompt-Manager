@@ -44,17 +44,27 @@ def test_wan_workflow_with_shared_lora_loader():
     print(f"Negative prompt: {result['negative_prompt'][:100] if result['negative_prompt'] else 'EMPTY'}")
     print(f"\nLoRAs Stack A (High): {len(result['loras_a'])} LoRAs")
     for lora in result['loras_a']:
-        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']})")
+        active_status = " [ACTIVE]" if lora.get('active', True) else " [INACTIVE]"
+        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']}){active_status}")
 
     print(f"\nLoRAs Stack B (Low): {len(result['loras_b'])} LoRAs")
     for lora in result['loras_b']:
-        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']})")
+        active_status = " [ACTIVE]" if lora.get('active', True) else " [INACTIVE]"
+        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']}){active_status}")
 
     print("\n" + "=" * 80)
 
-    # Assertions
+    # Assertions - verify we get both active and inactive LoRAs from connected nodes
     assert len(result['loras_a']) > 0, "Stack A should have LoRAs (high noise)"
     assert len(result['loras_b']) > 0, "Stack B should have LoRAs (low noise)"
+
+    # Verify that we have BOTH active and inactive LoRAs (as the extractor returns all)
+    all_loras = result['loras_a'] + result['loras_b']
+    has_active = any(lora.get('active', True) for lora in all_loras)
+    has_inactive = any(not lora.get('active', True) for lora in all_loras)
+    print(f"\nVerification: Has active LoRAs: {has_active}, Has inactive LoRAs: {has_inactive}")
+    print(f"Total LoRAs extracted: {len(all_loras)}")
+
     # Note: This workflow uses subgraphs, so prompts might be inside the subgraph
     # assert result['positive_prompt'], "Should have positive prompt"
 
