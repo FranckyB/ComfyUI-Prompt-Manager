@@ -26,6 +26,56 @@ _file_metadata_cache = {}
 _video_frames_cache = {}
 
 
+def parse_a1111_parameters(parameters_text):
+    """
+    Parse A1111/Forge parameters format
+    Returns dict with prompt, negative_prompt, and loras
+    """
+    if not parameters_text:
+        return None
+
+    result = {
+        'prompt': '',
+        'negative_prompt': '',
+        'loras': []
+    }
+
+    # Split by "Negative prompt:" to separate positive and negative
+    parts = re.split(r'Negative prompt:\s*', parameters_text, flags=re.IGNORECASE)
+    positive_prompt = parts[0].strip()
+    remainder = parts[1] if len(parts) > 1 else ''
+
+    # Extract LoRAs using pattern: <lora:name:strength> or <lora:name:model_strength:clip_strength>
+    lora_pattern = r'<lora:([^:>]+):([^:>]+)(?::([^:>]+))?>'
+    loras = []
+
+    for match in re.finditer(lora_pattern, positive_prompt):
+        lora_name = match.group(1).strip()
+        strength1 = float(match.group(2))
+        strength2 = float(match.group(3)) if match.group(3) else strength1
+
+        loras.append({
+            'name': lora_name,
+            'model_strength': strength1,
+            'clip_strength': strength2,
+            'active': True
+        })
+
+    # Remove LoRA tags from prompt
+    positive_prompt = re.sub(lora_pattern, '', positive_prompt).strip()
+    result['prompt'] = positive_prompt
+    result['loras'] = loras
+
+    # Extract negative prompt (before any "Steps:" line if present)
+    settings_match = re.match(r'^(.*?)[\r\n]+Steps:', remainder, re.DOTALL)
+    if settings_match:
+        result['negative_prompt'] = settings_match.group(1).strip()
+    else:
+        result['negative_prompt'] = remainder.strip()
+
+    return result
+
+
 # API endpoint to cache file metadata (sent from JavaScript)
 @server.PromptServer.instance.routes.post("/prompt-extractor/cache-file-metadata")
 async def cache_file_metadata(request):
@@ -39,9 +89,10 @@ async def cache_file_metadata(request):
             return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
 
         if metadata:
-            # Normalize path separators and replace for cache key
-            cache_key = filename.replace('\\', '/').replace('/', '_')
+            # Use filename as-is (with forward slashes) as cache key
+            cache_key = filename.replace('\\', '/')
             _file_metadata_cache[cache_key] = metadata
+            print(f"[PromptExtractor] Cached metadata for: {cache_key}")
 
         return server.web.json_response({"success": True})
     except Exception as e:
@@ -67,7 +118,7 @@ async def cache_video_frame(request):
 
         if frame:
             # Normalize path separators and replace for cache key (matching JavaScript)
-            # Note: We don't include frame_position in the cache key because the video 
+            # Note: We don't include frame_position in the cache key because the video
             # frame changes when the user adjusts the slider, and we only cache one frame per video
             path_key = filename.replace('\\', '/').replace('/', '_')
             _video_frames_cache[path_key] = frame
@@ -143,20 +194,31 @@ def resolve_lora_path(lora_name):
 def extract_metadata_from_png(file_path):
     """Extract workflow/prompt metadata from PNG file (cached from JavaScript)"""
     try:
-        # Get just the filename from the path
-        filename = os.path.basename(file_path)
+        # Try to get relative path from input directory first (matches JavaScript cache keys)
+        input_dir = folder_paths.get_input_directory()
+        if file_path.startswith(input_dir):
+            cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
+        else:
+            cache_key = os.path.basename(file_path)
 
         # Check if metadata was cached by JavaScript
-        if filename in _file_metadata_cache:
-            metadata = _file_metadata_cache[filename]
-            print(f"[PromptExtractor] Using cached PNG metadata for: {filename}")
+        if cache_key in _file_metadata_cache:
+            metadata = _file_metadata_cache[cache_key]
+            print(f"[PromptExtractor] Using cached PNG metadata for: {cache_key}")
 
             if isinstance(metadata, dict):
                 prompt_data = metadata.get('prompt')
                 workflow_data = metadata.get('workflow')
+
+                # Check if we have parsed A1111 parameters
+                if metadata.get('parsed_parameters'):
+                    print("[PromptExtractor] Found parsed A1111 parameters")
+                    return metadata.get('parsed_parameters'), None
+
                 return prompt_data, workflow_data
         else:
-            print(f"[PromptExtractor] No cached metadata found for PNG: {filename}")
+            print(f"[PromptExtractor] No cached metadata found for PNG: {cache_key}")
+            print(f"[PromptExtractor] Available cache keys: {list(_file_metadata_cache.keys())[:5]}")  # Debug: show first 5 keys
             print("[PromptExtractor] Note: Image metadata is read by JavaScript when file is selected")
 
         # Fallback to PIL if no cached data (backwards compatibility)
@@ -196,8 +258,16 @@ def extract_metadata_from_png(file_path):
                     prompt_json = json.loads(prompt_data) if isinstance(prompt_data, str) else prompt_data
                 except json.JSONDecodeError as e:
                     print(f"[PromptExtractor] Failed to parse prompt JSON: {e}")
-                    # Maybe it's plain text prompt (A1111 style)
-                    prompt_json = {'positive': prompt_data}
+                    # Check if it's A1111 parameters format
+                    if isinstance(prompt_data, str) and ('Negative prompt:' in prompt_data or '<lora:' in prompt_data):
+                        print("[PromptExtractor] Detected A1111 parameters format, parsing...")
+                        parsed = parse_a1111_parameters(prompt_data)
+                        if parsed:
+                            prompt_json = parsed
+                            print(f"[PromptExtractor] Parsed {len(parsed.get('loras', []))} LoRAs from A1111 parameters")
+                    else:
+                        # Plain text prompt (fallback)
+                        prompt_json = {'positive': prompt_data}
 
             if workflow_data:
                 try:
@@ -216,13 +286,17 @@ def extract_metadata_from_png(file_path):
 def extract_metadata_from_jpeg(file_path):
     """Extract workflow/prompt metadata from JPEG/WebP file (cached from JavaScript)"""
     try:
-        # Get just the filename from the path
-        filename = os.path.basename(file_path)
+        # Try to get relative path from input directory first (matches JavaScript cache keys)
+        input_dir = folder_paths.get_input_directory()
+        if file_path.startswith(input_dir):
+            cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
+        else:
+            cache_key = os.path.basename(file_path)
 
         # Check if metadata was cached by JavaScript
-        if filename in _file_metadata_cache:
-            metadata = _file_metadata_cache[filename]
-            print(f"[PromptExtractor] Using cached JPEG/WebP metadata for: {filename}")
+        if cache_key in _file_metadata_cache:
+            metadata = _file_metadata_cache[cache_key]
+            print(f"[PromptExtractor] Using cached JPEG/WebP metadata for: {cache_key}")
 
             if isinstance(metadata, dict):
                 # Check for prompt/workflow structure
@@ -420,16 +494,16 @@ def base64_to_tensor(base64_data):
 def get_cached_video_frame(relative_path, frame_position):
     """
     Retrieve cached video frame extracted by JavaScript at the specified position.
-    
+
     Args:
         relative_path: The video file path relative to input directory (e.g., "workflow/video.mp4")
         frame_position: float from 0.0 to 1.0 representing position in video (used for requesting new extraction)
-    
+
     Returns:
         A single frame tensor or None if cache is missing.
     """
     import time
-    
+
     # Handle None frame_position
     if frame_position is None:
         frame_position = 0.01
@@ -438,7 +512,7 @@ def get_cached_video_frame(relative_path, frame_position):
     # Note: Cache key does NOT include frame_position - we only cache one frame per video
     # When user adjusts the slider, JavaScript recaches with the new frame
     path_key = relative_path.replace('\\', '/').replace('/', '_')
-    
+
     print(f"[PromptExtractor] Looking for cached frame: {path_key}")
     print(f"[PromptExtractor] Available cache keys: {list(_video_frames_cache.keys())}")
 
@@ -847,7 +921,7 @@ def collect_lora_model_chain(start_node_id, node_map, link_map, visited=None):
                 if links is not None and len(links) > 0:
                     has_connected_output = True
                     break
-        
+
         # Only extract LoRAs if this node's output is connected
         if has_connected_output:
             node_loras = extract_loras_from_node(node)
@@ -1043,6 +1117,24 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     if not prompt_data and not workflow_data:
         return result
 
+    # Check if prompt_data is parsed A1111 parameters (from JavaScript)
+    if isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data:
+        print("[PromptExtractor] Processing A1111 parsed parameters")
+        result['positive_prompt'] = prompt_data.get('prompt', '')
+        result['negative_prompt'] = prompt_data.get('negative_prompt', '')
+
+        # Add all LoRAs to stack_a (A1111 doesn't have dual stacks)
+        for lora in prompt_data.get('loras', []):
+            result['loras_a'].append({
+                'name': lora['name'],
+                'model_strength': lora['model_strength'],
+                'clip_strength': lora['clip_strength'],
+                'active': True
+            })
+
+        print(f"[PromptExtractor] Extracted A1111: {len(result['loras_a'])} LoRAs, prompt length: {len(result['positive_prompt'])}")
+        return result
+
     # Build maps for traversal if workflow_data is available
     node_map = {}
     link_map = {}
@@ -1214,7 +1306,7 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
         for terminal_id in terminal_stackers:
             node = stacker_nodes[terminal_id]
-            
+
             # Check if this stacker's output is actually connected to something
             # A disconnected stacker should not be included
             outputs = node.get('outputs', [])
@@ -1224,11 +1316,11 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 if output.get('links') and len(output.get('links', [])) > 0:
                     has_connected_output = True
                     break
-            
+
             # Skip this stacker if it's not connected to anything
             if not has_connected_output:
                 continue
-            
+
             chain_loras, chain_titles = collect_lora_stack_chain(terminal_id, node_map, link_map)
 
             if chain_loras:
@@ -1333,7 +1425,7 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                                 break
                     if not has_connected_output:
                         continue  # Skip disconnected nodes
-            
+
             lora_name = inputs.get('lora_name', '')
             if lora_name and lora_name not in lora_names_seen_a:
                 lora_names_seen_a.add(lora_name)

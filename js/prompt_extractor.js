@@ -30,6 +30,7 @@ async function getPNGMetadata(file) {
 
             let prompt = null;
             let workflow = null;
+            let parameters = null; // A1111/Forge parameters that ComfyUI can convert to workflow
             let offset = 8; // Skip PNG signature
 
             // Parse PNG chunks
@@ -70,7 +71,7 @@ async function getPNGMetadata(file) {
                         text = decoder.decode(chunkData.slice(textStart));
                     }
 
-                    // Check for ComfyUI metadata
+                    // Check for ComfyUI metadata or A1111 parameters
                     if (keyword === 'prompt') {
                         try {
                             prompt = JSON.parse(text);
@@ -83,27 +84,88 @@ async function getPNGMetadata(file) {
                         } catch (e) {
                             console.error('[PromptExtractor] Failed to parse workflow metadata:', e);
                         }
+                    } else if (keyword === 'parameters') {
+                        // A1111/Forge generation parameters (ComfyUI can load workflow from this)
+                        parameters = text;
                     }
                 }
 
                 // Move to next chunk (length + type + data + CRC)
                 offset += 12 + chunkLength;
 
-                // Stop if we found both or reached IEND
-                if ((prompt && workflow) || chunkType === 'IEND') {
+                // Stop if we found metadata or reached IEND
+                if ((prompt && workflow) || parameters || chunkType === 'IEND') {
                     break;
                 }
             }
 
-            // Return metadata if found
-            if (prompt || workflow) {
-                resolve({ prompt, workflow });
+            // Return metadata if found (including A1111 parameters)
+            if (prompt || workflow || parameters) {
+                const metadata = { prompt, workflow, parameters };
+                
+                // If we have A1111 parameters, parse them for easier access
+                if (parameters && !workflow) {
+                    metadata.parsed_parameters = parseA1111Parameters(parameters);
+                }
+                
+                resolve(metadata);
             } else {
                 resolve(null);
             }
         };
         reader.readAsArrayBuffer(file);
     });
+}
+
+/**
+ * Parse A1111/Forge parameters format
+ * Extracts prompt, negative, and LoRAs
+ */
+function parseA1111Parameters(parametersText) {
+    if (!parametersText) return null;
+
+    const result = {
+        prompt: '',
+        negative_prompt: '',
+        loras: []
+    };
+
+    // Split by "Negative prompt:" to separate positive and negative
+    const parts = parametersText.split(/Negative prompt:\s*/i);
+    let positivePrompt = parts[0].trim();
+    let remainder = parts[1] || '';
+
+    // Extract LoRAs from positive prompt using pattern: <lora:name:strength> or <lora:name:model_strength:clip_strength>
+    const loraRegex = /<lora:([^:>]+):([^:>]+)(?::([^:>]+))?>/gi;
+    let loraMatch;
+    const loras = [];
+    
+    while ((loraMatch = loraRegex.exec(positivePrompt)) !== null) {
+        const loraName = loraMatch[1].trim();
+        const strength1 = parseFloat(loraMatch[2]);
+        const strength2 = loraMatch[3] ? parseFloat(loraMatch[3]) : strength1;
+        
+        loras.push({
+            name: loraName,
+            model_strength: strength1,
+            clip_strength: strength2
+        });
+    }
+
+    // Remove LoRA tags from prompt
+    positivePrompt = positivePrompt.replace(loraRegex, '').trim();
+    result.prompt = positivePrompt;
+    result.loras = loras;
+
+    // Extract negative prompt (before any "Steps:" line if present)
+    const settingsMatch = remainder.match(/^(.*?)[\r\n]+Steps:/s);
+    if (settingsMatch) {
+        result.negative_prompt = settingsMatch[1].trim();
+    } else {
+        result.negative_prompt = remainder.trim();
+    }
+
+    return result;
 }
 
 /**
@@ -725,7 +787,8 @@ async function extractAndUpdateMetadata(node, filename) {
         if (ext === 'json') {
             node.hasWorkflow = !!(metadata && (metadata.workflow || (metadata.nodes && metadata.links)));
         } else {
-            node.hasWorkflow = !!(metadata && metadata.workflow);
+            // Check for ComfyUI workflow or A1111 parameters
+            node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
         }
 
         // Force canvas redraw to update indicator
@@ -796,8 +859,8 @@ async function loadImageFile(node, filename) {
         // Cache metadata (or lack thereof) for Python backend
         await cacheFileMetadata(filename, metadata);
 
-        // Update workflow status flag
-        node.hasWorkflow = !!(metadata && metadata.workflow);
+        // Update workflow status flag - check for workflow or parameters
+        node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
         
         // Force canvas redraw to update indicator immediately
         node.setDirtyCanvas(true, true);
@@ -895,8 +958,8 @@ async function loadVideoFrame(node, filename) {
         // Cache metadata (or lack thereof) for Python backend
         await cacheFileMetadata(filename, metadata);
 
-        // Update workflow status flag
-        node.hasWorkflow = !!(metadata && metadata.workflow);
+        // Update workflow status flag - check for workflow or parameters
+        node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
         
         // Force canvas redraw to update indicator immediately
         node.setDirtyCanvas(true, true);
