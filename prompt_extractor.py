@@ -354,15 +354,19 @@ def extract_metadata_from_jpeg(file_path):
 def extract_metadata_from_json(file_path):
     """Extract workflow data from JSON file (cached from JavaScript)"""
     try:
-        # Get just the filename from the path
-        filename = os.path.basename(file_path)
+        # Try to get relative path from input directory first (matches JavaScript cache keys)
+        input_dir = folder_paths.get_input_directory()
+        if file_path.startswith(input_dir):
+            cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
+        else:
+            cache_key = os.path.basename(file_path)
 
         # Check if metadata was cached by JavaScript
-        if filename in _file_metadata_cache:
-            data = _file_metadata_cache[filename]
-            print(f"[PromptExtractor] Using cached JSON metadata for: {filename}")
+        if cache_key in _file_metadata_cache:
+            data = _file_metadata_cache[cache_key]
+            print(f"[PromptExtractor] Using cached JSON metadata for: {cache_key}")
         else:
-            print(f"[PromptExtractor] No cached metadata found for JSON: {filename}")
+            print(f"[PromptExtractor] No cached metadata found for JSON: {cache_key}")
             print("[PromptExtractor] Falling back to file read")
             # Fallback to reading file (backwards compatibility)
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -400,9 +404,8 @@ def extract_metadata_from_video(file_path):
         # Get the relative path from input directory to match JavaScript cache keys
         input_dir = folder_paths.get_input_directory()
         if file_path.startswith(input_dir):
-            relative_path = os.path.relpath(file_path, input_dir)
-            # Normalize path separators to forward slashes and replace for cache key
-            cache_key = relative_path.replace('\\', '/').replace('/', '_')
+            # Normalize path separators to forward slashes
+            cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
         else:
             # Fallback to basename for absolute paths outside input dir
             cache_key = os.path.basename(file_path)
