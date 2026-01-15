@@ -146,8 +146,6 @@ async def extract_video_metadata_api(request):
         input_dir = folder_paths.get_input_directory()
         file_path = os.path.join(input_dir, filename.replace('/', os.sep))
 
-        print(f"[PromptExtractor] Looking for video file at: {file_path}")
-
         if not os.path.exists(file_path):
             print(f"[PromptExtractor] File not found: {file_path}")
             return server.web.json_response({"success": False, "error": "File not found"}, status=404)
@@ -184,8 +182,6 @@ async def extract_video_metadata_api(request):
                             metadata['workflow'] = tags['workflow']
 
                     if metadata:
-                        print(f"[PromptExtractor] Extracted video metadata via ffprobe for: {filename}")
-
                         # Sanitize metadata to replace NaN with null for valid JSON
                         def sanitize_json(obj):
                             if isinstance(obj, dict):
@@ -936,6 +932,122 @@ def extract_lora_manager_stacker(node):
     return loras
 
 
+def extract_wan_video_lora_select_multi(node):
+    """Extract ALL LoRAs from WanVideoLoraSelectMulti node (regardless of active state)"""
+    loras = []
+    widgets_values = node.get('widgets_values', [])
+
+    # WanVideoLoraSelectMulti stores LoRAs as pairs in widgets_values:
+    # [lora_name_1, strength_1, lora_name_2, strength_2, ..., none, strength, bool, bool]
+    # Parse pairs of (lora_name, strength)
+
+    i = 0
+    while i < len(widgets_values) - 1:
+        lora_name = widgets_values[i]
+
+        # Check if this is a string (potential LoRA name)
+        if isinstance(lora_name, str):
+            # Skip if it's "none" or empty
+            if lora_name.lower() == 'none' or not lora_name.strip():
+                i += 2  # Skip the strength value too
+                continue
+
+            # Next value should be the strength
+            if i + 1 < len(widgets_values):
+                strength_val = widgets_values[i + 1]
+
+                # If next value is numeric, it's the strength for this LoRA
+                if isinstance(strength_val, (int, float)):
+                    strength = float(strength_val)
+
+                    loras.append({
+                        'name': os.path.splitext(os.path.basename(lora_name))[0],
+                        'path': lora_name,
+                        'model_strength': strength,
+                        'clip_strength': strength,  # WanVideo doesn't separate model/clip strength
+                        'active': True  # All LoRAs in the list are considered active
+                    })
+
+                    i += 2  # Move to next pair
+                    continue
+
+        # If we didn't process a pair, just move to next item
+        i += 1
+
+    # Legacy fallback for other possible formats
+    for val in widgets_values:
+        # Format 1: List of LoRA dictionaries
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    # Extract LoRA info from dictionary format
+                    lora_name = item.get('lora') or item.get('name') or item.get('lora_name', '')
+                    if lora_name and lora_name != 'None':
+                        strength = item.get('strength') or item.get('model_strength', 1.0)
+                        if isinstance(strength, str):
+                            strength = float(strength) if strength else 1.0
+                        else:
+                            strength = float(strength)
+
+                        clip_strength = item.get('clip_strength') or item.get('strengthTwo')
+                        if clip_strength is not None:
+                            if isinstance(clip_strength, str):
+                                clip_strength = float(clip_strength) if clip_strength else strength
+                            else:
+                                clip_strength = float(clip_strength)
+                        else:
+                            clip_strength = strength
+
+                        is_active = item.get('on', item.get('active', item.get('enabled', True)))
+
+                        loras.append({
+                            'name': os.path.splitext(os.path.basename(lora_name))[0],
+                            'path': lora_name,
+                            'model_strength': strength,
+                            'clip_strength': clip_strength,
+                            'active': is_active
+                        })
+                elif isinstance(item, str) and item and item != 'None':
+                    # Format 2: Simple string list of LoRA names
+                    loras.append({
+                        'name': os.path.splitext(os.path.basename(item))[0],
+                        'path': item,
+                        'model_strength': 1.0,
+                        'clip_strength': 1.0,
+                        'active': True
+                    })
+        # Format 3: Dictionary containing LoRA info
+        elif isinstance(val, dict):
+            lora_name = val.get('lora') or val.get('name') or val.get('lora_name', '')
+            if lora_name and lora_name != 'None':
+                strength = val.get('strength') or val.get('model_strength', 1.0)
+                if isinstance(strength, str):
+                    strength = float(strength) if strength else 1.0
+                else:
+                    strength = float(strength)
+
+                clip_strength = val.get('clip_strength') or val.get('strengthTwo')
+                if clip_strength is not None:
+                    if isinstance(clip_strength, str):
+                        clip_strength = float(clip_strength) if clip_strength else strength
+                    else:
+                        clip_strength = float(clip_strength)
+                else:
+                    clip_strength = strength
+
+                is_active = val.get('on', val.get('active', val.get('enabled', True)))
+
+                loras.append({
+                    'name': os.path.splitext(os.path.basename(lora_name))[0],
+                    'path': lora_name,
+                    'model_strength': strength,
+                    'clip_strength': clip_strength,
+                    'active': is_active
+                })
+
+    return loras
+
+
 def extract_standard_lora_loader(node):
     """Extract LoRA from standard LoraLoader or LoraLoaderModelOnly node"""
     widgets_values = node.get('widgets_values', [])
@@ -988,6 +1100,10 @@ def extract_loras_from_node(node):
     if node_type in lora_stacker_types:
         return extract_lora_manager_stacker(node)
 
+    # WanVideoLoraSelectMulti (video LoRA loader)
+    if node_type == 'WanVideoLoraSelectMulti':
+        return extract_wan_video_lora_select_multi(node)
+
     # Standard LoRA loaders
     standard_loader_types = [
         'LoraLoader',
@@ -1013,6 +1129,7 @@ def is_lora_node(node_type):
         'LoraLoaderModelOnly',
         'LoRALoader',
         'LoraLoaderKJNodes',
+        'WanVideoLoraSelectMulti',
     ]
     return node_type in lora_node_types
 
@@ -1048,8 +1165,8 @@ def collect_lora_model_chain(start_node_id, node_map, link_map, visited=None):
         has_connected_output = False
         for output in outputs:
             output_type = output.get('type', '')
-            # Check if this is a MODEL or LORA_STACK output with connections
-            if output_type in ['MODEL', 'LORA_STACK']:
+            # Check if this is a MODEL, LORA_STACK, or WANVIDLORA output with connections
+            if output_type in ['MODEL', 'LORA_STACK', 'WANVIDLORA']:
                 links = output.get('links')
                 # links can be None, [], or a list with items
                 if links is not None and len(links) > 0:
@@ -1064,12 +1181,13 @@ def collect_lora_model_chain(start_node_id, node_map, link_map, visited=None):
             if title:
                 all_titles.append(title)
 
-    # Look for MODEL or lora_stack input connections and traverse backwards
+    # Look for MODEL, lora_stack, or WANVIDLORA input connections and traverse backwards
     inputs = node.get('inputs', [])
     for inp in inputs:
         input_name = inp.get('name', '')
-        # Follow MODEL, model, or lora_stack connections
-        if input_name in ['model', 'MODEL', 'lora_stack'] and inp.get('link'):
+        input_type = inp.get('type', '')
+        # Follow MODEL, model, lora_stack, or WANVIDLORA connections
+        if (input_name in ['model', 'MODEL', 'lora_stack', 'lora'] or input_type == 'WANVIDLORA') and inp.get('link'):
             link_id = inp['link']
             link_info = link_map.get(link_id)
             if link_info:
@@ -1170,8 +1288,10 @@ def find_lora_chain_terminals(workflow_data, node_map, link_map):
             inp_name = inp.get('name', '')
             inp_type = inp.get('type', '')
 
-            # Check if this is a MODEL type input (by type or by name matching)
-            if (inp_type == 'MODEL' or inp_name in model_input_names) and inp.get('link'):
+            # Check if this is a MODEL or WANVIDLORA type input (by type or by name matching)
+            is_model_input = (inp_type in ['MODEL', 'WANVIDLORA'] or inp_name in model_input_names)
+
+            if is_model_input and inp.get('link'):
                 link_id = inp['link']
                 link_info = link_map.get(link_id)
                 if link_info:
@@ -1216,10 +1336,13 @@ def trace_to_lora_loader(node_id, node_map, link_map, visited, max_depth=10):
     if is_lora_node(node.get('type', '')):
         return node_id
 
-    # Otherwise, trace back through MODEL input
+    # Otherwise, trace back through MODEL or WANVIDLORA input
     inputs = node.get('inputs', [])
     for inp in inputs:
-        if inp.get('name') in ['model', 'MODEL'] and inp.get('link'):
+        inp_name = inp.get('name', '')
+        inp_type = inp.get('type', '')
+        # Follow MODEL, model, lora, or WANVIDLORA connections
+        if (inp_name in ['model', 'MODEL', 'lora'] or inp_type in ['MODEL', 'WANVIDLORA']) and inp.get('link'):
             link_id = inp['link']
             link_info = link_map.get(link_id)
             if link_info:

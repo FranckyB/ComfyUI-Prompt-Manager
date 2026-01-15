@@ -74,6 +74,7 @@ def test_non_wan_workflow():
     """
     Test case: Regular workflow without high/low naming conventions.
     Should fall back to position-based assignment (1st chain -> A, 2nd -> B)
+    Also tests WanVideoLoraSelectMulti extraction.
     """
     workflow_path = r"d:\ComfyUI\user\default\workflows\Unsaved Workflow.json"
 
@@ -84,14 +85,50 @@ def test_non_wan_workflow():
     with open(workflow_path, 'r', encoding='utf-8') as f:
         workflow_data = json.load(f)
 
+    # Debug: Check for WanVideoLoraSelectMulti nodes
+    wan_nodes = [n for n in workflow_data.get('nodes', []) if n.get('type') == 'WanVideoLoraSelectMulti']
+    print(f"\n[DEBUG] Found {len(wan_nodes)} WanVideoLoraSelectMulti nodes in workflow")
+    for node in wan_nodes:
+        print(f"  - Node {node.get('id')}: {node.get('title', 'untitled')}")
+        print(f"    widgets_values: {node.get('widgets_values', [])}")
+
     result = parse_workflow_for_prompts(None, workflow_data)
 
     print("\n" + "=" * 80)
-    print("TEST: Non-WAN Workflow (backward compatibility)")
+    print("TEST: Non-WAN Workflow (backward compatibility + WanVideoLoraSelectMulti)")
     print("=" * 80)
     print(f"\nLoRAs Stack A: {len(result['loras_a'])} LoRAs")
-    print(f"LoRAs Stack B: {len(result['loras_b'])} LoRAs")
+    for lora in result['loras_a']:
+        active_status = " [ACTIVE]" if lora.get('active', True) else " [INACTIVE]"
+        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']}){active_status}")
+    
+    print(f"\nLoRAs Stack B: {len(result['loras_b'])} LoRAs")
+    for lora in result['loras_b']:
+        active_status = " [ACTIVE]" if lora.get('active', True) else " [INACTIVE]"
+        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']}){active_status}")
+    
     print("\n" + "=" * 80)
+
+    # Verify we extracted WanVideoLoraSelectMulti LoRAs
+    all_loras = result['loras_a'] + result['loras_b']
+    wan_loras = ['WanAnimate_relight_lora_fp16', 'lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16', 
+                 'NSFW-22-L-e8', 'WAN-2.2-I2V-Handjob-LOW-v1']
+    
+    found_wan_loras = []
+    for expected_name in wan_loras:
+        for lora in all_loras:
+            if expected_name in lora['name']:
+                found_wan_loras.append(lora['name'])
+                break
+    
+    print(f"\nWanVideoLoraSelectMulti LoRAs found: {len(found_wan_loras)}/{len(wan_loras)}")
+    for lora_name in found_wan_loras:
+        print(f"  ✓ {lora_name}")
+    
+    if len(found_wan_loras) > 0:
+        print("\n[PASS] WanVideoLoraSelectMulti extraction working!")
+    else:
+        print("\n[WARNING] No WanVideoLoraSelectMulti LoRAs found - check extraction logic")
 
     print("\n[PASS] Backward compatibility maintained!")
 
