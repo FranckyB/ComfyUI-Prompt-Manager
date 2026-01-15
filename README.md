@@ -242,8 +242,9 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
-### version 1.13.0
+### version 1.13.5
 - Added browse window with thumbnails in Extractor, with cache system for speedup.
+- Bug fix for issue caused by new additions.
 
 ### version 1.12.7
 - Quality of life improvements and added option to change the Strenght of any Lora in Manager, so we can tweak Extracted Workflows Live.
