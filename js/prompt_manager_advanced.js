@@ -231,13 +231,15 @@ app.registerExtension({
                         if (shouldReset) {
                             console.log("[PromptManagerAdvanced] Resetting toggles as instructed by Python");
 
-                            // Clear ALL loras - we'll reload fresh
+                            // Clear ALL loras and trigger words - we'll reload fresh
                             this.currentLorasA = [];
                             this.currentLorasB = [];
                             this.savedLorasA = [];
                             this.savedLorasB = [];
+                            this.currentTriggerWords = [];
+                            this.savedTriggerWords = [];
 
-                            // Reload saved loras from prompt to get clean toggle states
+                            // Reload saved loras and trigger words from prompt to get clean toggle states
                             // Use Python's unavailable list directly - it's the source of truth
                             if (this.prompts && categoryWidget && promptWidget) {
                                 const promptData = this.prompts[categoryWidget.value]?.[promptWidget.value];
@@ -254,6 +256,12 @@ app.registerExtension({
                                         strength: lora.strength ?? lora.model_strength ?? 1.0,
                                         available: !unavailableLorasB.has(lora.name.toLowerCase())
                                     }));
+                                    // Reload saved trigger words with their saved active states
+                                    this.savedTriggerWords = (promptData.trigger_words || []).map(word => ({
+                                        text: word.text,
+                                        active: word.active !== false,
+                                        source: 'saved'
+                                    }));
                                 }
                             }
 
@@ -261,7 +269,7 @@ app.registerExtension({
                             this.currentLorasA = inputLorasA.map(l => ({ ...l, source: 'current' }));
                             this.currentLorasB = inputLorasB.map(l => ({ ...l, source: 'current' }));
 
-                            // Update connected trigger words
+                            // Set current trigger words from connected input
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             this.currentTriggerWords = newConnectedTriggers;
 
