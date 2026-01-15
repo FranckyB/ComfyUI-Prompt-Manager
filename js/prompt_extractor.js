@@ -360,6 +360,40 @@ async function getVideoMetadata(file) {
 }
 
 /**
+ * Request Python to extract video metadata using ffprobe (fallback)
+ */
+async function extractVideoMetadataWithPython(filename) {
+    try {
+        console.log(`[PromptExtractor] Requesting Python ffprobe extraction for: ${filename}`);
+        const response = await api.fetchApi("/prompt-extractor/extract-video-metadata", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            if (result.success && result.metadata) {
+                console.log(`[PromptExtractor] Python extracted video metadata successfully for: ${filename}`);
+                console.log(`[PromptExtractor] Metadata:`, result.metadata);
+                return result.metadata;
+            } else if (result.warning && result.error === 'ffprobe_not_found') {
+                console.warn(`[PromptExtractor] WARNING: Video metadata fallback unavailable - ffprobe not found.`);
+                console.warn(`[PromptExtractor] Install FFmpeg to enable metadata extraction for all video formats.`);
+            } else {
+                console.log(`[PromptExtractor] Python extraction returned no metadata for: ${filename}`);
+            }
+        } else {
+            console.error(`[PromptExtractor] Python extraction failed with status: ${response.status}`);
+        }
+        return null;
+    } catch (error) {
+        console.error("[PromptExtractor] Error requesting Python video extraction:", error);
+        return null;
+    }
+}
+
+/**
  * Send file metadata to Python backend for caching
  */
 async function cacheFileMetadata(filename, metadata) {
@@ -775,10 +809,25 @@ async function extractAndUpdateMetadata(node, filename) {
         } else if (ext === 'json') {
             metadata = await getJSONMetadata(fileBlob);
         } else if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
+            console.log(`[PromptExtractor] Attempting JavaScript video metadata extraction for: ${filename}`);
             metadata = await getVideoMetadata(fileBlob);
+            
+            // If JavaScript parser failed, ask Python to try with ffprobe
+            if (metadata === null) {
+                console.log(`[PromptExtractor] JavaScript parser returned null, trying Python ffprobe for: ${filename}`);
+                metadata = await extractVideoMetadataWithPython(filename);
+                
+                if (metadata) {
+                    console.log(`[PromptExtractor] Successfully got metadata from Python for: ${filename}`);
+                } else {
+                    console.log(`[PromptExtractor] Python also returned no metadata for: ${filename}`);
+                }
+            } else {
+                console.log(`[PromptExtractor] JavaScript successfully extracted metadata for: ${filename}`);
+            }
         }
 
-        // Cache metadata for Python backend
+        // Cache metadata for Python backend (only if we extracted it and Python doesn't already have it)
         if (metadata !== null) {
             await cacheFileMetadata(filename, metadata);
         }

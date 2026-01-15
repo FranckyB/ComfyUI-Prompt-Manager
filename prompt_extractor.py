@@ -122,11 +122,102 @@ async def cache_video_frame(request):
             # frame changes when the user adjusts the slider, and we only cache one frame per video
             path_key = filename.replace('\\', '/').replace('/', '_')
             _video_frames_cache[path_key] = frame
-            print(f"[PromptExtractor] Cached frame at position {frame_position:.2f} for: {filename} (cache_key: {path_key})")
 
         return server.web.json_response({"success": True})
     except Exception as e:
         print(f"[PromptExtractor] Error caching video frame: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+# API endpoint to extract video metadata using ffprobe (fallback when JavaScript can't parse)
+@server.PromptServer.instance.routes.post("/prompt-extractor/extract-video-metadata")
+async def extract_video_metadata_api(request):
+    """API endpoint to extract video metadata using ffprobe when JavaScript parser fails"""
+    try:
+        data = await request.json()
+        filename = data.get('filename')
+
+        print(f"[PromptExtractor] JavaScript requested ffprobe extraction for: {filename}")
+
+        if not filename:
+            return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
+
+        # Build full path
+        input_dir = folder_paths.get_input_directory()
+        file_path = os.path.join(input_dir, filename.replace('/', os.sep))
+
+        print(f"[PromptExtractor] Looking for video file at: {file_path}")
+
+        if not os.path.exists(file_path):
+            print(f"[PromptExtractor] File not found: {file_path}")
+            return server.web.json_response({"success": False, "error": "File not found"}, status=404)
+
+        # Try extracting with ffprobe
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', file_path],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0:
+                ffprobe_data = json.loads(result.stdout)
+                if 'format' in ffprobe_data and 'tags' in ffprobe_data['format']:
+                    tags = ffprobe_data['format']['tags']
+
+                    metadata = {}
+
+                    # Extract prompt if present
+                    if 'prompt' in tags:
+                        try:
+                            metadata['prompt'] = json.loads(tags['prompt'])
+                        except:
+                            metadata['prompt'] = tags['prompt']
+
+                    # Extract workflow if present
+                    if 'workflow' in tags:
+                        try:
+                            metadata['workflow'] = json.loads(tags['workflow'])
+                        except:
+                            metadata['workflow'] = tags['workflow']
+
+                    if metadata:
+                        print(f"[PromptExtractor] Extracted video metadata via ffprobe for: {filename}")
+
+                        # Sanitize metadata to replace NaN with null for valid JSON
+                        def sanitize_json(obj):
+                            if isinstance(obj, dict):
+                                return {k: sanitize_json(v) for k, v in obj.items()}
+                            elif isinstance(obj, list):
+                                return [sanitize_json(item) for item in obj]
+                            elif isinstance(obj, float) and (obj != obj):  # NaN check
+                                return None
+                            elif obj == float('inf') or obj == float('-inf'):
+                                return None
+                            else:
+                                return obj
+
+                        metadata = sanitize_json(metadata)
+
+                        # Cache it
+                        cache_key = filename.replace('\\', '/')
+                        _file_metadata_cache[cache_key] = metadata
+                        return server.web.json_response({"success": True, "metadata": metadata})
+
+            return server.web.json_response({"success": False, "error": "No metadata found"}, status=404)
+
+        except FileNotFoundError:
+            print("[PromptExtractor] WARNING: ffprobe not found. Video metadata fallback unavailable.")
+            print("[PromptExtractor] Please install FFmpeg to enable video metadata extraction for all formats.")
+            return server.web.json_response({"success": False, "error": "ffprobe_not_found", "warning": True}, status=200)
+        except Exception as e:
+            print(f"[PromptExtractor] ffprobe extraction error: {e}")
+            return server.web.json_response({"success": False, "error": f"ffprobe error: {str(e)}"}, status=500)
+
+    except Exception as e:
+        print(f"[PromptExtractor] Error in extract-video-metadata API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -216,10 +307,6 @@ def extract_metadata_from_png(file_path):
                     return metadata.get('parsed_parameters'), None
 
                 return prompt_data, workflow_data
-        else:
-            print(f"[PromptExtractor] No cached metadata found for PNG: {cache_key}")
-            print(f"[PromptExtractor] Available cache keys: {list(_file_metadata_cache.keys())[:5]}")  # Debug: show first 5 keys
-            print("[PromptExtractor] Note: Image metadata is read by JavaScript when file is selected")
 
         # Fallback to PIL if no cached data (backwards compatibility)
         if not IMAGE_SUPPORT:
@@ -449,7 +536,54 @@ def extract_metadata_from_video(file_path):
                     return metadata, None
         else:
             print(f"[PromptExtractor] No cached metadata found for video: {cache_key}")
-            print("[PromptExtractor] Note: Video metadata is read by JavaScript when file is selected")
+            print("[PromptExtractor] Attempting ffprobe extraction as fallback...")
+
+            # Try extracting with ffprobe as fallback
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', file_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if result.returncode == 0:
+                    ffprobe_data = json.loads(result.stdout)
+                    if 'format' in ffprobe_data and 'tags' in ffprobe_data['format']:
+                        tags = ffprobe_data['format']['tags']
+
+                        prompt_val = None
+                        workflow_val = None
+
+                        # Extract prompt if present
+                        if 'prompt' in tags:
+                            try:
+                                prompt_val = json.loads(tags['prompt'])
+                            except:
+                                prompt_val = tags['prompt']
+
+                        # Extract workflow if present
+                        if 'workflow' in tags:
+                            try:
+                                workflow_val = json.loads(tags['workflow'])
+                            except:
+                                workflow_val = tags['workflow']
+
+                        if prompt_val or workflow_val:
+                            print(f"[PromptExtractor] Successfully extracted metadata using ffprobe")
+                            # Cache it for next time
+                            _file_metadata_cache[cache_key] = {
+                                'prompt': prompt_val,
+                                'workflow': workflow_val
+                            }
+                            return prompt_val, workflow_val
+
+                print(f"[PromptExtractor] No metadata found in video with ffprobe")
+            except FileNotFoundError:
+                print("[PromptExtractor] ffprobe not found - cannot extract video metadata")
+            except Exception as e:
+                print(f"[PromptExtractor] ffprobe extraction failed: {e}")
 
         return None, None
     except Exception as e:
@@ -515,9 +649,6 @@ def get_cached_video_frame(relative_path, frame_position):
     # Note: Cache key does NOT include frame_position - we only cache one frame per video
     # When user adjusts the slider, JavaScript recaches with the new frame
     path_key = relative_path.replace('\\', '/').replace('/', '_')
-
-    print(f"[PromptExtractor] Looking for cached frame: {path_key}")
-    print(f"[PromptExtractor] Available cache keys: {list(_video_frames_cache.keys())}")
 
     if path_key not in _video_frames_cache:
         print(f"[PromptExtractor] Cache missing for: {relative_path} at position {frame_position}, requesting extraction...")
