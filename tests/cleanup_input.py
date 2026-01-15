@@ -21,10 +21,11 @@ except ImportError:
 
 
 def check_png_workflow(file_path):
-    """Check if PNG has workflow metadata"""
+    """Check if PNG has workflow metadata (ComfyUI or A1111 format)"""
     try:
         with Image.open(file_path) as img:
-            return 'workflow' in img.info or 'prompt' in img.info
+            # Check for ComfyUI workflow/prompt or A1111 parameters
+            return 'workflow' in img.info or 'prompt' in img.info or 'parameters' in img.info
     except:
         return False
 
