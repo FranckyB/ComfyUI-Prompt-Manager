@@ -681,9 +681,11 @@ def get_cached_video_frame(relative_path, frame_position):
 
 
 def build_link_map(workflow_data):
-    """Build a map from link_id to (source_node_id, source_slot, dest_node_id, dest_slot)"""
-    links = workflow_data.get('links', [])
+    """Build a map from link_id to (source_node_id, source_slot, dest_node_id, dest_slot), including links from subgraphs"""
     link_map = {}
+
+    # Add top-level links
+    links = workflow_data.get('links', [])
     for link in links:
         # link format: [link_id, source_node_id, source_slot, dest_node_id, dest_slot, type]
         if len(link) >= 5:
@@ -694,17 +696,54 @@ def build_link_map(workflow_data):
                 'dest_node': link[3],
                 'dest_slot': link[4]
             }
+
+    # Add links from subgraph definitions
+    if 'definitions' in workflow_data and 'subgraphs' in workflow_data['definitions']:
+        for subgraph in workflow_data['definitions']['subgraphs']:
+            if 'links' in subgraph:
+                for link in subgraph['links']:
+                    # Subgraph links can be either dict format or array format
+                    if isinstance(link, dict):
+                        link_id = link.get('id')
+                        if link_id:
+                            link_map[link_id] = {
+                                'source_node': link.get('origin_id'),
+                                'source_slot': link.get('origin_slot'),
+                                'dest_node': link.get('target_id'),
+                                'dest_slot': link.get('target_slot')
+                            }
+                    elif len(link) >= 5:
+                        link_id = link[0]
+                        link_map[link_id] = {
+                            'source_node': link[1],
+                            'source_slot': link[2],
+                            'dest_node': link[3],
+                            'dest_slot': link[4]
+                        }
+
     return link_map
 
 
 def build_node_map(workflow_data):
-    """Build a map from node_id to node data"""
-    nodes = workflow_data.get('nodes', [])
+    """Build a map from node_id to node data, including nodes from subgraphs"""
     node_map = {}
+
+    # Add top-level nodes
+    nodes = workflow_data.get('nodes', [])
     for node in nodes:
         node_id = node.get('id')
         if node_id is not None:
             node_map[node_id] = node
+
+    # Add nodes from subgraph definitions
+    if 'definitions' in workflow_data and 'subgraphs' in workflow_data['definitions']:
+        for subgraph in workflow_data['definitions']['subgraphs']:
+            if 'nodes' in subgraph:
+                for node in subgraph['nodes']:
+                    node_id = node.get('id')
+                    if node_id is not None:
+                        node_map[node_id] = node
+
     return node_map
 
 
@@ -1048,6 +1087,51 @@ def extract_wan_video_lora_select_multi(node):
     return loras
 
 
+def extract_lora_loader_stack_rgthree(node):
+    """Extract LoRAs from Lora Loader Stack (rgthree) node - supports up to 4 LoRAs"""
+    loras = []
+    widgets_values = node.get('widgets_values', [])
+
+    # Lora Loader Stack (rgthree) stores LoRAs as pairs in widgets_values:
+    # [lora_01, strength_01, lora_02, strength_02, lora_03, strength_03, lora_04, strength_04]
+    # Parse pairs of (lora_name, strength) - max 4 LoRAs
+
+    i = 0
+    while i < len(widgets_values) - 1 and i < 8:  # Max 4 LoRAs = 8 values
+        lora_name = widgets_values[i]
+
+        # Check if this is a string (potential LoRA name)
+        if isinstance(lora_name, str):
+            # Skip if it's "None" or empty
+            if lora_name == 'None' or not lora_name.strip():
+                i += 2  # Skip the strength value too
+                continue
+
+            # Next value should be the strength
+            if i + 1 < len(widgets_values):
+                strength_val = widgets_values[i + 1]
+
+                # If next value is numeric, it's the strength for this LoRA
+                if isinstance(strength_val, (int, float)):
+                    strength = float(strength_val)
+
+                    loras.append({
+                        'name': os.path.splitext(os.path.basename(lora_name))[0],
+                        'path': lora_name,
+                        'model_strength': strength,
+                        'clip_strength': strength,  # No separate model/clip strength
+                        'active': True  # All LoRAs are active (no on/off toggle)
+                    })
+
+                    i += 2  # Move to next pair
+                    continue
+
+        # If we didn't process a pair, move to next item
+        i += 1
+
+    return loras
+
+
 def extract_standard_lora_loader(node):
     """Extract LoRA from standard LoraLoader or LoraLoaderModelOnly node"""
     widgets_values = node.get('widgets_values', [])
@@ -1104,6 +1188,10 @@ def extract_loras_from_node(node):
     if node_type == 'WanVideoLoraSelectMulti':
         return extract_wan_video_lora_select_multi(node)
 
+    # Lora Loader Stack (rgthree) - up to 4 LoRAs
+    if node_type == 'Lora Loader Stack (rgthree)':
+        return extract_lora_loader_stack_rgthree(node)
+
     # Standard LoRA loaders
     standard_loader_types = [
         'LoraLoader',
@@ -1121,6 +1209,7 @@ def is_lora_node(node_type):
     """Check if a node type is any kind of LoRA loader"""
     lora_node_types = [
         'Power Lora Loader (rgthree)',
+        'Lora Loader Stack (rgthree)',
         'Lora Stacker (LoraManager)',
         'LoRA Stacker',
         'LoraStacker',
@@ -1273,7 +1362,23 @@ def find_lora_chain_terminals(workflow_data, node_map, link_map):
         'unet',  # Some custom nodes
     ]
 
-    for node in workflow_data.get('nodes', []):
+    # Collect all nodes including those in subgraphs
+    all_nodes = []
+    if 'nodes' in workflow_data:
+        all_nodes.extend(workflow_data.get('nodes', []))
+
+    # Add nodes from subgraph definitions
+    if 'definitions' in workflow_data and 'subgraphs' in workflow_data['definitions']:
+        subgraph_count = len(workflow_data['definitions']['subgraphs'])
+        subgraph_node_count = 0
+        for subgraph in workflow_data['definitions']['subgraphs']:
+            if 'nodes' in subgraph:
+                subgraph_nodes = subgraph['nodes']
+                subgraph_node_count += len(subgraph_nodes)
+                all_nodes.extend(subgraph_nodes)
+        print(f"[PromptExtractor] find_lora_chain_terminals: {len(workflow_data.get('nodes', []))} top-level nodes + {subgraph_node_count} subgraph nodes from {subgraph_count} subgraphs = {len(all_nodes)} total")
+
+    for node in all_nodes:
         node_id = node.get('id')
         node_type = node.get('type', '')
 
@@ -1418,9 +1523,21 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     lora_names_seen_a = set()
     lora_names_seen_b = set()
 
-    # Iterate through all nodes (workflow format)
-    if workflow_data and 'nodes' in workflow_data:
-        for node in workflow_data['nodes']:
+    # Iterate through all nodes (workflow format) - including subgraphs
+    all_workflow_nodes = []
+    if workflow_data:
+        # Add top-level nodes
+        if 'nodes' in workflow_data:
+            all_workflow_nodes.extend(workflow_data.get('nodes', []))
+
+        # Add nodes from subgraph definitions
+        if 'definitions' in workflow_data and 'subgraphs' in workflow_data['definitions']:
+            for subgraph in workflow_data['definitions']['subgraphs']:
+                if 'nodes' in subgraph:
+                    all_workflow_nodes.extend(subgraph['nodes'])
+
+    if all_workflow_nodes:
+        for node in all_workflow_nodes:
             if not isinstance(node, dict):
                 continue
 
@@ -1504,9 +1621,10 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     lora_chains = []
     processed_terminals = set()  # Track by (terminal_id, input_name) tuple to allow multiple inputs per node
 
-    if workflow_data and 'nodes' in workflow_data:
+    if workflow_data:
         # Method 1: Find chains ending at non-LoRA nodes (MODEL input chains)
         terminals = find_lora_chain_terminals(workflow_data, node_map, link_map)
+        print(f"[PromptExtractor] Found {len(terminals)} terminal nodes for LoRA chains")
 
         for terminal_info in terminals:
             terminal_id = terminal_info['terminal_id']
@@ -1520,6 +1638,9 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
             # Collect all LoRAs in this chain
             chain_loras, chain_titles = collect_lora_model_chain(source_id, node_map, link_map)
+
+            if chain_loras:
+                print(f"[PromptExtractor] Chain from terminal {terminal_id} ({terminal_info.get('terminal_title', '')}): {len(chain_loras)} LoRAs")
 
             # Mark this terminal input as processed
             processed_terminals.add(terminal_key)
@@ -1544,13 +1665,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         ]
 
         stacker_nodes = {}
-        for node in workflow_data['nodes']:
+        for node in all_workflow_nodes:
             if node.get('type') in lora_stacker_types:
                 stacker_nodes[node.get('id')] = node
 
         # Find stackers feeding other stackers
         stackers_feeding_stackers = set()
-        for node in workflow_data['nodes']:
+        for node in all_workflow_nodes:
             if node.get('type') in lora_stacker_types:
                 for inp in node.get('inputs', []):
                     if inp.get('name') == 'lora_stack' and inp.get('link'):
@@ -1737,14 +1858,26 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
 
 def convert_workflow_to_prompt_format(workflow_data):
-    """Convert workflow format (nodes array) to prompt format (node_id: data dict)"""
-    if not isinstance(workflow_data, dict) or 'nodes' not in workflow_data:
+    """Convert workflow format (nodes array) to prompt format (node_id: data dict), including subgraph nodes"""
+    if not isinstance(workflow_data, dict):
         return {}
 
     result = {}
-    nodes = workflow_data.get('nodes', [])
 
-    for node in nodes:
+    # Collect all nodes (top-level + subgraphs)
+    all_nodes = []
+
+    # Add top-level nodes
+    if 'nodes' in workflow_data:
+        all_nodes.extend(workflow_data.get('nodes', []))
+
+    # Add nodes from subgraph definitions
+    if 'definitions' in workflow_data and 'subgraphs' in workflow_data['definitions']:
+        for subgraph in workflow_data['definitions']['subgraphs']:
+            if 'nodes' in subgraph:
+                all_nodes.extend(subgraph['nodes'])
+
+    for node in all_nodes:
         if not isinstance(node, dict):
             continue
 

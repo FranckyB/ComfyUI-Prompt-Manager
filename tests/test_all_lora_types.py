@@ -18,6 +18,7 @@ from prompt_extractor import (
     extract_power_lora_loader,
     extract_lora_manager_stacker,
     extract_wan_video_lora_select_multi,
+    extract_lora_loader_stack_rgthree,
     extract_standard_lora_loader,
     is_lora_node
 )
@@ -135,6 +136,63 @@ def test_wan_video_lora_select_multi():
     print("[PASS] WanVideoLoraSelectMulti extraction working correctly!")
 
 
+def test_lora_loader_stack_rgthree():
+    """Test Lora Loader Stack (rgthree) extraction"""
+    print("\n" + "=" * 80)
+    print("TEST: Lora Loader Stack (rgthree)")
+    print("=" * 80)
+    
+    node = {
+        'type': 'Lora Loader Stack (rgthree)',
+        'widgets_values': [
+            'SmoothXXXAnimation_High.safetensors', 0.2,
+            'None', 0.8,
+            'None', 1,
+            'None', 1
+        ]
+    }
+    
+    loras = extract_lora_loader_stack_rgthree(node)
+    
+    print(f"Extracted {len(loras)} LoRAs:")
+    for lora in loras:
+        active_status = " [ACTIVE]" if lora.get('active', True) else " [INACTIVE]"
+        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']}){active_status}")
+    
+    assert len(loras) == 1, f"Expected 1 LoRA, got {len(loras)}"
+    assert loras[0]['name'] == 'SmoothXXXAnimation_High'
+    assert loras[0]['model_strength'] == 0.2
+    assert loras[0]['clip_strength'] == 0.2
+    assert loras[0]['active'] == True
+    
+    print("[PASS] Lora Loader Stack (rgthree) extraction working correctly!")
+    
+    # Test with multiple LoRAs
+    print("\nTesting with multiple LoRAs:")
+    node2 = {
+        'type': 'Lora Loader Stack (rgthree)',
+        'widgets_values': [
+            'lora1.safetensors', 0.5,
+            'lora2.safetensors', 0.7,
+            'lora3.safetensors', 1.0,
+            'None', 1
+        ]
+    }
+    
+    loras2 = extract_lora_loader_stack_rgthree(node2)
+    
+    print(f"Extracted {len(loras2)} LoRAs:")
+    for lora in loras2:
+        print(f"  - {lora['name']} (model: {lora['model_strength']}, clip: {lora['clip_strength']})")
+    
+    assert len(loras2) == 3, f"Expected 3 LoRAs, got {len(loras2)}"
+    assert loras2[0]['name'] == 'lora1'
+    assert loras2[1]['name'] == 'lora2'
+    assert loras2[2]['name'] == 'lora3'
+    
+    print("[PASS] Multiple LoRAs extraction working correctly!")
+
+
 def test_standard_lora_loader():
     """Test standard LoraLoader extraction"""
     print("\n" + "=" * 80)
@@ -170,6 +228,7 @@ def test_is_lora_node():
 
     lora_types = [
         'Power Lora Loader (rgthree)',
+        'Lora Loader Stack (rgthree)',
         'Lora Stacker (LoraManager)',
         'LoRA Stacker',
         'LoraLoader',
@@ -205,9 +264,6 @@ if __name__ == "__main__":
     test_power_lora_loader()
     test_lora_manager_stacker()
     test_wan_video_lora_select_multi()
-    test_standard_lora_loader()
-    test_is_lora_node()
-
-    print("\n" + "=" * 80)
+    test_lora_loader_stack_rgthree()
     print("ALL TESTS PASSED! ✓")
     print("=" * 80)
