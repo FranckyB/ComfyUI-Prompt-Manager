@@ -1049,9 +1049,12 @@ async def save_prompt_advanced(request):
             prompts[category] = {}
 
         # Case-insensitive check for existing prompt
+        # Get existing prompt data BEFORE potentially deleting it (to preserve thumbnail)
         existing_prompts_lower = {k.lower(): k for k in prompts[category].keys()}
+        existing_prompt = {}
         if name.lower() in existing_prompts_lower:
             old_name = existing_prompts_lower[name.lower()]
+            existing_prompt = prompts[category].get(old_name, {})
             if old_name != name:
                 # Delete the old casing version
                 print(f"[PromptManagerAdvanced] Removing old casing '{old_name}' before saving as '{name}'")
@@ -1095,7 +1098,6 @@ async def save_prompt_advanced(request):
 
         # Preserve existing thumbnail if not provided, or use new thumbnail
         thumbnail = data.get("thumbnail")
-        existing_prompt = prompts.get(category, {}).get(name, {})
         if thumbnail is None:
             thumbnail = existing_prompt.get("thumbnail")
 
