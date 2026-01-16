@@ -242,6 +242,14 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.14.0
+- **Addition of a "Save Video H264/H265" node, that replicates ComfyUI's Video Node**
+  - Adds choice between H264/H265
+  - Choice of Chroma Subsampling between yuv420, yuv422, yuv444
+  - Can set Constant Rate Factor (compression level)
+  - Generates a quick proxy video if chosen format could not play in browser (H265 + yuv422 or H265 + yuv444)
+  - Unlike VideoHelperSuite, clip with Audio also include Metadata. Which can then be used with Prompt Extractor.
+
 ### version 1.13.5
 - Added browse window with thumbnails in Extractor, with cache system for speedup.
 - Bug fix for issue caused by new additions.

@@ -2,7 +2,7 @@
 ComfyUI Prompt Manager - A simple custom node for saving and reusing prompts
 A prompt management system for ComfyUI with LLM input support
 """
-__version__ = "1.13.5"
+__version__ = "1.14.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
@@ -13,6 +13,7 @@ from .prompt_generator_options import PromptGenOptions
 from .prompt_apply_lora import PromptApplyLora
 from .prompt_extractor import PromptExtractor
 from .model_manager import get_local_models
+from .save_video_h26x import SaveVideoH26x
 from server import PromptServer
 
 NODE_CLASS_MAPPINGS = {
@@ -21,7 +22,8 @@ NODE_CLASS_MAPPINGS = {
     "PromptGenerator": PromptGenerator,
     "PromptGenOptions": PromptGenOptions,
     "PromptApplyLora": PromptApplyLora,
-    "PromptExtractor": PromptExtractor
+    "PromptExtractor": PromptExtractor,
+    "SaveVideoH26x": SaveVideoH26x
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -30,7 +32,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptGenerator": "Prompt Generator",
     "PromptGenOptions": "Prompt Generator Options",
     "PromptApplyLora": "Prompt Apply LoRA",
-    "PromptExtractor": "Prompt Extractor"
+    "PromptExtractor": "Prompt Extractor",
+    "SaveVideoH26x": "Save Video H264/H265"
 }
 
 WEB_DIRECTORY = "./js"
