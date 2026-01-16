@@ -615,10 +615,15 @@ app.registerExtension({
                 };
 
                 // Load initial image if widget has a value on creation
-                if (imageWidget && imageWidget.value) {
+                if (imageWidget) {
                     // Use setTimeout to ensure node is fully initialized
                     setTimeout(() => {
-                        loadAndDisplayImage(node, imageWidget.value);
+                        if (imageWidget.value && imageWidget.value !== "(none)") {
+                            loadAndDisplayImage(node, imageWidget.value);
+                        } else {
+                            // Show placeholder for (none) or empty
+                            showPlaceholder(node);
+                        }
                     }, 10);
                 }
 
@@ -1085,6 +1090,12 @@ function showPlaceholder(node) {
     placeholderImg.onload = () => {
         node.imgs = [placeholderImg];
         node.imageIndex = 0;
+        
+        // Resize node to fit placeholder image
+        const targetWidth = Math.max(node.size[0], 256);
+        const targetHeight = Math.max(node.size[1], placeholderImg.naturalHeight * (targetWidth / placeholderImg.naturalWidth) + 100);
+        node.setSize([targetWidth, targetHeight]);
+        
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
     };
