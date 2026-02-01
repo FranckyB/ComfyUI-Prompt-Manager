@@ -13,7 +13,7 @@ from .prompt_generator_options import PromptGenOptions
 from .prompt_apply_lora import PromptApplyLora
 from .prompt_extractor import PromptExtractor
 from .model_manager import get_local_models
-from .save_video_h26x import SaveVideoH26x
+from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo
 from server import PromptServer
 
 NODE_CLASS_MAPPINGS = {
@@ -23,7 +23,9 @@ NODE_CLASS_MAPPINGS = {
     "PromptGenOptions": PromptGenOptions,
     "PromptApplyLora": PromptApplyLora,
     "PromptExtractor": PromptExtractor,
-    "SaveVideoH26x": SaveVideoH26x
+    "SaveVideoH26x": SaveVideoH26x,
+    "LoadLatentFile": LoadLatentFile,
+    "AudioMonoToStereo": MonoToStereo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -33,7 +35,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptGenOptions": "Prompt Generator Options",
     "PromptApplyLora": "Prompt Apply LoRA",
     "PromptExtractor": "Prompt Extractor",
-    "SaveVideoH26x": "Save Video H264/H265"
+    "SaveVideoH26x": "Save Video H264/H265",
+    "LoadLatentFile": "Load Latent File",
+    "AudioMonoToStereo": "Audio Mono to Stereo",
 }
 
 WEB_DIRECTORY = "./js"

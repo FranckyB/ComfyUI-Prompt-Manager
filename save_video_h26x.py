@@ -12,8 +12,11 @@ import av
 import json
 import math
 import torch
+import hashlib
+import safetensors.torch
 from datetime import datetime
 import folder_paths
+import comfy.utils
 from fractions import Fraction
 from comfy.cli_args import args
 
@@ -52,10 +55,17 @@ class SaveVideoH26x:
                     "step": 1,
                     "tooltip": "Constant Rate Factor (quality).\nLower = better quality, larger file.\n0 = lossless\n18-23 = high quality\n28+ = lower quality.\nRecommended: 18-28."
                 }),
-                "use_counter": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Add incrementing counter to filename.\nOff = cleaner names like '2026-01-16.mp4' (adds counter only if file exists).\nOn = always add counter like 'ComfyUI_00001_.mp4'."
+                "save": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Save to output folder.\nOff = preview only (saves to temp with fast encoding)."
                 }),
+                "save_latent": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Save latent alongside the video.\nOff = don't save the connected latent."
+                }),
+            },
+            "optional": {
+                "latent": ("LATENT", {"tooltip": "Optional latent to save alongside the video (same filename with .latent extension)."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -63,13 +73,14 @@ class SaveVideoH26x:
             },
         }
 
-    RETURN_TYPES = ()
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("filename",)
     FUNCTION = "save_video"
     OUTPUT_NODE = True
-    CATEGORY = "image/video"
+    CATEGORY = "Prompt Manager"
     DESCRIPTION = "Saves video with H.264 or H.265 codec and quality control. Includes audio and workflow metadata."
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, use_counter, prompt=None, extra_pnginfo=None):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, latent=None, prompt=None, extra_pnginfo=None):
         # Expand %date:format% patterns (e.g., %date:yy-MM-dd_hh-mm%)
         # This mimics ComfyUI's frontend JS date expansion
         def expand_date_format(text):
@@ -99,25 +110,52 @@ class SaveVideoH26x:
         # Get dimensions
         width, height = video.get_dimensions()
 
-        # Get output path
-        full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
-            filename_prefix,
-            folder_paths.get_output_directory(),
-            width,
-            height
-        )
-
-        # Build filename based on use_counter setting
-        if use_counter:
-            # Always use counter with trailing underscore (ComfyUI standard pattern)
-            file = f"{filename}_{counter:05}_.mp4"
+        # Preview mode: save to temp with fast encoding
+        if not save:
+            temp_dir = folder_paths.get_temp_directory()
+            # Use filename without subfolders, add counter if needed
+            base_filename = os.path.basename(expand_date_format(filename_prefix))
+            file = f"{base_filename}.mp4"
+            file_path_test = os.path.join(temp_dir, file)
+            if os.path.exists(file_path_test):
+                # Find next available counter
+                pattern = re.compile(rf"^{re.escape(base_filename)}_?(\d+)\.mp4$")
+                existing_counters = []
+                for f in os.listdir(temp_dir):
+                    match = pattern.match(f)
+                    if match:
+                        existing_counters.append(int(match.group(1)))
+                next_counter = max(existing_counters, default=0) + 1
+                file = f"{base_filename}_{next_counter:05}.mp4"
+            file_path = os.path.join(temp_dir, file)
+            subfolder = ""
+            output_type = "temp"
+            # Override to fast settings for preview
+            codec = "h264"
+            codec_name = "libx264"
+            is_10bit = False
+            pixel_format = "yuv420p"
+            crf = 23
+            preset = "veryfast"
         else:
-            # Try without counter first
+            output_type = "output"
+            preset = "medium"
+            codec_name = "libx264" if codec == "h264" else "libx265"
+
+            # Get output path
+            full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
+                filename_prefix,
+                folder_paths.get_output_directory(),
+                width,
+                height
+            )
+
+            # Build filename - add counter only if file already exists
             file = f"{filename}.mp4"
             file_path_test = os.path.join(full_output_folder, file)
             if os.path.exists(file_path_test):
                 # File exists, find next available counter
-                pattern = re.compile(rf"^{re.escape(filename)}_(\d+)\.mp4$")
+                pattern = re.compile(rf"^{re.escape(filename)}_?(\d+)\.mp4$")
                 existing_counters = []
                 if os.path.isdir(full_output_folder):
                     for f in os.listdir(full_output_folder):
@@ -128,7 +166,22 @@ class SaveVideoH26x:
                 next_counter = max(existing_counters, default=0) + 1
                 file = f"{filename}_{next_counter:05}.mp4"
 
-        file_path = os.path.join(full_output_folder, file)
+            file_path = os.path.join(full_output_folder, file)
+
+            # Save latent if connected and enabled (only when saving to output)
+            if save_latent and latent is not None:
+                latent_file = file_path.replace('.mp4', '.latent')
+                # Prepare latent metadata
+                prompt_info = json.dumps(prompt) if prompt else ""
+                latent_metadata = {"prompt": prompt_info}
+                if extra_pnginfo:
+                    for x in extra_pnginfo:
+                        latent_metadata[x] = json.dumps(extra_pnginfo[x])
+                # Save the latent
+                latent_output = {"latent_tensor": latent["samples"], "latent_format_version_0": torch.tensor([])}
+                if os.path.exists(latent_file):
+                    os.remove(latent_file)
+                comfy.utils.save_torch_file(latent_output, latent_file, metadata=latent_metadata)
 
         # Build metadata
         metadata = {}
@@ -137,9 +190,6 @@ class SaveVideoH26x:
                 metadata.update(extra_pnginfo)
             if prompt is not None:
                 metadata["prompt"] = prompt
-
-        # Select codec
-        codec_name = "libx264" if codec == "h264" else "libx265"
 
         # Prepare frame rate as fraction
         frame_rate_frac = Fraction(round(float(frame_rate) * 1000), 1000)
@@ -160,7 +210,7 @@ class SaveVideoH26x:
             # Set encoding options
             video_stream.options = {
                 'crf': str(crf),
-                'preset': 'medium',
+                'preset': preset,
             }
 
             # For H.265, add tag for Apple/browser compatibility
@@ -223,9 +273,9 @@ class SaveVideoH26x:
                     output.mux(packet)
 
         # h265 + yuv422/444 won't play in browser, so generate a browser-compatible preview in temp
-        if codec == "h264" or (codec == "h265" and chroma == "yuv420"):
-            # Browser can play this directly
-            return {"ui": {"images": [{"filename": file, "subfolder": subfolder, "type": "output"}], "animated": (True,)}}
+        if not save or codec == "h264" or (codec == "h265" and chroma == "yuv420"):
+            # Browser can play this directly (or it's already a preview)
+            return {"ui": {"images": [{"filename": file, "subfolder": subfolder, "type": output_type}], "animated": (True,)}, "result": (file_path,)}
         else:
             # Create a browser-compatible h264 preview in temp folder
             temp_dir = folder_paths.get_temp_directory()
@@ -275,13 +325,107 @@ class SaveVideoH26x:
                     for packet in preview_audio_stream.encode(None):
                         preview_output.mux(packet)
 
-            return {"ui": {"images": [{"filename": preview_file, "subfolder": "", "type": "temp"}], "animated": (True,)}}
+            return {"ui": {"images": [{"filename": preview_file, "subfolder": "", "type": "temp"}], "animated": (True,)}, "result": (file_path,)}
+
+
+class LoadLatentFile:
+    """
+    Load a latent from a file path.
+    Companion to SaveVideoH26x for loading latents saved alongside videos.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "file_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Path to the .latent file to load."
+                })
+            }
+        }
+
+    RETURN_TYPES = ("LATENT",)
+    FUNCTION = "load"
+    CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Load a latent from a file. Use with Save Video H264/H265 to reload saved latents."
+
+    def load(self, file_path):
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"Latent file not found: {file_path}")
+
+        # Load the latent file
+        latent = safetensors.torch.load_file(file_path, device="cpu")
+
+        # Handle version differences
+        multiplier = 1.0
+        if "latent_format_version_0" not in latent:
+            multiplier = 1.0 / 0.18215
+
+        samples = {"samples": latent["latent_tensor"].float() * multiplier}
+        return (samples,)
+
+    @classmethod
+    def IS_CHANGED(cls, file_path):
+        """Return hash of file to detect changes."""
+        if not file_path or not os.path.exists(file_path):
+            return ""
+        m = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            m.update(f.read())
+        return m.digest().hex()
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, file_path):
+        if not file_path:
+            return True  # Empty is valid (will error at runtime)
+        if not os.path.exists(file_path):
+            return f"Latent file not found: {file_path}"
+        return True
+
+
+class MonoToStereo:
+    """
+    Convert mono audio to stereo by duplicating the channel.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio": ("AUDIO", {"tooltip": "Mono audio input to convert to stereo."}),
+            }
+        }
+
+    RETURN_TYPES = ("AUDIO",)
+    FUNCTION = "convert"
+    CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Convert mono audio to stereo by duplicating the single channel to left and right."
+
+    def convert(self, audio):
+        waveform = audio['waveform']
+        sample_rate = audio['sample_rate']
+
+        # Check if already stereo (or more)
+        if waveform.shape[1] >= 2:
+            # Already stereo, return as-is
+            return (audio,)
+
+        # Duplicate mono channel to create stereo: (batch, 1, samples) -> (batch, 2, samples)
+        stereo_waveform = waveform.repeat(1, 2, 1)
+
+        return ({"waveform": stereo_waveform, "sample_rate": sample_rate},)
+
 
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "SaveVideoH26x": SaveVideoH26x,
+    "LoadLatentFile": LoadLatentFile,
+    "AudioMonoToStereo": MonoToStereo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveVideoH26x": "Save Video H264/H265",
+    "LoadLatentFile": "Load Latent File",
+    "AudioMonoToStereo": "Audio Mono to Stereo",
 }

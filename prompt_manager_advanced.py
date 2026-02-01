@@ -508,7 +508,7 @@ class PromptManagerAdvanced:
         # Not found
         return lora_path, False
 
-    def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, prompt_input="",
+    def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, prompt_input=None,
                    lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
@@ -575,10 +575,11 @@ class PromptManagerAdvanced:
         # ========================================
 
         # Choose which text to use based on the toggle
+        # When use_prompt_input is OFF, always use the internal text widget regardless of what's connected
         if use_prompt_input and prompt_input:
             output_text = prompt_input
         else:
-            output_text = text
+            output_text = text if text else ""
 
         # Capture the original input loras BEFORE any processing
         # These are used by the frontend to detect when inputs change
@@ -701,13 +702,13 @@ class PromptManagerAdvanced:
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Tell ComfyUI which lazy inputs are needed based on current settings.
 
-        Note: We don't mark prompt_input as required even when use_prompt_input is on.
-        This allows the node to gracefully fall back to internal text if nothing is connected,
-        rather than throwing a ComfyUI error about missing input.
+        When use_prompt_input is enabled, we need to request the prompt_input
+        so ComfyUI will evaluate any connected nodes.
         """
-        # Return empty list - all optional inputs are truly optional
-        # The get_prompt method handles fallback logic gracefully
-        return []
+        needed = []
+        if use_prompt_input:
+            needed.append("prompt_input")
+        return needed
 
     def _build_stack_from_toggle(self, toggle_data):
         """

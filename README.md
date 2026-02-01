@@ -242,6 +242,14 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.14.5
+- **Added Save Latent support to Save Video node**
+- allows to save the full data of a generation to then experiment without the need to regenerate.
+- added some very quick workflow examples.
+    -A simplified version of my Wan workflow
+    -A basic Z-Image base workflow with Prompt Generator.
+- Small bug fixes    
+
 ### version 1.14.0
 - **Addition of a "Save Video H264/H265" node, that replicates ComfyUI's Video Node**
   - Adds choice between H264/H265

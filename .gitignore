@@ -26,6 +26,7 @@ wheels/
 # IDE files
 .vscode/
 .idea/
+ComfyUI-Prompt-Manager.code-workspace
 
 # OS files
 .DS_Store
