@@ -89,6 +89,23 @@ ___
 - Set new default model location, previous folder (gguf and llm) will still be scanned, but model will save in new default.
 - Set custom Location for Llama.cpp. If Llama.cpp was not added to the system Path, this option let's you specify it's location.
 
+### Save Video H264/H265
+- **Codec Selection**: Choose between H.264 (8-bit, better compatibility) or H.265/HEVC (10-bit, better compression and gradients)
+- **Chroma Subsampling**: Select yuv420 (most compatible), yuv422 (better for video editing), or yuv444 (best color, no chroma loss)
+- **Quality Control**: Constant Rate Factor (CRF) from 0-51 for fine-tuned quality vs file size balance
+- **Preview Mode**: Quick preview encoding to temp folder without saving to output
+- **Save Latent**: Optionally save the latent alongside the video for later experimentation without regeneration
+- **Audio Support**: Preserves audio from VIDEO input with proper sync
+- **Workflow Metadata**: Embeds full workflow metadata in MP4 (unlike VideoHelperSuite which strips it from audio clips)
+- **Browser Preview**: Automatically generates browser-compatible preview for H.265 + yuv422/444 combinations
+
+### Animated Latent Preview
+- **Video Sampling Preview**: Display animated previews during KSampler execution for video models
+- **TAESD Support**: Works with both Latent2RGB and TAESD preview methods (including high-quality video TAESD)
+- **Auto Frame Rate**: Automatically detects optimal playback rate based on video model (Wan, Mochi, LTXV, HunyuanVideo, etc.)
+- **Manual Rate Override**: Optional playback rate override in preferences
+- **VHS Compatible**: Automatically defers to VideoHelperSuite if installed to avoid conflicts
+
 ## Installation
 
 1. Navigate to your ComfyUI custom nodes directory:
@@ -198,6 +215,26 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - **Set Default Port** You can set the port used by Llama.cpp
 - **Close Llama on Exit** By default Llama.cpp with be close on exit.
 
+### Save Video H264/H265
+
+1. **Add the Node**: Add Node → Prompt Manager → Save Video H264/H265
+2. **Connect VIDEO**: Connect a VIDEO output (e.g., from VAE Decode for video models)
+3. **Choose Codec**: Select h264 for compatibility or h265 for better quality/compression
+4. **Set Quality**: Adjust CRF (18-23 recommended for high quality, lower = better quality but larger files)
+5. **Chroma Options**: Use yuv420 for maximum compatibility, yuv444 for best color preservation
+6. **Save Latent**: Connect a LATENT input and enable "save_latent" to save the latent alongside your video
+7. **Preview Mode**: Set "save" to false for quick preview encoding without saving to output folder
+
+### Animated Latent Preview
+
+1. **Enable in Settings**: Go to ComfyUI Settings → Prompt Manager → 5. Video Sampling
+2. **Toggle On**: Enable "Display animated previews when sampling"
+3. **Optional Rate**: Set "Playback rate override" to force a specific FPS (0 = auto-detect from model)
+4. **Run Video Workflow**: During KSampler execution, you'll see an animated preview of the video being generated
+5. **Works with TAESD**: Enable TAESD in ComfyUI preview settings for higher quality previews
+
+**Note**: If VideoHelperSuite is installed and enabled, its latent preview takes priority to avoid conflicts.
+
 ## Requirements
 
 - ComfyUI
@@ -242,7 +279,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
-### version 1.14.6
+### version 1.15.0
 - **Added Animated Latent Preview**
 - Added Similar option to VideoHelperSuite, to display animated Latent preview. With the addition that it works in TAESD mode.
 - Check for VideoHelperSuite node, so not to conflict with it. (Will do nothing if installed)
