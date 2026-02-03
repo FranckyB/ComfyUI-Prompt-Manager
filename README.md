@@ -242,6 +242,11 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.14.6
+- **Added Animated Latent Preview**
+- Added Similar option to VideoHelperSuite, to display animated Latent preview. With the addition that it works in TAESD mode.
+- Check for VideoHelperSuite node, so not to conflict with it. (Will do nothing if installed)
+
 ### version 1.14.5
 - **Added Save Latent support to Save Video node**
 - allows to save the full data of a generation to then experiment without the need to regenerate.

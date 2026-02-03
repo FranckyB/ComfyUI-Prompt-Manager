@@ -79,10 +79,14 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         """
         import server
 
-        if x0.ndim == 5:
-            # Keep batch major for video tensors
-            x0 = x0.movedim(2, 1)
-            x0 = x0.reshape((-1,) + x0.shape[-3:])
+        # Only animate for video latents (5D tensor)
+        # Image/batch latents are 4D - let ComfyUI handle those normally
+        if x0.ndim != 5:
+            return None
+
+        # Keep batch major for video tensors
+        x0 = x0.movedim(2, 1)
+        x0 = x0.reshape((-1,) + x0.shape[-3:])
 
         num_images = x0.size(0)
         new_time = time.time()
@@ -207,9 +211,8 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
             ind = (ind + 1) % leng
 
     def decode_single_frame(self, x0):
-        """Decode a single latent frame to PIL Image.
-
-        This mirrors exactly what ComfyUI's preview classes do.
+        """Decode a single TAESD latent frame to PIL Image.
+        Only used by _process_taesd_batch().
 
         Args:
             x0: Latent tensor, shape (1, C, H, W) for images or (1, C, T, H, W) for video
@@ -217,46 +220,18 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         Returns:
             PIL.Image
         """
-        if hasattr(self, 'taesd'):
-            if self.is_video_taesd:
-                # TAEHVPreviewerImpl style: x0[:1, :, :1] then [0][0]
-                # Video latent input is (1, C, H, W) - we need to add temporal dim
-                # Actually for video models, x0 coming in may already be flattened
-                # Let's add a temporal dim: (1, C, H, W) -> (1, C, 1, H, W)
-                if x0.ndim == 4:
-                    x0 = x0.unsqueeze(2)  # (1, C, H, W) -> (1, C, 1, H, W)
+        if self.is_video_taesd:
+            # TAEHVPreviewerImpl style: x0[:1, :, :1] then [0][0]
+            if x0.ndim == 4:
+                x0 = x0.unsqueeze(2)  # (1, C, H, W) -> (1, C, 1, H, W)
 
-                x_sample = self.taesd.decode(x0[:1, :, :1])[0][0]
-                # x_sample should now be (C, H, W), we need (H, W, C) for PIL
-                # Video TAEs output 0-1 range, not -1 to 1
-                return self._tensor_to_image(x_sample, do_scale=False)
-            else:
-                # TAESDPreviewerImpl style: decode(x0[:1])[0].movedim(0, 2)
-                x_sample = self.taesd.decode(x0[:1])[0].movedim(0, 2)
-                # x_sample is (H, W, C)
-                return self._tensor_to_image(x_sample, do_scale=True)
+            x_sample = self.taesd.decode(x0[:1, :, :1])[0][0]
+            # Video TAEs output 0-1 range, not -1 to 1
+            return self._tensor_to_image(x_sample, do_scale=False)
         else:
-            # Latent2RGBPreviewer style
-            if self.latent_rgb_factors_reshape is not None:
-                x0 = self.latent_rgb_factors_reshape(x0)
-
-            self.latent_rgb_factors = self.latent_rgb_factors.to(dtype=x0.dtype, device=x0.device)
-            if self.latent_rgb_factors_bias is not None:
-                self.latent_rgb_factors_bias = self.latent_rgb_factors_bias.to(dtype=x0.dtype, device=x0.device)
-
-            # Handle 5D (video) and 4D (image) latents
-            if x0.ndim == 5:
-                x0_frame = x0[0, :, 0]  # (C, H, W)
-            else:
-                x0_frame = x0[0]  # (C, H, W)
-
-            latent_image = F.linear(
-                x0_frame.movedim(0, -1),  # (H, W, C)
-                self.latent_rgb_factors,
-                bias=self.latent_rgb_factors_bias
-            )
-            # latent_image is (H, W, 3)
-            return self._tensor_to_image(latent_image, do_scale=True)
+            # TAESDPreviewerImpl style: decode(x0[:1])[0].movedim(0, 2)
+            x_sample = self.taesd.decode(x0[:1])[0].movedim(0, 2)
+            return self._tensor_to_image(x_sample, do_scale=True)
 
     def _tensor_to_image(self, tensor, do_scale=True):
         """Convert tensor to PIL Image, matching ComfyUI's preview_to_image."""
