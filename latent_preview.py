@@ -48,7 +48,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
     instead of static images.
     """
 
-    def __init__(self, previewer, rate=8, server_instance=None):
+    def __init__(self, previewer, rate=8, server_instance=None, model_name=None):
         # Don't call super().__init__() as we're wrapping an existing previewer
         self.first_preview = True
         self.last_time = 0
@@ -56,6 +56,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         self.rate = rate
         self.server = server_instance
         self.is_video_taesd = False
+        self.model_name = model_name
 
         # Copy decoder attributes from the original previewer
         # Check what type of previewer we have
@@ -79,14 +80,10 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         """
         import server
 
-        # Only animate for video latents (5D tensor)
-        # Image/batch latents are 4D - let ComfyUI handle those normally
-        if x0.ndim != 5:
-            return None
-
-        # Keep batch major for video tensors
-        x0 = x0.movedim(2, 1)
-        x0 = x0.reshape((-1,) + x0.shape[-3:])
+        if x0.ndim == 5:
+            # Keep batch major for video tensors
+            x0 = x0.movedim(2, 1)
+            x0 = x0.reshape((-1,) + x0.shape[-3:])
 
         num_images = x0.size(0)
         new_time = time.time()
@@ -226,12 +223,25 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
                 x0 = x0.unsqueeze(2)  # (1, C, H, W) -> (1, C, 1, H, W)
 
             x_sample = self.taesd.decode(x0[:1, :, :1])[0][0]
+
+            # Apply contrast boost for Wan models (TAESD looks washed out)
+            if self.model_name and self.model_name.startswith('Wan'):
+                x_sample = self._apply_contrast(x_sample, contrast=1.5, brightness=1.2)
+
             # Video TAEs output 0-1 range, not -1 to 1
             return self._tensor_to_image(x_sample, do_scale=False)
         else:
             # TAESDPreviewerImpl style: decode(x0[:1])[0].movedim(0, 2)
             x_sample = self.taesd.decode(x0[:1])[0].movedim(0, 2)
             return self._tensor_to_image(x_sample, do_scale=True)
+
+    def _apply_contrast(self, tensor, contrast=1.2, brightness=1.0):
+        """Apply contrast and brightness adjustment to a tensor in 0-1 range."""
+        # Contrast: (x - 0.5) * contrast + 0.5
+        # Brightness: x * brightness
+        tensor = (tensor - 0.5) * contrast + 0.5
+        tensor = tensor * brightness
+        return tensor.clamp(0, 1)
 
     def _tensor_to_image(self, tensor, do_scale=True):
         """Convert tensor to PIL Image, matching ComfyUI's preview_to_image."""
@@ -314,7 +324,8 @@ def install_latent_preview_hook():
             if not prev_setting or not hasattr(previewer, "decode_latent_to_preview"):
                 return previewer
 
-            return WrappedPreviewer(previewer, rate_setting, serv)
+            model_name = latent_format.__class__.__name__
+            return WrappedPreviewer(previewer, rate_setting, serv, model_name)
 
         _hook_installed = True
         print("[PromptManager] Latent preview hook installed successfully")
