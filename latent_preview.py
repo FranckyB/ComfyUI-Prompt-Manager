@@ -110,11 +110,14 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
             x0 = x0[self.c_index:self.c_index + num_previews]
 
         # Process previews in a thread
-        Thread(target=self.process_previews, args=(x0, self.c_index, num_images)).run()
+        if hasattr(self, 'latent_rgb_factors'):
+            Thread(target=self._process_latent2rgb_batch, args=(x0, self.c_index, num_images)).run()
+        else:
+            Thread(target=self._process_taesd_batch, args=(x0, self.c_index, num_images)).run()
         self.c_index = (self.c_index + num_previews) % num_images
         return None
 
-    def process_previews(self, latent_frames, ind, leng):
+    def _process_taesd_batch(self, latent_frames, ind, leng):
         """Process and send preview frames to the frontend.
 
         Args:
@@ -124,9 +127,9 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         """
         import server
 
-        # Decode each frame using the same method ComfyUI uses for single frames
+        # For TAESD, decode each frame (don't change this - it works)
         for i in range(latent_frames.size(0)):
-            frame_latent = latent_frames[i:i+1]  # Keep batch dim: (1, C, H, W)
+            frame_latent = latent_frames[i:i + 1]  # Keep batch dim: (1, C, H, W)
 
             # Decode single frame to PIL Image (same as ComfyUI does)
             preview_image = self.decode_single_frame(frame_latent)
@@ -151,6 +154,51 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
             message.write(struct.pack('16p', self.server.last_node_id.encode('ascii')))
             preview_image.save(message, format="JPEG", quality=95)
 
+            self.server.send_sync(
+                server.BinaryEventTypes.PREVIEW_IMAGE,
+                message.getvalue(),
+                self.server.client_id
+            )
+            ind = (ind + 1) % leng
+
+    def _process_latent2rgb_batch(self, x0, ind, leng):
+        """Process Latent2RGB previews using batch decode (VHS style)."""
+        import server
+
+        # Apply reshape if needed
+        if self.latent_rgb_factors_reshape is not None:
+            x0 = self.latent_rgb_factors_reshape(x0)
+
+        self.latent_rgb_factors = self.latent_rgb_factors.to(dtype=x0.dtype, device=x0.device)
+        if self.latent_rgb_factors_bias is not None:
+            self.latent_rgb_factors_bias = self.latent_rgb_factors_bias.to(dtype=x0.dtype, device=x0.device)
+
+        # Batch decode: x0 is (N, C, H, W), output is (N, H, W, 3)
+        image_tensor = F.linear(x0.movedim(1, -1), self.latent_rgb_factors,
+                                bias=self.latent_rgb_factors_bias)
+
+        # Resize if needed
+        if image_tensor.size(1) > 512 or image_tensor.size(2) > 512:
+            image_tensor = image_tensor.movedim(-1, 0)
+            if image_tensor.size(2) < image_tensor.size(3):
+                height = (512 * image_tensor.size(2)) // image_tensor.size(3)
+                image_tensor = F.interpolate(image_tensor, (height, 512), mode='bilinear')
+            else:
+                width = (512 * image_tensor.size(3)) // image_tensor.size(2)
+                image_tensor = F.interpolate(image_tensor, (512, width), mode='bilinear')
+            image_tensor = image_tensor.movedim(0, -1)
+
+        # Convert to uint8 (scale from -1..1 to 0..255)
+        previews_ubyte = (((image_tensor + 1.0) / 2.0).clamp(0, 1).mul(0xFF)).to(device="cpu", dtype=torch.uint8)
+
+        # Send each frame
+        for preview in previews_ubyte:
+            i = Image.fromarray(preview.numpy())
+            message = io.BytesIO()
+            message.write((1).to_bytes(length=4, byteorder='big') * 2)
+            message.write(ind.to_bytes(length=4, byteorder='big'))
+            message.write(struct.pack('16p', self.server.last_node_id.encode('ascii')))
+            i.save(message, format="JPEG", quality=95)
             self.server.send_sync(
                 server.BinaryEventTypes.PREVIEW_IMAGE,
                 message.getvalue(),
