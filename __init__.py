@@ -16,6 +16,10 @@ from .model_manager import get_local_models
 from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo
 from server import PromptServer
 
+# Initialize latent preview hook (with VHS conflict detection)
+from .latent_preview import install_latent_preview_hook
+install_latent_preview_hook()
+
 NODE_CLASS_MAPPINGS = {
     "PromptManager": PromptManager,
     "PromptManagerAdvanced": PromptManagerAdvanced,

@@ -86,20 +86,6 @@ async function getLoraManagerPreviewTooltip() {
 // Initialize on load (non-blocking)
 getLoraManagerPreviewTooltip();
 
-// Register setting for unsaved changes warning
-app.registerExtension({
-    name: "PromptManagerAdvanced.Settings",
-    async setup() {
-        app.ui.settings.addSetting({
-            id: "PromptManagerAdvanced.warnUnsavedChanges",
-            name: "Warn about unsaved prompt changes",
-            type: "boolean",
-            defaultValue: true,
-            tooltip: "Show a warning when switching prompts if there are unsaved changes to the current prompt text, LoRAs, or trigger words."
-        });
-    }
-});
-
 app.registerExtension({
     name: "PromptManagerAdvanced",
 
@@ -2250,7 +2236,7 @@ function addButtonBar(node) {
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
 
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
@@ -2395,7 +2381,7 @@ function setupCategoryChangeHandler(node) {
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -2495,7 +2481,7 @@ function setupCategoryChangeHandler(node) {
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -4536,7 +4522,7 @@ function createPromptSelectorWidget(node) {
         // Check for unsaved changes before switching (unless skipped)
         if (!skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -4613,7 +4599,7 @@ function createPromptSelectorWidget(node) {
 
         // Check for unsaved changes before opening browser
         const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManagerAdvanced.warnUnsavedChanges", true);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
 
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(

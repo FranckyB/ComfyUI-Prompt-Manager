@@ -106,6 +106,14 @@ app.registerExtension({
                     console.error("[PromptManager] Error saving Close Llama preference:", error);
                 });
             }
+        },
+        {
+            id: "PromptManager.WarnUnsavedChanges",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Warn Unsaved Changes"],
+            name: "Warn about unsaved prompt changes",
+            tooltip: "Show a warning when switching prompts if there are unsaved changes to the current prompt text, LoRAs, or trigger words.",
+            type: "boolean",
+            defaultValue: true
         }
     ],
     async setup() {
