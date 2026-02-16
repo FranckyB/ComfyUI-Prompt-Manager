@@ -435,6 +435,336 @@ async function cacheVideoFrame(filename, frameData, framePosition) {
     }
 }
 
+/**
+ * Create and show image preview modal
+ */
+function showImagePreviewModal(filename) {
+    // Build image URL
+    let actualFilename = filename;
+    let subfolder = "";
+    
+    if (filename.includes('/')) {
+        const lastSlash = filename.lastIndexOf('/');
+        subfolder = filename.substring(0, lastSlash);
+        actualFilename = filename.substring(lastSlash + 1);
+    }
+    
+    let imageUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+    if (subfolder) {
+        imageUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
+    }
+
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.85);
+        z-index: 10000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    `;
+
+    // Create header with filename and close button
+    const header = document.createElement('div');
+    header.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 15px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.5);
+    `;
+
+    const title = document.createElement('span');
+    title.textContent = filename;
+    title.style.cssText = `
+        color: #fff;
+        font-size: 14px;
+        font-family: sans-serif;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: calc(100% - 50px);
+    `;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = `
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        color: #fff;
+        font-size: 20px;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.2s;
+    `;
+    closeBtn.onmouseover = () => closeBtn.style.background = 'rgba(255, 255, 255, 0.2)';
+    closeBtn.onmouseout = () => closeBtn.style.background = 'rgba(255, 255, 255, 0.1)';
+    closeBtn.onclick = () => overlay.remove();
+
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    // Create image container
+    const imageContainer = document.createElement('div');
+    imageContainer.style.cssText = `
+        max-width: 90%;
+        max-height: 80%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    `;
+
+    // Create image element
+    const img = document.createElement('img');
+    img.src = imageUrl;
+    img.style.cssText = `
+        max-width: 100%;
+        max-height: 80vh;
+        border-radius: 8px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    `;
+
+    // Error handling
+    img.onerror = () => {
+        imageContainer.innerHTML = `
+            <div style="color: #ff6666; font-family: sans-serif; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 10px;">⚠️</div>
+                <div>Failed to load image</div>
+                <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">${filename}</div>
+            </div>
+        `;
+    };
+
+    imageContainer.appendChild(img);
+
+    // Create keyboard hint
+    const hint = document.createElement('div');
+    hint.textContent = 'Press ESC or click outside to close';
+    hint.style.cssText = `
+        position: absolute;
+        bottom: 20px;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 12px;
+        font-family: sans-serif;
+    `;
+
+    overlay.appendChild(header);
+    overlay.appendChild(imageContainer);
+    overlay.appendChild(hint);
+
+    // Close on overlay click (but not image click)
+    overlay.onclick = (e) => {
+        if (e.target === overlay) {
+            overlay.remove();
+        }
+    };
+
+    // Close on ESC key
+    const handleKeydown = (e) => {
+        if (e.key === 'Escape') {
+            overlay.remove();
+            document.removeEventListener('keydown', handleKeydown);
+        }
+    };
+    document.addEventListener('keydown', handleKeydown);
+
+    // Add to document
+    document.body.appendChild(overlay);
+}
+
+/**
+ * Create and show video preview modal
+ */
+function showVideoPreviewModal(filename) {
+    // Build video URL
+    let actualFilename = filename;
+    let subfolder = "";
+    
+    if (filename.includes('/')) {
+        const lastSlash = filename.lastIndexOf('/');
+        subfolder = filename.substring(0, lastSlash);
+        actualFilename = filename.substring(lastSlash + 1);
+    }
+    
+    let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+    if (subfolder) {
+        videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
+    }
+
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.85);
+        z-index: 10000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    `;
+
+    // Create header with filename and close button
+    const header = document.createElement('div');
+    header.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 15px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.5);
+    `;
+
+    const title = document.createElement('span');
+    title.textContent = filename;
+    title.style.cssText = `
+        color: #fff;
+        font-size: 14px;
+        font-family: sans-serif;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: calc(100% - 50px);
+    `;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = `
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        color: #fff;
+        font-size: 20px;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.2s;
+    `;
+    closeBtn.onmouseover = () => closeBtn.style.background = 'rgba(255, 255, 255, 0.2)';
+    closeBtn.onmouseout = () => closeBtn.style.background = 'rgba(255, 255, 255, 0.1)';
+    closeBtn.onclick = () => overlay.remove();
+
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    // Create video container
+    const videoContainer = document.createElement('div');
+    videoContainer.style.cssText = `
+        max-width: 90%;
+        max-height: 80%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    `;
+
+    // Create video element
+    const video = document.createElement('video');
+    video.src = videoUrl;
+    video.controls = true;
+    video.autoplay = true;
+    video.loop = true;
+    video.style.cssText = `
+        max-width: 100%;
+        max-height: 80vh;
+        border-radius: 8px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    `;
+
+    // Error handling
+    video.onerror = () => {
+        videoContainer.innerHTML = `
+            <div style="color: #ff6666; font-family: sans-serif; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 10px;">⚠️</div>
+                <div>Failed to load video</div>
+                <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">${filename}</div>
+            </div>
+        `;
+    };
+
+    videoContainer.appendChild(video);
+
+    // Create keyboard hint
+    const hint = document.createElement('div');
+    hint.textContent = 'Press ESC or click outside to close';
+    hint.style.cssText = `
+        position: absolute;
+        bottom: 20px;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 12px;
+        font-family: sans-serif;
+    `;
+
+    overlay.appendChild(header);
+    overlay.appendChild(videoContainer);
+    overlay.appendChild(hint);
+
+    // Close on overlay click (but not video click)
+    overlay.onclick = (e) => {
+        if (e.target === overlay) {
+            overlay.remove();
+        }
+    };
+
+    // Close on ESC key
+    const handleKeydown = (e) => {
+        if (e.key === 'Escape') {
+            overlay.remove();
+            document.removeEventListener('keydown', handleKeydown);
+        }
+    };
+    document.addEventListener('keydown', handleKeydown);
+
+    // Add to document
+    document.body.appendChild(overlay);
+
+    // Focus video for keyboard controls
+    video.focus();
+}
+
+/**
+ * Check if filename is a video file
+ */
+function isVideoFile(filename) {
+    if (!filename) return false;
+    const ext = filename.split('.').pop().toLowerCase();
+    return ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'wmv'].includes(ext);
+}
+
+/**
+ * Check if filename is a previewable file (image or video)
+ */
+function isPreviewableFile(filename) {
+    if (!filename || filename === '(none)') return false;
+    const ext = filename.split('.').pop().toLowerCase();
+    const imageExtensions = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'];
+    const videoExtensions = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'wmv'];
+    return imageExtensions.includes(ext) || videoExtensions.includes(ext);
+}
+
 app.registerExtension({
     name: "PromptExtractor",
 
@@ -479,6 +809,9 @@ app.registerExtension({
 
                 // Track workflow metadata status for indicator
                 node.hasWorkflow = false;
+
+                // Find the frame_position widget (slider) early so we can reference it
+                const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
 
                 // Find the image widget (combo dropdown)
                 const imageWidget = this.widgets?.find(w => w.name === "image");
@@ -546,13 +879,43 @@ app.registerExtension({
                     // Insert button right after the image widget
                     this.widgets.splice(imageWidgetIndex + 1, 0, browseButton);
                     Object.defineProperty(browseButton, "node", { value: node });
+
+                    // Track if current file is a video for UI behavior
+                    node._isVideoFile = false;
+
+                    // Function to update video-specific UI visibility
+                    const updateVideoUIVisibility = () => {
+                        const isVideo = isVideoFile(imageWidget.value);
+                        node._isVideoFile = isVideo;
+                        
+                        // Show/hide frame_position widget based on file type
+                        if (framePositionWidget) {
+                            framePositionWidget.hidden = !isVideo;
+                        }
+                        
+                        node.setDirtyCanvas(true);
+                    };
+
+                    // Wrap the image widget callback to also update visibility
+                    const wrappedCallback = imageWidget.callback;
+                    imageWidget.callback = function(value) {
+                        if (wrappedCallback) {
+                            wrappedCallback.apply(this, arguments);
+                        }
+                        updateVideoUIVisibility();
+                    };
+
+                    // Initial visibility check
+                    setTimeout(updateVideoUIVisibility, 100);
                 }
 
-                // Find the frame_position widget (slider)
-                const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
+                // Configure frame_position widget behavior
                 if (framePositionWidget) {
                     // Ensure the widget is serialized (saved in workflows)
                     framePositionWidget.serialize = true;
+                    
+                    // Initially hide frame_position (will be shown if video is loaded)
+                    framePositionWidget.hidden = true;
                     
                     // Store original callback
                     const originalFrameCallback = framePositionWidget.callback;
@@ -707,7 +1070,7 @@ app.registerExtension({
                     return true;
                 };
 
-                // Add workflow status indicator light
+                // Add workflow status indicator light and preview button
                 const onDrawForeground = node.onDrawForeground;
                 node.onDrawForeground = function(ctx) {
                     const result = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
@@ -728,6 +1091,36 @@ app.registerExtension({
                         ctx.strokeStyle = node.hasWorkflow ? '#054405' : '#550505';
                         ctx.lineWidth = 1;
                         ctx.stroke();
+
+                        // Draw preview play icon (simple triangle) left of workflow indicator - only for images/videos
+                        const imageWidget = node.widgets?.find(w => w.name === "image");
+                        const currentFile = imageWidget?.value;
+                        
+                        if (isPreviewableFile(currentFile)) {
+                            const playX = node.size[0] - radius - 8 - 34;
+                            const playY = (titleHeight / 2) - 30;
+                            const triSize = 8;
+                            
+                            ctx.beginPath();
+                            ctx.moveTo(playX - triSize, playY - triSize);
+                            ctx.lineTo(playX - triSize, playY + triSize);
+                            ctx.lineTo(playX + triSize, playY);
+                            ctx.closePath();
+                            ctx.fillStyle = node._hoverPreviewIcon ? '#ffffff' : 'rgba(255, 255, 255, 0.7)';
+                            ctx.fill();
+                            
+                            // Store play icon bounds for click detection
+                            node._previewIconBounds = {
+                                x: playX - triSize - 3,
+                                y: playY - triSize - 3,
+                                width: triSize * 2 + 6,
+                                height: triSize * 2 + 6
+                            };
+                        } else {
+                            node._previewIconBounds = null;
+                        }
+                    } else {
+                        node._previewIconBounds = null;
                     }
 
                     return result;
@@ -754,9 +1147,50 @@ app.registerExtension({
                         canvas.canvas.title = node.hasWorkflow ? 
                             'Workflow metadata found' : 
                             'No workflow metadata';
+                        node._hoverPreviewIcon = false;
+                    } else if (node._previewIconBounds) {
+                        // Check if hovering over preview icon
+                        const bounds = node._previewIconBounds;
+                        if (localPos[0] >= bounds.x && localPos[0] <= bounds.x + bounds.width &&
+                            localPos[1] >= bounds.y && localPos[1] <= bounds.y + bounds.height) {
+                            canvas.canvas.style.cursor = 'pointer';
+                            canvas.canvas.title = 'Click to preview';
+                            node._hoverPreviewIcon = true;
+                            node.setDirtyCanvas(true);
+                        } else {
+                            if (node._hoverPreviewIcon) {
+                                node._hoverPreviewIcon = false;
+                                node.setDirtyCanvas(true);
+                            }
+                            canvas.canvas.style.cursor = '';
+                        }
                     }
                     
                     return result;
+                };
+                
+                // Handle click on preview icon
+                const onMouseDown = node.onMouseDown;
+                node.onMouseDown = function(e, localPos, canvas) {
+                    // Check if clicking on preview icon
+                    if (node._previewIconBounds && node.imgs && node.imgs.length > 0) {
+                        const bounds = node._previewIconBounds;
+                        if (localPos[0] >= bounds.x && localPos[0] <= bounds.x + bounds.width &&
+                            localPos[1] >= bounds.y && localPos[1] <= bounds.y + bounds.height) {
+                            // Open preview modal
+                            const imageWidget = node.widgets?.find(w => w.name === "image");
+                            if (imageWidget && imageWidget.value) {
+                                if (node._isVideoFile) {
+                                    showVideoPreviewModal(imageWidget.value);
+                                } else {
+                                    showImagePreviewModal(imageWidget.value);
+                                }
+                            }
+                            return true; // Consume the event
+                        }
+                    }
+                    
+                    return onMouseDown ? onMouseDown.apply(this, arguments) : undefined;
                 };
 
                 return result;

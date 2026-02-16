@@ -224,9 +224,9 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
 
             x_sample = self.taesd.decode(x0[:1, :, :1])[0][0]
 
-            # Apply contrast boost for Wan models (TAESD looks washed out)
-            if self.model_name and self.model_name.startswith('Wan'):
-                x_sample = self._apply_contrast(x_sample, contrast=1.5, brightness=1.2)
+            # # Apply contrast boost for Wan models (TAESD looks washed out)
+            # if self.model_name and self.model_name.startswith('Wan'):
+            #     x_sample = self._apply_contrast(x_sample, contrast=1.2, brightness=1.0)
 
             # Video TAEs output 0-1 range, not -1 to 1
             return self._tensor_to_image(x_sample, do_scale=False)
@@ -235,7 +235,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
             x_sample = self.taesd.decode(x0[:1])[0].movedim(0, 2)
             return self._tensor_to_image(x_sample, do_scale=True)
 
-    def _apply_contrast(self, tensor, contrast=1.2, brightness=1.0):
+    def _apply_contrast(self, tensor, contrast=1.0, brightness=1.0):
         """Apply contrast and brightness adjustment to a tensor in 0-1 range."""
         # Contrast: (x - 0.5) * contrast + 0.5
         # Brightness: x * brightness

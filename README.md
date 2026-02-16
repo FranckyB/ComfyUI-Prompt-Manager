@@ -279,6 +279,12 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.15.5
+- **Added get video components+ node**
+  - Since our save video node can saves latents, this also returns the matching latent (if found) and filepath.
+- **Video Preview in Prompt Extractor**
+  - Added the option to preview in fullscreen with dark overlay for both images and video on the Prompt Extractor node.
+
 ### version 1.15.0
 - **Added Animated Latent Preview**
 - Added Similar option to VideoHelperSuite, to display animated Latent preview. With the addition that it works in TAESD mode.
