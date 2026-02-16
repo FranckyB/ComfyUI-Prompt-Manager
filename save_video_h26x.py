@@ -417,15 +417,76 @@ class MonoToStereo:
         return ({"waveform": stereo_waveform, "sample_rate": sample_rate},)
 
 
+class GetVideoComponentsPlus:
+    """
+    Extract video components (images, audio, fps) plus the filepath.
+    Like ComfyUI's GetVideoComponents but also outputs the file path as a string,
+    and automatically loads a matching .latent file if one exists.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("VIDEO", {"tooltip": "The video to extract components from."}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "STRING", "LATENT")
+    RETURN_NAMES = ("images", "audio", "fps", "filepath", "latent")
+    FUNCTION = "get_components"
+    CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Extract video frames, audio, fps, filepath, and matching latent file if found."
+
+    def get_components(self, video):
+        # Get video components using the standard API
+        components = video.get_components()
+        images = components.images
+        audio = components.audio
+        fps = float(components.frame_rate)
+
+        # Try to get the file path from the video object
+        video_path = ""
+        try:
+            source = video.get_stream_source()
+            if isinstance(source, str):
+                video_path = source
+        except Exception as e:
+            print(f"[GetVideoComponentsPlus] Could not get video path: {e}")
+
+        # Check for matching .latent file
+        latent = None
+        if video_path and os.path.exists(video_path):
+            latent_path = os.path.splitext(video_path)[0] + '.latent'
+            if os.path.exists(latent_path):
+                try:
+                    # Load the latent file (same logic as LoadLatentFile)
+                    latent_data = safetensors.torch.load_file(latent_path, device="cpu")
+
+                    # Handle version differences
+                    multiplier = 1.0
+                    if "latent_format_version_0" not in latent_data:
+                        multiplier = 1.0 / 0.18215
+
+                    latent = {"samples": latent_data["latent_tensor"].float() * multiplier}
+                    print(f"[GetVideoComponentsPlus] Loaded matching latent: {latent_path}")
+                except Exception as e:
+                    print(f"[GetVideoComponentsPlus] Could not load latent file: {e}")
+
+        return (images, audio, fps, video_path, latent)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "SaveVideoH26x": SaveVideoH26x,
     "LoadLatentFile": LoadLatentFile,
     "AudioMonoToStereo": MonoToStereo,
+    "GetVideoComponentsPlus": GetVideoComponentsPlus,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveVideoH26x": "Save Video H264/H265",
     "LoadLatentFile": "Load Latent File",
     "AudioMonoToStereo": "Audio Mono to Stereo",
+    "GetVideoComponentsPlus": "Get Video Components+",
 }

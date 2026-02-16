@@ -13,7 +13,7 @@ from .prompt_generator_options import PromptGenOptions
 from .prompt_apply_lora import PromptApplyLora
 from .prompt_extractor import PromptExtractor
 from .model_manager import get_local_models
-from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo
+from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo, GetVideoComponentsPlus
 from server import PromptServer
 
 # Initialize latent preview hook (with VHS conflict detection)
@@ -30,6 +30,7 @@ NODE_CLASS_MAPPINGS = {
     "SaveVideoH26x": SaveVideoH26x,
     "LoadLatentFile": LoadLatentFile,
     "AudioMonoToStereo": MonoToStereo,
+    "GetVideoComponentsPlus": GetVideoComponentsPlus,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -42,6 +43,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveVideoH26x": "Save Video H264/H265",
     "LoadLatentFile": "Load Latent File",
     "AudioMonoToStereo": "Audio Mono to Stereo",
+    "GetVideoComponentsPlus": "Get Video Components+",
 }
 
 WEB_DIRECTORY = "./js"
