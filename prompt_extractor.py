@@ -25,6 +25,28 @@ _file_metadata_cache = {}
 # Cache for video frames extracted by JavaScript
 _video_frames_cache = {}
 
+# LoRA Blacklist - LoRAs containing these keywords will be excluded from extraction
+# Add keywords that identify non-style LoRAs (e.g., distillation, optimization LoRAs)
+LORA_BLACKLIST = [
+    'lightx2v',                 # Distillation LoRAs
+    ['4steps', 'seko'],         # Fast sampling LoRAs - requires BOTH keywords
+    ['4steps', 'lightning']]    # Fast sampling LoRAs - requires BOTH keywords
+
+def is_lora_blacklisted(lora_name):
+    """Check if a LoRA name contains any blacklisted keywords (case-insensitive)"""
+    if not lora_name:
+        return False
+    lora_name_lower = lora_name.lower()
+    for keyword in LORA_BLACKLIST:
+        if isinstance(keyword, list):
+            # We check if all keywords in the list are present in the lora_name for a match
+            if all(k.lower() in lora_name_lower for k in keyword):
+                return True
+        else:
+            if keyword.lower() in lora_name_lower:
+                return True
+    return False
+
 
 def parse_a1111_parameters(parameters_text):
     """
@@ -1487,6 +1509,9 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
         # Add all LoRAs to stack_a (A1111 doesn't have dual stacks)
         for lora in prompt_data.get('loras', []):
+            # Skip blacklisted LoRAs
+            if is_lora_blacklisted(lora['name']):
+                continue
             result['loras_a'].append({
                 'name': lora['name'],
                 'model_strength': lora['model_strength'],
@@ -1640,7 +1665,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             chain_loras, chain_titles = collect_lora_model_chain(source_id, node_map, link_map)
 
             if chain_loras:
-                print(f"[PromptExtractor] Chain from terminal {terminal_id} ({terminal_info.get('terminal_title', '')}): {len(chain_loras)} LoRAs")
+                active_count = sum(1 for lora in chain_loras if lora.get('active', True))
+                inactive_count = len(chain_loras) - active_count
+                lora_names_in_chain = [lora.get('name', 'unknown') for lora in chain_loras if lora.get('active', True)]
+                print(f"[PromptExtractor] Chain from terminal {terminal_id} ({terminal_info.get('terminal_title', '')}), input '{input_name}': {active_count} active, {inactive_count} inactive LoRAs")
+                print(f"[PromptExtractor]   Active LoRAs: {lora_names_in_chain}")
+                print(f"[PromptExtractor]   Chain titles: {chain_titles}")
+                print(f"[PromptExtractor]   Input label: {terminal_info.get('input_label', '')}")
 
             # Mark this terminal input as processed
             processed_terminals.add(terminal_key)
@@ -1716,6 +1747,7 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
     lora_chains.sort(key=lambda x: x.get('source_id', 0))
 
+    print(f"[PromptExtractor] Processing {len(lora_chains)} chains for stack assignment")
     for i, chain in enumerate(lora_chains):
         # Check ALL titles in the chain for high/low hints
         all_titles = chain.get('titles', []) + [chain.get('terminal_title', '')]
@@ -1725,49 +1757,140 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         input_name = chain.get('input_name', '').lower()
         input_label = chain.get('input_label', '').lower()
 
-        # More specific matching - look for whole words or clear patterns
-        has_high = (
-            'high' in all_titles_lower or
-            'high' in input_name or
-            'high' in input_label
+        # IMPORTANT: Only check ACTIVE loras for the chain assignment
+        active_loras = [lora for lora in chain.get('loras', []) if lora.get('active', True)]
+
+        print(f"[PromptExtractor] Chain {i}: {len(chain.get('loras', []))} total LoRAs, {len(active_loras)} active")
+        print(f"  Titles: {all_titles}")
+        print(f"  Active LoRA names: {[lora.get('name', '') for lora in active_loras]}")
+
+        # PRIORITY 1: Check CHAIN STRUCTURE (most reliable)
+        # Use word boundaries to match complete words in titles and input names
+        chain_has_high = (
+            re.search(r'\bhigh\b', all_titles_lower) or
+            re.search(r'\bhigh\b', input_name) or
+            re.search(r'\bhigh\b', input_label) or
+            'highnoise' in all_titles_lower.replace('_', '').replace('-', '').replace(' ', '')
         )
-        has_low = (
-            'low' in all_titles_lower or
-            'low' in input_name or
-            'low' in input_label
+        chain_has_low = (
+            re.search(r'\blow\b', all_titles_lower) or
+            re.search(r'\blow\b', input_name) or
+            re.search(r'\blow\b', input_label) or
+            'lownoise' in all_titles_lower.replace('_', '').replace('-', '').replace(' ', '')
         )
+
+        # PRIORITY 2: Check LoRA filenames with MAJORITY VOTING (fallback when chain structure unclear)
+        # Count how many LoRAs have high/low indicators (excluding blacklisted LoRAs)
+        high_count = 0
+        low_count = 0
+        for lora in active_loras:
+            lora_name = lora.get('name', '')
+            # Skip blacklisted LoRAs from voting
+            if is_lora_blacklisted(lora_name):
+                continue
+            lora_name_lower = lora_name.lower()
+            has_high_pattern = (
+                '_high' in lora_name_lower or
+                '-high' in lora_name_lower or
+                'high_' in lora_name_lower or
+                '_h.' in lora_name_lower or
+                '_h_' in lora_name_lower
+            )
+            has_low_pattern = (
+                '_low' in lora_name_lower or
+                '-low' in lora_name_lower or
+                'low_' in lora_name_lower or
+                '_l.' in lora_name_lower or
+                '_l_' in lora_name_lower
+            )
+            if has_high_pattern:
+                high_count += 1
+            if has_low_pattern:
+                low_count += 1
+                low_count += 1
+
+        # Combine: Chain structure takes priority, filenames used as tiebreaker
+        has_high = chain_has_high or (not chain_has_low and high_count > low_count)
+        has_low = chain_has_low or (not chain_has_high and low_count > high_count)
+
+        print(f"  Chain structure: high={chain_has_high}, low={chain_has_low}")
+        print(f"  LoRA filename voting: {high_count} high, {low_count} low")
+        print(f"  Final decision: has_high={has_high}, has_low={has_low}")
 
         # Determine which stack based on title hints
         if has_high and not has_low:
+            print(f"[PromptExtractor] Chain {i} → STACK A (high detected in chain structure)")
             for lora in chain['loras']:
+                # Only add active LoRAs
+                if not lora.get('active', True):
+                    continue
+                # Skip blacklisted LoRAs
+                if is_lora_blacklisted(lora['name']):
+                    print(f"  Skipping blacklisted LoRA: {lora['name']}")
+                    continue
                 if lora['name'] not in lora_names_seen_a:
                     lora_names_seen_a.add(lora['name'])
                     loras_a.append(lora)
         elif has_low and not has_high:
+            print(f"[PromptExtractor] Chain {i} → STACK B (low detected in chain structure)")
             for lora in chain['loras']:
+                # Only add active LoRAs
+                if not lora.get('active', True):
+                    continue
+                # Skip blacklisted LoRAs
+                if is_lora_blacklisted(lora['name']):
+                    print(f"  Skipping blacklisted LoRA: {lora['name']}")
+                    continue
                 if lora['name'] not in lora_names_seen_b:
                     lora_names_seen_b.add(lora['name'])
                     loras_b.append(lora)
         elif i == 0:
             # First chain defaults to A
+            print(f"[PromptExtractor] Chain {i} → STACK A (first chain default, has_high={has_high}, has_low={has_low})")
             for lora in chain['loras']:
+                # Only add active LoRAs
+                if not lora.get('active', True):
+                    continue
+                # Skip blacklisted LoRAs
+                if is_lora_blacklisted(lora['name']):
+                    print(f"  Skipping blacklisted LoRA: {lora['name']}")
+                    continue
                 if lora['name'] not in lora_names_seen_a:
                     lora_names_seen_a.add(lora['name'])
                     loras_a.append(lora)
         elif i == 1:
             # Second chain defaults to B
+            print(f"[PromptExtractor] Chain {i} → STACK B (second chain default, has_high={has_high}, has_low={has_low})")
             for lora in chain['loras']:
+                # Only add active LoRAs
+                if not lora.get('active', True):
+                    continue
+                # Skip blacklisted LoRAs
+                if is_lora_blacklisted(lora['name']):
+                    print(f"  Skipping blacklisted LoRA: {lora['name']}")
+                    continue
                 if lora['name'] not in lora_names_seen_b:
                     lora_names_seen_b.add(lora['name'])
                     loras_b.append(lora)
         else:
             # Additional chains go to A
+            print(f"[PromptExtractor] Chain {i} → STACK A (additional chain default, has_high={has_high}, has_low={has_low})")
             for lora in chain['loras']:
+                # Only add active LoRAs
+                if not lora.get('active', True):
+                    continue
+                # Skip blacklisted LoRAs
+                if is_lora_blacklisted(lora['name']):
+                    print(f"  Skipping blacklisted LoRA: {lora['name']}")
+                    continue
                 if lora['name'] not in lora_names_seen_a:
                     lora_names_seen_a.add(lora['name'])
                     loras_a.append(lora)
 
     # Also iterate through prompt_data format (API format)
+    # BUT: Only extract LoRAs from API format if we didn't already get them from workflow chains
+    skip_api_lora_extraction = len(lora_chains) > 0
+
     for node_id, node_data in data.items():
         if not isinstance(node_data, dict):
             continue
@@ -1788,7 +1911,8 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 positive_prompts.append(text)
 
         # Standard LoRA loaders (API format)
-        elif class_type in ['LoraLoader', 'LoraLoaderModelOnly']:
+        # Skip this if we already extracted LoRAs from workflow chains
+        elif class_type in ['LoraLoader', 'LoraLoaderModelOnly'] and not skip_api_lora_extraction:
             # Check if this node's MODEL output is connected
             if node_map:
                 node = node_map.get(int(node_id) if str(node_id).isdigit() else node_id)
@@ -1806,33 +1930,43 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
             lora_name = inputs.get('lora_name', '')
             if lora_name and lora_name not in lora_names_seen_a:
+                # Skip blacklisted LoRAs
+                lora_basename = os.path.splitext(os.path.basename(lora_name))[0]
+                if is_lora_blacklisted(lora_basename):
+                    continue
                 lora_names_seen_a.add(lora_name)
                 model_strength = float(inputs.get('strength_model', inputs.get('strength', 1.0)))
                 clip_strength = float(inputs.get('strength_clip', model_strength))
                 loras_a.append({
-                    'name': os.path.splitext(os.path.basename(lora_name))[0],
+                    'name': lora_basename,
                     'path': lora_name,
                     'model_strength': model_strength,
                     'clip_strength': clip_strength
                 })
 
     # Also check for LoRA syntax in prompts: <lora:name:strength>
-    all_prompts = ' '.join(positive_prompts + negative_prompts)
-    lora_pattern = r'<lora:([^:>]+):([^:>]+)(?::([^>]+))?>'
-    for match in re.finditer(lora_pattern, all_prompts):
-        lora_name = match.group(1).strip()
-        if lora_name not in lora_names_seen_a:
-            lora_names_seen_a.add(lora_name)
-            model_strength = float(match.group(2)) if match.group(2) else 1.0
-            clip_strength = float(match.group(3)) if match.group(3) else model_strength
-            loras_a.append({
-                'name': lora_name,
-                'path': '',
-                'model_strength': model_strength,
-                'clip_strength': clip_strength
-            })
+    # Skip this if we already extracted LoRAs from workflow chains
+    if not skip_api_lora_extraction:
+        all_prompts = ' '.join(positive_prompts + negative_prompts)
+        lora_pattern = r'<lora:([^:>]+):([^:>]+)(?::([^>]+))?>'
+        for match in re.finditer(lora_pattern, all_prompts):
+            lora_name = match.group(1).strip()
+            # Skip blacklisted LoRAs
+            if is_lora_blacklisted(lora_name):
+                continue
+            if lora_name not in lora_names_seen_a:
+                lora_names_seen_a.add(lora_name)
+                model_strength = float(match.group(2)) if match.group(2) else 1.0
+                clip_strength = float(match.group(3)) if match.group(3) else model_strength
+                loras_a.append({
+                    'name': lora_name,
+                    'path': '',
+                    'model_strength': model_strength,
+                    'clip_strength': clip_strength
+                })
 
-    # Clean LoRA syntax from prompts
+    # Clean LoRA syntax from prompts (even if we skipped extraction, we still clean the syntax)
+    lora_pattern = r'<lora:([^:>]+):([^:>]+)(?::([^>]+))?>'
     clean_positive = []
     for p in positive_prompts:
         cleaned = re.sub(lora_pattern, '', p).strip()
