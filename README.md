@@ -279,6 +279,10 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.15.8
+- **Bug Fixes**
+  - Improved Prompt Extractor, enhanced detection logic
+
 ### version 1.15.7
 - **Added Rename Category Option**
 - **Bug Fixes**
