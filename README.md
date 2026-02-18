@@ -239,11 +239,11 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 - ComfyUI
 - Python 3.8+
-- requests >= 2.31.0
-- huggingface_hub >= 0.20.0
-- psutil >= 5.9.0
-- tqdm >= 4.66.0
-- Pillow >= 10.0.0
+- requests
+- huggingface_hub
+- psutil
+- tqdm
+- Pillow
 - colorama
 - llama-server (from llama.cpp)
 
