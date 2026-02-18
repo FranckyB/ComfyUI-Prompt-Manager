@@ -279,6 +279,10 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.15.7
+- **Added Rename Category Option**
+- **Bug Fixes**
+
 ### version 1.15.6
 - **Video Metadata Reader - VHS Compatible**
    - Added capability to read metadata from VideoHelperSuite generated videos.

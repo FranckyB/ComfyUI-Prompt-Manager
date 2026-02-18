@@ -809,6 +809,9 @@ app.registerExtension({
 
                 // Track workflow metadata status for indicator
                 node.hasWorkflow = false;
+                // Track the currently loaded image filename and frame position to prevent unnecessary reloads
+                node._loadedImageFilename = null;
+                node._loadedFramePosition = null;
 
                 // Find the frame_position widget (slider) early so we can reference it
                 const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
@@ -965,11 +968,16 @@ app.registerExtension({
                     }
 
                     // After workflow is configured, load the preview if a file is selected
-                    // Only reload if we don't already have a preview image displayed
-                    if (imageWidget && imageWidget.value) {
-                        const previewWidget = this.widgets?.find(w => w.name === "preview" && w.type === "image");
-                        // Only load if preview is not already showing this image
-                        if (!previewWidget || !previewWidget.value) {
+                    // Only reload if we're not already displaying this exact image/video frame (prevents refresh on queue)
+                    if (imageWidget && imageWidget.value && imageWidget.value !== "(none)") {
+                        const isVideo = isVideoFile(imageWidget.value);
+                        const currentFramePos = framePositionWidget ? framePositionWidget.value : 0.0;
+                        
+                        // Check if we already have this exact image/frame loaded
+                        const alreadyLoaded = node._loadedImageFilename === imageWidget.value &&
+                            (!isVideo || node._loadedFramePosition === currentFramePos);
+                        
+                        if (!alreadyLoaded) {
                             loadAndDisplayImage(node, imageWidget.value);
                         }
                     }
@@ -982,7 +990,10 @@ app.registerExtension({
                     // Use setTimeout to ensure node is fully initialized
                     setTimeout(() => {
                         if (imageWidget.value && imageWidget.value !== "(none)") {
-                            loadAndDisplayImage(node, imageWidget.value);
+                            // Only load if not already loaded
+                            if (node._loadedImageFilename !== imageWidget.value) {
+                                loadAndDisplayImage(node, imageWidget.value);
+                            }
                         } else {
                             // Show placeholder for (none) or empty
                             showPlaceholder(node);
@@ -1359,6 +1370,8 @@ async function loadImageFile(node, filename) {
         img.onload = () => {
             node.imgs = [img];
             node.imageIndex = 0;
+            // Track that this image is now loaded
+            node._loadedImageFilename = filename;
 
             // Resize node to fit image (like Load Image does)
             const targetWidth = Math.max(node.size[0], 256);
@@ -1399,6 +1412,8 @@ async function loadJSONFile(node, filename) {
         // Update workflow status flag
         // Check if metadata has workflow property OR if metadata itself is a workflow (has nodes/links)
         node.hasWorkflow = !!(metadata && (metadata.workflow || (metadata.nodes && metadata.links)));
+        // Track that this JSON is now loaded
+        node._loadedImageFilename = filename;
         
         // Force canvas redraw to update indicator immediately
         node.setDirtyCanvas(true, true);
@@ -1480,6 +1495,9 @@ async function loadVideoFrame(node, filename) {
                 // Display the frame
                 node.imgs = [img];
                 node.imageIndex = 0;
+                // Track that this video frame is now loaded at this specific position
+                node._loadedImageFilename = filename;
+                node._loadedFramePosition = framePosition;
 
                 // Cache frame as base64 for Python backend
                 const frameData = canvas.toDataURL('image/png');
@@ -1519,6 +1537,10 @@ async function loadVideoFrame(node, filename) {
  * Show placeholder image for non-image files
  */
 function showPlaceholder(node) {
+    // Clear the loaded filename and frame position since we're showing a placeholder
+    node._loadedImageFilename = null;
+    node._loadedFramePosition = null;
+    
     const placeholderImg = new Image();
     placeholderImg.src = PLACEHOLDER_IMAGE_PATH;
     placeholderImg.onload = () => {

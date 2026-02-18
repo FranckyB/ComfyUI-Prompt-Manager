@@ -2207,10 +2207,17 @@ function addButtonBar(node) {
             node.newPromptCategory = null;
             node.newPromptName = null;
 
+            // Skip callback reload logic during save update
+            node._skipCallbackReload = true;
+
             // Update UI to show the saved prompt
             categoryWidget.value = targetCategory;
             filterPromptDropdown(node);
             promptWidget.value = promptName;
+            textWidget.value = promptText;  // Ensure text shows what was just saved
+
+            // Clear skip flag
+            node._skipCallbackReload = false;
 
             // Update previous values tracking
             node._previousCategory = targetCategory;
@@ -2294,6 +2301,45 @@ function addButtonBar(node) {
     // More dropdown button
     const moreBtn = createDropdownButton("More ▼", [
         {
+            label: "Rename Category",
+            action: async () => {
+                const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+                const currentCategory = categoryWidget.value;
+
+                if (categories.length === 0) {
+                    await showInfo("No Categories", "There are no categories to rename.");
+                    return;
+                }
+
+                const result = await showRenameCategoryDialog(
+                    "Rename Category",
+                    "Enter new category name:",
+                    categories,
+                    currentCategory
+                );
+
+                if (result && result.oldCategory && result.newCategory && result.newCategory.trim()) {
+                    const oldCat = result.oldCategory;
+                    const newCat = result.newCategory.trim();
+
+                    // Check if they're the same (case-insensitive)
+                    if (oldCat.toLowerCase() === newCat.toLowerCase() && oldCat !== newCat) {
+                        // Just a case change, allow it
+                        await renameCategory(node, oldCat, newCat);
+                        return;
+                    }
+
+                    if (oldCat === newCat) {
+                        await showInfo("No Change", "The category name hasn't changed.");
+                        return;
+                    }
+
+                    await renameCategory(node, oldCat, newCat);
+                }
+            }
+        },
+        { divider: true },
+        {
             label: "New Category",
             action: async () => {
                 const categoryName = await showTextPrompt("New Category", "Enter new category name:");
@@ -2375,6 +2421,14 @@ function setupCategoryChangeHandler(node) {
     const originalCallback = categoryWidget.callback;
 
     categoryWidget.callback = async function(value) {
+        // Skip callback reload during save operations
+        if (node._skipCallbackReload) {
+            if (originalCallback) {
+                originalCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         const previousCategory = node._previousCategory;
         const previousPrompt = node._previousPrompt;
 
@@ -2475,6 +2529,14 @@ function setupCategoryChangeHandler(node) {
     const originalPromptCallback = promptWidget.callback;
 
     promptWidget.callback = async function(value) {
+        // Skip callback reload during save operations
+        if (node._skipCallbackReload) {
+            if (originalPromptCallback) {
+                originalPromptCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         const previousCategory = node._previousCategory;
         const previousPrompt = node._previousPrompt;
 
@@ -2966,6 +3028,56 @@ async function createCategory(node, categoryName) {
     }
 }
 
+async function renameCategory(node, oldCategory, newCategory) {
+    try {
+        const response = await fetch("/prompt-manager-advanced/rename-category", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ old_category: oldCategory, new_category: newCategory })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            node.prompts = data.prompts;
+
+            const categoryWidget = node.widgets.find(w => w.name === "category");
+            const promptWidget = node.widgets.find(w => w.name === "name");
+
+            // Update to the renamed category
+            if (categoryWidget) {
+                categoryWidget.value = data.new_category;
+            }
+
+            // Keep current prompt if it exists
+            const currentPrompt = promptWidget?.value || "";
+            const categoryPrompts = node.prompts[data.new_category] || {};
+            if (currentPrompt && currentPrompt in categoryPrompts) {
+                if (promptWidget) {
+                    promptWidget.value = currentPrompt;
+                }
+            }
+
+            updateDropdowns(node);
+
+            // Update custom prompt selector display
+            if (node.updatePromptSelectorDisplay) {
+                node.updatePromptSelectorDisplay();
+            }
+
+            node.serialize_widgets = true;
+            app.graph.setDirtyCanvas(true, true);
+
+            await showInfo("Success", `Category renamed from "${oldCategory}" to "${newCategory}"`);
+        } else {
+            await showInfo("Error", data.error);
+        }
+    } catch (error) {
+        console.error("[PromptManagerAdvanced] Error renaming category:", error);
+        await showInfo("Error", "Error renaming category");
+    }
+}
+
 async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null) {
     try {
         const requestBody = {
@@ -3055,15 +3167,49 @@ async function deleteCategory(node, category) {
 
         if (data.success) {
             node.prompts = data.prompts;
+            
+            // Clear current lora and trigger word data
             node.savedLorasA = [];
             node.savedLorasB = [];
-            node.originalLorasA = [];
-            node.originalLorasB = [];
+            node.currentLorasA = [];
+            node.currentLorasB = [];
+            node.originalStrengthsA = {};
+            node.originalStrengthsB = {};
             node.savedTriggerWords = [];
             node.currentTriggerWords = [];
+            
+            const categoryWidget = node.widgets.find(w => w.name === "category");
+            const promptWidget = node.widgets.find(w => w.name === "name");
+            const textWidget = node.widgets.find(w => w.name === "text");
+
+            // Update dropdowns to reflect deletion
             updateDropdowns(node);
-            updateLoraDisplays(node);
-            updateTriggerWordsDisplay(node);
+
+            // Load the new prompt data (first prompt in first category, or empty)
+            const currentCategory = categoryWidget?.value;
+            const newPrompt = promptWidget?.value || "";
+            
+            if (currentCategory && newPrompt && node.prompts[currentCategory]?.[newPrompt]) {
+                // Load the new category's first prompt
+                await loadPromptData(node, currentCategory, newPrompt);
+            } else {
+                // No categories/prompts left - clear everything
+                if (textWidget) textWidget.value = "";
+                updateLoraDisplays(node);
+                updateTriggerWordsDisplay(node);
+            }
+
+            // Update previous values tracking
+            node._previousCategory = currentCategory;
+            node._previousPrompt = newPrompt;
+
+            // Update custom prompt selector display
+            if (node.updatePromptSelectorDisplay) {
+                node.updatePromptSelectorDisplay();
+            }
+
+            // Update last saved state
+            updateLastSavedState(node);
 
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
@@ -3091,15 +3237,49 @@ async function deletePrompt(node, category, name) {
 
         if (data.success) {
             node.prompts = data.prompts;
+            
+            // Clear current lora and trigger word data
             node.savedLorasA = [];
             node.savedLorasB = [];
-            node.originalLorasA = [];
-            node.originalLorasB = [];
+            node.currentLorasA = [];
+            node.currentLorasB = [];
+            node.originalStrengthsA = {};
+            node.originalStrengthsB = {};
             node.savedTriggerWords = [];
             node.currentTriggerWords = [];
+            
+            const categoryWidget = node.widgets.find(w => w.name === "category");
+            const promptWidget = node.widgets.find(w => w.name === "name");
+            const textWidget = node.widgets.find(w => w.name === "text");
+
+            // Update dropdowns to reflect deletion
             updateDropdowns(node);
-            updateLoraDisplays(node);
-            updateTriggerWordsDisplay(node);
+
+            // Load the new prompt data (first prompt in category, or empty)
+            const currentCategory = categoryWidget?.value;
+            const newPrompt = promptWidget?.value || "";
+            
+            if (currentCategory && newPrompt && node.prompts[currentCategory]?.[newPrompt]) {
+                // Load the new prompt's data
+                await loadPromptData(node, currentCategory, newPrompt);
+            } else {
+                // No prompts left in category - clear everything
+                if (textWidget) textWidget.value = "";
+                updateLoraDisplays(node);
+                updateTriggerWordsDisplay(node);
+            }
+
+            // Update previous values tracking
+            node._previousCategory = currentCategory;
+            node._previousPrompt = newPrompt;
+
+            // Update custom prompt selector display
+            if (node.updatePromptSelectorDisplay) {
+                node.updatePromptSelectorDisplay();
+            }
+
+            // Update last saved state
+            updateLastSavedState(node);
 
             node.serialize_widgets = true;
             app.graph.setDirtyCanvas(true, true);
@@ -3277,6 +3457,102 @@ function createDropdownButton(text, items) {
     container.appendChild(button);
 
     return container;
+}
+
+function showRenameCategoryDialog(title, message, categories, defaultCategory) {
+    return new Promise((resolve) => {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        // Build category options
+        const categoryOptions = categories.map(cat =>
+            `<option value="${cat}" ${cat === defaultCategory ? 'selected' : ''}>${cat}</option>`
+        ).join('');
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category to rename:</div>
+            <select style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+                ${categoryOptions}
+            </select>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
+            <input type="text" value="${defaultCategory}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
+            </div>
+        `;
+
+        const selectEl = dialog.querySelector("select");
+        const input = dialog.querySelector("input");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        // Update input when category selection changes
+        selectEl.onchange = () => {
+            input.value = selectEl.value;
+            input.select();
+        };
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve({ oldCategory: selectEl.value, newCategory: input.value });
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleOk();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        input.focus();
+        input.select();
+    });
 }
 
 function showPromptWithCategory(title, message, defaultName, categories, defaultCategory) {
@@ -3856,7 +4132,10 @@ function resizeImageToThumbnail(file, maxSize = 128) {
  * Show thumbnail browser popup for selecting prompts
  * Returns { category, prompt } or null if cancelled
  */
-function showThumbnailBrowser(node, currentCategory, currentPrompt) {
+async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
+    // Reload prompts to ensure we have the latest data
+    await loadPrompts(node);
+    
     return new Promise((resolve) => {
         let selectedCategory = currentCategory;
 

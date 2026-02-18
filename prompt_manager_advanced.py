@@ -1029,6 +1029,42 @@ async def save_category_advanced(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/rename-category")
+async def rename_category_advanced(request):
+    """API endpoint to rename a category"""
+    try:
+        data = await request.json()
+        old_category = data.get("old_category", "").strip()
+        new_category = data.get("new_category", "").strip()
+
+        if not old_category or not new_category:
+            return server.web.json_response({"success": False, "error": "Both old and new category names are required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        # Check if old category exists
+        if old_category not in prompts:
+            return server.web.json_response({"success": False, "error": f"Category '{old_category}' not found"})
+
+        # Case-insensitive check for new category name conflicts (excluding the old name)
+        existing_categories_lower = {k.lower(): k for k in prompts.keys() if k.lower() != old_category.lower()}
+        if new_category.lower() in existing_categories_lower:
+            return server.web.json_response({
+                "success": False,
+                "error": f"Category already exists as '{existing_categories_lower[new_category.lower()]}'"
+            })
+
+        # Rename by copying data and deleting old
+        prompts[new_category] = prompts[old_category]
+        del prompts[old_category]
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts, "new_category": new_category})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in rename_category API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-prompt")
 async def save_prompt_advanced(request):
     """API endpoint to save a prompt with lora configurations"""

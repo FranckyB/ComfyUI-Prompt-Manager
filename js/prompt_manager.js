@@ -468,7 +468,7 @@ function addButtonBar(node) {
         }
     });
 
-    // New Prompt button with category selection
+    // New Prompt button - simply clears fields for a fresh start
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
@@ -477,7 +477,7 @@ function addButtonBar(node) {
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and create a new prompt?",
+                "You have unsaved changes to the current prompt. Do you want to discard them and start fresh?",
                 "Discard & Continue",
                 "#f80"
             );
@@ -486,59 +486,27 @@ function addButtonBar(node) {
             }
         }
         
-        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+        // Keep the current category, just clear the prompt selection and content
         const currentCategory = categoryWidget.value;
         
-        const result = await showPromptWithCategory(
-            "New Prompt",
-            "Enter new prompt name:",
-            "",
-            categories,
-            currentCategory
-        );
+        // Clear prompt selection (set to empty/placeholder)
+        promptWidget.value = "";
+        textWidget.value = "";
         
-        if (result && result.name && result.name.trim()) {
-            const promptName = result.name.trim();
-            const targetCategory = result.category;
-            
-            // Check for existing prompt
-            let existingPromptName = null;
-            if (node.prompts[targetCategory]) {
-                const existingNames = Object.keys(node.prompts[targetCategory]);
-                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
-            }
-
-            if (existingPromptName) {
-                await showInfo(
-                    "Prompt Exists",
-                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}".`
-                );
-                return;
-            }
-
-            // Set up UI for new prompt (temporary, not saved yet)
-            // User must click "Save Prompt" to persist it
-            categoryWidget.value = targetCategory;
-            
-            // Add prompt name to dropdown temporarily so it can be selected
-            if (!promptWidget.options.values.includes(promptName)) {
-                promptWidget.options.values = [...promptWidget.options.values, promptName].sort((a, b) => a.localeCompare(b));
-            }
-            promptWidget.value = promptName;
-            textWidget.value = "";
-            
-            // Mark as unsaved/new prompt
-            node.isNewUnsavedPrompt = true;
-            node.newPromptCategory = targetCategory;
-            node.newPromptName = promptName;
-            
-            // Update previous values so cancel/revert works correctly
-            node._previousCategory = targetCategory;
-            node._previousPrompt = promptName;
-            
-            node.serialize_widgets = true;
-            app.graph.setDirtyCanvas(true, true);
-        }
+        // Update previous values for cancel/revert
+        node._previousCategory = currentCategory;
+        node._previousPrompt = "";
+        
+        // Mark as new unsaved prompt state
+        node.isNewUnsavedPrompt = true;
+        node.newPromptCategory = currentCategory;
+        node.newPromptName = null;
+        
+        // Clear the last saved state since this is a brand new prompt
+        node.lastSavedState = null;
+        
+        node.serialize_widgets = true;
+        app.graph.setDirtyCanvas(true, true);
     });
 
     // More dropdown button
