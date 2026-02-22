@@ -1902,9 +1902,29 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         if class_type in ['CLIPTextEncode', 'CLIPTextEncodeSDXL', 'CLIPTextEncodeFlux']:
             text = inputs.get('text', '')
             if text and isinstance(text, str):
-                positive_prompts.append(text)
+                # Determine if this is positive or negative by checking connections
+                connection_type = None
+                if node_map:
+                    actual_node_id = int(node_id) if str(node_id).isdigit() else node_id
+                    connection_type = determine_clip_text_encode_type(actual_node_id, workflow_data, node_map)
 
-        # PromptManager nodes
+                # Fallback: check node title if we have node_map
+                if not connection_type and node_map:
+                    node = node_map.get(actual_node_id)
+                    if node:
+                        title_lower = node.get('title', '').lower()
+                        if 'negative' in title_lower:
+                            connection_type = 'negative'
+                        elif 'positive' in title_lower:
+                            connection_type = 'positive'
+
+                # Add to appropriate list (default to positive if unclear)
+                if connection_type == 'negative':
+                    negative_prompts.append(text)
+                else:
+                    positive_prompts.append(text)
+
+        # PromptManager nodes (always positive)
         elif class_type in ['PromptManager', 'PromptManagerAdvanced']:
             text = inputs.get('text', '')
             if text and isinstance(text, str):

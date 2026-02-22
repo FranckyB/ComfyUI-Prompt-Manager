@@ -974,8 +974,14 @@ app.registerExtension({
                         const currentFramePos = framePositionWidget ? framePositionWidget.value : 0.0;
                         
                         // Check if we already have this exact image/frame loaded
+                        // Also verify the actual image src matches (prevents stale images when switching tabs)
+                        const expectedFilename = encodeURIComponent(imageWidget.value);
+                        const hasCorrectImage = node.imgs && node.imgs[0] && 
+                            node.imgs[0].src && node.imgs[0].src.includes(expectedFilename);
+                        
                         const alreadyLoaded = node._loadedImageFilename === imageWidget.value &&
-                            (!isVideo || node._loadedFramePosition === currentFramePos);
+                            (!isVideo || node._loadedFramePosition === currentFramePos) &&
+                            hasCorrectImage;
                         
                         if (!alreadyLoaded) {
                             loadAndDisplayImage(node, imageWidget.value);

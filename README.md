@@ -279,7 +279,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
-### version 1.15.8
+### version 1.15.9
 - **Bug Fixes**
   - Improved Prompt Extractor, enhanced detection logic
 
