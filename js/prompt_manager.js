@@ -114,6 +114,58 @@ app.registerExtension({
             tooltip: "Show a warning when switching prompts if there are unsaved changes to the current prompt text, LoRAs, or trigger words.",
             type: "boolean",
             defaultValue: true
+        },
+        {
+            id: "PromptManager.LLMBackend",
+            category: ["Prompt Manager", "5. Ollama Settings", "LLM Backend"],
+            name: "LLM Backend",
+            tooltip: "Choose the LLM backend: llama.cpp (local server, default) or Ollama",
+            type: "combo",
+            options: ["llama.cpp", "ollama"],
+            defaultValue: "llama.cpp",
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "llm_backend", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving LLM backend preference:", error);
+                });
+            }
+        },
+        {
+            id: "PromptManager.OllamaUrl",
+            category: ["Prompt Manager", "5. Ollama Settings", "Ollama URL"],
+            name: "Ollama URL",
+            tooltip: "URL of the Ollama server (default: http://127.0.0.1:11434)",
+            type: "text",
+            defaultValue: "http://127.0.0.1:11434",
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "ollama_url", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving Ollama URL preference:", error);
+                });
+            }
+        },
+        {
+            id: "PromptManager.OllamaKeepAlive",
+            category: ["Prompt Manager", "5. Ollama Settings", "Keep Alive Duration"],
+            name: "Keep Alive Duration",
+            tooltip: "How long Ollama keeps the model loaded in memory after a request. Examples: '5m' (5 minutes), '30m', '1h', '0' (unload immediately), '-1' (keep forever). Default: 5m",
+            type: "text",
+            defaultValue: "5m",
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "ollama_keep_alive", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving Ollama keep alive preference:", error);
+                });
+            }
         }
     ],
     async setup() {
@@ -126,8 +178,11 @@ app.registerExtension({
             const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath", "");
             const port = app.ui.settings.getSettingValue("PromptManager.Port", "8080");
             const CloseLlama = app.ui.settings.getSettingValue("PromptManager.CloseLlama", true);
+            const llmBackend = app.ui.settings.getSettingValue("PromptManager.LLMBackend", "llama.cpp");
+            const ollamaUrl = app.ui.settings.getSettingValue("PromptManager.OllamaUrl", "http://127.0.0.1:11434");
+            const ollamaKeepAlive = app.ui.settings.getSettingValue("PromptManager.OllamaKeepAlive", "5m");
             
-            console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, CloseLlama });
+            console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, CloseLlama, llmBackend, ollamaUrl, ollamaKeepAlive });
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -157,6 +212,21 @@ app.registerExtension({
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "close_llama_on_exit", value: CloseLlama })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "llm_backend", value: llmBackend })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "ollama_url", value: ollamaUrl })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "ollama_keep_alive", value: ollamaKeepAlive })
             });
         } catch (error) {
             console.error("[PromptManager] Error syncing preferences:", error);

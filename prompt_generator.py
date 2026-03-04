@@ -13,7 +13,10 @@ import numpy as np
 from colorama import Fore, Style
 from PIL import Image
 from io import BytesIO
-from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path
+from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, has_vision_support
+
+# Ollama integration
+from .ollama_wrapper import generate_chat as ollama_generate_chat, unload_model as ollama_unload_model
 
 # ComfyUI interrupt helper
 import comfy.model_management
@@ -229,7 +232,7 @@ class PromptGenerator:
 
     @staticmethod
     def get_image_system_prompt():
-        """Load the system prompt for image description (used with Qwen3VL)."""
+        """Load the system prompt for image description (used with vision models)."""
         return load_prompt("image_default_system_prompt.txt")
 
     @staticmethod
@@ -248,63 +251,54 @@ class PromptGenerator:
         return load_prompt("json_system_prompt.txt")
 
     @staticmethod
-    def find_qwen3vl_model(available_models, thinking):
-        """Find the preferred or smallest available Qwen3VL model
+    def find_vision_model(available_models):
+        """Find the preferred or first available vision-capable model.
 
-        First checks user preferences, then falls back to smallest model (4B preferred over 8B)
+        A model is considered vision-capable if it has an mmproj file
+        (either in the registry or on disk).
         """
-
-        qwen3vl_models = [m for m in available_models if 'qwen3vl' in m.lower()]
-        if not qwen3vl_models:
+        vision_models = [m for m in available_models if has_vision_support(m)]
+        if not vision_models:
             return None
 
         # Check user preference first
         preferred = _preferences_cache.get("preferred_vision_model", "")
-        if preferred and preferred in qwen3vl_models and is_model_local(preferred):
-            if thinking:
-                if 'thinking' in preferred.lower():
-                    return preferred
-            else:
-                if 'thinking' not in preferred.lower():
-                    return preferred
+        if preferred and preferred in vision_models and is_model_local(preferred):
+            return preferred
 
-        # Let's filter models based on thinking mode
-        if thinking:
-            filtered_models = [model for model in qwen3vl_models if 'thinking' in model.lower()]
-        else:
-            filtered_models = [model for model in qwen3vl_models if 'thinking' not in model.lower()]
-        if filtered_models:
-            qwen3vl_models = filtered_models
-
-        # Fall back to smaller model (prefer 4B over 8B)
-        for model in qwen3vl_models:
-            if '4b' in model.lower():
+        # Fall back to smallest model
+        for model in vision_models:
+            if '4b' in model.lower() or '3b' in model.lower():
                 return model
 
-        return qwen3vl_models[0]
+        return vision_models[0]
 
     @staticmethod
-    def find_non_vl_model(available_models):
-        """Find the preferred or smallest available non-vision model by file size
+    def find_text_model(available_models):
+        """Find the preferred or smallest available model for text enhancement.
 
-        First checks user preferences, then falls back to smallest model by file size
+        Any model can be used for text (vision models work too),
+        but we prefer non-vision models when available to save resources.
+        Falls back to vision-capable models if that's all there is.
         """
+        # Prefer models without mmproj (lighter weight)
+        text_only = [m for m in available_models if not has_vision_support(m)]
 
-        non_vl_models = [m for m in available_models if 'qwen3vl' not in m.lower()]
-        if not non_vl_models:
+        candidates = text_only if text_only else available_models
+        if not candidates:
             return None
 
         # Check user preference first
         preferred = _preferences_cache.get("preferred_base_model", "")
-        if preferred and preferred in non_vl_models and is_model_local(preferred):
+        if preferred and preferred in candidates and is_model_local(preferred):
             return preferred
 
-        # Fall back to smaller model (prefer 4B over 8B)
-        for model in non_vl_models:
-            if '4b' in model.lower():
+        # Fall back to smallest model
+        for model in candidates:
+            if '4b' in model.lower() or '3b' in model.lower():
                 return model
 
-        return non_vl_models[0]
+        return candidates[0]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -314,7 +308,8 @@ class PromptGenerator:
                     "default": 0,
                     "min": 0,
                     "max": 0xffffffffffffffff,
-                    "tooltip": "Seed for reproducible generation."
+                    "tooltip": "Seed for reproducible generation.",
+                    "control_after_generate": True
                 }),
             },
             "optional": {
@@ -443,15 +438,14 @@ class PromptGenerator:
             # Build command arguments
             cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-c", str(context_size)]
 
-            # Add vision flags for VL models
+            # Add vision flags for models with mmproj
             if use_vision_model:
                 mmproj_path = get_mmproj_path(model_name)
                 if mmproj_path:
-                    # Only print if mmproj is used
                     print_pg(f"Vision model: using mmproj: {os.path.basename(mmproj_path)}")
                     cmd_args.extend(["--mmproj", mmproj_path])
                 else:
-                    error_msg = f"Error: Vision model requires mmproj file for '{model_name}' but it was not found. \nPlease ensure it exists, or use the Generator Options node to download the Qwen3VL model and its mmproj file."
+                    error_msg = f"Error: Vision mode requires an mmproj file for '{model_name}' but none was found.\nPlease ensure an mmproj file exists, or use the Generator Options node to download a vision-capable model."
                     print_pg(error_msg, RED)
                     return (False, error_msg)
 
@@ -650,10 +644,16 @@ class PromptGenerator:
         return PromptGenerator.fetch_model_defaults()
 
     def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=False, options=None, **kwargs) -> str:
-        """Convert prompt using llama.cpp server, with caching for repeated requests."""
+        """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 
         print_pg_header()  # Print header for this execution
+
+        # Determine LLM backend: "ollama" or "llama.cpp"
+        use_ollama = (
+            (options and options.get("llm_backend") == "ollama")
+            or _preferences_cache.get("llm_backend", "llama.cpp") == "ollama"
+        )
 
         # Extract console option from connected options node
         show_everything_in_console = False  # Default to False when options not connected
@@ -678,57 +678,69 @@ class PromptGenerator:
 
         # Always determine a valid model filename before running server
         model_to_use = None
-        available_models = get_local_models()
 
-        if use_vision_model:
-            # Check if options specifies a Qwen3VL model
-            if options and "model" in options and "vl" in options["model"].lower() and is_model_local(options["model"]):
+        if use_ollama:
+            # ── Ollama model selection ──
+            # Priority: Options node > auto-discover from Ollama
+            if options and "model" in options:
                 model_to_use = options["model"]
-            elif options and "model" in options and is_model_local(options["model"]):
-                # Non-VL model selected but in vision mode
-                print_pg(f"Warning: Non-vision model '{options['model']}' selected but '{mode}' mode is active.\nIgnoring model selection and using a Vision Model instead.")
-                model_to_use = self.find_qwen3vl_model(available_models, enable_thinking)
-                if model_to_use is None:
-                    error_msg = f"Error: '{mode}' mode requires a Qwen3VL model. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
-                    print_pg(error_msg, RED)
-                    return (error_msg,)
             else:
-                # Try to find a Qwen3VL model automatically
-                model_to_use = self.find_qwen3vl_model(available_models, enable_thinking)
-                if model_to_use is None:
-                    error_msg = f"Error: '{mode}' mode requires a Qwen3VL model. Please connect the Options node and select a Qwen3VL model (Qwen3VL-4B or Qwen3VL-8B) to use vision capabilities."
+                # Auto-discover available models from Ollama
+                from .ollama_wrapper import discover_ollama_models
+                discovered, status = discover_ollama_models(_preferences_cache)
+                if discovered:
+                    model_to_use = discovered[0]
+                    print_pg(f"Auto-selected Ollama model: {model_to_use}")
+                else:
+                    error_msg = (f"Error: No Ollama model available. {status}\n"
+                                 "Pull a model first (e.g. `ollama pull llama3.1`).")
                     print_pg(error_msg, RED)
                     return (error_msg,)
+
+            print_pg("Backend       : Ollama")
+
         else:
-            # Enhance Prompt mode - use regular model selection logic (exclude Qwen3VL models)
-            if options and "model" in options and is_model_local(options["model"]):
-                # If user explicitly selected a Qwen3VL model but in Enhance mode, use first non-VL model instead
-                if "qwen3vl" in options["model"].lower():
-                    model_to_use = self.find_non_vl_model(available_models)
-                    if model_to_use:
-                        print_pg(f"Warning: Qwen3VL model '{options['model']}' selected but 'Enhance Prompt' mode is active. Ignoring model selection and using {model_to_use} instead.")
-                    else:
-                        error_msg = "Error: Only Qwen3VL models available but 'Enhance Prompt' mode is active. Please add a .gguf model or use Generator Options to add a non-vision model."
+            # ── llama.cpp model selection ──
+            print_pg("Backend       : llama.cpp")
+            available_models = get_local_models()
+
+            if use_vision_model:
+                # Check if the selected model supports vision (has mmproj)
+                if options and "model" in options and has_vision_support(options["model"]) and is_model_local(options["model"]):
+                    model_to_use = options["model"]
+                elif options and "model" in options and is_model_local(options["model"]):
+                    # Selected model doesn't support vision
+                    print_pg(f"Warning: Model '{options['model']}' has no mmproj (no vision support) but '{mode}' mode is active.\nIgnoring model selection and searching for a vision-capable model.")
+                    model_to_use = self.find_vision_model(available_models)
+                    if model_to_use is None:
+                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                         print_pg(error_msg, RED)
                         return (error_msg,)
                 else:
-                    model_to_use = options["model"]
+                    # Try to find a vision model automatically
+                    model_to_use = self.find_vision_model(available_models)
+                    if model_to_use is None:
+                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                        print_pg(error_msg, RED)
+                        return (error_msg,)
             else:
-                if not available_models:
-                    error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
-                    print_pg(error_msg, RED)
-                    return (error_msg,)
-                # Find smallest non-VL model
-                model_to_use = self.find_non_vl_model(available_models)
-                if not model_to_use:
-                    error_msg = "Error: Only Qwen3VL models available but 'Enhance Prompt' mode is active. Please add a non-vision model or switch to 'Describe Image' mode."
-                    print_pg(error_msg, RED)
-                    return (error_msg,)
+                # Enhance Prompt mode - any model works, prefer text-only for efficiency
+                if options and "model" in options and is_model_local(options["model"]):
+                    model_to_use = options["model"]
+                else:
+                    if not available_models:
+                        error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
+                        print_pg(error_msg, RED)
+                        return (error_msg,)
+                    model_to_use = self.find_text_model(available_models)
+                    if not model_to_use:
+                        error_msg = "Error: No suitable model found. Please add a .gguf model or use the Generator Options node to download one."
+                        print_pg(error_msg, RED)
+                        return (error_msg,)
 
-        # let's make sure thinking is disabled for non-thinking versions of Qwen3VL
-        if enable_thinking and "qwen3vl" in model_to_use.lower() and "thinking" not in model_to_use.lower():
-            print_pg("Warning: Thinking disabled - model does not support it.")
-            enable_thinking = False
+            # Thinking mode is only meaningful if the model explicitly supports it
+            # (no longer tied to Qwen3VL naming — generic check)
+            # Users can always enable thinking; the model will simply ignore it if unsupported.
 
         print_pg(f"Vision mode   : {'ON' if use_vision_model else 'OFF'}")
         print_pg(f"Thinking mode : {'ON' if enable_thinking else 'OFF'}")
@@ -754,14 +766,15 @@ class PromptGenerator:
                 return (error_msg,)
 
         # If the current model is not the one we want, or server is not running, restart
-        # Also restart if context_size has changed
+        # Also restart if context_size has changed (llama.cpp only)
         context_size = options.get("context_size", 4096) if options else 4096
-        if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
-            self.stop_server()
-            # Get context_size from options or use default
-            success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
-            if not success:
-                return (error_msg,)
+        if not use_ollama:
+            if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
+                self.stop_server()
+                # Get context_size from options or use default
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
+                if not success:
+                    return (error_msg,)
 
         # Build the endpoint URL
         full_url = f"http://localhost:{self.SERVER_PORT}/v1/chat/completions"
@@ -795,9 +808,9 @@ class PromptGenerator:
         else:
             user_content = prompt
 
-        # === TOKENIZATION (only for non-cached requests) ===
+        # === TOKENIZATION (only for non-cached requests, llama.cpp only) ===
         cached_token_counts = None
-        if show_everything_in_console:
+        if show_everything_in_console and not use_ollama:
             cached_token_counts = self._get_token_counts_parallel(system_prompt, user_content)
 
         # If in vision mode, encode images for the request
@@ -830,7 +843,7 @@ class PromptGenerator:
                 img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
                 image_contents.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}})
 
-            # Qwen3VL format for vision messages: all images, then text
+            # Vision format: all images first, then text
             user_message = {
                 "role": "user",
                 "content": image_contents + [{"type": "text", "text": user_content}]
@@ -838,6 +851,29 @@ class PromptGenerator:
         else:
             user_message = {"role": "user", "content": user_content}
 
+        # ================================================================
+        # Ollama generation path
+        # ================================================================
+        if use_ollama:
+            return self._generate_via_ollama(
+                model_to_use=model_to_use,
+                system_prompt=system_prompt,
+                user_message=user_message,
+                user_content=user_content,
+                seed=seed,
+                enable_thinking=enable_thinking,
+                use_model_default_sampling=use_model_default_sampling,
+                show_everything_in_console=show_everything_in_console,
+                stop_server_after=stop_server_after,
+                options=options,
+                images=images,
+                context_size=context_size,
+                prompt=prompt,
+            )
+
+        # ================================================================
+        # llama.cpp generation path (existing)
+        # ================================================================
         payload = {
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -1019,6 +1055,174 @@ class PromptGenerator:
             if response.status_code == 400:
                 print_pg("Perhaps your query requires a larger context size.\nConsider increasing it using the Generator Options node.", RED)
                 error_msg += "\nConsider increasing context size using Generator Options node."
+            return (error_msg,)
+
+    # ================================================================
+    # Ollama generation helper
+    # ================================================================
+    def _generate_via_ollama(self, model_to_use, system_prompt, user_message,
+                             user_content, seed, enable_thinking,
+                             use_model_default_sampling, show_everything_in_console,
+                             stop_server_after, options, images, context_size, prompt):
+        """Generate text using Ollama's OpenAI-compatible endpoint with streaming."""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            user_message,
+        ]
+
+        # Sampling parameters
+        temperature = 0.8
+        top_k = 40
+        top_p = 0.95
+        min_p = 0.05
+        repeat_penalty = 1.0
+        if options and not use_model_default_sampling:
+            temperature = options.get("temperature", temperature)
+            top_k = options.get("top_k", top_k)
+            top_p = options.get("top_p", top_p)
+            min_p = options.get("min_p", min_p)
+            repeat_penalty = options.get("repeat_penalty", repeat_penalty)
+
+        if show_everything_in_console:
+            print_pg(f"{'=' * 60}", GREEN)
+            print_pg("           DETAILED INFORMATION ENABLED (Ollama)", GREEN)
+            print_pg(f"{'=' * 60}", GREEN)
+            if not use_model_default_sampling:
+                print_pg("------ GENERATION PARAMETERS ------", GREEN)
+                for name, val in [("seed", seed), ("temperature", temperature),
+                                  ("top_k", top_k), ("top_p", top_p),
+                                  ("min_p", min_p), ("repeat_penalty", repeat_penalty)]:
+                    print_pg(f"{name} = {val}", GREEN)
+            else:
+                print_pg("Using model default sampling parameters", GREEN)
+            print_pg("\n--------- SYSTEM PROMPT ---------", GREEN)
+            print_pg(f"{system_prompt}", GREEN)
+            print_pg("\n--------- USER PROMPT ---------", GREEN)
+            print_pg(f"{user_content}", GREEN)
+
+        # Call Ollama (streaming)
+        result = ollama_generate_chat(
+            user_config=_preferences_cache,
+            model_name=model_to_use,
+            messages=messages,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            repeat_penalty=repeat_penalty,
+            seed=seed,
+            stream=True,
+            timeout=120,
+            use_model_defaults=use_model_default_sampling,
+            enable_thinking=enable_thinking,
+        )
+
+        # result is (response_obj, error_msg) for streaming
+        if result[1] is not None:
+            print_pg(f"Ollama error: {result[1]}", RED)
+            return (result[1],)
+
+        response = result[0]
+
+        try:
+            full_response = ""
+            thinking_content = ""
+            usage_stats = None
+            first_thinking = True
+            first_content = True
+
+            for line in response.iter_lines():
+                # Check for user interrupt
+                try:
+                    comfy.model_management.throw_exception_if_processing_interrupted()
+                except Exception:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                    raise
+
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        data = line[6:]
+                        if data == '[DONE]':
+                            break
+                        try:
+                            chunk = json.loads(data)
+
+                            if "usage" in chunk:
+                                usage_stats = chunk["usage"]
+
+                            if 'choices' in chunk and len(chunk['choices']) > 0:
+                                delta = chunk['choices'][0].get('delta', {})
+                                if 'reasoning_content' in delta:
+                                    reasoning_delta = delta['reasoning_content']
+                                    if reasoning_delta is not None:
+                                        thinking_content += str(reasoning_delta)
+                                        if show_everything_in_console:
+                                            if first_thinking:
+                                                print_pg("\n--------- THINKING ---------", GREEN)
+                                                first_thinking = False
+                                            print(f"{GREEN}{str(reasoning_delta)}{RESET}", end='', flush=True)
+                                if 'content' in delta:
+                                    content_delta = delta['content']
+                                    if content_delta is not None:
+                                        full_response += str(content_delta)
+                                        if show_everything_in_console:
+                                            if first_content:
+                                                print_pg("\n\n--------- FINAL ANSWER ---------", CYAN)
+                                                first_content = False
+                                            print(f"{CYAN}{str(content_delta)}{RESET}", end='', flush=True)
+                        except json.JSONDecodeError:
+                            continue
+
+            if show_everything_in_console:
+                print('')  # Final newline
+
+            if not show_everything_in_console:
+                print_pg("Prompt generation complete (Ollama).")
+
+            if show_everything_in_console and usage_stats:
+                self.print_token_stats(usage_stats, None, thinking_content, full_response, images)
+            else:
+                print_pg_footer()
+
+            if not full_response:
+                print_pg("Warning: Empty response from Ollama")
+                full_response = prompt
+
+            # "stop_server_after" → unload model from Ollama memory immediately
+            # (This overrides the keep_alive duration for this request)
+            if stop_server_after:
+                print_pg("Unloading model from Ollama memory...")
+                ok, msg = ollama_unload_model(_preferences_cache, model_to_use)
+                print_pg(msg, GREEN if ok else RED)
+            else:
+                keep_alive = _preferences_cache.get("ollama_keep_alive", "5m")
+                if keep_alive and str(keep_alive) != "0":
+                    print_pg(f"Model will stay loaded for: {keep_alive}")
+
+            return (full_response, thinking_content)
+
+        except comfy.model_management.InterruptProcessingException:
+            try:
+                response.close()
+            except Exception:
+                pass
+            raise
+        except requests.exceptions.ConnectionError:
+            error_msg = "Error: Lost connection to Ollama during generation."
+            print_pg(error_msg, RED)
+            return (error_msg,)
+        except requests.exceptions.Timeout:
+            error_msg = "Error: Ollama request timed out (>120s)"
+            print_pg(error_msg, RED)
+            return (error_msg,)
+        except Exception as e:
+            error_msg = f"Error (Ollama): {e}"
+            print_pg(error_msg, RED)
             return (error_msg,)
 
     def print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):

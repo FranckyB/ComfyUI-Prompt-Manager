@@ -7,7 +7,7 @@ A complete prompt management solution featuring three core capabilities:
 
 **Prompt Manager Advanced** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan videos. Toggle LoRAs on/off or adjust strengths directly from saved presets. Will also remap Loras if path differs.
 
-**Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp). Supports text enhancement, image analysis with vision models (Qwen3VL), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
+**Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp) or [Ollama](https://ollama.com). Supports text enhancement, image analysis with vision models (Qwen3.5), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
 **Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai.
 ___
@@ -68,16 +68,17 @@ ___
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
+- **Dual Backend Support**: Use llama.cpp (local server, default) or Ollama as the LLM backend
 - **Prompt Enhancement**: Transform basic prompts into detailed descriptions using local LLMs
-- **Vision Analysis**: Analyze images with Qwen3VL models to generate detailed descriptions
+- **Vision Analysis**: Analyze images with vision-capable models to generate detailed descriptions
 - **Custom Image Analysis**: Provide your own instructions for image analysis
 - **JSON Output**: Optional structured JSON output with scene breakdown
 - **Thinking Support**: Support Thinking models to perform deeper generative reasoning.
 - **Automatic Server Management**: Starts/stops llama.cpp server as needed, with automatic shut off at exit.
-- **Smart Model Selection**: Auto-selects appropriate model (vision or text) based on mode or Thinking mode.
+- **Smart Model Selection**: Auto-selects appropriate model based on mode, using mmproj-based vision detection.
 
 ### Prompt Generator Options
-- **Model Selection**: Choose from local models or download Qwen3, Qwen3VL and Qwen3VL Thinking models from HuggingFace
+- **Model Selection**: Choose from local models or download Qwen3.5 models from HuggingFace
 - **Auto-Download**: Automatically downloads both model and required mmproj files for vision models
 - **LLM Parameters**: Fine-tune temperature, top_k, top_p, min_p, repeat_penalty and context size.
 - **Custom Instructions**: Override default system prompt for different enhancement styles.
@@ -85,9 +86,11 @@ ___
 - **Console Debugging**: Enable outputing the entire process to the console for debugging purposes.
 
 ### Preference Options 
-- Set choices for prefered Model for both base mode and VL model.
+- Set choices for prefered Model for both base mode and vision model.
 - Set new default model location, previous folder (gguf and llm) will still be scanned, but model will save in new default.
 - Set custom Location for Llama.cpp. If Llama.cpp was not added to the system Path, this option let's you specify it's location.
+- **LLM Backend**: Choose between llama.cpp (default) or Ollama as the generation backend.
+- **Ollama Settings**: Configure Ollama URL and keep-alive duration for model memory management.
 
 ### Save Video H264/H265
 - **Codec Selection**: Choose between H.264 (8-bit, better compatibility) or H.265/HEVC (10-bit, better compression and gradients)
@@ -196,13 +199,11 @@ ___
 7. **Enable Debugging**: Enable complete printout of process to console using show_everything_in_console
 
 **Qwen models found in options**
-- Qwen3-1.7B-Q8_0.gguf: Fastest, lowest VRAM (~2GB)
-- Qwen3-4B-Q8_0.gguf:   Balanced performance (~4GB VRAM)
-- Qwen3-8B-Q8_0.gguf:   Best quality, highest VRAM (~8GB)
-- Qwen3VL-4B-Instruct-Q8_0.gguf: Vision model, balanced performance (~5GB VRAM)
-- Qwen3VL-8B-Instruct-Q8_0.gguf: Vision model, best quality (~9GB VRAM)
-- Qwen3VL-4B-Thinking-Q8_0.gguf: Vision model, Thinking variant, balanced performance (~5GB VRAM)
-- Qwen3VL-8B-Thinking-Q8_0.gguf: Vision model, Thinking variant, best quality (~9GB VRAM)
+- Qwen3.5-9B-UD-Q4_K_XL.gguf: Unsloth Dynamic 4-bit, good balance (~6GB VRAM)
+- Qwen3.5-9B-Q8_0.gguf: Standard 8-bit, high quality (~9.5GB VRAM)
+- Qwen3.5-9B-UD-Q8_K_XL.gguf: Unsloth Dynamic 8-bit, best quality (~13GB VRAM)
+
+All Qwen3.5 models are unified vision+text — every model supports both text enhancement and image analysis via its mmproj file. Thinking mode is controlled at runtime via a toggle, no separate model variant needed.
 
 **Model Management**:
 - Place gguf files in models/gguf folder
@@ -210,10 +211,13 @@ ___
 
 **Preferences**:
 Preference settings can be found in ComfyUI Settings → Prompt Manager
-- **Preferred Base Model**: Name of model used for "Enhance User Prompt" mode (text-only models)
-- **Preferred Vision Model**: Name of model Used for "Analyze Image" modes (Qwen3VL models)
+- **Preferred Base Model**: Name of model used for "Enhance User Prompt" mode
+- **Preferred Vision Model**: Name of model used for "Analyze Image" modes
 - **Set Default Port** You can set the port used by Llama.cpp
-- **Close Llama on Exit** By default Llama.cpp with be close on exit.
+- **Close Llama on Exit** By default Llama.cpp will be closed on exit.
+- **LLM Backend**: Choose between llama.cpp (default) or Ollama
+- **Ollama URL**: Set the Ollama server address (default: http://127.0.0.1:11434)
+- **Keep Alive Duration**: How long Ollama keeps the model loaded after a request (e.g. 5m, 30m, 0 for immediate unload)
 
 ### Save Video H264/H265
 
@@ -278,6 +282,25 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.16.0
+- **Ollama Support**
+  - Added Ollama as an alternative LLM backend alongside llama.cpp
+  - Auto-discovers available Ollama models when no model is explicitly configured
+  - Keep-alive duration setting controls how long Ollama keeps the model loaded in memory
+  - "Stop server after" toggle unloads the model from Ollama memory to free VRAM
+- **Upgraded to Qwen3.5 Models**
+  - Replaced Qwen3/Qwen3VL models with unified Qwen3.5-9B (vision+text in one model)
+  - Three download options: UD-Q4_K_XL (~6GB), Q8_0 (~9.5GB), UD-Q8_K_XL (~13GB)
+  - Thinking mode is now a runtime toggle — no separate model variant needed
+- **mmproj-Based Vision Detection**
+  - Vision model detection no longer relies on "VL" in the filename
+  - Models are identified as vision-capable based on the presence of an mmproj file
+  - Heuristic matching supports user-provided models outside the predefined registry
+  - Backward compatible with existing Qwen3VL models and their mmproj files
+- **Bug Fixes**
+  - Fixed seed control_after_generate not working (increment/decrement/randomize)
+  - Improved Prompt Extractor detection logic
 
 ### version 1.15.9
 - **Bug Fixes**

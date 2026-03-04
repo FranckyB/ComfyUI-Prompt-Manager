@@ -1,4 +1,5 @@
-from .model_manager import get_all_models, is_model_local, download_model, get_mmproj_for_model, get_mmproj_path
+from .model_manager import get_all_models, is_model_local, download_model, get_mmproj_for_model, get_mmproj_path, _preferences_cache
+from .ollama_wrapper import discover_ollama_models, is_ollama_available
 import time
 
 # Global timestamp to track when models were last updated
@@ -14,17 +15,25 @@ class PromptGenOptions:
 
     @classmethod
     def INPUT_TYPES(cls):
-        available_models = get_all_models()
+        backend = _preferences_cache.get("llm_backend", "llama.cpp")
 
-        # If no models found, show a placeholder
-        if not available_models:
-            available_models = ["No models found - check HuggingFace"]
+        if backend == "ollama":
+            # Discover models from Ollama
+            ollama_models, _status = discover_ollama_models(_preferences_cache)
+            if not ollama_models:
+                available_models = ["No Ollama models found - run 'ollama pull <model>'"]
+            else:
+                available_models = ollama_models
+        else:
+            available_models = get_all_models()
+            if not available_models:
+                available_models = ["No models found - check HuggingFace"]
 
         return {
             "optional": {
                 "model": (available_models, {
                     "default": available_models[0] if available_models else "",
-                    "tooltip": "Select model to use (local models listed first, then HuggingFace models)"
+                    "tooltip": "Select model to use (local models listed first, then HuggingFace models)\nDownload sizes: UD-Q4_K_XL ~6GB | Q8_0 ~9.5GB | UD-Q8_K_XL ~13GB"
                 }),
                 "image2": ("IMAGE", {
                     "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
@@ -117,16 +126,23 @@ class PromptGenOptions:
         options = {}
 
         # Handle model selection and download if needed
-        if model and model != "No models found - check HuggingFace":
+        backend = _preferences_cache.get("llm_backend", "llama.cpp")
+
+        if backend == "ollama":
+            # Ollama mode — no download needed, just validate the selection
+            if model and model != "No Ollama models found - run 'ollama pull <model>'":
+                options["model"] = model
+                options["llm_backend"] = "ollama"
+        elif model and model != "No models found - check HuggingFace":
             # Check if model is local
             model_exists = is_model_local(model)
 
-            # For VL models, also check if mmproj exists
+            # For vision models, also check if mmproj exists
             needs_download = not model_exists
             if model_exists:
                 mmproj_name = get_mmproj_for_model(model)
                 if mmproj_name:
-                    # This is a VL model, check if mmproj is present
+                    # This is a vision model, check if mmproj is present
                     mmproj_path = get_mmproj_path(model)
                     if not mmproj_path:
                         print(f"[Prompt Generator Options] Vision model found but mmproj missing, downloading: {mmproj_name}")

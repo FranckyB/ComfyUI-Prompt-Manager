@@ -17,33 +17,32 @@ _preferences_cache = {
     "custom_llama_path": "",
     "custom_llama_model_path": "",
     "close_llama_on_exit": True,
-    "custom_llama_port": 8080
+    "custom_llama_port": 8080,
+    "llm_backend": "llama.cpp",        # "llama.cpp" or "ollama"
+    "ollama_url": "http://127.0.0.1:11434",
+    "ollama_keep_alive": "5m",           # How long Ollama keeps model loaded after request
 }
 
 # Predefined models - use real filenames as keys
+# Qwen3.5 models are unified vision+text — every model supports vision via its mmproj.
+# "mmproj" is the LOCAL filename we store on disk.
+# "mmproj_repo_filename" is the filename in the HuggingFace repo (may differ).
 QWEN_MODELS = {
-    "Qwen3-4B-Q8_0.gguf": {
-        "repo": "Qwen/Qwen3-4B-GGUF"
+    "Qwen3.5-9B-UD-Q4_K_XL.gguf": {
+        "repo": "unsloth/Qwen3.5-9B-GGUF",
+        "mmproj": "mmproj-Qwen3.5-9B-F16.gguf",
+        "mmproj_repo_filename": "mmproj-F16.gguf"
     },
-    "Qwen3-8B-Q8_0.gguf": {
-        "repo": "Qwen/Qwen3-8B-GGUF"
+    "Qwen3.5-9B-Q8_0.gguf": {
+        "repo": "unsloth/Qwen3.5-9B-GGUF",
+        "mmproj": "mmproj-Qwen3.5-9B-F16.gguf",
+        "mmproj_repo_filename": "mmproj-F16.gguf"
     },
-    "Qwen3VL-4B-Instruct-Q8_0.gguf": {
-        "repo": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
-        "mmproj": "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+    "Qwen3.5-9B-UD-Q8_K_XL.gguf": {
+        "repo": "unsloth/Qwen3.5-9B-GGUF",
+        "mmproj": "mmproj-Qwen3.5-9B-F16.gguf",
+        "mmproj_repo_filename": "mmproj-F16.gguf"
     },
-    "Qwen3VL-8B-Instruct-Q8_0.gguf": {
-        "repo": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
-        "mmproj": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
-    },
-    "Qwen3VL-4B-Thinking-Q8_0.gguf": {
-        "repo": "Qwen/Qwen3-VL-4B-Thinking-GGUF",
-        "mmproj": "mmproj-Qwen3VL-4B-Thinking-Q8_0.gguf"
-    },
-    "Qwen3VL-8B-Thinking-Q8_0.gguf": {
-        "repo": "Qwen/Qwen3-VL-8B-Thinking-GGUF",
-        "mmproj": "mmproj-Qwen3VL-8B-Thinking-Q8_0.gguf"
-    }
 }
 
 @server.PromptServer.instance.routes.get("/prompt-manager/load-preferences")
@@ -65,7 +64,10 @@ async def save_preference(request):
                        "custom_llama_path",
                        "custom_llama_model_path",
                        "close_llama_on_exit",
-                       "custom_llama_port"]:
+                       "custom_llama_port",
+                       "llm_backend",
+                       "ollama_url",
+                       "ollama_keep_alive"]:
             return server.web.json_response({"success": False, "error": "Invalid preference key"})
 
         # Update in-memory cache
@@ -75,6 +77,18 @@ async def save_preference(request):
     except Exception as e:
         print(f"[Model Manager] Error saving preference: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/prompt-manager/ollama-models")
+async def list_ollama_models(request):
+    """API endpoint to discover available Ollama models."""
+    try:
+        from .ollama_wrapper import discover_ollama_models
+        models, status = discover_ollama_models(_preferences_cache)
+        return server.web.json_response({"models": models, "status": status})
+    except Exception as e:
+        return server.web.json_response({"models": [], "status": f"Error: {e}"}, status=500)
+
 
 def get_models_directory():
     """Get the path to the primary models directory (ComfyUI/models/gguf) for downloads"""
@@ -176,41 +190,91 @@ def get_model_path(model_name):
     models_dir = get_models_directory()
     return os.path.join(models_dir, model_name)
 
+# Quantization-related filename parts — stripped when matching models to mmproj files
+_QUANT_PARTS = frozenset({
+    "Q2", "Q3", "Q4", "Q5", "Q6", "Q8",
+    "K", "M", "S", "L", "XS", "XL", "XXS", "XXL",
+    "IQ1", "IQ2", "IQ3", "IQ4", "NL",
+    "BF16", "F16", "F32",
+    "0", "1", "UD",
+})
+
+
+def _get_model_identity(name):
+    """Extract the model's identity parts from a filename, stripping quant info.
+
+    Example: 'Qwen3.5-9B-Q4_K_M.gguf' → ('Qwen3', '5', '9B')
+             'mmproj-Qwen3.5-9B-F16.gguf' → ('Qwen3', '5', '9B')
+    """
+    base = os.path.splitext(os.path.basename(name))[0]
+    parts = [p for p in re.split(r"[-._ ]", base) if p]
+    return tuple(p for p in parts if p not in _QUANT_PARTS and p.lower() != "mmproj")
+
+
 def get_mmproj_for_model(model_name):
-    """Get the mmproj filename for a given vision model"""
+    """Get the mmproj filename for a given model from the predefined registry."""
     if model_name in QWEN_MODELS and "mmproj" in QWEN_MODELS[model_name]:
         return QWEN_MODELS[model_name]["mmproj"]
     return None
 
+
 def get_mmproj_path(model_name):
-    """Get the path to the mmproj file for a vision model, if it exists
-    Searches for mmproj files that contain all parts of the model name
+    """Get the path to the mmproj file for a model, if it exists.
+
+    1. Check the explicit QWEN_MODELS mapping first.
+    2. Fall back to heuristic matching by model identity (strips quant parts).
     """
-    # Get all parts of the model name (excluding .gguf)
-    model_parts = [part for part in re.split(r"[-.]", os.path.splitext(os.path.basename(model_name))[0]) if part]
+    # --- 1. Explicit mapping ---
+    mmproj_name = get_mmproj_for_model(model_name)
+    if mmproj_name:
+        all_dirs = get_all_model_directories()
+        for d in all_dirs:
+            p = os.path.join(d, mmproj_name)
+            if os.path.exists(p):
+                return p
+        # Mapped but file not found on disk
+        return None
 
-    # Get all local mmproj files
+    # --- 2. Heuristic: match by model identity ---
+    model_identity = _get_model_identity(model_name)
+    if not model_identity:
+        return None
+
     all_dirs = get_all_model_directories()
-    mmproj_files = []
     for models_dir in all_dirs:
-        if os.path.exists(models_dir):
-            for f in os.listdir(models_dir):
-                if 'mmproj' in f.lower() and f.endswith('.gguf'):
-                    mmproj_files.append(f)
+        if not os.path.exists(models_dir):
+            continue
+        for f in os.listdir(models_dir):
+            if 'mmproj' not in f.lower() or not f.endswith('.gguf'):
+                continue
+            mmproj_identity = _get_model_identity(f)
+            if mmproj_identity and mmproj_identity == model_identity:
+                return os.path.join(models_dir, f)
 
-    # Find mmproj that contains all model parts
-    for mmproj_file in mmproj_files:
-        # Let's split the mmproj filename to check for matching bits, we remove extension and mmproj
-        mmproj_parts = [part for part in re.split(r"[-.]", os.path.splitext(os.path.basename(mmproj_file))[0].replace('mmproj', '')) if part]
-        if all(part in mmproj_parts for part in model_parts):
-            return get_model_path(mmproj_file)
+    return None
+
+
+def has_vision_support(model_name):
+    """Check whether a model has vision capabilities.
+
+    Returns True if an mmproj file is available (on disk or in the registry).
+    """
+    # Check explicit registry first (even if not yet downloaded)
+    if get_mmproj_for_model(model_name):
+        return True
+    # Check if a matching mmproj file already exists on disk
+    return get_mmproj_path(model_name) is not None
 
 def download_model(model_name):
-    """Download a model from HuggingFace with automatic progress display
-    For VL models, also downloads the matching mmproj file if needed
+    """Download a model from HuggingFace with automatic progress display.
+    Also downloads the matching mmproj file if one is defined.
+
+    The mmproj file in the repo may have a generic name (e.g. 'mmproj-F16.gguf').
+    We rename it on download to a model-specific name to avoid conflicts when
+    multiple model sizes are installed side-by-side.
 
     Args:
-        model_name: Filename of the model (e.g., "Qwen3-4B-Q8_0.gguf")
+        model_name: Filename of the model (e.g., 'Qwen3.5-9B-Q8_0.gguf')
 
     Returns:
         Path to downloaded model or None on error
@@ -224,38 +288,44 @@ def download_model(model_name):
     models_dir = get_models_directory()
 
     # Build list of files to download
+    # Each entry: repo_filename (name in the HF repo), local_filename (name on disk), desc
     files_to_download = [
-        {"filename": model_name, "desc": "Downloading model"}
+        {"repo_filename": model_name, "local_filename": model_name, "desc": "Downloading model"}
     ]
 
-    # Add mmproj file if this is a VL model
-    mmproj_name = get_mmproj_for_model(model_name)
-    if mmproj_name:
+    # Add mmproj file if this model has one
+    mmproj_local = get_mmproj_for_model(model_name)
+    if mmproj_local:
+        mmproj_repo = model_info.get("mmproj_repo_filename", mmproj_local)
         files_to_download.append({
-            "filename": mmproj_name,
+            "repo_filename": mmproj_repo,
+            "local_filename": mmproj_local,
             "desc": "Downloading mmproj"
         })
 
     # Download each file if it doesn't exist
     for file_info in files_to_download:
-        filename = file_info["filename"]
-        local_path = os.path.join(models_dir, filename)
+        repo_filename = file_info["repo_filename"]
+        local_filename = file_info["local_filename"]
+        local_path = os.path.join(models_dir, local_filename)
 
         if os.path.exists(local_path):
-            print(f"[Model Manager] File already exists: {filename}")
+            print(f"[Model Manager] File already exists: {local_filename}")
             continue
 
         # Download the file
         try:
-            print(f"[Model Manager] Downloading {filename} from {repo_id}...")
+            print(f"[Model Manager] Downloading {repo_filename} from {repo_id}...")
             api = HfApi()
-            repo_info = api.repo_info(repo_id=repo_id, files_metadata=True)
-            file_metadata = next((f for f in repo_info.siblings if f.rfilename == filename), None)
+            repo_info_obj = api.repo_info(repo_id=repo_id, files_metadata=True)
+            file_metadata = next((f for f in repo_info_obj.siblings if f.rfilename == repo_filename), None)
             if not file_metadata or file_metadata.size is None:
-                print(f"[Model Manager] Could not find file size for {filename} in {repo_id}")
+                print(f"[Model Manager] Could not find file size for {repo_filename} in {repo_id}")
                 return None
             total_size = file_metadata.size
-            download_url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
+            download_url = f"https://huggingface.co/{repo_id}/resolve/main/{repo_filename}"
+            if local_filename != repo_filename:
+                print(f"[Model Manager] Will save as: {local_filename}")
             pbar = tqdm(total=total_size, unit="B", unit_scale=True, desc=file_info["desc"])
             with requests.get(download_url, stream=True) as r, open(local_path, "wb") as f:
                 r.raise_for_status()
@@ -264,9 +334,9 @@ def download_model(model_name):
                         f.write(chunk)
                         pbar.update(len(chunk))
             pbar.close()
-            print(f"[Model Manager] Successfully downloaded {filename}")
+            print(f"[Model Manager] Successfully downloaded {local_filename}")
         except Exception as e:
-            print(f"[Model Manager] Error downloading {filename}: {e}")
+            print(f"[Model Manager] Error downloading {repo_filename}: {e}")
             return None
 
     return os.path.join(models_dir, model_name)
