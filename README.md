@@ -292,7 +292,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ### version 1.17.5
 - **Browser Context Menu Enhancements**
-  - Added "Delete Prompt" option to prompt right-click menu in the thumbnail browser
+  - Added "Delete Prompt", "Rename and Move Prompt" option to prompt right-click menu in the thumbnail browser
   - Added "Delete Category", "Rename Category" options to category right-click menu
   - Added "+" button at the end of the category list to create new categories directly from the browser
   - All browser operations preserve unsaved prompt state (text, loras, trigger words are not reset)

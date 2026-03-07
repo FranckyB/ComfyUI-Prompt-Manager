@@ -5192,6 +5192,44 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
     nsfwItem.style.color = isNSFW ? '#f66' : '#ccc';
     menu.appendChild(nsfwItem);
 
+    // Rename / Move Prompt
+    const renameDivider = document.createElement("div");
+    renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(renameDivider);
+
+    menu.appendChild(createMenuItem("✏️ Rename / Move", async () => {
+        const allCategories = Object.keys(node.prompts).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+        const result = await showPromptWithCategory(
+            "Rename / Move Prompt",
+            "Prompt name:",
+            promptName,
+            allCategories,
+            category,
+            promptData?.nsfw || false
+        );
+        if (result && result.name && result.name.trim()) {
+            const newName = result.name.trim();
+            const newCat = result.category;
+            if (newName === promptName && newCat === category) return;
+            try {
+                const resp = await fetch("/prompt-manager-advanced/rename-prompt", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ category: category, old_name: promptName, new_name: newName, new_category: newCat })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    node.prompts = data.prompts;
+                    onUpdate();
+                } else {
+                    await showInfo("Error", data.error);
+                }
+            } catch (err) {
+                console.error("[PromptManagerAdvanced] Error renaming prompt:", err);
+            }
+        }
+    }));
+
     // Delete Prompt
     const deleteDivider = document.createElement("div");
     deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;

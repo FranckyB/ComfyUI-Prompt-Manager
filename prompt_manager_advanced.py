@@ -1226,6 +1226,51 @@ async def delete_prompt_advanced(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/rename-prompt")
+async def rename_prompt_advanced(request):
+    """API endpoint to rename/move a prompt, optionally to a different category"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        old_name = data.get("old_name", "").strip()
+        new_name = data.get("new_name", "").strip()
+        new_category = data.get("new_category", "").strip() or category
+
+        if not category or not old_name or not new_name:
+            return server.web.json_response({"success": False, "error": "Category, old name, and new name are required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        if category not in prompts or old_name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        if new_category not in prompts:
+            return server.web.json_response({"success": False, "error": f"Category '{new_category}' not found"})
+
+        # Check for name conflicts in the target category
+        # If same category, exclude the old name from conflict check
+        target_prompts = prompts[new_category]
+        if category == new_category:
+            existing_lower = {k.lower(): k for k in target_prompts.keys() if k != "__meta__" and k.lower() != old_name.lower()}
+        else:
+            existing_lower = {k.lower(): k for k in target_prompts.keys() if k != "__meta__"}
+
+        if new_name.lower() in existing_lower:
+            return server.web.json_response({
+                "success": False,
+                "error": f"A prompt named '{existing_lower[new_name.lower()]}' already exists in '{new_category}'"
+            })
+
+        prompts[new_category][new_name] = prompts[category][old_name]
+        del prompts[category][old_name]
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts, "new_name": new_name, "new_category": new_category})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in rename_prompt API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager-advanced/check-loras")
 async def check_loras_advanced(request):
     """API endpoint to check which LoRAs are available in the system"""
