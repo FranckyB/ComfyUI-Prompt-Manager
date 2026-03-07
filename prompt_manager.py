@@ -13,7 +13,7 @@ class PromptManager:
 
         all_prompts = set()
         for category_prompts in prompts_data.values():
-            all_prompts.update(category_prompts.keys())
+            all_prompts.update(k for k in category_prompts.keys() if k != "__meta__")
 
         all_prompts.add("")
         all_prompts_list = sorted(list(all_prompts))
@@ -24,7 +24,7 @@ class PromptManager:
         first_prompt = ""
         first_prompt_text = ""
         if prompts_data and first_category in prompts_data and prompts_data[first_category]:
-            first_category_prompts = list(prompts_data[first_category].keys())
+            first_category_prompts = [k for k in prompts_data[first_category].keys() if k != "__meta__"]
             first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
             if first_prompt:
                 first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
@@ -94,10 +94,19 @@ class PromptManager:
 
     @staticmethod
     def sort_prompts_data(data):
-        """Sort categories and prompts alphabetically (case-insensitive)"""
+        """Sort categories and prompts alphabetically (case-insensitive), preserving __meta__"""
         sorted_data = {}
         for category in sorted(data.keys(), key=str.lower):
-            sorted_data[category] = dict(sorted(data[category].items(), key=lambda item: item[0].lower()))
+            cat_data = data[category]
+            meta = cat_data.get("__meta__")
+            sorted_prompts = dict(sorted(
+                ((k, v) for k, v in cat_data.items() if k != "__meta__"),
+                key=lambda item: item[0].lower()
+            ))
+            if meta is not None:
+                sorted_prompts["__meta__"] = meta
+            sorted_data[category] = sorted_prompts
+        return sorted_data
         return sorted_data
 
     @classmethod
@@ -203,7 +212,7 @@ async def save_prompt(request):
                 print(f"[PromptManager] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        # Save prompt in dict, preserving any existing lora data, trigger words, and thumbnail from PromptManagerAdvanced
+        # Save prompt in dict, preserving any existing lora data, trigger words, thumbnail, and nsfw from PromptManagerAdvanced
         existing_data = prompts[category].get(name, {})
         prompts[category][name] = {
             "prompt": text,
@@ -212,6 +221,9 @@ async def save_prompt(request):
             "trigger_words": existing_data.get("trigger_words", []),
             "thumbnail": existing_data.get("thumbnail")
         }
+        # Preserve nsfw flag if it was set
+        if existing_data.get("nsfw"):
+            prompts[category][name]["nsfw"] = existing_data["nsfw"]
         PromptManager.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
