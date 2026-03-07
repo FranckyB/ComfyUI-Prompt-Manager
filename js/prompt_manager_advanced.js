@@ -2330,87 +2330,6 @@ function addButtonBar(node) {
     // More dropdown button
     const moreBtn = createDropdownButton("More ▼", [
         {
-            label: "Rename Category",
-            action: async () => {
-                const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
-                const currentCategory = categoryWidget.value;
-
-                if (categories.length === 0) {
-                    await showInfo("No Categories", "There are no categories to rename.");
-                    return;
-                }
-
-                const result = await showRenameCategoryDialog(
-                    "Rename Category",
-                    "Enter new category name:",
-                    categories,
-                    currentCategory
-                );
-
-                if (result && result.oldCategory && result.newCategory && result.newCategory.trim()) {
-                    const oldCat = result.oldCategory;
-                    const newCat = result.newCategory.trim();
-
-                    // Check if they're the same (case-insensitive)
-                    if (oldCat.toLowerCase() === newCat.toLowerCase() && oldCat !== newCat) {
-                        // Just a case change, allow it
-                        await renameCategory(node, oldCat, newCat);
-                        return;
-                    }
-
-                    if (oldCat === newCat) {
-                        await showInfo("No Change", "The category name hasn't changed.");
-                        return;
-                    }
-
-                    await renameCategory(node, oldCat, newCat);
-                }
-            }
-        },
-        { divider: true },
-        {
-            label: "New Category",
-            action: async () => {
-                const result = await showNewCategoryDialog();
-
-                if (result && result.name && result.name.trim()) {
-                    const categoryName = result.name.trim();
-                    let existingCategoryName = null;
-                    if (node.prompts) {
-                        const existingCategories = Object.keys(node.prompts);
-                        existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.toLowerCase());
-                    }
-
-                    if (existingCategoryName) {
-                        await showInfo(
-                            "Category Exists",
-                            `Category already exists as "${existingCategoryName}".`
-                        );
-                        return;
-                    }
-
-                    await createCategory(node, categoryName, result.nsfw);
-                }
-            }
-        },
-        {
-            label: "Delete Category",
-            action: async () => {
-                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryWidget.value}" and all its prompts?`)) {
-                    await deleteCategory(node, categoryWidget.value);
-                }
-            }
-        },
-        {
-            label: "Delete Prompt",
-            action: async () => {
-                if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptWidget.value}"?`)) {
-                    await deletePrompt(node, categoryWidget.value, promptWidget.value);
-                }
-            }
-        },
-        { divider: true },
-        {
             label: "Export JSON",
             action: async () => {
                 await exportPromptsJSON(node);
@@ -4551,6 +4470,56 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 }
             };
             menu.appendChild(item);
+
+            // Rename Category
+            const renameDivider = document.createElement("div");
+            renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(renameDivider);
+
+            const renameItem = document.createElement("div");
+            renameItem.textContent = "✏️ Rename";
+            renameItem.style.cssText = `
+                padding: 8px 16px;
+                color: #ccc;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            renameItem.onmouseover = () => renameItem.style.background = '#3a3a3a';
+            renameItem.onmouseout = () => renameItem.style.background = 'transparent';
+            renameItem.onclick = async () => {
+                menu.remove();
+                const result = await showRenameCategoryDialog(
+                    "Rename Category",
+                    "Enter new category name:",
+                    [cat],
+                    cat
+                );
+                if (result && result.newCategory && result.newCategory.trim()) {
+                    const newCat = result.newCategory.trim();
+                    if (newCat === cat) return;
+                    try {
+                        const resp = await fetch("/prompt-manager-advanced/rename-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ old_category: cat, new_category: newCat })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            if (selectedCategory === cat) {
+                                selectedCategory = data.new_category;
+                            }
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error renaming category:", err);
+                    }
+                }
+            };
+            menu.appendChild(renameItem);
 
             // Delete Category
             const deleteDivider = document.createElement("div");
