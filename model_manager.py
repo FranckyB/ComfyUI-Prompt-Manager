@@ -203,11 +203,14 @@ _QUANT_PARTS = frozenset({
 def _get_model_identity(name):
     """Extract the model's identity parts from a filename, stripping quant info.
 
-    Example: 'Qwen3.5-9B-Q4_K_M.gguf' → ('Qwen3', '5', '9B')
-             'mmproj-Qwen3.5-9B-F16.gguf' → ('Qwen3', '5', '9B')
+    Splits on hyphens, underscores, and spaces but preserves dots within tokens
+    so that version strings like 'Qwen3.5' stay intact.
+
+    Example: 'Qwen3.5-9B-Q4_K_M.gguf' → ('Qwen3.5', '9B')
+             'mmproj-Qwen3.5-9B-F16.gguf' → ('Qwen3.5', '9B')
     """
     base = os.path.splitext(os.path.basename(name))[0]
-    parts = [p for p in re.split(r"[-._ ]", base) if p]
+    parts = [p for p in re.split(r"[-_ ]", base) if p]
     return tuple(p for p in parts if p not in _QUANT_PARTS and p.lower() != "mmproj")
 
 
@@ -241,6 +244,8 @@ def get_mmproj_path(model_name):
         return None
 
     all_dirs = get_all_model_directories()
+    best_match = None
+    best_match_len = 0
     for models_dir in all_dirs:
         if not os.path.exists(models_dir):
             continue
@@ -248,10 +253,29 @@ def get_mmproj_path(model_name):
             if 'mmproj' not in f.lower() or not f.endswith('.gguf'):
                 continue
             mmproj_identity = _get_model_identity(f)
-            if mmproj_identity and mmproj_identity == model_identity:
+            if not mmproj_identity:
+                continue
+            # Exact match
+            if mmproj_identity == model_identity:
                 return os.path.join(models_dir, f)
+            # Subset match: mmproj identity parts are all contained in the model identity
+            # e.g. mmproj ('Qwen3','5','9B') matches model ('Qwen3','5','9B','abliterated','vision')
+            if len(mmproj_identity) > best_match_len and set(mmproj_identity).issubset(set(model_identity)):
+                # Verify ordering is preserved (not just any subset)
+                model_list = list(model_identity)
+                try:
+                    last_idx = -1
+                    ordered = True
+                    for part in mmproj_identity:
+                        idx = model_list.index(part, last_idx + 1)
+                        last_idx = idx
+                    if ordered:
+                        best_match = os.path.join(models_dir, f)
+                        best_match_len = len(mmproj_identity)
+                except ValueError:
+                    pass
 
-    return None
+    return best_match
 
 
 def has_vision_support(model_name):

@@ -267,13 +267,13 @@ app.registerExtension({
             }
         });
         
-        // Listen for latent preview initialization from backend
-        api.addEventListener('PM_latentpreview', ({ detail }) => {
+        // Handler for latent preview init events (shared by PM and VHS-compatible sources)
+        function handleLatentPreviewInit(detail) {
             if (detail.id == null) {
                 return;
             }
             
-            // Skip if VHS is active
+            // Skip if VHS is active (it handles its own previews)
             if (isVHSLatentPreviewActive()) {
                 return;
             }
@@ -287,7 +287,14 @@ app.registerExtension({
                 const id = idParts.slice(0, i).join(':');
                 beginLatentPreview(id, previewImages, detail.rate);
             }
-        });
+        }
+
+        // Listen for our own latent preview initialization
+        api.addEventListener('PM_latentpreview', ({ detail }) => handleLatentPreviewInit(detail));
+
+        // Also catch VHS_latentpreview events (e.g. from KJNodes' LTX2SamplingPreviewOverride)
+        // so animated previews work for LTX2 even without VideoHelperSuite installed
+        api.addEventListener('VHS_latentpreview', ({ detail }) => handleLatentPreviewInit(detail));
         
         // Listen for binary preview images
         api.addEventListener('b_preview', async (e) => {
