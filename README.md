@@ -33,12 +33,17 @@ ___
 ### Prompt Manager:
 - **Category Organization**: Create and manage multiple categories to organize your prompts
 - **Save & Load Prompts**: Quickly save and recall your favorite prompts with custom names
+- **NSFW Tagging**: Mark categories and individual prompts as NSFW with visual badge indicator on the node title bar
+- **NSFW Filtering**: Hide/show NSFW content via a global preference — NSFW categories and prompts are filtered from dropdowns when hidden
 - **LLM Input Toggle**: Connect text outputs from other nodes and toggle between using them or your internal prompts
 - **LLM Input Toggle**: When in use, display of categories and prompt is disabled, allowing user to switch category and save.
 - **Persistent Storage**: All prompts saved in your ComfyUI user folder
 
 ### Prompt Manager Advanced:
 - **All Prompt Manager Features**: Everything from the basic Prompt Manager, plus LoRA and Trigger word integration
+- **NSFW Tagging**: Mark categories and individual prompts as NSFW — red "NSFW" badge appears on the prompt selector and in the thumbnail browser
+- **NSFW Filtering**: Session-persistent NSFW toggle button in the thumbnail browser to show/hide NSFW content; navigation arrows skip NSFW entries when hidden
+- **List View Mode**: Switch between thumbnail grid and compact list view in the prompt browser, with session-persistent preference
 - **Prompt Thumbnails**: Save thumbnail images with your prompts for visual identification in the dropdown
 - **Dual LoRA Stack Support**: Two separate LoRA stack inputs/outputs for complex workflows (e.g., Wan video with different LoRAs for image and video)
 - **Visual LoRA Tags**: See connected LoRAs as clickable tags with strength values
@@ -215,6 +220,8 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - **Preferred Vision Model**: Name of model used for "Analyze Image" modes
 - **Set Default Port** You can set the port used by Llama.cpp
 - **Close Llama on Exit** By default Llama.cpp will be closed on exit.
+- **Hide NSFW by Default**: When enabled, NSFW categories and prompts are hidden from all dropdowns, navigation, and the thumbnail browser
+- **Default View Mode**: Choose between thumbnail grid or list view for the Advanced prompt browser
 - **LLM Backend**: Choose between llama.cpp (default) or Ollama
 - **Ollama URL**: Set the Ollama server address (default: http://127.0.0.1:11434)
 - **Keep Alive Duration**: How long Ollama keeps the model loaded after a request (e.g. 5m, 30m, 0 for immediate unload)
@@ -282,6 +289,33 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.17.5
+- **Browser Context Menu Enhancements**
+  - Added "Delete Prompt" option to prompt right-click menu in the thumbnail browser
+  - Added "Delete Category", "Rename Category" options to category right-click menu
+  - Added "+" button at the end of the category list to create new categories directly from the browser
+  - All browser operations preserve unsaved prompt state (text, loras, trigger words are not reset)
+- **Streamlined More Dropdown**
+  - Removed Rename Category, New Category, Delete Category, and Delete Prompt from the "More" dropdown (now accessible via browser context menus)
+
+### version 1.17.0
+- **NSFW Tagging & Filtering**
+  - Mark entire categories or individual prompts as NSFW
+  - Visual red "NSFW" badge on the Prompt Manager node title bar and on the Advanced prompt selector
+  - NSFW badge appears on all prompts within an NSFW-tagged category in the thumbnail browser
+  - Category buttons show red border for NSFW categories in the thumbnail browser
+  - Global preference to hide/show NSFW content — filters dropdowns, navigation arrows, and browser
+  - Session-persistent NSFW toggle button in the Advanced thumbnail browser
+  - Toggle NSFW on categories and prompts via context menu or the save/new category dialogs
+- **List View Mode**
+  - New compact list view alternative to the thumbnail grid in the Advanced prompt browser
+  - Toggle between grid and list view with a button in the browser controls bar
+  - View mode preference is session-persistent
+  - Default view mode configurable in ComfyUI settings
+- **UI Improvements**
+  - Search input moved into the controls bar with a clear (×) button
+  - Separator line between category buttons and prompt content
 
 ### version 1.16.0
 - **Ollama Support**

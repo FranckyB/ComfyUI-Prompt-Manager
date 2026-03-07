@@ -218,7 +218,7 @@ class PromptManagerAdvanced:
 
         all_prompts = set()
         for category_prompts in prompts_data.values():
-            all_prompts.update(category_prompts.keys())
+            all_prompts.update(k for k in category_prompts.keys() if k != "__meta__")
 
         all_prompts.add("")
         all_prompts_list = sorted(list(all_prompts))
@@ -229,7 +229,7 @@ class PromptManagerAdvanced:
         first_prompt = ""
         first_prompt_text = ""
         if prompts_data and first_category in prompts_data and prompts_data[first_category]:
-            first_category_prompts = list(prompts_data[first_category].keys())
+            first_category_prompts = [k for k in prompts_data[first_category].keys() if k != "__meta__"]
             first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
             if first_prompt:
                 first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
@@ -344,10 +344,19 @@ class PromptManagerAdvanced:
 
     @staticmethod
     def sort_prompts_data(data):
-        """Sort categories and prompts alphabetically (case-insensitive)"""
+        """Sort categories and prompts alphabetically (case-insensitive), preserving __meta__"""
         sorted_data = {}
         for category in sorted(data.keys(), key=str.lower):
-            sorted_data[category] = dict(sorted(data[category].items(), key=lambda item: item[0].lower()))
+            cat_data = data[category]
+            # Preserve __meta__ key (not a prompt), sort the rest
+            meta = cat_data.get("__meta__")
+            sorted_prompts = dict(sorted(
+                ((k, v) for k, v in cat_data.items() if k != "__meta__"),
+                key=lambda item: item[0].lower()
+            ))
+            if meta is not None:
+                sorted_prompts["__meta__"] = meta
+            sorted_data[category] = sorted_prompts
         return sorted_data
 
     @classmethod
@@ -1020,7 +1029,11 @@ async def save_category_advanced(request):
                 "error": f"Category already exists as '{existing_categories_lower[category_name.lower()]}'"
             })
 
-        prompts[category_name] = {}
+        nsfw = data.get("nsfw", False)
+        cat_data = {}
+        if nsfw:
+            cat_data["__meta__"] = {"nsfw": True}
+        prompts[category_name] = cat_data
         PromptManagerAdvanced.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
@@ -1147,6 +1160,13 @@ async def save_prompt_advanced(request):
         }
         if thumbnail:
             prompt_data["thumbnail"] = thumbnail
+
+        # Preserve or set NSFW flag
+        nsfw = data.get("nsfw")
+        if nsfw is not None:
+            prompt_data["nsfw"] = bool(nsfw)
+        elif existing_prompt.get("nsfw"):
+            prompt_data["nsfw"] = existing_prompt["nsfw"]
 
         prompts[category][name] = prompt_data
         PromptManagerAdvanced.save_prompts(prompts)
@@ -1309,6 +1329,11 @@ async def import_prompts_advanced(request):
                 if not isinstance(prompt_data, dict):
                     continue
 
+                # Handle __meta__ key (category metadata, not a prompt)
+                if prompt_name == "__meta__" and isinstance(prompt_data, dict):
+                    prompts[category]["__meta__"] = prompt_data
+                    continue
+
                 # Normalize the prompt data structure (include thumbnail if present)
                 normalized = {
                     "prompt": prompt_data.get("prompt", ""),
@@ -1320,6 +1345,10 @@ async def import_prompts_advanced(request):
                 # Include thumbnail if present in imported data
                 if "thumbnail" in prompt_data and prompt_data["thumbnail"]:
                     normalized["thumbnail"] = prompt_data["thumbnail"]
+
+                # Preserve NSFW flag if present
+                if prompt_data.get("nsfw"):
+                    normalized["nsfw"] = prompt_data["nsfw"]
 
                 prompts[category][prompt_name] = normalized
 
@@ -1359,4 +1388,40 @@ async def save_thumbnail(request):
         return server.web.json_response({"success": True})
     except Exception as e:
         print(f"[PromptManagerAdvanced] Error in save_thumbnail API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/toggle-nsfw")
+async def toggle_nsfw_advanced(request):
+    """API endpoint to toggle NSFW flag on a category or prompt"""
+    try:
+        data = await request.json()
+        toggle_type = data.get("type", "").strip()  # "category" or "prompt"
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+
+        if not category:
+            return server.web.json_response({"success": False, "error": "Category is required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+
+        if category not in prompts:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        if toggle_type == "category":
+            meta = prompts[category].get("__meta__", {})
+            meta["nsfw"] = not meta.get("nsfw", False)
+            prompts[category]["__meta__"] = meta
+        elif toggle_type == "prompt":
+            if not name or name not in prompts[category]:
+                return server.web.json_response({"success": False, "error": "Prompt not found"})
+            prompts[category][name]["nsfw"] = not prompts[category][name].get("nsfw", False)
+        else:
+            return server.web.json_response({"success": False, "error": "Invalid type, must be 'category' or 'prompt'"})
+
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in toggle_nsfw API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)

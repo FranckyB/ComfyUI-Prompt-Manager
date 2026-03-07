@@ -51,6 +51,23 @@ let loraManagerPreviewTooltip = null;
 let loraManagerCheckDone = false;
 let loraManagerAvailable = false;
 
+// ========================
+// Session State for NSFW & View Mode
+// ========================
+// These persist during a working session but reset to preferences on ComfyUI restart
+let sessionHideNSFW = null;   // null = use preference default
+let sessionViewMode = null;   // null = use preference default
+
+function getHideNSFW() {
+    if (sessionHideNSFW !== null) return sessionHideNSFW;
+    return app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
+}
+
+function getViewMode() {
+    if (sessionViewMode !== null) return sessionViewMode;
+    return app.ui.settings.getSettingValue("PromptManager.DefaultViewMode");
+}
+
 /**
  * Attempt to initialize the LoRA Manager preview tooltip integration
  * Only tries once, then caches the result
@@ -635,7 +652,7 @@ function filterPromptDropdown(node) {
     if (categoryWidget && promptWidget) {
         const currentCategory = categoryWidget.value;
         if (node.prompts[currentCategory]) {
-            const promptNames = Object.keys(node.prompts[currentCategory]).sort((a, b) => a.localeCompare(b));
+            const promptNames = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
             if (promptNames.length === 0) {
                 promptNames.push("");
             }
@@ -2125,12 +2142,20 @@ function addButtonBar(node) {
         const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
         const currentCategory = categoryWidget.value;
 
+        // Determine NSFW default from existing prompt if editing
+        let defaultNsfw = false;
+        if (node.prompts[currentCategory]) {
+            const existingPrompt = node.prompts[currentCategory][promptWidget.value];
+            if (existingPrompt && existingPrompt.nsfw) defaultNsfw = true;
+        }
+
         const result = await showPromptWithCategory(
             "Save Prompt",
             "Enter prompt name:",
             promptWidget.value || "New Prompt",
             categories,
-            currentCategory
+            currentCategory,
+            defaultNsfw
         );
 
         if (result && result.name && result.name.trim()) {
@@ -2138,10 +2163,11 @@ function addButtonBar(node) {
             const targetCategory = result.category;
             const promptText = textWidget.value;
 
+            try {
             // Check for existing prompt in target category
             let existingPromptName = null;
             if (node.prompts[targetCategory]) {
-                const existingNames = Object.keys(node.prompts[targetCategory]);
+                const existingNames = Object.keys(node.prompts[targetCategory]).filter(k => k !== '__meta__');
                 existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
             }
 
@@ -2200,12 +2226,7 @@ function addButtonBar(node) {
             // Use connected thumbnail if available
             const thumbnail = node.connectedThumbnail || null;
 
-            await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail);
-
-            // Clear new prompt flag since it's now saved
-            node.isNewUnsavedPrompt = false;
-            node.newPromptCategory = null;
-            node.newPromptName = null;
+            await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail, result.nsfw);
 
             // Skip callback reload logic during save update
             node._skipCallbackReload = true;
@@ -2236,6 +2257,14 @@ function addButtonBar(node) {
 
             // Update last saved state after successful save
             updateLastSavedState(node);
+            } catch (err) {
+                console.error("[PromptManagerAdvanced] Error during save:", err);
+            } finally {
+                // Always clear new prompt flag after save attempt
+                node.isNewUnsavedPrompt = false;
+                node.newPromptCategory = null;
+                node.newPromptName = null;
+            }
         }
     });
 
@@ -2243,7 +2272,7 @@ function addButtonBar(node) {
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
@@ -2301,86 +2330,6 @@ function addButtonBar(node) {
     // More dropdown button
     const moreBtn = createDropdownButton("More ▼", [
         {
-            label: "Rename Category",
-            action: async () => {
-                const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
-                const currentCategory = categoryWidget.value;
-
-                if (categories.length === 0) {
-                    await showInfo("No Categories", "There are no categories to rename.");
-                    return;
-                }
-
-                const result = await showRenameCategoryDialog(
-                    "Rename Category",
-                    "Enter new category name:",
-                    categories,
-                    currentCategory
-                );
-
-                if (result && result.oldCategory && result.newCategory && result.newCategory.trim()) {
-                    const oldCat = result.oldCategory;
-                    const newCat = result.newCategory.trim();
-
-                    // Check if they're the same (case-insensitive)
-                    if (oldCat.toLowerCase() === newCat.toLowerCase() && oldCat !== newCat) {
-                        // Just a case change, allow it
-                        await renameCategory(node, oldCat, newCat);
-                        return;
-                    }
-
-                    if (oldCat === newCat) {
-                        await showInfo("No Change", "The category name hasn't changed.");
-                        return;
-                    }
-
-                    await renameCategory(node, oldCat, newCat);
-                }
-            }
-        },
-        { divider: true },
-        {
-            label: "New Category",
-            action: async () => {
-                const categoryName = await showTextPrompt("New Category", "Enter new category name:");
-
-                if (categoryName && categoryName.trim()) {
-                    let existingCategoryName = null;
-                    if (node.prompts) {
-                        const existingCategories = Object.keys(node.prompts);
-                        existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.trim().toLowerCase());
-                    }
-
-                    if (existingCategoryName) {
-                        await showInfo(
-                            "Category Exists",
-                            `Category already exists as "${existingCategoryName}".`
-                        );
-                        return;
-                    }
-
-                    await createCategory(node, categoryName.trim());
-                }
-            }
-        },
-        {
-            label: "Delete Category",
-            action: async () => {
-                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryWidget.value}" and all its prompts?`)) {
-                    await deleteCategory(node, categoryWidget.value);
-                }
-            }
-        },
-        {
-            label: "Delete Prompt",
-            action: async () => {
-                if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptWidget.value}"?`)) {
-                    await deletePrompt(node, categoryWidget.value, promptWidget.value);
-                }
-            }
-        },
-        { divider: true },
-        {
             label: "Export JSON",
             action: async () => {
                 await exportPromptsJSON(node);
@@ -2435,7 +2384,7 @@ function setupCategoryChangeHandler(node) {
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -2488,7 +2437,7 @@ function setupCategoryChangeHandler(node) {
 
         const category = value;
         if (node.prompts && node.prompts[category]) {
-            const promptNames = Object.keys(node.prompts[category]);
+            const promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__');
             promptWidget.options.values = promptNames;
 
             if (promptNames.length > 0) {
@@ -2543,7 +2492,7 @@ function setupCategoryChangeHandler(node) {
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -2597,7 +2546,7 @@ function setupCategoryChangeHandler(node) {
 
         // Update prompt dropdown options in case prompts were deleted/added in another tab
         if (node.prompts && node.prompts[category]) {
-            const promptNames = Object.keys(node.prompts[category]).sort((a, b) => a.localeCompare(b));
+            const promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
             promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
 
             // Check if selected prompt still exists after reload
@@ -2634,7 +2583,7 @@ function setupCategoryChangeHandler(node) {
             if (node.prompts && categoryWidget && newValues && newValues.length > 0) {
                 const currentCategory = categoryWidget.value;
                 if (node.prompts[currentCategory]) {
-                    const categoryPrompts = Object.keys(node.prompts[currentCategory]);
+                    const categoryPrompts = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__');
                     const hasOtherCategoryPrompts = newValues.some(val =>
                         val !== "" && !categoryPrompts.includes(val)
                     );
@@ -2980,12 +2929,12 @@ function hasUnsavedChanges(node) {
 // API Functions
 // ========================
 
-async function createCategory(node, categoryName) {
+async function createCategory(node, categoryName, nsfw = false) {
     try {
         const response = await fetch("/prompt-manager-advanced/save-category", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ category_name: categoryName })
+            body: JSON.stringify({ category_name: categoryName, nsfw: nsfw })
         });
 
         const data = await response.json();
@@ -3078,12 +3027,13 @@ async function renameCategory(node, oldCategory, newCategory) {
     }
 }
 
-async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null) {
+async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null, nsfw = false) {
     try {
         const requestBody = {
             category: category,
             name: name,
             text: text,
+            nsfw: nsfw,
             // Save loras with their active state
             loras_a: lorasA.map(l => ({
                 name: l.name,
@@ -3310,7 +3260,7 @@ function updateDropdowns(node) {
     // Update prompt dropdown for current category (sorted alphabetically)
     const currentCategory = categoryWidget.value;
     if (node.prompts[currentCategory]) {
-        const promptNames = Object.keys(node.prompts[currentCategory]).sort((a, b) => a.localeCompare(b));
+        const promptNames = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
 
         if (promptNames.length === 0) {
             promptNames.push("");
@@ -3555,7 +3505,7 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory) {
     });
 }
 
-function showPromptWithCategory(title, message, defaultName, categories, defaultCategory) {
+function showPromptWithCategory(title, message, defaultName, categories, defaultCategory, defaultNsfw = false) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -3583,10 +3533,14 @@ function showPromptWithCategory(title, message, defaultName, categories, default
             z-index: 9999;
         `;
 
-        // Build category options
-        const categoryOptions = categories.map(cat =>
-            `<option value="${cat}" ${cat === defaultCategory ? 'selected' : ''}>${cat}</option>`
-        ).join('');
+        // Build category options — sanitize for safe HTML
+        const categoryOptions = categories.map(cat => {
+            const opt = document.createElement("option");
+            opt.value = cat;
+            opt.textContent = cat;
+            if (cat === defaultCategory) opt.selected = true;
+            return opt.outerHTML;
+        }).join('');
 
         dialog.innerHTML = `
             <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
@@ -3595,7 +3549,11 @@ function showPromptWithCategory(title, message, defaultName, categories, default
                 ${categoryOptions}
             </select>
             <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
-            <input type="text" value="${defaultName}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <input type="text" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 15px; color: #aaa; font-size: 13px; cursor: pointer; user-select: none;">
+                <input type="checkbox" class="nsfw-cb" style="cursor: pointer; accent-color: #c44;" />
+                Mark as NSFW
+            </label>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
@@ -3603,9 +3561,14 @@ function showPromptWithCategory(title, message, defaultName, categories, default
         `;
 
         const selectEl = dialog.querySelector("select");
-        const input = dialog.querySelector("input");
+        const input = dialog.querySelector("input[type='text']");
+        const nsfwCb = dialog.querySelector(".nsfw-cb");
         const okBtn = dialog.querySelector(".ok-btn");
         const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        // Set defaults after DOM is built
+        input.value = defaultName;
+        nsfwCb.checked = defaultNsfw;
 
         const cleanup = () => {
             document.body.removeChild(overlay);
@@ -3613,7 +3576,7 @@ function showPromptWithCategory(title, message, defaultName, categories, default
         };
 
         const handleOk = () => {
-            resolve({ name: input.value, category: selectEl.value });
+            resolve({ name: input.value, category: selectEl.value, nsfw: nsfwCb.checked });
             cleanup();
         };
 
@@ -3950,6 +3913,90 @@ function showTextPrompt(title, message, defaultValue = "") {
     });
 }
 
+function showNewCategoryDialog() {
+    return new Promise((resolve) => {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            min-width: 300px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">New Category</div>
+            <div style="margin-bottom: 10px; color: #ccc;">Enter new category name:</div>
+            <input type="text" value="" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 15px; color: #aaa; font-size: 13px; cursor: pointer; user-select: none;">
+                <input type="checkbox" class="nsfw-cb" style="cursor: pointer; accent-color: #c44;" />
+                Mark as NSFW
+            </label>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
+            </div>
+        `;
+
+        const input = dialog.querySelector("input[type='text']");
+        const nsfwCb = dialog.querySelector(".nsfw-cb");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve({ name: input.value, nsfw: nsfwCb.checked });
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleOk();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        input.focus();
+    });
+}
+
 function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c00") {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
@@ -4207,32 +4254,370 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         header.appendChild(title);
         header.appendChild(closeBtn);
 
+        // Controls bar: Search + NSFW button + View Mode button
+        const controlsBar = document.createElement("div");
+        controlsBar.style.cssText = `
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
+        `;
+
+        // Search input (fills remaining space)
+        const searchInput = document.createElement("input");
+        searchInput.type = "text";
+        searchInput.placeholder = "Search prompts...";
+        searchInput.style.cssText = `
+            flex: 1;
+            min-width: 0;
+            padding: 6px 10px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 13px;
+            box-sizing: border-box;
+            outline: none;
+        `;
+        searchInput.onfocus = () => searchInput.style.borderColor = "#666";
+        searchInput.onblur = () => searchInput.style.borderColor = "#444";
+
+        // Wrap search input in a container with clear button
+        const searchWrapper = document.createElement("div");
+        searchWrapper.style.cssText = `
+            flex: 1;
+            min-width: 0;
+            position: relative;
+            display: flex;
+            align-items: center;
+        `;
+        searchInput.style.flex = "1";
+        searchInput.style.paddingRight = "28px";
+        const clearBtn = document.createElement("span");
+        clearBtn.textContent = "\u00d7";
+        clearBtn.title = "Clear search";
+        clearBtn.style.cssText = `
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #666;
+            font-size: 16px;
+            cursor: pointer;
+            line-height: 1;
+            display: none;
+            user-select: none;
+        `;
+        clearBtn.onmouseover = () => clearBtn.style.color = "#fff";
+        clearBtn.onmouseout = () => clearBtn.style.color = "#666";
+        clearBtn.onclick = () => {
+            searchInput.value = "";
+            clearBtn.style.display = "none";
+            searchInput.focus();
+            renderContent("");
+        };
+        const origOninput = searchInput.oninput;
+        searchInput.addEventListener("input", () => {
+            clearBtn.style.display = searchInput.value ? "" : "none";
+        });
+        searchWrapper.appendChild(searchInput);
+        searchWrapper.appendChild(clearBtn);
+
+        // NSFW toggle button
+        let hideNSFWState = getHideNSFW();
+        const nsfwBtn = document.createElement("button");
+        const btnStyle = `
+            background: #2a2a2a;
+            border: 1px solid #444;
+            color: #aaa;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            white-space: nowrap;
+        `;
+        const updateNsfwBtn = () => {
+            if (hideNSFWState) {
+                nsfwBtn.textContent = "NSFW: Hidden";
+                nsfwBtn.style.cssText = btnStyle + `background: #3a2020; border-color: #744; color: #c88;`;
+            } else {
+                nsfwBtn.textContent = "NSFW: Visible";
+                nsfwBtn.style.cssText = btnStyle;
+            }
+            nsfwBtn.title = hideNSFWState ? "NSFW content is hidden — click to show" : "NSFW content is visible — click to hide";
+        };
+        updateNsfwBtn();
+        nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#3a3a3a'; nsfwBtn.style.color = '#fff'; } };
+        nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#2a2a2a'; nsfwBtn.style.color = '#aaa'; } };
+
+        // View mode toggle button
+        let currentViewMode = getViewMode();
+        const viewModeBtn = document.createElement("button");
+        const updateViewModeBtn = () => {
+            viewModeBtn.textContent = currentViewMode === "thumbnails" ? "⊞ Grid" : "☰ List";
+            viewModeBtn.title = currentViewMode === "thumbnails" ? "Switch to list view" : "Switch to grid view";
+        };
+        viewModeBtn.style.cssText = btnStyle;
+        viewModeBtn.onmouseover = () => { viewModeBtn.style.background = '#3a3a3a'; viewModeBtn.style.color = '#fff'; };
+        viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#2a2a2a'; viewModeBtn.style.color = '#aaa'; };
+        updateViewModeBtn();
+
+        controlsBar.appendChild(searchWrapper);
+        controlsBar.appendChild(nsfwBtn);
+        controlsBar.appendChild(viewModeBtn);
+
         // Category selector
         const categoryContainer = document.createElement("div");
         categoryContainer.style.cssText = `
             display: flex;
             gap: 6px;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #333;
             flex-wrap: wrap;
         `;
 
-        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
-        const categoryButtons = [];
+        let categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+        let categoryButtons = [];
+
+        const isCategoryNSFW = (cat) => {
+            return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
+        };
 
         const updateCategoryButtons = () => {
             categoryButtons.forEach(btn => {
-                const isSelected = btn.dataset.category === selectedCategory;
+                const cat = btn.dataset.category;
+                const isSelected = cat === selectedCategory;
+                const isNSFW = isCategoryNSFW(cat);
+
+                // Hide NSFW categories when filter is active
+                if (hideNSFWState && isNSFW) {
+                    btn.style.display = "none";
+                    return;
+                }
+                btn.style.display = "";
+
                 btn.style.background = isSelected ? '#4a8ad4' : '#2a2a2a';
-                btn.style.borderColor = isSelected ? '#5a9ae4' : '#444';
                 btn.style.color = isSelected ? '#fff' : '#aaa';
+
+                // NSFW categories get a red border, otherwise normal
+                if (isNSFW && !isSelected) {
+                    btn.style.borderColor = '#944';
+                } else {
+                    btn.style.borderColor = isSelected ? '#5a9ae4' : '#444';
+                }
             });
+
+            // If selected category is now hidden, switch to first visible
+            if (hideNSFWState && isCategoryNSFW(selectedCategory)) {
+                const firstVisible = categories.find(c => !isCategoryNSFW(c));
+                if (firstVisible) {
+                    selectedCategory = firstVisible;
+                    updateCategoryButtons();
+                }
+            }
         };
 
-        categories.forEach(cat => {
-            const btn = document.createElement("button");
-            btn.textContent = cat;
-            btn.dataset.category = cat;
-            btn.style.cssText = `
+        // Category context menu for NSFW toggle
+        const showCategoryContextMenu = (event, cat) => {
+            const existing = document.querySelector('.category-context-menu');
+            if (existing) existing.remove();
+
+            const menu = document.createElement("div");
+            menu.className = "category-context-menu";
+            menu.style.cssText = `
+                position: fixed;
+                left: ${event.clientX}px;
+                top: ${event.clientY}px;
+                background: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 6px;
+                padding: 4px 0;
+                z-index: 10001;
+                min-width: 150px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            `;
+
+            const isNSFW = isCategoryNSFW(cat);
+            const item = document.createElement("div");
+            item.textContent = isNSFW ? "✓ NSFW" : "Mark as NSFW";
+            item.style.cssText = `
+                padding: 8px 16px;
+                color: ${isNSFW ? '#f66' : '#ccc'};
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            item.onmouseover = () => item.style.background = '#3a3a3a';
+            item.onmouseout = () => item.style.background = 'transparent';
+            item.onclick = async () => {
+                menu.remove();
+                try {
+                    const resp = await fetch("/prompt-manager-advanced/toggle-nsfw", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ type: "category", category: cat })
+                    });
+                    const result = await resp.json();
+                    if (result.success) {
+                        node.prompts = result.prompts;
+                        updateCategoryButtons();
+                        renderContent(searchInput.value);
+                    }
+                } catch (err) {
+                    console.error("[PromptManagerAdvanced] Error toggling category NSFW:", err);
+                }
+            };
+            menu.appendChild(item);
+
+            // Rename Category
+            const renameDivider = document.createElement("div");
+            renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(renameDivider);
+
+            const renameItem = document.createElement("div");
+            renameItem.textContent = "✏️ Rename";
+            renameItem.style.cssText = `
+                padding: 8px 16px;
+                color: #ccc;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            renameItem.onmouseover = () => renameItem.style.background = '#3a3a3a';
+            renameItem.onmouseout = () => renameItem.style.background = 'transparent';
+            renameItem.onclick = async () => {
+                menu.remove();
+                const result = await showRenameCategoryDialog(
+                    "Rename Category",
+                    "Enter new category name:",
+                    [cat],
+                    cat
+                );
+                if (result && result.newCategory && result.newCategory.trim()) {
+                    const newCat = result.newCategory.trim();
+                    if (newCat === cat) return;
+                    try {
+                        const resp = await fetch("/prompt-manager-advanced/rename-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ old_category: cat, new_category: newCat })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            if (selectedCategory === cat) {
+                                selectedCategory = data.new_category;
+                            }
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error renaming category:", err);
+                    }
+                }
+            };
+            menu.appendChild(renameItem);
+
+            // Delete Category
+            const deleteDivider = document.createElement("div");
+            deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(deleteDivider);
+
+            const deleteItem = document.createElement("div");
+            deleteItem.textContent = "🗑️ Delete Category";
+            deleteItem.style.cssText = `
+                padding: 8px 16px;
+                color: #f66;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            deleteItem.onmouseover = () => deleteItem.style.background = '#3a3a3a';
+            deleteItem.onmouseout = () => deleteItem.style.background = 'transparent';
+            deleteItem.onclick = async () => {
+                menu.remove();
+                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${cat}" and all its prompts?`)) {
+                    try {
+                        const resp = await fetch("/prompt-manager-advanced/delete-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category: cat })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            if (selectedCategory === cat) {
+                                const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
+                                selectedCategory = cats[0] || "";
+                            }
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error deleting category:", err);
+                    }
+                }
+            };
+            menu.appendChild(deleteItem);
+
+            document.body.appendChild(menu);
+            const closeMenu = (e) => {
+                if (!menu.contains(e.target)) {
+                    menu.remove();
+                    document.removeEventListener("mousedown", closeMenu, true);
+                    document.removeEventListener("contextmenu", closeMenu, true);
+                }
+            };
+            setTimeout(() => {
+                document.addEventListener("mousedown", closeMenu, true);
+                document.addEventListener("contextmenu", closeMenu, true);
+            }, 0);
+        };
+
+        const rebuildCategoryList = () => {
+            categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+            categoryButtons = [];
+            categoryContainer.innerHTML = "";
+            categories.forEach(cat => {
+                const btn = document.createElement("button");
+                btn.dataset.category = cat;
+                btn.style.cssText = `
+                    padding: 6px 14px;
+                    border-radius: 6px;
+                    border: 1px solid #444;
+                    background: #2a2a2a;
+                    color: #aaa;
+                    cursor: pointer;
+                    font-size: 13px;
+                    transition: all 0.15s ease;
+                    position: relative;
+                `;
+
+                btn.textContent = cat;
+
+                btn.onclick = () => {
+                    selectedCategory = cat;
+                    updateCategoryButtons();
+                    renderContent(searchInput.value);
+                };
+                btn.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showCategoryContextMenu(e, cat);
+                };
+                categoryButtons.push(btn);
+                categoryContainer.appendChild(btn);
+            });
+
+            // Add "+" button to create a new category
+            const addBtn = document.createElement("button");
+            addBtn.textContent = "+";
+            addBtn.title = "New Category";
+            addBtn.style.cssText = `
                 padding: 6px 14px;
                 border-radius: 6px;
                 border: 1px solid #444;
@@ -4242,42 +4627,45 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 font-size: 13px;
                 transition: all 0.15s ease;
             `;
-            btn.onclick = () => {
-                selectedCategory = cat;
-                updateCategoryButtons();
-                createThumbnailCards(searchInput.value);
+            addBtn.onmouseover = () => { addBtn.style.background = '#3a3a3a'; addBtn.style.color = '#fff'; };
+            addBtn.onmouseout = () => { addBtn.style.background = '#2a2a2a'; addBtn.style.color = '#aaa'; };
+            addBtn.onclick = async () => {
+                const result = await showNewCategoryDialog();
+                if (result && result.name && result.name.trim()) {
+                    const categoryName = result.name.trim();
+                    const existingCategories = Object.keys(node.prompts || {});
+                    const existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.toLowerCase());
+                    if (existingCategoryName) {
+                        await showInfo("Category Exists", `Category already exists as "${existingCategoryName}".`);
+                        return;
+                    }
+                    try {
+                        const resp = await fetch("/prompt-manager-advanced/save-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category_name: categoryName, nsfw: result.nsfw })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            selectedCategory = categoryName;
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error creating category:", err);
+                    }
+                }
             };
-            categoryButtons.push(btn);
-            categoryContainer.appendChild(btn);
-        });
-        updateCategoryButtons();
+            categoryContainer.appendChild(addBtn);
 
-        // Search bar
-        const searchContainer = document.createElement("div");
-        searchContainer.style.cssText = `
-            margin-bottom: 12px;
-        `;
+            updateCategoryButtons();
+        };
+        rebuildCategoryList();
 
-        const searchInput = document.createElement("input");
-        searchInput.type = "text";
-        searchInput.placeholder = "Search prompts...";
-        searchInput.style.cssText = `
-            width: 100%;
-            padding: 10px 12px;
-            background: #2a2a2a;
-            border: 1px solid #444;
-            border-radius: 6px;
-            color: #fff;
-            font-size: 14px;
-            box-sizing: border-box;
-            outline: none;
-        `;
-        searchInput.onfocus = () => searchInput.style.borderColor = "#666";
-        searchInput.onblur = () => searchInput.style.borderColor = "#444";
-
-        searchContainer.appendChild(searchInput);
-
-        // Thumbnails grid container - fixed size for 4x5 grid
+        // Content container - fixed size
         const gridContainer = document.createElement("div");
         gridContainer.className = "thumbnail-grid-container";
         gridContainer.style.cssText = `
@@ -4292,24 +4680,46 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         document.head.appendChild(style);
 
         const grid = document.createElement("div");
-        grid.style.cssText = `
-            display: grid;
-            grid-template-columns: repeat(4, 140px);
-            gap: 12px;
-            padding: 4px 0;
-        `;
 
-        // Create thumbnail cards for selected category
-        const createThumbnailCards = (filter = "") => {
+        // Helper: get filtered prompt names for the selected category
+        const getFilteredPrompts = (filter = "") => {
+            const categoryPrompts = node.prompts[selectedCategory] || {};
+            let promptNames = Object.keys(categoryPrompts)
+                .filter(k => k !== "__meta__")
+                .sort((a, b) => a.localeCompare(b));
+
+            // Filter by NSFW
+            if (hideNSFWState) {
+                promptNames = promptNames.filter(name => !categoryPrompts[name]?.nsfw);
+            }
+
+            // Filter by search
+            if (filter) {
+                promptNames = promptNames.filter(name => name.toLowerCase().includes(filter.toLowerCase()));
+            }
+            return promptNames;
+        };
+
+        // Shared right-click handler for prompt items (works in both grid and list view)
+        const promptContextMenu = (e, promptName) => {
+            e.preventDefault();
+            showThumbnailContextMenu(e, node, selectedCategory, promptName, () => {
+                renderContent(searchInput.value);
+            });
+        };
+
+        // ---- Grid (Thumbnail) View ----
+        const renderGridView = (filter = "") => {
+            grid.style.cssText = `
+                display: grid;
+                grid-template-columns: repeat(4, 140px);
+                gap: 12px;
+                padding: 4px 0;
+            `;
             grid.innerHTML = "";
 
-            // Get prompts for selected category
             const categoryPrompts = node.prompts[selectedCategory] || {};
-            const promptNames = Object.keys(categoryPrompts).sort((a, b) => a.localeCompare(b));
-
-            const filteredPrompts = filter
-                ? promptNames.filter(name => name.toLowerCase().includes(filter.toLowerCase()))
-                : promptNames;
+            const filteredPrompts = getFilteredPrompts(filter);
 
             if (filteredPrompts.length === 0) {
                 const emptyMsg = document.createElement("div");
@@ -4329,6 +4739,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 const promptData = categoryPrompts[promptName];
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = promptName === currentPrompt;
+                const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
 
                 const card = document.createElement("div");
                 card.style.cssText = `
@@ -4341,6 +4752,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     border-radius: 8px;
                     cursor: pointer;
                     transition: all 0.15s ease;
+                    position: relative;
                 `;
 
                 card.onmouseover = () => {
@@ -4355,6 +4767,26 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                         card.style.borderColor = '#3a3a3a';
                     }
                 };
+
+                // NSFW badge (top-right)
+                if (isNSFW) {
+                    const badge = document.createElement("div");
+                    badge.textContent = "NSFW";
+                    badge.style.cssText = `
+                        position: absolute;
+                        top: 4px;
+                        right: 4px;
+                        background: rgba(204, 0, 0, 0.85);
+                        color: #fff;
+                        font-size: 8px;
+                        font-weight: bold;
+                        padding: 1px 4px;
+                        border-radius: 3px;
+                        line-height: 1.2;
+                        z-index: 1;
+                    `;
+                    card.appendChild(badge);
+                }
 
                 // Thumbnail image
                 const img = document.createElement("img");
@@ -4385,31 +4817,200 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 card.appendChild(img);
                 card.appendChild(nameLabel);
 
-                // Click to select - return both category and prompt
                 card.onclick = () => {
                     resolve({ category: selectedCategory, prompt: promptName });
                     cleanup();
                 };
 
-                // Right-click context menu for setting thumbnail
-                card.oncontextmenu = (e) => {
-                    e.preventDefault();
-                    showThumbnailContextMenu(e, node, selectedCategory, promptName, () => {
-                        // Refresh the grid after thumbnail change
-                        createThumbnailCards(searchInput.value);
-                    });
-                };
+                card.oncontextmenu = (e) => promptContextMenu(e, promptName);
 
                 grid.appendChild(card);
             });
         };
 
+        // ---- List View ----
+        const renderListView = (filter = "") => {
+            grid.style.cssText = `
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+                padding: 4px 0;
+            `;
+            grid.innerHTML = "";
+
+            const categoryPrompts = node.prompts[selectedCategory] || {};
+            const filteredPrompts = getFilteredPrompts(filter);
+
+            if (filteredPrompts.length === 0) {
+                const emptyMsg = document.createElement("div");
+                emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
+                emptyMsg.style.cssText = `
+                    text-align: center;
+                    color: #666;
+                    padding: 40px;
+                    font-style: italic;
+                `;
+                grid.appendChild(emptyMsg);
+                return;
+            }
+
+            // Column headers
+            const headerRow = document.createElement("div");
+            headerRow.style.cssText = `
+                display: grid;
+                grid-template-columns: 44px 1fr 70px 70px 70px;
+                gap: 8px;
+                padding: 4px 8px 6px 8px;
+                border-bottom: 1px solid #444;
+                margin-bottom: 4px;
+                align-items: center;
+            `;
+            const headers = ["", "Name", "LoRAs A", "LoRAs B", "Triggers"];
+            headers.forEach((h, i) => {
+                const hDiv = document.createElement("div");
+                hDiv.textContent = h;
+                hDiv.style.cssText = `
+                    font-size: 10px;
+                    color: #888;
+                    font-weight: bold;
+                    text-transform: uppercase;
+                    text-align: ${i === 0 ? 'center' : i >= 2 ? 'center' : 'left'};
+                `;
+                headerRow.appendChild(hDiv);
+            });
+            grid.appendChild(headerRow);
+
+            filteredPrompts.forEach(promptName => {
+                const promptData = categoryPrompts[promptName];
+                const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
+                const isSelected = promptName === currentPrompt;
+                const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
+                const lorasACount = (promptData?.loras_a || []).length;
+                const lorasBCount = (promptData?.loras_b || []).length;
+                const triggerCount = (promptData?.trigger_words || []).length;
+
+                const row = document.createElement("div");
+                row.style.cssText = `
+                    display: grid;
+                    grid-template-columns: 44px 1fr 70px 70px 70px;
+                    gap: 8px;
+                    padding: 4px 8px;
+                    background: ${isSelected ? '#2a4a6a' : 'transparent'};
+                    border-radius: 4px;
+                    cursor: pointer;
+                    align-items: center;
+                    transition: background 0.1s ease;
+                `;
+                row.onmouseover = () => { if (!isSelected) row.style.background = '#2a2a2a'; };
+                row.onmouseout = () => { if (!isSelected) row.style.background = 'transparent'; };
+
+                // Thumbnail icon
+                const thumbDiv = document.createElement("div");
+                const img = document.createElement("img");
+                img.src = thumbnail;
+                img.style.cssText = `
+                    width: 36px;
+                    height: 36px;
+                    object-fit: cover;
+                    border-radius: 4px;
+                    background: #1a1a1a;
+                `;
+                thumbDiv.appendChild(img);
+
+                // Name + optional NSFW badge
+                const nameDiv = document.createElement("div");
+                nameDiv.style.cssText = `
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    overflow: hidden;
+                `;
+                const nameSpan = document.createElement("span");
+                nameSpan.textContent = promptName;
+                nameSpan.title = promptName;
+                nameSpan.style.cssText = `
+                    font-size: 13px;
+                    color: #ddd;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                `;
+                nameDiv.appendChild(nameSpan);
+                if (isNSFW) {
+                    const badge = document.createElement("span");
+                    badge.textContent = "NSFW";
+                    badge.style.cssText = `
+                        background: rgba(204, 0, 0, 0.85);
+                        color: #fff;
+                        font-size: 8px;
+                        font-weight: bold;
+                        padding: 1px 4px;
+                        border-radius: 3px;
+                        flex-shrink: 0;
+                    `;
+                    nameDiv.appendChild(badge);
+                }
+
+                // Counts
+                const makeCount = (n) => {
+                    const d = document.createElement("div");
+                    d.textContent = n > 0 ? n : "—";
+                    d.style.cssText = `
+                        font-size: 12px;
+                        color: ${n > 0 ? '#aaa' : '#555'};
+                        text-align: center;
+                    `;
+                    return d;
+                };
+
+                row.appendChild(thumbDiv);
+                row.appendChild(nameDiv);
+                row.appendChild(makeCount(lorasACount));
+                row.appendChild(makeCount(lorasBCount));
+                row.appendChild(makeCount(triggerCount));
+
+                row.onclick = () => {
+                    resolve({ category: selectedCategory, prompt: promptName });
+                    cleanup();
+                };
+
+                row.oncontextmenu = (e) => promptContextMenu(e, promptName);
+
+                grid.appendChild(row);
+            });
+        };
+
+        // Unified render function: picks grid vs list based on currentViewMode
+        const renderContent = (filter = "") => {
+            if (currentViewMode === "list") {
+                renderListView(filter);
+            } else {
+                renderGridView(filter);
+            }
+        };
+
+        // Event handlers for controls
+        nsfwBtn.onclick = () => {
+            hideNSFWState = !hideNSFWState;
+            sessionHideNSFW = hideNSFWState;
+            updateNsfwBtn();
+            updateCategoryButtons();
+            renderContent(searchInput.value);
+        };
+
+        viewModeBtn.onclick = () => {
+            currentViewMode = currentViewMode === "thumbnails" ? "list" : "thumbnails";
+            sessionViewMode = currentViewMode;
+            updateViewModeBtn();
+            renderContent(searchInput.value);
+        };
+
         // Initial render
-        createThumbnailCards();
+        renderContent();
 
         // Search filtering
         searchInput.oninput = () => {
-            createThumbnailCards(searchInput.value);
+            renderContent(searchInput.value);
         };
 
         gridContainer.appendChild(grid);
@@ -4425,11 +5026,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             color: #666;
             text-align: center;
         `;
-        footer.textContent = "Right-click a prompt to set or remove its thumbnail";
+        footer.textContent = "Right-click a prompt or category for more options (thumbnails, NSFW, delete)";
 
         dialog.appendChild(header);
+        dialog.appendChild(controlsBar);
         dialog.appendChild(categoryContainer);
-        dialog.appendChild(searchContainer);
         dialog.appendChild(gridContainer);
         dialog.appendChild(footer);
 
@@ -4565,6 +5166,45 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
             onUpdate();
         }));
     }
+
+    // NSFW toggle divider + option
+    const nsfwDivider = document.createElement("div");
+    nsfwDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(nsfwDivider);
+
+    const isNSFW = promptData?.nsfw === true;
+    const nsfwItem = createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
+        try {
+            const resp = await fetch("/prompt-manager-advanced/toggle-nsfw", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type: "prompt", category: category, name: promptName })
+            });
+            const result = await resp.json();
+            if (result.success) {
+                node.prompts = result.prompts;
+                onUpdate();
+            }
+        } catch (err) {
+            console.error("[PromptManagerAdvanced] Error toggling prompt NSFW:", err);
+        }
+    });
+    nsfwItem.style.color = isNSFW ? '#f66' : '#ccc';
+    menu.appendChild(nsfwItem);
+
+    // Delete Prompt
+    const deleteDivider = document.createElement("div");
+    deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(deleteDivider);
+
+    menu.appendChild(createMenuItem("🗑️ Delete Prompt", async () => {
+        if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
+            await deletePrompt(node, category, promptName);
+            onUpdate();
+        }
+    }));
+    // Style the delete item red
+    menu.lastChild.style.color = '#f66';
 
     // Close menu when clicking outside of it
     const closeMenu = (e) => {
@@ -4766,12 +5406,39 @@ function createPromptSelectorWidget(node) {
     container.appendChild(nameDisplay);
     container.appendChild(rightArrow);
 
-    // Update display function - show CATEGORY : PROMPT
+    // Update display function - show CATEGORY : PROMPT with optional NSFW label
     const updateDisplay = () => {
         const category = categoryWidget.value || "";
         const prompt = promptWidget.value || "new prompt";
         nameDisplay.textContent = `${category} : ${prompt}`;
         nameDisplay.title = `${category} : ${prompt}`;
+
+        // Remove existing NSFW label if any
+        const existingLabel = nameDisplay.querySelector('.nsfw-selector-label');
+        if (existingLabel) existingLabel.remove();
+
+        // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible
+        if (node.prompts && category) {
+            const catIsNSFW = node.prompts[category]?.["__meta__"]?.nsfw === true;
+            const promptIsNSFW = node.prompts[category]?.[prompt]?.nsfw === true;
+            if (catIsNSFW || promptIsNSFW) {
+                const label = document.createElement("span");
+                label.className = "nsfw-selector-label";
+                label.textContent = "NSFW";
+                label.style.cssText = `
+                    background: rgba(204, 50, 50, 0.85);
+                    color: #fff;
+                    font-size: 8px;
+                    font-weight: bold;
+                    padding: 0px 4px;
+                    border-radius: 2px;
+                    margin-left: 6px;
+                    flex-shrink: 0;
+                    line-height: 12px;
+                `;
+                nameDisplay.appendChild(label);
+            }
+        }
     };
 
     // Get flattened list of all prompts across all categories for navigation
@@ -4779,10 +5446,16 @@ function createPromptSelectorWidget(node) {
         const allPrompts = [];
         if (!node.prompts) return allPrompts;
 
+        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
         const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
         for (const cat of categories) {
-            const prompts = Object.keys(node.prompts[cat]).sort((a, b) => a.localeCompare(b));
+            // Skip NSFW categories when preference is set to hide
+            if (hideNSFW && node.prompts[cat]?.["__meta__"]?.nsfw === true) continue;
+
+            const prompts = Object.keys(node.prompts[cat]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
             for (const prompt of prompts) {
+                // Skip NSFW prompts when preference is set to hide
+                if (hideNSFW && node.prompts[cat][prompt]?.nsfw === true) continue;
                 allPrompts.push({ category: cat, prompt: prompt });
             }
         }
@@ -4801,7 +5474,7 @@ function createPromptSelectorWidget(node) {
         // Check for unsaved changes before switching (unless skipped)
         if (!skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -4876,35 +5549,39 @@ function createPromptSelectorWidget(node) {
     nameDisplay.onclick = async (e) => {
         e.stopPropagation();
 
-        // Check for unsaved changes before opening browser
-        const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+        try {
+            // Check for unsaved changes before opening browser
+            const hasUnsaved = hasUnsavedChanges(node);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
-        if (hasUnsaved && warnEnabled) {
-            const confirmed = await showConfirm(
-                "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and browse prompts?",
-                "Discard & Browse",
-                "#f80"
-            );
-            if (!confirmed) {
-                return;  // User cancelled, don't open browser
+            if (hasUnsaved && warnEnabled) {
+                const confirmed = await showConfirm(
+                    "Unsaved Changes",
+                    "You have unsaved changes to the current prompt. Do you want to discard them and browse prompts?",
+                    "Discard & Browse",
+                    "#f80"
+                );
+                if (!confirmed) {
+                    return;  // User cancelled, don't open browser
+                }
             }
-        }
 
-        const category = categoryWidget.value;
-        const currentPrompt = promptWidget.value;
+            const category = categoryWidget.value;
+            const currentPrompt = promptWidget.value;
 
-        const selection = await showThumbnailBrowser(node, category, currentPrompt);
+            const selection = await showThumbnailBrowser(node, category, currentPrompt);
 
-        if (selection) {
-            // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
-            await navigateTo(selection, true);
+            if (selection) {
+                // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
+                await navigateTo(selection, true);
 
-            // Clear new prompt flag after successful navigation
-            node.isNewUnsavedPrompt = false;
-            node.newPromptCategory = null;
-            node.newPromptName = null;
+                // Clear new prompt flag after successful navigation
+                node.isNewUnsavedPrompt = false;
+                node.newPromptCategory = null;
+                node.newPromptName = null;
+            }
+        } catch (err) {
+            console.error("[PromptManagerAdvanced] Error opening prompt browser:", err);
         }
     };
 
@@ -4919,6 +5596,7 @@ function createPromptSelectorWidget(node) {
 
     // Store reference for updates
     node.promptSelectorWidget = widget;
+    node._promptSelectorContainer = container;
     node.updatePromptSelectorDisplay = updateDisplay;
 
     return widget;

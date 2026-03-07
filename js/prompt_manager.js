@@ -116,6 +116,23 @@ app.registerExtension({
             defaultValue: true
         },
         {
+            id: "PromptManager.DefaultHideNSFW",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Hide NSFW by Default"],
+            name: "Hide NSFW prompts by default",
+            tooltip: "When enabled, NSFW categories and prompts are hidden in the prompt browser on startup. Can be toggled per session.",
+            type: "boolean",
+            defaultValue: true
+        },
+        {
+            id: "PromptManager.DefaultViewMode",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Prompt Browser View Mode"],
+            name: "Default prompt browser view mode",
+            tooltip: "Choose the default display mode for the prompt browser: thumbnails grid or compact list view.",
+            type: "combo",
+            options: ["thumbnails", "list"],
+            defaultValue: "thumbnails"
+        },
+        {
             id: "PromptManager.LLMBackend",
             category: ["Prompt Manager", "5. Ollama Settings", "LLM Backend"],
             name: "LLM Backend",
@@ -172,15 +189,15 @@ app.registerExtension({
         // Load settings from ComfyUI and sync to Python cache
         try {
             // Sync current values to Python cache first
-            const baseModel = app.ui.settings.getSettingValue("PromptManager.PreferredBaseModel", "");
-            const visionModel = app.ui.settings.getSettingValue("PromptManager.PreferredVisionModel", "");
-            const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath", "");
-            const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath", "");
-            const port = app.ui.settings.getSettingValue("PromptManager.Port", "8080");
-            const CloseLlama = app.ui.settings.getSettingValue("PromptManager.CloseLlama", true);
-            const llmBackend = app.ui.settings.getSettingValue("PromptManager.LLMBackend", "llama.cpp");
-            const ollamaUrl = app.ui.settings.getSettingValue("PromptManager.OllamaUrl", "http://127.0.0.1:11434");
-            const ollamaKeepAlive = app.ui.settings.getSettingValue("PromptManager.OllamaKeepAlive", "5m");
+            const baseModel = app.ui.settings.getSettingValue("PromptManager.PreferredBaseModel");
+            const visionModel = app.ui.settings.getSettingValue("PromptManager.PreferredVisionModel");
+            const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath");
+            const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath");
+            const port = app.ui.settings.getSettingValue("PromptManager.Port");
+            const CloseLlama = app.ui.settings.getSettingValue("PromptManager.CloseLlama");
+            const llmBackend = app.ui.settings.getSettingValue("PromptManager.LLMBackend");
+            const ollamaUrl = app.ui.settings.getSettingValue("PromptManager.OllamaUrl");
+            const ollamaKeepAlive = app.ui.settings.getSettingValue("PromptManager.OllamaKeepAlive");
             
             console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, CloseLlama, llmBackend, ollamaUrl, ollamaKeepAlive });
             await fetch("/prompt-manager/save-preference", {
@@ -347,6 +364,53 @@ app.registerExtension({
                 return result;
             };
 
+            // Draw red NSFW badge at the top of the node when NSFW content is selected
+            const onDrawForeground = nodeType.prototype.onDrawForeground;
+            nodeType.prototype.onDrawForeground = function(ctx) {
+                if (onDrawForeground) onDrawForeground.apply(this, arguments);
+
+                const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
+                if (hideNSFW || !this.prompts) return;
+
+                const categoryWidget = this.widgets?.find(w => w.name === "category");
+                const promptWidget = this.widgets?.find(w => w.name === "name");
+                if (!categoryWidget || !promptWidget) return;
+
+                const category = categoryWidget.value;
+                const promptName = promptWidget.value;
+                const catIsNSFW = this.prompts[category]?.["__meta__"]?.nsfw === true;
+                const promptIsNSFW = this.prompts[category]?.[promptName]?.nsfw === true;
+
+                if (catIsNSFW || promptIsNSFW) {
+                    ctx.save();
+                    // Draw red "NSFW" badge at top-right of node
+                    const text = "NSFW";
+                    ctx.font = "bold 8px sans-serif";
+                    const textWidth = ctx.measureText(text).width;
+                    const badgeW = textWidth + 8;
+                    const badgeH = 12;
+                    const badgeX = this.size[0] - badgeW - 4;
+                    const badgeY = -LiteGraph.NODE_TITLE_HEIGHT + (LiteGraph.NODE_TITLE_HEIGHT - badgeH) / 2;
+
+                    // Badge background
+                    ctx.fillStyle = "rgba(204, 50, 50, 0.85)";
+                    ctx.beginPath();
+                    if (ctx.roundRect) {
+                        ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2);
+                    } else {
+                        ctx.rect(badgeX, badgeY, badgeW, badgeH);
+                    }
+                    ctx.fill();
+
+                    // Badge text
+                    ctx.fillStyle = "#fff";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(text, badgeX + badgeW / 2, badgeY + badgeH / 2);
+                    ctx.restore();
+                }
+            };
+
             // Enforce minimum node width
             const onResize = nodeType.prototype.onResize;
             nodeType.prototype.onResize = function(size) {
@@ -449,9 +513,31 @@ function filterPromptDropdown(node) {
     const promptWidget = node.widgets.find(w => w.name === "name");
 
     if (categoryWidget && promptWidget) {
+        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
+
+        // Filter NSFW categories from the category dropdown
+        if (hideNSFW && node.prompts) {
+            let categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
+            categories = categories.filter(cat => node.prompts[cat]?.["__meta__"]?.nsfw !== true);
+            categoryWidget.options.values = categories.length > 0 ? categories : ["Default"];
+
+            // If current category is now hidden, switch to first visible
+            if (!categories.includes(categoryWidget.value) && categories.length > 0) {
+                categoryWidget.value = categories[0];
+            }
+        }
+
         const currentCategory = categoryWidget.value;
         if (node.prompts[currentCategory]) {
-            const promptNames = Object.keys(node.prompts[currentCategory]).sort((a, b) => a.localeCompare(b));
+            let promptNames = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+            if (hideNSFW) {
+                const catIsNSFW = node.prompts[currentCategory]?.["__meta__"]?.nsfw === true;
+                if (catIsNSFW) {
+                    promptNames = [];
+                } else {
+                    promptNames = promptNames.filter(name => !node.prompts[currentCategory][name]?.nsfw);
+                }
+            }
             if (promptNames.length === 0) {
                 promptNames.push("");
             }
@@ -506,7 +592,7 @@ function addButtonBar(node) {
             // Case-insensitive check for existing prompt
             let existingPromptName = null;
             if (node.prompts[targetCategory]) {
-                const existingNames = Object.keys(node.prompts[targetCategory]);
+                const existingNames = Object.keys(node.prompts[targetCategory]).filter(k => k !== '__meta__');
                 existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
             }
 
@@ -542,7 +628,7 @@ function addButtonBar(node) {
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.warnUnsavedChanges", true);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.warnUnsavedChanges");
         
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
@@ -673,7 +759,11 @@ function setupCategoryChangeHandler(node) {
 
         const category = value;
         if (node.prompts && node.prompts[category]) {
-            const promptNames = Object.keys(node.prompts[category]).sort((a, b) => a.localeCompare(b));
+            const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
+            let promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+            if (hideNSFW) {
+                promptNames = promptNames.filter(name => !node.prompts[category][name]?.nsfw);
+            }
             promptWidget.options.values = promptNames;
 
             if (promptNames.length > 0) {
@@ -711,7 +801,11 @@ function setupCategoryChangeHandler(node) {
         
         // Update prompt dropdown options in case prompts were deleted/added in another tab
         if (node.prompts && node.prompts[category]) {
-            const promptNames = Object.keys(node.prompts[category]).sort((a, b) => a.localeCompare(b));
+            const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
+            let promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+            if (hideNSFW) {
+                promptNames = promptNames.filter(name => !node.prompts[category][name]?.nsfw);
+            }
             promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
             
             // Check if selected prompt still exists after reload
@@ -747,7 +841,7 @@ function setupCategoryChangeHandler(node) {
             if (node.prompts && categoryWidget && newValues && newValues.length > 0) {
                 const currentCategory = categoryWidget.value;
                 if (node.prompts[currentCategory]) {
-                    const categoryPrompts = Object.keys(node.prompts[currentCategory]);
+                    const categoryPrompts = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__');
                     const hasOtherCategoryPrompts = newValues.some(val =>
                         val !== "" && !categoryPrompts.includes(val)
                     );
@@ -1489,8 +1583,12 @@ function updateDropdowns(node) {
     if (!categoryWidget || !promptWidget || !textWidget) return;
 
     // Update category dropdown (sorted alphabetically)
-    const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
-    categoryWidget.options.values = categories;
+    const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
+    let categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
+    if (hideNSFW) {
+        categories = categories.filter(cat => node.prompts[cat]?.["__meta__"]?.nsfw !== true);
+    }
+    categoryWidget.options.values = categories.length > 0 ? categories : ["Default"];
 
     if (!node.prompts[categoryWidget.value] && categories.length > 0) {
         categoryWidget.value = categories[0];
@@ -1499,7 +1597,10 @@ function updateDropdowns(node) {
     // Update prompt dropdown for current category (sorted alphabetically)
     const currentCategory = categoryWidget.value;
     if (node.prompts[currentCategory]) {
-        const promptNames = Object.keys(node.prompts[currentCategory]).sort((a, b) => a.localeCompare(b));
+        let promptNames = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+        if (hideNSFW) {
+            promptNames = promptNames.filter(name => !node.prompts[currentCategory][name]?.nsfw);
+        }
 
         if (promptNames.length === 0) {
             promptNames.push("");
