@@ -189,15 +189,15 @@ app.registerExtension({
         // Load settings from ComfyUI and sync to Python cache
         try {
             // Sync current values to Python cache first
-            const baseModel = app.ui.settings.getSettingValue("PromptManager.PreferredBaseModel", "");
-            const visionModel = app.ui.settings.getSettingValue("PromptManager.PreferredVisionModel", "");
-            const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath", "");
-            const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath", "");
-            const port = app.ui.settings.getSettingValue("PromptManager.Port", "8080");
-            const CloseLlama = app.ui.settings.getSettingValue("PromptManager.CloseLlama", true);
-            const llmBackend = app.ui.settings.getSettingValue("PromptManager.LLMBackend", "llama.cpp");
-            const ollamaUrl = app.ui.settings.getSettingValue("PromptManager.OllamaUrl", "http://127.0.0.1:11434");
-            const ollamaKeepAlive = app.ui.settings.getSettingValue("PromptManager.OllamaKeepAlive", "5m");
+            const baseModel = app.ui.settings.getSettingValue("PromptManager.PreferredBaseModel");
+            const visionModel = app.ui.settings.getSettingValue("PromptManager.PreferredVisionModel");
+            const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath");
+            const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath");
+            const port = app.ui.settings.getSettingValue("PromptManager.Port");
+            const CloseLlama = app.ui.settings.getSettingValue("PromptManager.CloseLlama");
+            const llmBackend = app.ui.settings.getSettingValue("PromptManager.LLMBackend");
+            const ollamaUrl = app.ui.settings.getSettingValue("PromptManager.OllamaUrl");
+            const ollamaKeepAlive = app.ui.settings.getSettingValue("PromptManager.OllamaKeepAlive");
             
             console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, CloseLlama, llmBackend, ollamaUrl, ollamaKeepAlive });
             await fetch("/prompt-manager/save-preference", {
@@ -369,7 +369,7 @@ app.registerExtension({
             nodeType.prototype.onDrawForeground = function(ctx) {
                 if (onDrawForeground) onDrawForeground.apply(this, arguments);
 
-                const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
+                const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
                 if (hideNSFW || !this.prompts) return;
 
                 const categoryWidget = this.widgets?.find(w => w.name === "category");
@@ -513,7 +513,7 @@ function filterPromptDropdown(node) {
     const promptWidget = node.widgets.find(w => w.name === "name");
 
     if (categoryWidget && promptWidget) {
-        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
+        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
 
         // Filter NSFW categories from the category dropdown
         if (hideNSFW && node.prompts) {
@@ -628,7 +628,7 @@ function addButtonBar(node) {
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.warnUnsavedChanges", true);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.warnUnsavedChanges");
         
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
@@ -759,7 +759,7 @@ function setupCategoryChangeHandler(node) {
 
         const category = value;
         if (node.prompts && node.prompts[category]) {
-            const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
+            const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
             let promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
             if (hideNSFW) {
                 promptNames = promptNames.filter(name => !node.prompts[category][name]?.nsfw);
@@ -801,7 +801,7 @@ function setupCategoryChangeHandler(node) {
         
         // Update prompt dropdown options in case prompts were deleted/added in another tab
         if (node.prompts && node.prompts[category]) {
-            const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
+            const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
             let promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
             if (hideNSFW) {
                 promptNames = promptNames.filter(name => !node.prompts[category][name]?.nsfw);
@@ -1583,7 +1583,7 @@ function updateDropdowns(node) {
     if (!categoryWidget || !promptWidget || !textWidget) return;
 
     // Update category dropdown (sorted alphabetically)
-    const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
+    const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
     let categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
     if (hideNSFW) {
         categories = categories.filter(cat => node.prompts[cat]?.["__meta__"]?.nsfw !== true);

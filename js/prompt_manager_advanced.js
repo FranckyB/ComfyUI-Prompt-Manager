@@ -60,12 +60,12 @@ let sessionViewMode = null;   // null = use preference default
 
 function getHideNSFW() {
     if (sessionHideNSFW !== null) return sessionHideNSFW;
-    return app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
+    return app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
 }
 
 function getViewMode() {
     if (sessionViewMode !== null) return sessionViewMode;
-    return app.ui.settings.getSettingValue("PromptManager.DefaultViewMode", "thumbnails");
+    return app.ui.settings.getSettingValue("PromptManager.DefaultViewMode");
 }
 
 /**
@@ -2272,7 +2272,7 @@ function addButtonBar(node) {
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
@@ -2465,7 +2465,7 @@ function setupCategoryChangeHandler(node) {
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -2573,7 +2573,7 @@ function setupCategoryChangeHandler(node) {
         // Check for unsaved changes before switching (skip if navigating via custom selector)
         if (!node._skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -4460,8 +4460,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             flex-wrap: wrap;
         `;
 
-        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
-        const categoryButtons = [];
+        let categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+        let categoryButtons = [];
 
         const isCategoryNSFW = (cat) => {
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
@@ -4497,7 +4497,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 if (firstVisible) {
                     selectedCategory = firstVisible;
                     updateCategoryButtons();
-                    renderContent(searchInput.value);
                 }
             }
         };
@@ -4553,6 +4552,49 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             };
             menu.appendChild(item);
 
+            // Delete Category
+            const deleteDivider = document.createElement("div");
+            deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(deleteDivider);
+
+            const deleteItem = document.createElement("div");
+            deleteItem.textContent = "🗑️ Delete Category";
+            deleteItem.style.cssText = `
+                padding: 8px 16px;
+                color: #f66;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            deleteItem.onmouseover = () => deleteItem.style.background = '#3a3a3a';
+            deleteItem.onmouseout = () => deleteItem.style.background = 'transparent';
+            deleteItem.onclick = async () => {
+                menu.remove();
+                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${cat}" and all its prompts?`)) {
+                    try {
+                        const resp = await fetch("/prompt-manager-advanced/delete-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category: cat })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            if (selectedCategory === cat) {
+                                const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
+                                selectedCategory = cats[0] || "";
+                            }
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error deleting category:", err);
+                    }
+                }
+            };
+            menu.appendChild(deleteItem);
+
             document.body.appendChild(menu);
             const closeMenu = (e) => {
                 if (!menu.contains(e.target)) {
@@ -4567,10 +4609,46 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             }, 0);
         };
 
-        categories.forEach(cat => {
-            const btn = document.createElement("button");
-            btn.dataset.category = cat;
-            btn.style.cssText = `
+        const rebuildCategoryList = () => {
+            categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+            categoryButtons = [];
+            categoryContainer.innerHTML = "";
+            categories.forEach(cat => {
+                const btn = document.createElement("button");
+                btn.dataset.category = cat;
+                btn.style.cssText = `
+                    padding: 6px 14px;
+                    border-radius: 6px;
+                    border: 1px solid #444;
+                    background: #2a2a2a;
+                    color: #aaa;
+                    cursor: pointer;
+                    font-size: 13px;
+                    transition: all 0.15s ease;
+                    position: relative;
+                `;
+
+                btn.textContent = cat;
+
+                btn.onclick = () => {
+                    selectedCategory = cat;
+                    updateCategoryButtons();
+                    renderContent(searchInput.value);
+                };
+                btn.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showCategoryContextMenu(e, cat);
+                };
+                categoryButtons.push(btn);
+                categoryContainer.appendChild(btn);
+            });
+
+            // Add "+" button to create a new category
+            const addBtn = document.createElement("button");
+            addBtn.textContent = "+";
+            addBtn.title = "New Category";
+            addBtn.style.cssText = `
                 padding: 6px 14px;
                 border-radius: 6px;
                 border: 1px solid #444;
@@ -4579,25 +4657,44 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 cursor: pointer;
                 font-size: 13px;
                 transition: all 0.15s ease;
-                position: relative;
             `;
-
-            btn.textContent = cat;
-
-            btn.onclick = () => {
-                selectedCategory = cat;
-                updateCategoryButtons();
-                renderContent(searchInput.value);
+            addBtn.onmouseover = () => { addBtn.style.background = '#3a3a3a'; addBtn.style.color = '#fff'; };
+            addBtn.onmouseout = () => { addBtn.style.background = '#2a2a2a'; addBtn.style.color = '#aaa'; };
+            addBtn.onclick = async () => {
+                const result = await showNewCategoryDialog();
+                if (result && result.name && result.name.trim()) {
+                    const categoryName = result.name.trim();
+                    const existingCategories = Object.keys(node.prompts || {});
+                    const existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.toLowerCase());
+                    if (existingCategoryName) {
+                        await showInfo("Category Exists", `Category already exists as "${existingCategoryName}".`);
+                        return;
+                    }
+                    try {
+                        const resp = await fetch("/prompt-manager-advanced/save-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category_name: categoryName, nsfw: result.nsfw })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            selectedCategory = categoryName;
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error creating category:", err);
+                    }
+                }
             };
-            btn.oncontextmenu = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                showCategoryContextMenu(e, cat);
-            };
-            categoryButtons.push(btn);
-            categoryContainer.appendChild(btn);
-        });
-        updateCategoryButtons();
+            categoryContainer.appendChild(addBtn);
+
+            updateCategoryButtons();
+        };
+        rebuildCategoryList();
 
         // Content container - fixed size
         const gridContainer = document.createElement("div");
@@ -4960,7 +5057,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             color: #666;
             text-align: center;
         `;
-        footer.textContent = "Right-click a prompt to set or remove its thumbnail · Right-click a category to toggle NSFW";
+        footer.textContent = "Right-click a prompt or category for more options (thumbnails, NSFW, delete)";
 
         dialog.appendChild(header);
         dialog.appendChild(controlsBar);
@@ -5125,6 +5222,20 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
     });
     nsfwItem.style.color = isNSFW ? '#f66' : '#ccc';
     menu.appendChild(nsfwItem);
+
+    // Delete Prompt
+    const deleteDivider = document.createElement("div");
+    deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(deleteDivider);
+
+    menu.appendChild(createMenuItem("🗑️ Delete Prompt", async () => {
+        if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
+            await deletePrompt(node, category, promptName);
+            onUpdate();
+        }
+    }));
+    // Style the delete item red
+    menu.lastChild.style.color = '#f66';
 
     // Close menu when clicking outside of it
     const closeMenu = (e) => {
@@ -5337,9 +5448,8 @@ function createPromptSelectorWidget(node) {
         const existingLabel = nameDisplay.querySelector('.nsfw-selector-label');
         if (existingLabel) existingLabel.remove();
 
-        // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) only when not hiding NSFW
-        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
-        if (!hideNSFW && node.prompts && category) {
+        // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible
+        if (node.prompts && category) {
             const catIsNSFW = node.prompts[category]?.["__meta__"]?.nsfw === true;
             const promptIsNSFW = node.prompts[category]?.[prompt]?.nsfw === true;
             if (catIsNSFW || promptIsNSFW) {
@@ -5367,7 +5477,7 @@ function createPromptSelectorWidget(node) {
         const allPrompts = [];
         if (!node.prompts) return allPrompts;
 
-        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW", true);
+        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
         const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
         for (const cat of categories) {
             // Skip NSFW categories when preference is set to hide
@@ -5395,7 +5505,7 @@ function createPromptSelectorWidget(node) {
         // Check for unsaved changes before switching (unless skipped)
         if (!skipUnsavedCheck) {
             const hasUnsaved = hasUnsavedChanges(node);
-            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
             if (hasUnsaved && warnEnabled) {
                 const confirmed = await showConfirm(
@@ -5470,35 +5580,39 @@ function createPromptSelectorWidget(node) {
     nameDisplay.onclick = async (e) => {
         e.stopPropagation();
 
-        // Check for unsaved changes before opening browser
-        const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges", true);
+        try {
+            // Check for unsaved changes before opening browser
+            const hasUnsaved = hasUnsavedChanges(node);
+            const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
-        if (hasUnsaved && warnEnabled) {
-            const confirmed = await showConfirm(
-                "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and browse prompts?",
-                "Discard & Browse",
-                "#f80"
-            );
-            if (!confirmed) {
-                return;  // User cancelled, don't open browser
+            if (hasUnsaved && warnEnabled) {
+                const confirmed = await showConfirm(
+                    "Unsaved Changes",
+                    "You have unsaved changes to the current prompt. Do you want to discard them and browse prompts?",
+                    "Discard & Browse",
+                    "#f80"
+                );
+                if (!confirmed) {
+                    return;  // User cancelled, don't open browser
+                }
             }
-        }
 
-        const category = categoryWidget.value;
-        const currentPrompt = promptWidget.value;
+            const category = categoryWidget.value;
+            const currentPrompt = promptWidget.value;
 
-        const selection = await showThumbnailBrowser(node, category, currentPrompt);
+            const selection = await showThumbnailBrowser(node, category, currentPrompt);
 
-        if (selection) {
-            // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
-            await navigateTo(selection, true);
+            if (selection) {
+                // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
+                await navigateTo(selection, true);
 
-            // Clear new prompt flag after successful navigation
-            node.isNewUnsavedPrompt = false;
-            node.newPromptCategory = null;
-            node.newPromptName = null;
+                // Clear new prompt flag after successful navigation
+                node.isNewUnsavedPrompt = false;
+                node.newPromptCategory = null;
+                node.newPromptName = null;
+            }
+        } catch (err) {
+            console.error("[PromptManagerAdvanced] Error opening prompt browser:", err);
         }
     };
 
