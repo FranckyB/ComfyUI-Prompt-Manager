@@ -2184,15 +2184,13 @@ function addButtonBar(node) {
                 }
             }
 
-            // Query connected LoRA stacker nodes to get current configurations
-            // Also use node.currentLorasA/B which are populated from backend (works for PromptExtractor)
-            const chainLorasA = collectAllLorasFromChain(node, "lora_stack_a");
-            const chainLorasB = collectAllLorasFromChain(node, "lora_stack_b");
-
-            // Combine chain loras with currentLoras (from backend update)
-            // This handles both widget-based stackers and output-only nodes like PromptExtractor
-            const connectedLorasA = chainLorasA.length > 0 ? chainLorasA : (node.currentLorasA || []);
-            const connectedLorasB = chainLorasB.length > 0 ? chainLorasB : (node.currentLorasB || []);
+            // Use the last-executed state from Python as the authoritative source for connected loras.
+            // node.currentLorasA/B is populated from the backend after each execution (input_loras_a/b),
+            // so it already reflects only what actually ran — muted/bypassed nodes are absent.
+            // Graph traversal (collectAllLorasFromChain) is intentionally NOT used here because it
+            // reads raw widget values regardless of node mute/bypass state.
+            const connectedLorasA = node.currentLorasA || [];
+            const connectedLorasB = node.currentLorasB || [];
 
             // Check if use_lora_input is disabled
             const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
