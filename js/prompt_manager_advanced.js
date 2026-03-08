@@ -3536,7 +3536,6 @@ function showPromptWithCategory(title, message, defaultName, categories, default
             const opt = document.createElement("option");
             opt.value = cat;
             opt.textContent = cat;
-            if (cat === defaultCategory) opt.selected = true;
             return opt.outerHTML;
         }).join('');
 
@@ -3565,6 +3564,7 @@ function showPromptWithCategory(title, message, defaultName, categories, default
         const cancelBtn = dialog.querySelector(".cancel-btn");
 
         // Set defaults after DOM is built
+        selectEl.value = defaultCategory;
         input.value = defaultName;
         nsfwCb.checked = defaultNsfw;
 
