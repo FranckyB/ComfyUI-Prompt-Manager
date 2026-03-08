@@ -2328,6 +2328,30 @@ function addButtonBar(node) {
     // More dropdown button
     const moreBtn = createDropdownButton("More ▼", [
         {
+            label: "Delete Prompt",
+            action: async () => {
+                const currentCategory = categoryWidget.value;
+                const currentPrompt = promptWidget.value;
+
+                if (!currentPrompt) {
+                    await showInfo("Error", "No prompt selected to delete.");
+                    return;
+                }
+
+                const confirmed = await showConfirm(
+                    "Delete Prompt",
+                    `Are you sure you want to delete "${currentPrompt}" from category "${currentCategory}"? This cannot be undone.`,
+                    "Delete",
+                    "#c00"
+                );
+
+                if (confirmed) {
+                    await deletePrompt(node, currentCategory, currentPrompt);
+                }
+            }
+        },
+        { divider: true },
+        {
             label: "Export JSON",
             action: async () => {
                 await exportPromptsJSON(node);
