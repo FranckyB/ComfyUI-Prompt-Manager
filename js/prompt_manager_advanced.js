@@ -242,9 +242,33 @@ app.registerExtension({
                             this.currentTriggerWords = [];
                             this.savedTriggerWords = [];
 
-                            // Reload saved loras and trigger words from prompt to get clean toggle states
-                            // Use Python's unavailable list directly - it's the source of truth
-                            if (this.prompts && categoryWidget && promptWidget) {
+                            // Restore saved state from serialized widgets first.
+                            // These are updated immediately when the user toggles items.
+                            this.savedLorasA = getSerializedSavedLoras(this, "a", unavailableLorasA);
+                            this.savedLorasB = getSerializedSavedLoras(this, "b", unavailableLorasB);
+                            this.savedTriggerWords = getSerializedSavedTriggerWords(this);
+
+                            // Filter out saved LoRAs that came from input but are no longer in the input.
+                            // This prevents LoRAs removed from connected stacker from lingering in saved state.
+                            const inputLoraSetA = new Set(inputLorasA.map(l => l.name.toLowerCase()));
+                            const inputLoraSetB = new Set(inputLorasB.map(l => l.name.toLowerCase()));
+                            this.savedLorasA = this.savedLorasA.filter(lora => 
+                                !lora.fromInput || inputLoraSetA.has(lora.name.toLowerCase())
+                            );
+                            this.savedLorasB = this.savedLorasB.filter(lora => 
+                                !lora.fromInput || inputLoraSetB.has(lora.name.toLowerCase())
+                            );
+
+                            // Fall back to cached prompt data only when there is no serialized state.
+                            // Use Python's unavailable list directly - it's the source of truth.
+                            if (
+                                this.savedLorasA.length === 0 &&
+                                this.savedLorasB.length === 0 &&
+                                this.savedTriggerWords.length === 0 &&
+                                this.prompts &&
+                                categoryWidget &&
+                                promptWidget
+                            ) {
                                 const promptData = this.prompts[categoryWidget.value]?.[promptWidget.value];
                                 if (promptData) {
                                     this.savedLorasA = (promptData.loras_a || []).map(lora => ({
@@ -290,6 +314,16 @@ app.registerExtension({
                                 this.currentLorasA = inputLorasA.map(l => ({ ...l, source: 'current' }));
                                 this.currentLorasB = inputLorasB.map(l => ({ ...l, source: 'current' }));
                                 this.currentTriggerWords = newConnectedTriggers;
+
+                                // Filter out saved LoRAs that came from input but are no longer present
+                                const inputLoraSetA = new Set(inputLorasA.map(l => l.name.toLowerCase()));
+                                const inputLoraSetB = new Set(inputLorasB.map(l => l.name.toLowerCase()));
+                                this.savedLorasA = (this.savedLorasA || []).filter(lora => 
+                                    !lora.fromInput || inputLoraSetA.has(lora.name.toLowerCase())
+                                );
+                                this.savedLorasB = (this.savedLorasB || []).filter(lora => 
+                                    !lora.fromInput || inputLoraSetB.has(lora.name.toLowerCase())
+                                );
 
                                 updateLoraDisplays(this);
                                 updateTriggerWordsDisplay(this);
@@ -492,6 +526,37 @@ async function loadPrompts(node) {
     }
 }
 
+function parseSerializedWidgetValue(widget, fallback = []) {
+    if (!widget || !widget.value) {
+        return fallback;
+    }
+
+    try {
+        const parsed = JSON.parse(widget.value);
+        return Array.isArray(parsed) ? parsed : fallback;
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function getSerializedSavedLoras(node, stackId, unavailableLoras = new Set()) {
+    const widget = stackId === "a" ? node.lorasAToggleWidget : node.lorasBToggleWidget;
+    return parseSerializedWidgetValue(widget, []).map(lora => ({
+        ...lora,
+        active: lora.active !== false,
+        strength: lora.strength ?? lora.model_strength ?? 1.0,
+        available: !unavailableLoras.has((lora.name || "").toLowerCase())
+    }));
+}
+
+function getSerializedSavedTriggerWords(node) {
+    return parseSerializedWidgetValue(node.triggerWordsToggleWidget, []).map(word => ({
+        text: word.text,
+        active: word.active !== false,
+        source: 'saved'
+    }));
+}
+
 /**
  * Query connected LoRA stacker nodes to get current LoRA configurations
  * This allows saving without executing the workflow first
@@ -557,7 +622,8 @@ function extractLorasFromNode(sourceNode) {
         const loraMatches = textWidget.value.matchAll(/<lora:([^:>]+):([^:>]+)(?::([^>]+))?>/g);
         for (const match of loraMatches) {
             const name = match[1].trim();
-            const modelStrength = parseFloat(match[2]) || 1.0;
+            const parsedModelStrength = parseFloat(match[2]);
+            const modelStrength = Number.isNaN(parsedModelStrength) ? 1.0 : parsedModelStrength;
             const clipStrength = match[3] ? parseFloat(match[3]) : modelStrength;
 
             loras.push({
@@ -582,8 +648,10 @@ function extractLorasFromNode(sourceNode) {
     );
 
     if (loraNameWidget && loraNameWidget.value) {
-        const modelStrength = strengthWidget ? parseFloat(strengthWidget.value) || 1.0 : 1.0;
-        const clipStrength = clipStrengthWidget ? parseFloat(clipStrengthWidget.value) || modelStrength : modelStrength;
+        const parsedModelStrength = strengthWidget ? parseFloat(strengthWidget.value) : NaN;
+        const parsedClipStrength = clipStrengthWidget ? parseFloat(clipStrengthWidget.value) : NaN;
+        const modelStrength = Number.isNaN(parsedModelStrength) ? 1.0 : parsedModelStrength;
+        const clipStrength = Number.isNaN(parsedClipStrength) ? modelStrength : parsedClipStrength;
 
         loras.push({
             name: loraNameWidget.value.replace(/\.[^/.]+$/, ""), // Remove file extension
@@ -984,7 +1052,8 @@ function createLoraTag(lora, index, stackId, node) {
     const isActive = lora.active !== false;
     const isAvailable = lora.available === true;
     const isFromInput = lora.fromInput === true || lora.source === 'current';  // From connected input
-    const strength = parseFloat(lora.strength ?? lora.model_strength ?? 1.0) || 1.0;
+    const parsedStrength = parseFloat(lora.strength ?? lora.model_strength ?? 1.0);
+    const strength = Number.isNaN(parsedStrength) ? 1.0 : parsedStrength;
 
     // Determine colors based on active and available status
     let bgColor, textColor, borderColor;
@@ -1552,7 +1621,8 @@ function updateToggleWidgets(node) {
         return loraList.map(lora => ({
             name: lora.name,
             active: lora.active !== false,
-            strength: lora.strength ?? lora.model_strength ?? 1.0
+            strength: lora.strength ?? lora.model_strength ?? 1.0,
+            fromInput: lora.fromInput || false  // Preserve flag indicating it came from connected input
         }));
     };
 
@@ -3060,13 +3130,13 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             loras_a: lorasA.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0,
-                clip_strength: l.clip_strength || l.strength || 1.0,
+                clip_strength: l.clip_strength ?? l.strength ?? 1.0,
                 active: l.active !== false
             })),
             loras_b: lorasB.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0,
-                clip_strength: l.clip_strength || l.strength || 1.0,
+                clip_strength: l.clip_strength ?? l.strength ?? 1.0,
                 active: l.active !== false
             })),
             // Save all trigger words with their active states

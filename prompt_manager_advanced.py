@@ -252,6 +252,12 @@ class PromptManagerAdvanced:
                     "dynamicPrompts": False,
                     "tooltip": "Enter prompt text directly"
                 }),
+                "swap_lora_outputs": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "swapped",
+                    "label_off": "normal",
+                    "tooltip": "Swap the lora_stack_a and lora_stack_b outputs."
+                }),
             },
             "optional": {
                 "prompt_input": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
@@ -275,7 +281,7 @@ class PromptManagerAdvanced:
     OUTPUT_NODE = True
 
     @classmethod
-    def IS_CHANGED(cls, category, name, text, use_prompt_input, use_lora_input, **kwargs):
+    def IS_CHANGED(cls, category, name, text, use_prompt_input, use_lora_input, swap_lora_outputs=False, **kwargs):
         """
         Track changes to the node's inputs to determine if re-execution is needed.
         Returns a tuple of relevant values that should trigger re-execution when changed.
@@ -294,6 +300,7 @@ class PromptManagerAdvanced:
             text,
             use_prompt_input,
             use_lora_input,
+            swap_lora_outputs,
             str(prompt_input) if prompt_input else None,
             str(lora_stack_a) if lora_stack_a else None,
             str(lora_stack_b) if lora_stack_b else None,
@@ -517,8 +524,8 @@ class PromptManagerAdvanced:
         # Not found
         return lora_path, False
 
-    def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, prompt_input=None,
-                   lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
+    def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, swap_lora_outputs=False,
+                   prompt_input=None, lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
 
@@ -704,11 +711,18 @@ class PromptManagerAdvanced:
         # Append active trigger words to output
         final_output = self._append_trigger_words_to_prompt(output_text, active_trigger_words)
 
-        return (final_output, processed_stack_a if processed_stack_a else [], processed_stack_b if processed_stack_b else [])
+        # Swap outputs if requested
+        out_stack_a = processed_stack_a if processed_stack_a else []
+        out_stack_b = processed_stack_b if processed_stack_b else []
+        if swap_lora_outputs:
+            out_stack_a, out_stack_b = out_stack_b, out_stack_a
 
-    def check_lazy_status(self, category, name, use_prompt_input, text, use_lora_input=True, prompt_input=None,
-                          lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
-                          unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
+        return (final_output, out_stack_a, out_stack_b)
+
+    def check_lazy_status(self, category, name, use_prompt_input, text, use_lora_input=True, swap_lora_outputs=False,
+                          prompt_input=None, lora_stack_a=None, lora_stack_b=None, trigger_words=None,
+                          thumbnail_image=None, unique_id=None, loras_a_toggle=None, loras_b_toggle=None,
+                          trigger_words_toggle=None):
         """Tell ComfyUI which lazy inputs are needed based on current settings.
 
         When use_prompt_input is enabled, we need to request the prompt_input
