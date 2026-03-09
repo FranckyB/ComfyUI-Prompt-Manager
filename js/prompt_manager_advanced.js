@@ -2707,75 +2707,27 @@ function setupUseExternalToggleHandler(node) {
     // Setup use_lora_input toggle handler to update lora display
     if (useLoraInputWidget) {
         const originalLoraInputCallback = useLoraInputWidget.callback;
-        useLoraInputWidget.callback = async function(value) {
+        useLoraInputWidget.callback = function(value) {
             if (originalLoraInputCallback) {
                 originalLoraInputCallback.apply(this, arguments);
             }
 
-            // Clear current (connected) loras and reload saved from prompt
-            // This ensures toggled-off connected loras don't persist
-            node.currentLorasA = [];
-            node.currentLorasB = [];
-            node.currentTriggerWords = [];
-
-            // Reload saved loras from the current prompt to get clean state
-            if (node.prompts) {
-                const promptData = node.prompts[categoryWidget?.value]?.[promptWidget?.value];
-                if (promptData) {
-                    const lorasA = (promptData.loras_a || []).map(lora => ({
-                        ...lora,
-                        active: lora.active !== false,
-                        strength: lora.strength ?? lora.model_strength ?? 1.0,
-                        source: 'saved',
-                        available: true  // Will be updated after check
-                    }));
-                    const lorasB = (promptData.loras_b || []).map(lora => ({
-                        ...lora,
-                        active: lora.active !== false,
-                        strength: lora.strength ?? lora.model_strength ?? 1.0,
-                        source: 'saved',
-                        available: true  // Will be updated after check
-                    }));
-
-                    // Check availability of all loras
-                    const allLoraNames = [
-                        ...lorasA.map(l => l.name),
-                        ...lorasB.map(l => l.name)
-                    ].filter(name => name);
-
-                    if (allLoraNames.length > 0) {
-                        try {
-                            const response = await fetch("/prompt-manager-advanced/check-loras", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ lora_names: allLoraNames })
-                            });
-                            const data = await response.json();
-
-                            if (data.success && data.results) {
-                                // Update availability status
-                                lorasA.forEach(lora => {
-                                    lora.available = data.results[lora.name] !== false;
-                                });
-                                lorasB.forEach(lora => {
-                                    lora.available = data.results[lora.name] !== false;
-                                });
-                            }
-                        } catch (error) {
-                            console.error("[PromptManagerAdvanced] Error checking LoRA availability:", error);
-                        }
-                    }
-
-                    node.savedLorasA = lorasA;
-                    node.savedLorasB = lorasB;
-                } else {
-                    node.savedLorasA = [];
-                    node.savedLorasB = [];
-                }
+            if (!value) {
+                // Switching OFF: clear current (connected) loras AND 
+                // remove any saved loras that came from input (fromInput: true)
+                node.currentLorasA = [];
+                node.currentLorasB = [];
+                node.currentTriggerWords = [];
+                
+                // Keep only saved loras that are from presets (not from input)
+                node.savedLorasA = (node.savedLorasA || []).filter(lora => !lora.fromInput);
+                node.savedLorasB = (node.savedLorasB || []).filter(lora => !lora.fromInput);
             }
+            // When switching ON, keep everything - the update event will sync with input
 
-            // Update lora displays when toggle changes
+            // Update display to reflect the new state
             updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
         };
     }
 
