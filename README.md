@@ -290,6 +290,17 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.17.6
+- **Swap LoRA Stack Outputs**
+  - Added `swap_lora_outputs` toggle to swap LoRA Stack A and B outputs
+  - Useful for quickly testing different LoRA configurations in dual-stack workflows
+- **LoRA Input Handling Fixes**
+  - Fixed issue when no LoRA input was connected: toggling LoRAs off would cause the list to refresh and revert the toggle state
+  - Fixed inability to set LoRA strength to 0 (zero values were incorrectly replaced with 1.0)
+  - Fixed saving prompts to use current displayed state instead of re-querying connected inputs
+  - Added automatic cleanup of input-derived LoRAs when they're no longer present in the connected input
+    - Improving `use_lora_input` toggle behavior to properly remove input-derived LoRAs when switching OFF while preserving preset LoRA toggle states
+
 ### version 1.17.5
 - **Browser Context Menu Enhancements**
   - Added "Delete Prompt", "Rename and Move Prompt" option to prompt right-click menu in the thumbnail browser
