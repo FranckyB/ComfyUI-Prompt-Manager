@@ -153,6 +153,13 @@ export function createFileBrowserModal(currentFile, onFileSelect) {
     modal.appendChild(gridContainer);
     overlay.appendChild(modal);
 
+    // Prevent right-click context menu everywhere in the browser
+    // (video thumbnails have their own handler that will show the refresh menu)
+    overlay.oncontextmenu = (e) => {
+        e.preventDefault();
+        return false;
+    };
+
     // Close button handler
     const closeBtn = topRow.querySelector('.close-btn');
     closeBtn.onclick = () => document.body.removeChild(overlay);
@@ -481,10 +488,24 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     };
 
     // Click handler
-    item.onclick = () => {
+    item.onclick = (e) => {
+        // Don't select if clicking to close context menu
+        if (document.querySelector('.thumbnail-context-menu')) {
+            return;
+        }
         onFileSelect(filename);
         document.body.removeChild(overlay);
     };
+
+    // Right-click context menu - only for video thumbnails
+    if (videoExts.includes(ext)) {
+        item.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showThumbnailContextMenu(e, filename, preview);
+            return false;
+        };
+    }
 
     return item;
 }
@@ -498,6 +519,91 @@ function getFileType(filename) {
     if (videoExts.includes(ext)) return 'video';
     if (ext === 'json') return 'json';
     return 'other';
+}
+
+/**
+ * Show context menu for thumbnail with refresh option
+ */
+function showThumbnailContextMenu(event, filename, previewElement) {
+    // Remove any existing context menu
+    const existingMenu = document.querySelector('.thumbnail-context-menu');
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+
+    // Create context menu
+    const menu = document.createElement('div');
+    menu.className = 'thumbnail-context-menu';
+    menu.style.cssText = `
+        position: fixed;
+        left: ${event.pageX}px;
+        top: ${event.pageY}px;
+        background: rgba(30, 30, 30, 0.98);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        padding: 4px;
+        z-index: 10001;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        min-width: 160px;
+    `;
+
+    // Refresh option
+    const refreshBtn = document.createElement('div');
+    refreshBtn.textContent = '🔄 Refresh Thumbnail';
+    refreshBtn.style.cssText = `
+        padding: 8px 12px;
+        color: #ccc;
+        cursor: pointer;
+        border-radius: 4px;
+        font-size: 13px;
+        transition: background 0.15s ease;
+    `;
+    refreshBtn.onmouseenter = () => {
+        refreshBtn.style.background = 'rgba(66, 153, 225, 0.3)';
+    };
+    refreshBtn.onmouseleave = () => {
+        refreshBtn.style.background = 'transparent';
+    };
+    refreshBtn.onclick = () => {
+        refreshIndividualThumbnail(filename, previewElement);
+        menu.remove();
+    };
+
+    menu.appendChild(refreshBtn);
+    document.body.appendChild(menu);
+
+    // Close menu when clicking outside
+    const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+            e.stopPropagation(); // Prevent click from going through to elements below
+            menu.remove();
+            document.removeEventListener('click', closeMenu, true); // Remove from capture phase
+        }
+    };
+    // Use capture phase to catch the click before it reaches other elements
+    setTimeout(() => {
+        document.addEventListener('click', closeMenu, true);
+    }, 10);
+}
+
+/**
+ * Refresh thumbnail for a single file
+ */
+function refreshIndividualThumbnail(filename, previewElement) {
+    console.log(`[FileBrowser] Refreshing thumbnail for: ${filename}`);
+    
+    // Clear cache for this specific file
+    const cacheKey = `video_thumb_${filename.replace(/[\/\\]/g, '_')}`;
+    
+    try {
+        localStorage.removeItem(cacheKey);
+        console.log(`[FileBrowser] Cleared cache for: ${filename}`);
+    } catch (error) {
+        console.error('[FileBrowser] Error clearing cache:', error);
+    }
+    
+    // Re-extract thumbnail
+    extractVideoThumbnail(filename, previewElement, cacheKey);
 }
 
 function filterThumbnails(container, searchText, fileType) {

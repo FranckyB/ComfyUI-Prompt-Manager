@@ -832,6 +832,15 @@ app.registerExtension({
                             originalCallback.apply(this, arguments);
                         }
 
+                        // Reset frame position to 0 when selecting a new video
+                        if (value && framePositionWidget) {
+                            const ext = value.split('.').pop().toLowerCase();
+                            const videoExtensions = ['mp4', 'webm', 'mov', 'avi'];
+                            if (videoExtensions.includes(ext)) {
+                                framePositionWidget.value = 0;
+                            }
+                        }
+
                         // Load and display the image/video (handles all display logic)
                         loadAndDisplayImage(node, value);
                     };
