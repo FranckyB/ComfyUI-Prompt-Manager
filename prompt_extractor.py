@@ -330,7 +330,7 @@ def extract_metadata_from_png(file_path):
         if not IMAGE_SUPPORT:
             return None, None
 
-        print(f"[PromptExtractor] Falling back to PIL for: {filename}")
+        print(f"[PromptExtractor] Falling back to PIL for: {file_path}")
         with Image.open(file_path) as img:
             metadata = img.info
 
@@ -412,14 +412,14 @@ def extract_metadata_from_jpeg(file_path):
                 else:
                     return metadata, None
         else:
-            print(f"[PromptExtractor] No cached metadata found for JPEG/WebP: {filename}")
+            print(f"[PromptExtractor] No cached metadata found for JPEG/WebP: {file_path}")
             print("[PromptExtractor] Note: Image metadata is read by JavaScript when file is selected")
 
         # Fallback to PIL if no cached data (backwards compatibility)
         if not IMAGE_SUPPORT:
             return None, None
 
-        print(f"[PromptExtractor] Falling back to PIL for: {filename}")
+        print(f"[PromptExtractor] Falling back to PIL for: {file_path}")
         with Image.open(file_path) as img:
             # Try EXIF data
             exif = img.getexif()
@@ -589,7 +589,7 @@ def extract_metadata_from_video(file_path):
                                 workflow_val = tags['workflow']
 
                         if prompt_val or workflow_val:
-                            print(f"[PromptExtractor] Successfully extracted metadata using ffprobe")
+                            print("[PromptExtractor] Successfully extracted metadata using ffprobe")
                             # Cache it for next time
                             _file_metadata_cache[cache_key] = {
                                 'prompt': prompt_val,
@@ -597,11 +597,11 @@ def extract_metadata_from_video(file_path):
                             }
                             return prompt_val, workflow_val
 
-                print(f"[PromptExtractor] No metadata found in video with ffprobe")
+                print("[PromptExtractor] No metadata found in video with ffprobe")
             except FileNotFoundError:
                 print("[PromptExtractor] ffprobe not found - cannot extract video metadata")
             except Exception as e:
-                print(f"[PromptExtractor] ffprobe extraction failed: {e}")
+                print("[PromptExtractor] ffprobe extraction failed: {e}")
 
         return None, None
     except Exception as e:
