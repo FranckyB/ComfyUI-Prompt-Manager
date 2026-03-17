@@ -4228,6 +4228,14 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
     await loadPrompts(node);
     
     return new Promise((resolve) => {
+        // Clean up any stale preview elements from previous modal openings
+        const stalePreviews = document.querySelectorAll('[data-pm-thumbnail-preview]');
+        stalePreviews.forEach(preview => {
+            if (preview.parentNode) {
+                preview.parentNode.removeChild(preview);
+            }
+        });
+        
         let selectedCategory = currentCategory;
 
         const overlay = document.createElement("div");
@@ -4799,13 +4807,13 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     position: relative;
                 `;
 
-                card.onmouseover = () => {
+                card.onmouseenter = () => {
                     if (!isSelected) {
                         card.style.background = '#3a3a3a';
                         card.style.borderColor = '#555';
                     }
                 };
-                card.onmouseout = () => {
+                card.onmouseleave = () => {
                     if (!isSelected) {
                         card.style.background = '#2a2a2a';
                         card.style.borderColor = '#3a3a3a';
@@ -4841,7 +4849,20 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     object-fit: cover;
                     border-radius: 6px;
                     background: #1a1a1a;
+                    display: block;
                 `;
+                
+                // Add hover preview with proper event handling
+                img.addEventListener("mouseenter", (e) => {
+                    console.log("[PM Thumbnail Preview] Grid mode: mouseenter", thumbnail.substring(0, 50));
+                    e.stopPropagation();
+                    showPreviewWithDelay(thumbnail, img);
+                });
+                img.addEventListener("mouseleave", (e) => {
+                    console.log("[PM Thumbnail Preview] Grid mode: mouseleave");
+                    e.stopPropagation();
+                    scheduleHidePreview();
+                });
 
                 // Prompt name
                 const nameLabel = document.createElement("div");
@@ -4945,8 +4966,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     align-items: center;
                     transition: background 0.1s ease;
                 `;
-                row.onmouseover = () => { if (!isSelected) row.style.background = '#2a2a2a'; };
-                row.onmouseout = () => { if (!isSelected) row.style.background = 'transparent'; };
+                row.onmouseenter = () => { if (!isSelected) row.style.background = '#2a2a2a'; };
+                row.onmouseleave = () => { if (!isSelected) row.style.background = 'transparent'; };
 
                 // Thumbnail icon
                 const thumbDiv = document.createElement("div");
@@ -4958,7 +4979,21 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     object-fit: cover;
                     border-radius: 4px;
                     background: #1a1a1a;
+                    display: block;
                 `;
+                
+                // Add hover preview with proper event handling
+                img.addEventListener("mouseenter", (e) => {
+                    console.log("[PM Thumbnail Preview] List mode: mouseenter", thumbnail.substring(0, 50));
+                    e.stopPropagation();
+                    showPreviewWithDelay(thumbnail, img);
+                });
+                img.addEventListener("mouseleave", (e) => {
+                    console.log("[PM Thumbnail Preview] List mode: mouseleave");
+                    e.stopPropagation();
+                    scheduleHidePreview();
+                });
+                
                 thumbDiv.appendChild(img);
 
                 // Name + optional NSFW badge
@@ -5024,6 +5059,143 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             });
         };
 
+        // Thumbnail hover preview system
+        let hoverPreview = null;
+        let hoverTimer = null;
+        let hideTimer = null;
+        let currentMouseX = 0;
+        let currentMouseY = 0;
+        let currentThumbnail = "";
+        let previewWidth = 0;
+        let previewHeight = 0;
+
+        const createHoverPreview = () => {
+            if (!hoverPreview) {
+                hoverPreview = document.createElement("div");
+                hoverPreview.setAttribute('data-pm-thumbnail-preview', 'true');
+                hoverPreview.style.cssText = `
+                    position: fixed;
+                    pointer-events: none;
+                    z-index: 10001;
+                    display: none;
+                    border: 2px solid #666;
+                    border-radius: 8px;
+                    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
+                    background: #1a1a1a;
+                    overflow: hidden;
+                `;
+                const img = document.createElement("img");
+                img.style.cssText = `
+                    display: block;
+                    object-fit: contain;
+                `;
+                
+                hoverPreview.appendChild(img);
+                document.body.appendChild(hoverPreview);
+            }
+            return hoverPreview;
+        };
+
+        const updatePreviewPosition = () => {
+            if (!hoverPreview || !previewWidth || !previewHeight) return;
+            
+            // Center on thumbnail position, keeping on screen
+            let left = currentMouseX - previewWidth / 2;
+            let top = currentMouseY - previewHeight / 2;
+            
+            // Keep on screen with padding
+            left = Math.max(5, Math.min(left, window.innerWidth - previewWidth - 9));
+            top = Math.max(5, Math.min(top, window.innerHeight - previewHeight - 9));
+            
+            hoverPreview.style.left = left + "px";
+            hoverPreview.style.top = top + "px";
+        };
+
+        const showPreviewWithDelay = (thumbnailSrc, thumbnailElement) => {
+            console.log("[PM Thumbnail Preview] showPreviewWithDelay called", thumbnailSrc);
+            // Cancel any pending hide operation
+            clearTimeout(hideTimer);
+            hideTimer = null;
+            
+            const rect = thumbnailElement.getBoundingClientRect();
+            currentMouseX = rect.left + rect.width / 2;
+            currentMouseY = rect.top + rect.height / 2;
+            currentThumbnail = thumbnailSrc;
+            
+            clearTimeout(hoverTimer);
+            hoverTimer = setTimeout(() => {
+                console.log("[PM Thumbnail Preview] Showing preview after delay");
+                const preview = createHoverPreview();
+                const img = preview.querySelector("img");
+                
+                // Set up onload to calculate dimensions and show preview
+                img.onload = function() {
+                    console.log("[PM Thumbnail Preview] Image loaded", this.naturalWidth, "x", this.naturalHeight);
+                    const naturalWidth = this.naturalWidth;
+                    const naturalHeight = this.naturalHeight;
+                    
+                    // Detect thumbnail version and scale appropriately:
+                    // - New thumbnails: smallest dimension ~200px, scale 2x
+                    // - Old thumbnails: largest dimension ~128px, scale 4x
+                    const minDim = Math.min(naturalWidth, naturalHeight);
+                    const maxDim = Math.max(naturalWidth, naturalHeight);
+                    
+                    let scale;
+                    if (minDim >= 180) {
+                        // New thumbnail format (smallest side ~200px)
+                        scale = 2;
+                    } else if (maxDim <= 140) {
+                        // Old thumbnail format (largest side ~128px)
+                        scale = 4;
+                    } else {
+                        // Default to 2x for anything in between
+                        scale = 2;
+                    }
+                    
+                    previewWidth = naturalWidth * scale;
+                    previewHeight = naturalHeight * scale;
+                    
+                    this.style.width = previewWidth + 'px';
+                    this.style.height = previewHeight + 'px';
+                    
+                    updatePreviewPosition();
+                    preview.style.display = "block";
+                    console.log("[PM Thumbnail Preview] Preview shown at", preview.style.left, preview.style.top, "size:", previewWidth, "x", previewHeight);
+                };
+                
+                // Check if image is already loaded (cached)
+                if (img.complete && img.src === thumbnailSrc && img.naturalWidth > 0) {
+                    // Trigger onload manually for cached images
+                    console.log("[PM Thumbnail Preview] Image already cached, triggering onload");
+                    img.onload();
+                } else {
+                    // Load the image
+                    console.log("[PM Thumbnail Preview] Loading image");
+                    img.src = thumbnailSrc;
+                }
+            }, 500);
+        };
+
+        const hidePreview = () => {
+            console.log("[PM Thumbnail Preview] hidePreview called");
+            clearTimeout(hoverTimer);
+            clearTimeout(hideTimer);
+            hideTimer = null;
+            
+            if (hoverPreview) {
+                hoverPreview.style.display = "none";
+                previewWidth = 0;
+                previewHeight = 0;
+            }
+        };
+
+        const scheduleHidePreview = () => {
+            clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => {
+                hidePreview();
+            }, 100);
+        };
+
         // Unified render function: picks grid vs list based on currentViewMode
         const renderContent = (filter = "") => {
             if (currentViewMode === "list") {
@@ -5079,6 +5251,18 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         dialog.appendChild(footer);
 
         const cleanup = () => {
+            clearTimeout(hoverTimer);
+            clearTimeout(hideTimer);
+            hidePreview();
+            if (hoverPreview && hoverPreview.parentNode) {
+                document.body.removeChild(hoverPreview);
+            }
+            hoverPreview = null;
+            // Clean up any stale preview elements
+            const allPreviews = document.querySelectorAll('[data-pm-thumbnail-preview]');
+            allPreviews.forEach(p => {
+                if (p.parentNode) p.parentNode.removeChild(p);
+            });
             document.body.removeChild(overlay);
             document.body.removeChild(dialog);
         };

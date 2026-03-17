@@ -19,13 +19,13 @@ except ImportError:
     print("[PromptManagerAdvanced] Warning: PIL/numpy not available, thumbnail from image input disabled")
 
 
-def image_to_base64_thumbnail(image_tensor, max_size=128):
+def image_to_base64_thumbnail(image_tensor, max_size=200):
     """
     Convert a ComfyUI image tensor to a base64 thumbnail string.
 
     Args:
         image_tensor: ComfyUI image tensor (B, H, W, C) in float32 0-1 range
-        max_size: Maximum dimension for the thumbnail
+        max_size: Minimum dimension for the thumbnail (default 200px for smallest side)
 
     Returns:
         Base64 encoded JPEG string or None if conversion fails
@@ -48,18 +48,15 @@ def image_to_base64_thumbnail(image_tensor, max_size=128):
         # Create PIL Image
         img = Image.fromarray(img_array)
 
-        # Resize maintaining aspect ratio
+        # Resize maintaining aspect ratio, limiting smallest dimension to max_size
         width, height = img.size
-        if width > height:
-            if width > max_size:
-                new_height = int((height * max_size) / width)
-                new_width = max_size
-                img = img.resize((new_width, new_height), Image.LANCZOS)
-        else:
-            if height > max_size:
-                new_width = int((width * max_size) / height)
-                new_height = max_size
-                img = img.resize((new_width, new_height), Image.LANCZOS)
+        min_dim = min(width, height)
+
+        if min_dim > max_size:
+            scale = max_size / min_dim
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            img = img.resize((new_width, new_height), Image.LANCZOS)
 
         # Convert to JPEG base64
         buffer = BytesIO()
