@@ -290,6 +290,15 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.18.0
+- **Thumbnail Hover Preview**
+  - Intelligent delay system: 1000ms initial, then 50ms for fast browsing (resets after 2s inactivity)
+  - Preference toggle in ComfyUI Settings and browser UI (🔍 Preview / 🔍 Off)
+  - Auto-scroll to selected prompt when browser opens
+- **Improved Thumbnail Quality**
+  - Increased resolution to 200x200 (up from 128x128) with aspect ratio preservation
+  - Optimized JSON storage format
+
 ### version 1.17.6
 - **Swap LoRA Stack Outputs**
   - Added `swap_lora_outputs` toggle to swap LoRA Stack A and B outputs
