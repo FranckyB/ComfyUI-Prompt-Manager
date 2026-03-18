@@ -52,11 +52,12 @@ let loraManagerCheckDone = false;
 let loraManagerAvailable = false;
 
 // ========================
-// Session State for NSFW & View Mode
+// Session State for NSFW & View Mode & Thumbnail Preview
 // ========================
 // These persist during a working session but reset to preferences on ComfyUI restart
 let sessionHideNSFW = null;   // null = use preference default
 let sessionViewMode = null;   // null = use preference default
+let sessionEnableThumbnailPreview = null;  // null = use localStorage default
 
 function getHideNSFW() {
     if (sessionHideNSFW !== null) return sessionHideNSFW;
@@ -66,6 +67,15 @@ function getHideNSFW() {
 function getViewMode() {
     if (sessionViewMode !== null) return sessionViewMode;
     return app.ui.settings.getSettingValue("PromptManager.DefaultViewMode");
+}
+
+function getThumbnailPreviewEnabled() {
+    if (sessionEnableThumbnailPreview !== null) return sessionEnableThumbnailPreview;
+    // Try settings API first, fall back to localStorage for backward compatibility
+    const settingValue = app.ui.settings.getSettingValue("PromptManager.EnableThumbnailPreview");
+    if (settingValue !== undefined) return settingValue;
+    const stored = localStorage.getItem("PromptManager.EnableThumbnailPreview");
+    return stored !== null ? stored === "true" : true; // Default to true
 }
 
 /**
@@ -4179,27 +4189,25 @@ const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
  * Resize an image to fit within maxSize while maintaining aspect ratio
  * Returns a base64 data URL
  */
-function resizeImageToThumbnail(file, maxSize = 128) {
+function resizeImageToThumbnail(file, minSize = 200) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
             const img = new Image();
             img.onload = () => {
                 // Calculate new dimensions maintaining aspect ratio
+                // Smallest dimension should be minSize (200px)
                 let width = img.width;
                 let height = img.height;
+                const minDim = Math.min(width, height);
 
-                if (width > height) {
-                    if (width > maxSize) {
-                        height = Math.round((height * maxSize) / width);
-                        width = maxSize;
-                    }
-                } else {
-                    if (height > maxSize) {
-                        width = Math.round((width * maxSize) / height);
-                        height = maxSize;
-                    }
+                if (minDim > minSize) {
+                    // Scale down so smallest dimension = minSize
+                    const scale = minSize / minDim;
+                    width = Math.round(width * scale);
+                    height = Math.round(height * scale);
                 }
+                // Note: We don't scale UP if image is smaller than minSize
 
                 // Create canvas and draw resized image
                 const canvas = document.createElement('canvas');
@@ -4226,6 +4234,9 @@ function resizeImageToThumbnail(file, maxSize = 128) {
 async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
     // Reload prompts to ensure we have the latest data
     await loadPrompts(node);
+    
+    // Check if thumbnail preview is enabled from user preferences
+    const previewEnabled = getThumbnailPreviewEnabled();
     
     return new Promise((resolve) => {
         // Clean up any stale preview elements from previous modal openings
@@ -4416,9 +4427,26 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#2a2a2a'; viewModeBtn.style.color = '#aaa'; };
         updateViewModeBtn();
 
+        // Thumbnail preview toggle button
+        let thumbnailPreviewEnabled = getThumbnailPreviewEnabled();
+        const previewBtn = document.createElement("button");
+        const updatePreviewBtn = () => {
+            previewBtn.textContent = thumbnailPreviewEnabled ? "🔍 Preview" : "🔍 Off";
+            previewBtn.title = thumbnailPreviewEnabled ? "Hover preview enabled — click to disable" : "Hover preview disabled — click to enable";
+            if (!thumbnailPreviewEnabled) {
+                previewBtn.style.cssText = btnStyle + `background: #3a2020; border-color: #744; color: #c88;`;
+            } else {
+                previewBtn.style.cssText = btnStyle;
+            }
+        };
+        previewBtn.onmouseover = () => { if (thumbnailPreviewEnabled) { previewBtn.style.background = '#3a3a3a'; previewBtn.style.color = '#fff'; } };
+        previewBtn.onmouseout = () => { if (thumbnailPreviewEnabled) { previewBtn.style.background = '#2a2a2a'; previewBtn.style.color = '#aaa'; } };
+        updatePreviewBtn();
+
         controlsBar.appendChild(searchWrapper);
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
+        controlsBar.appendChild(previewBtn);
 
         // Category selector
         const categoryContainer = document.createElement("div");
@@ -4794,6 +4822,9 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
 
                 const card = document.createElement("div");
+                if (isSelected) {
+                    card.dataset.selectedPrompt = "true";
+                }
                 card.style.cssText = `
                     display: flex;
                     flex-direction: column;
@@ -4840,29 +4871,31 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     card.appendChild(badge);
                 }
 
-                // Thumbnail image
-                const img = document.createElement("img");
-                img.src = thumbnail;
-                img.style.cssText = `
+                // Thumbnail (using div with background-image to avoid browser extension interference)
+                const thumbDiv = document.createElement("div");
+                thumbDiv.style.cssText = `
                     width: 100px;
                     height: 100px;
-                    object-fit: cover;
+                    background-image: url(${thumbnail});
+                    background-size: cover;
+                    background-position: center;
                     border-radius: 6px;
-                    background: #1a1a1a;
-                    display: block;
+                    background-color: #1a1a1a;
+                    flex-shrink: 0;
+                    cursor: pointer;
                 `;
                 
-                // Add hover preview with proper event handling
-                img.addEventListener("mouseenter", (e) => {
-                    console.log("[PM Thumbnail Preview] Grid mode: mouseenter", thumbnail.substring(0, 50));
-                    e.stopPropagation();
-                    showPreviewWithDelay(thumbnail, img);
-                });
-                img.addEventListener("mouseleave", (e) => {
-                    console.log("[PM Thumbnail Preview] Grid mode: mouseleave");
-                    e.stopPropagation();
-                    scheduleHidePreview();
-                });
+                // Add hover preview with proper event handling (if enabled and not placeholder)
+                if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
+                    thumbDiv.addEventListener("mouseenter", (e) => {
+                        e.stopPropagation();
+                        showPreviewWithDelay(thumbnail, thumbDiv);
+                    });
+                    thumbDiv.addEventListener("mouseleave", (e) => {
+                        e.stopPropagation();
+                        scheduleHidePreview();
+                    });
+                }
 
                 // Prompt name
                 const nameLabel = document.createElement("div");
@@ -4879,7 +4912,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     white-space: nowrap;
                 `;
 
-                card.appendChild(img);
+                card.appendChild(thumbDiv);
                 card.appendChild(nameLabel);
 
                 card.onclick = () => {
@@ -4955,6 +4988,9 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 const triggerCount = (promptData?.trigger_words || []).length;
 
                 const row = document.createElement("div");
+                if (isSelected) {
+                    row.dataset.selectedPrompt = "true";
+                }
                 row.style.cssText = `
                     display: grid;
                     grid-template-columns: 44px 1fr 70px 70px 70px;
@@ -4969,32 +5005,31 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 row.onmouseenter = () => { if (!isSelected) row.style.background = '#2a2a2a'; };
                 row.onmouseleave = () => { if (!isSelected) row.style.background = 'transparent'; };
 
-                // Thumbnail icon
+                // Thumbnail icon (using div with background-image to avoid browser extension interference)
                 const thumbDiv = document.createElement("div");
-                const img = document.createElement("img");
-                img.src = thumbnail;
-                img.style.cssText = `
+                thumbDiv.style.cssText = `
                     width: 36px;
                     height: 36px;
-                    object-fit: cover;
+                    background-image: url(${thumbnail});
+                    background-size: cover;
+                    background-position: center;
                     border-radius: 4px;
-                    background: #1a1a1a;
-                    display: block;
+                    background-color: #1a1a1a;
+                    flex-shrink: 0;
+                    cursor: pointer;
                 `;
                 
-                // Add hover preview with proper event handling
-                img.addEventListener("mouseenter", (e) => {
-                    console.log("[PM Thumbnail Preview] List mode: mouseenter", thumbnail.substring(0, 50));
-                    e.stopPropagation();
-                    showPreviewWithDelay(thumbnail, img);
-                });
-                img.addEventListener("mouseleave", (e) => {
-                    console.log("[PM Thumbnail Preview] List mode: mouseleave");
-                    e.stopPropagation();
-                    scheduleHidePreview();
-                });
-                
-                thumbDiv.appendChild(img);
+                // Add hover preview with proper event handling (if enabled and not placeholder)
+                if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
+                    thumbDiv.addEventListener("mouseenter", (e) => {
+                        e.stopPropagation();
+                        showPreviewWithDelay(thumbnail, thumbDiv);
+                    });
+                    thumbDiv.addEventListener("mouseleave", (e) => {
+                        e.stopPropagation();
+                        scheduleHidePreview();
+                    });
+                }
 
                 // Name + optional NSFW badge
                 const nameDiv = document.createElement("div");
@@ -5063,6 +5098,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         let hoverPreview = null;
         let hoverTimer = null;
         let hideTimer = null;
+        let resetTimer = null;
+        let previewActivated = false;  // Tracks if preview system is "warmed up"
         let currentMouseX = 0;
         let currentMouseY = 0;
         let currentThumbnail = "";
@@ -5081,16 +5118,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     border: 2px solid #666;
                     border-radius: 8px;
                     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
-                    background: #1a1a1a;
-                    overflow: hidden;
-                `;
-                const img = document.createElement("img");
-                img.style.cssText = `
-                    display: block;
-                    object-fit: contain;
+                    background-color: #1a1a1a;
+                    background-size: contain;
+                    background-position: center;
+                    background-repeat: no-repeat;
                 `;
                 
-                hoverPreview.appendChild(img);
                 document.body.appendChild(hoverPreview);
             }
             return hoverPreview;
@@ -5112,72 +5145,54 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         };
 
         const showPreviewWithDelay = (thumbnailSrc, thumbnailElement) => {
-            console.log("[PM Thumbnail Preview] showPreviewWithDelay called", thumbnailSrc);
-            // Cancel any pending hide operation
+            // Cancel any pending hide operation and reset timer
             clearTimeout(hideTimer);
+            clearTimeout(resetTimer);
             hideTimer = null;
+            resetTimer = null;
             
             const rect = thumbnailElement.getBoundingClientRect();
             currentMouseX = rect.left + rect.width / 2;
             currentMouseY = rect.top + rect.height / 2;
             currentThumbnail = thumbnailSrc;
             
+            // Intelligent delay: 1000ms initial, 10ms once activated
+            const delay = previewActivated ? 10 : 1000;
+            
             clearTimeout(hoverTimer);
             hoverTimer = setTimeout(() => {
-                console.log("[PM Thumbnail Preview] Showing preview after delay");
+                previewActivated = true;  // Activate fast mode after first preview
                 const preview = createHoverPreview();
-                const img = preview.querySelector("img");
                 
-                // Set up onload to calculate dimensions and show preview
-                img.onload = function() {
-                    console.log("[PM Thumbnail Preview] Image loaded", this.naturalWidth, "x", this.naturalHeight);
+                // Load image in memory (not in DOM) to get dimensions
+                const tempImg = new Image();
+                tempImg.onload = function() {
                     const naturalWidth = this.naturalWidth;
                     const naturalHeight = this.naturalHeight;
                     
-                    // Detect thumbnail version and scale appropriately:
-                    // - New thumbnails: smallest dimension ~200px, scale 2x
-                    // - Old thumbnails: largest dimension ~128px, scale 4x
-                    const minDim = Math.min(naturalWidth, naturalHeight);
-                    const maxDim = Math.max(naturalWidth, naturalHeight);
-                    
-                    let scale;
-                    if (minDim >= 180) {
-                        // New thumbnail format (smallest side ~200px)
-                        scale = 2;
-                    } else if (maxDim <= 140) {
-                        // Old thumbnail format (largest side ~128px)
-                        scale = 4;
-                    } else {
-                        // Default to 2x for anything in between
-                        scale = 2;
-                    }
+                    // Scale logic:
+                    // - Thumbnails <= 200px in both dimensions: 2x scale (200px -> 400px)
+                    // - Thumbnails > 200px in either dimension: 1x scale (keep original size)
+                    const scale = (naturalWidth > 200 || naturalHeight > 200) ? 1 : 2;
                     
                     previewWidth = naturalWidth * scale;
                     previewHeight = naturalHeight * scale;
                     
-                    this.style.width = previewWidth + 'px';
-                    this.style.height = previewHeight + 'px';
+                    // Update preview div with background image and dimensions
+                    preview.style.width = previewWidth + 'px';
+                    preview.style.height = previewHeight + 'px';
+                    preview.style.backgroundImage = `url(${thumbnailSrc})`;
                     
                     updatePreviewPosition();
                     preview.style.display = "block";
-                    console.log("[PM Thumbnail Preview] Preview shown at", preview.style.left, preview.style.top, "size:", previewWidth, "x", previewHeight);
                 };
                 
-                // Check if image is already loaded (cached)
-                if (img.complete && img.src === thumbnailSrc && img.naturalWidth > 0) {
-                    // Trigger onload manually for cached images
-                    console.log("[PM Thumbnail Preview] Image already cached, triggering onload");
-                    img.onload();
-                } else {
-                    // Load the image
-                    console.log("[PM Thumbnail Preview] Loading image");
-                    img.src = thumbnailSrc;
-                }
-            }, 500);
+                // Load the image
+                tempImg.src = thumbnailSrc;
+            }, delay);
         };
 
         const hidePreview = () => {
-            console.log("[PM Thumbnail Preview] hidePreview called");
             clearTimeout(hoverTimer);
             clearTimeout(hideTimer);
             hideTimer = null;
@@ -5193,6 +5208,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             clearTimeout(hideTimer);
             hideTimer = setTimeout(() => {
                 hidePreview();
+                
+                // Start reset timer: after 2 seconds of no hovering, reset to slow mode
+                clearTimeout(resetTimer);
+                resetTimer = setTimeout(() => {
+                    previewActivated = false;
+                }, 2000);
             }, 100);
         };
 
@@ -5221,8 +5242,25 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             renderContent(searchInput.value);
         };
 
+        previewBtn.onclick = () => {
+            thumbnailPreviewEnabled = !thumbnailPreviewEnabled;
+            sessionEnableThumbnailPreview = thumbnailPreviewEnabled;
+            // Save to settings API (primary) and localStorage (backward compatibility)
+            app.ui.settings.setSettingValue("PromptManager.EnableThumbnailPreview", thumbnailPreviewEnabled);
+            localStorage.setItem("PromptManager.EnableThumbnailPreview", thumbnailPreviewEnabled.toString());
+            updatePreviewBtn();
+        };
+
         // Initial render
         renderContent();
+
+        // Scroll to selected prompt after rendering
+        setTimeout(() => {
+            const selectedElement = gridContainer.querySelector('[data-selected-prompt="true"]');
+            if (selectedElement) {
+                selectedElement.scrollIntoView({ behavior: 'instant', block: 'center' });
+            }
+        }, 50);
 
         // Search filtering
         searchInput.oninput = () => {
@@ -5253,6 +5291,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         const cleanup = () => {
             clearTimeout(hoverTimer);
             clearTimeout(hideTimer);
+            clearTimeout(resetTimer);
             hidePreview();
             if (hoverPreview && hoverPreview.parentNode) {
                 document.body.removeChild(hoverPreview);
@@ -5344,7 +5383,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
             const file = e.target.files[0];
             if (file) {
                 try {
-                    const thumbnail = await resizeImageToThumbnail(file, 128);
+                    const thumbnail = await resizeImageToThumbnail(file, 200);
                     await saveThumbnail(node, category, promptName, thumbnail);
                     onUpdate();
                 } catch (error) {
@@ -5365,7 +5404,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
                 if (imageType) {
                     const blob = await item.getType(imageType);
                     const file = new File([blob], 'clipboard.png', { type: imageType });
-                    const thumbnail = await resizeImageToThumbnail(file, 128);
+                    const thumbnail = await resizeImageToThumbnail(file, 200);
                     await saveThumbnail(node, category, promptName, thumbnail);
                     onUpdate();
                     return;
@@ -5602,32 +5641,25 @@ function createPromptSelectorWidget(node) {
     nameDisplay.onmouseover = () => nameDisplay.style.background = '#252525';
     nameDisplay.onmouseout = () => nameDisplay.style.background = '#1a1a1a';
 
-    // Thumbnail preview tooltip
+    // Thumbnail preview tooltip (screen-fixed, not affected by canvas zoom)
     const thumbnailPreview = document.createElement("div");
     thumbnailPreview.style.cssText = `
-        position: absolute;
-        bottom: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-        background: #2a2a2a;
-        border: 1px solid #444;
-        border-radius: 8px;
-        padding: 8px;
+        position: fixed;
         display: none;
-        z-index: 1000;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-        margin-bottom: 8px;
+        z-index: 10001;
+        pointer-events: none;
     `;
     const thumbnailImg = document.createElement("img");
     thumbnailImg.style.cssText = `
-        width: 128px;
-        height: 128px;
-        object-fit: cover;
-        border-radius: 4px;
+        max-width: 300px;
+        max-height: 300px;
+        object-fit: contain;
+        border-radius: 8px;
         display: block;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     `;
     thumbnailPreview.appendChild(thumbnailImg);
-    container.appendChild(thumbnailPreview);
+    document.body.appendChild(thumbnailPreview);
 
     // Show/hide thumbnail on hover
     let hoverTimeout = null;
@@ -5637,14 +5669,57 @@ function createPromptSelectorWidget(node) {
             const prompt = promptWidget.value;
             const promptData = node.prompts?.[category]?.[prompt];
             const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-            thumbnailImg.src = thumbnail;
-            thumbnailPreview.style.display = "block";
+            
+            // Don't show preview for placeholder/default thumbnail
+            if (thumbnail === DEFAULT_THUMBNAIL) {
+                return;
+            }
+            
+            // Load image to get natural dimensions and display at 1x scale
+            const tempImg = new Image();
+            tempImg.onload = function() {
+                const imgWidth = this.naturalWidth;
+                const imgHeight = this.naturalHeight;
+                
+                // Display at actual thumbnail size (1x scale) with max constraints
+                thumbnailImg.style.width = imgWidth + 'px';
+                thumbnailImg.style.height = imgHeight + 'px';
+                thumbnailImg.src = thumbnail;
+                
+                // Position using screen coordinates (immune to canvas zoom)
+                const rect = nameDisplay.getBoundingClientRect();
+                const margin = 8; // Margin between button and preview
+                
+                // Calculate preview dimensions (no padding, just image)
+                const previewWidth = Math.min(imgWidth, 300);
+                const previewHeight = Math.min(imgHeight, 300);
+                
+                // Center horizontally above the button
+                let left = rect.left + (rect.width / 2) - (previewWidth / 2);
+                let top = rect.top - previewHeight - margin;
+                
+                // Keep on screen with padding
+                left = Math.max(5, Math.min(left, window.innerWidth - previewWidth - 5));
+                top = Math.max(5, Math.min(top, window.innerHeight - previewHeight - 5));
+                
+                thumbnailPreview.style.left = left + 'px';
+                thumbnailPreview.style.top = top + 'px';
+                thumbnailPreview.style.display = "block";
+            };
+            tempImg.src = thumbnail;
         }, 300);
     });
     nameDisplay.addEventListener("mouseleave", () => {
         if (hoverTimeout) clearTimeout(hoverTimeout);
         thumbnailPreview.style.display = "none";
     });
+    
+    // Clean up preview when node is removed
+    node.onRemoved = function() {
+        if (thumbnailPreview && thumbnailPreview.parentNode) {
+            thumbnailPreview.parentNode.removeChild(thumbnailPreview);
+        }
+    };
 
     // Right arrow button
     const rightArrow = document.createElement("button");

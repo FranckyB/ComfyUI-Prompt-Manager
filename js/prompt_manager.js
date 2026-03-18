@@ -133,6 +133,14 @@ app.registerExtension({
             defaultValue: "thumbnails"
         },
         {
+            id: "PromptManager.EnableThumbnailPreview",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Enable Thumbnail Hover Preview"],
+            name: "Enable thumbnail hover preview",
+            tooltip: "When enabled, hovering over thumbnails in the prompt browser shows a larger preview after a short delay.",
+            type: "boolean",
+            defaultValue: true
+        },
+        {
             id: "PromptManager.LLMBackend",
             category: ["Prompt Manager", "5. Ollama Settings", "LLM Backend"],
             name: "LLM Backend",
