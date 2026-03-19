@@ -1169,7 +1169,7 @@ function createLoraTag(lora, index, stackId, node) {
         strengthInput.style.border = "1px solid transparent";
 
         const newValue = parseFloat(strengthInput.value);
-        if (!isNaN(newValue) && newValue >= 0) {
+        if (!isNaN(newValue)) {
             setLoraStrength(node, stackId, index, newValue);
         } else {
             // Reset to current value if invalid
