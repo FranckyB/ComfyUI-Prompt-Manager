@@ -2153,6 +2153,12 @@ class PromptExtractor:
             "required": {
                 "image": (files, {"image_upload": True}),
                 "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
+                "use_lora_input_only": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "input only",
+                    "label_off": "extract",
+                    "tooltip": "When enabled, skip LoRA extraction and use only connected LoRA inputs"
+                }),
             },
             "optional": {
                 "lora_stack_a": ("LORA_STACK",),
@@ -2169,7 +2175,7 @@ class PromptExtractor:
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
-    def extract(self, image="", frame_position=0.0, lora_stack_a=None, lora_stack_b=None, unique_id=None):
+    def extract(self, image="", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, unique_id=None):
         """Extract prompts and LoRAs from the specified file."""
 
         # Handle None for frame_position (workflow compatibility)
@@ -2266,82 +2272,91 @@ class PromptExtractor:
                 loras_a = parsed['loras_a']
                 loras_b = parsed['loras_b']
 
-            # Process loras_a into stack A (only active LoRAs)
-            for lora in loras_a:
-                # Skip inactive LoRAs
-                if not lora.get('active', True):
-                    continue
+            # Process loras only if use_lora_input_only is disabled (extract mode)
+            if not use_lora_input_only:
+                # Process loras_a into stack A (only active LoRAs)
+                for lora in loras_a:
+                    # Skip inactive LoRAs
+                    if not lora.get('active', True):
+                        continue
 
-                # Normalize path separators based on OS
-                lora_path = lora['name']
-                if os.name == 'nt':  # Windows
-                    lora_path = lora_path.replace('/', '\\')
-                else:  # Linux/Mac
-                    lora_path = lora_path.replace('\\', '/')
-                lora_name = os.path.basename(lora_path)
-                model_strength = lora['model_strength']
-                clip_strength = lora['clip_strength']
+                    # Normalize path separators based on OS
+                    lora_path = lora['name']
+                    if os.name == 'nt':  # Windows
+                        lora_path = lora_path.replace('/', '\\')
+                    else:  # Linux/Mac
+                        lora_path = lora_path.replace('\\', '/')
+                    lora_name = os.path.basename(lora_path)
+                    model_strength = lora['model_strength']
+                    clip_strength = lora['clip_strength']
 
-                # PromptManagerAdvanced handles matching to actual files
-                extracted_lora_stack_a.append((lora_path, model_strength, clip_strength))
+                    # PromptManagerAdvanced handles matching to actual files
+                    extracted_lora_stack_a.append((lora_path, model_strength, clip_strength))
 
-            # Process loras_b into stack B (only active LoRAs)
-            for lora in loras_b:
-                # Skip inactive LoRAs
-                if not lora.get('active', True):
-                    continue
+                # Process loras_b into stack B (only active LoRAs)
+                for lora in loras_b:
+                    # Skip inactive LoRAs
+                    if not lora.get('active', True):
+                        continue
 
-                # Normalize path separators based on OS
-                lora_path = lora['name']
-                if os.name == 'nt':  # Windows
-                    lora_path = lora_path.replace('/', '\\')
-                else:  # Linux/Mac
-                    lora_path = lora_path.replace('\\', '/')
-                lora_name = os.path.basename(lora_path)
-                model_strength = lora['model_strength']
-                clip_strength = lora['clip_strength']
+                    # Normalize path separators based on OS
+                    lora_path = lora['name']
+                    if os.name == 'nt':  # Windows
+                        lora_path = lora_path.replace('/', '\\')
+                    else:  # Linux/Mac
+                        lora_path = lora_path.replace('\\', '/')
+                    lora_name = os.path.basename(lora_path)
+                    model_strength = lora['model_strength']
+                    clip_strength = lora['clip_strength']
 
-                # PromptManagerAdvanced handles matching to actual files
-                extracted_lora_stack_b.append((lora_path, model_strength, clip_strength))
+                    # PromptManagerAdvanced handles matching to actual files
+                    extracted_lora_stack_b.append((lora_path, model_strength, clip_strength))
         else:
             if file_path:
                 print(f"[PromptExtractor] File not found: {file_path}")
 
         # Combine input lora stacks with extracted loras
-        # Extracted loras come first (to preserve workflow strengths), then input loras are appended (avoiding duplicates)
         final_lora_stack_a = []
         final_lora_stack_b = []
 
-        # Start with extracted loras (these have the correct strengths from the workflow)
-        final_lora_stack_a.extend(extracted_lora_stack_a)
-        final_lora_stack_b.extend(extracted_lora_stack_b)
+        if use_lora_input_only:
+            # Skip extraction, use only input loras
+            if lora_stack_a is not None and isinstance(lora_stack_a, list):
+                final_lora_stack_a = list(lora_stack_a)
+            if lora_stack_b is not None and isinstance(lora_stack_b, list):
+                final_lora_stack_b = list(lora_stack_b)
+        else:
+            # Extracted loras come first (to preserve workflow strengths), then input loras are appended (avoiding duplicates)
+            # Start with extracted loras (these have the correct strengths from the workflow)
+            final_lora_stack_a.extend(extracted_lora_stack_a)
+            final_lora_stack_b.extend(extracted_lora_stack_b)
 
-        # Build set of existing lora names (compare by base name only, without path or extension)
-        existing_names_a = {os.path.splitext(os.path.basename(lora[0]))[0].lower() for lora in final_lora_stack_a}
-        existing_names_b = {os.path.splitext(os.path.basename(lora[0]))[0].lower() for lora in final_lora_stack_b}
+            # Build set of existing lora names (compare by base name only, without path or extension)
+            existing_names_a = {os.path.splitext(os.path.basename(lora[0]))[0].lower() for lora in final_lora_stack_a}
+            existing_names_b = {os.path.splitext(os.path.basename(lora[0]))[0].lower() for lora in final_lora_stack_b}
 
-        # Add input loras (skip duplicates)
-        if lora_stack_a is not None and isinstance(lora_stack_a, list):
-            added_count = 0
-            skipped_count = 0
-            for lora in lora_stack_a:
-                lora_basename = os.path.splitext(os.path.basename(lora[0]))[0].lower()
-                if lora_basename not in existing_names_a:
-                    final_lora_stack_a.append(lora)
-                    added_count += 1
-                else:
-                    skipped_count += 1
+            # Add input loras (skip duplicates)
+            if lora_stack_a is not None and isinstance(lora_stack_a, list):
+                added_count = 0
+                skipped_count = 0
+                for lora in lora_stack_a:
+                    lora_basename = os.path.splitext(os.path.basename(lora[0]))[0].lower()
+                    if lora_basename not in existing_names_a:
+                        final_lora_stack_a.append(lora)
+                        added_count += 1
+                    else:
+                        skipped_count += 1
 
-        if lora_stack_b is not None and isinstance(lora_stack_b, list):
-            added_count = 0
-            skipped_count = 0
-            for lora in lora_stack_b:
-                lora_basename = os.path.splitext(os.path.basename(lora[0]))[0].lower()
-                if lora_basename not in existing_names_b:
-                    final_lora_stack_b.append(lora)
-                    added_count += 1
-                else:
-                    skipped_count += 1
+            if lora_stack_b is not None and isinstance(lora_stack_b, list):
+                added_count = 0
+                skipped_count = 0
+                for lora in lora_stack_b:
+                    lora_basename = os.path.splitext(os.path.basename(lora[0]))[0].lower()
+                    if lora_basename not in existing_names_b:
+                        final_lora_stack_b.append(lora)
+                        added_count += 1
+                    else:
+                        skipped_count += 1
 
         # Provide placeholder image tensor if none loaded (e.g., for JSON files)
         if image_tensor is None:
@@ -2390,10 +2405,10 @@ class PromptExtractor:
         return results
 
     @classmethod
-    def IS_CHANGED(cls, image, frame_position, **kwargs):
+    def IS_CHANGED(cls, image, frame_position, use_lora_input_only=False, **kwargs):
         """
-        Check if the file has changed or if frame position changed.
-        Returns a tuple of (file_modification_time, frame_position) to track changes.
+        Check if the file has changed or if frame position or use_lora_input_only changed.
+        Returns a tuple to track changes.
         """
         mtime = "no_file"
         if image:
@@ -2407,4 +2422,4 @@ class PromptExtractor:
             elif os.path.exists(file_path):
                 mtime = os.path.getmtime(file_path)
 
-        return (mtime, frame_position)
+        return (mtime, frame_position, use_lora_input_only)
