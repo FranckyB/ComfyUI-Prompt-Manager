@@ -473,9 +473,6 @@ class PromptManagerAdvanced:
             # Check toggle state (case-insensitive lookup)
             toggle_state = toggle_map.get(lora_name.lower(), {'active': True, 'strength': None})
 
-            # Debug logging
-            print(f"[PromptManagerAdvanced] Processing LoRA: {lora_name}, original_strength={model_strength}, toggle_strength={toggle_state.get('strength')}, active={toggle_state.get('active')}")
-
             if not toggle_state['active']:
                 continue  # Skip inactive loras
 
@@ -491,8 +488,6 @@ class PromptManagerAdvanced:
             resolved_path, found = self._resolve_lora_path_with_status(lora_path, lora_files)
             if found:
                 filtered_stack.append((resolved_path, model_strength, clip_strength))
-            else:
-                print(f"[PromptManagerAdvanced] Skipping unfound LoRA: {lora_name}")
 
         return filtered_stack
 
