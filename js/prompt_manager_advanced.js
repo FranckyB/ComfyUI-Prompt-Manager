@@ -383,11 +383,16 @@ app.registerExtension({
                         node.updatePromptSelectorDisplay();
                     }
 
-                    // Load initial prompt data (LoRAs and trigger words)
-                    const categoryWidget = node.widgets.find(w => w.name === "category");
-                    const promptWidget = node.widgets.find(w => w.name === "name");
-                    if (categoryWidget && promptWidget && promptWidget.value) {
-                        loadPromptData(node, categoryWidget.value, promptWidget.value);
+                    // Only load prompt data from file if this is a fresh node creation.
+                    // If onConfigure has already run (workflow restore / page reload / tab switch),
+                    // the node state was restored from serialized widgets - don't overwrite it.
+                    if (!node._configuredFromWorkflow) {
+                        // Load initial prompt data (LoRAs and trigger words)
+                        const categoryWidget = node.widgets.find(w => w.name === "category");
+                        const promptWidget = node.widgets.find(w => w.name === "name");
+                        if (categoryWidget && promptWidget && promptWidget.value) {
+                            loadPromptData(node, categoryWidget.value, promptWidget.value);
+                        }
                     }
 
                     // Ensure height is sufficient after data is loaded
@@ -411,6 +416,10 @@ app.registerExtension({
                 const result = onConfigure?.apply(this, arguments);
 
                 const node = this;
+
+                // Flag that this node is being restored from a workflow,
+                // so onNodeCreated's async loadPromptData won't overwrite state
+                node._configuredFromWorkflow = true;
 
                 // Detect if this is a fresh workflow load (page refresh) vs tab switch
                 // If widgets_values doesn't have current_loras_a or it's a fresh session, clear currentLoras
@@ -495,6 +504,10 @@ app.registerExtension({
                     filterPromptDropdown(node);
                     updateLoraDisplays(node);
                     updateTriggerWordsDisplay(node);
+
+                    // Snapshot restored state so unsaved-changes detection
+                    // doesn't falsely trigger after a reload
+                    updateLastSavedState(node);
 
                     // Update custom prompt selector display
                     if (node.updatePromptSelectorDisplay) {
