@@ -97,6 +97,13 @@ ___
 - **LLM Backend**: Choose between llama.cpp (default) or Ollama as the generation backend.
 - **Ollama Settings**: Configure Ollama URL and keep-alive duration for model memory management.
 
+### Switch Any
+- **Universal Input Switch**: Select one of up to 10 inputs of any type — models, LoRAs, strings, images, anything
+- **True Lazy Switching**: Non-selected inputs are completely invisible to ComfyUI — upstream nodes are never validated or executed, so unused models won't be loaded
+- **Named Inputs**: Provide custom names via a single string field using comma or semicolon separators (e.g., `WAN; FLUX; SDXL`)
+- **Adjustable Input Count**: Slider to set 1–10 active inputs — unused slots are hidden from the node
+- **Named Dropdown**: The select dropdown displays your custom names instead of generic numbers
+
 ### Save Video H264/H265
 - **Codec Selection**: Choose between H.264 (8-bit, better compatibility) or H.265/HEVC (10-bit, better compression and gradients)
 - **Chroma Subsampling**: Select yuv420 (most compatible), yuv422 (better for video editing), or yuv444 (best color, no chroma loss)
@@ -113,6 +120,7 @@ ___
 - **Auto Frame Rate**: Automatically detects optimal playback rate based on video model (Wan, Mochi, LTXV, HunyuanVideo, etc.)
 - **Manual Rate Override**: Optional playback rate override in preferences
 - **VHS Compatible**: Automatically defers to VideoHelperSuite if installed to avoid conflicts
+
 
 ## Installation
 
@@ -236,6 +244,14 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 6. **Save Latent**: Connect a LATENT input and enable "save_latent" to save the latent alongside your video
 7. **Preview Mode**: Set "save" to false for quick preview encoding without saving to output folder
 
+### Switch Any
+
+1. **Add the Node**: Add Node → Prompt Manager → Switch Any
+2. **Set Input Count**: Use the `num_inputs` slider to choose how many inputs you need (1–10)
+3. **Name Your Inputs**: Type names in the `names` field separated by commas or semicolons (e.g., `WAN; FLUX; SDXL`)
+4. **Connect Inputs**: Connect anything to the visible input slots — they'll show your custom names
+5. **Select**: Use the dropdown to pick which input to pass through — only that input's upstream will be executed
+
 ### Animated Latent Preview
 
 1. **Enable in Settings**: Go to ComfyUI Settings → Prompt Manager → 5. Video Sampling
@@ -289,6 +305,16 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.19.0
+- **True Switch Any Node**
+  - Added a 10 input 'True' Switch any node, that takes any inputs, doesn't lock in the type.
+  - Allows rename of inputs using a simple string with all names split using , or ;
+  - True lazy support, any Non selected input is disconnected internally.
+- **Metadata Json**
+  - Added metadata output, so workflow found can be visualized
+- **Bug Fix**
+  - Fixed bug where page reload and switching workflow would needlesly refetch the prompt.
 
 ### version 1.18.0
 - **Thumbnail Hover Preview**

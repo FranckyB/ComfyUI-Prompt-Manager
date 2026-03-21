@@ -2,7 +2,7 @@
 ComfyUI Prompt Manager - A simple custom node for saving and reusing prompts
 A prompt management system for ComfyUI with LLM input support
 """
-__version__ = "1.18.0"
+__version__ = "1.19.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
@@ -14,6 +14,7 @@ from .prompt_apply_lora import PromptApplyLora
 from .prompt_extractor import PromptExtractor
 from .model_manager import get_local_models
 from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo, GetVideoComponentsPlus
+from .switch_any import SwitchAny
 from server import PromptServer
 
 # Initialize latent preview hook (with VHS conflict detection)
@@ -31,6 +32,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadLatentFile": LoadLatentFile,
     "AudioMonoToStereo": MonoToStereo,
     "GetVideoComponentsPlus": GetVideoComponentsPlus,
+    "SwitchAny": SwitchAny,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -44,6 +46,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadLatentFile": "Load Latent File",
     "AudioMonoToStereo": "Audio Mono to Stereo",
     "GetVideoComponentsPlus": "Get Video Components+",
+    "SwitchAny": "Switch Any",
 }
 
 WEB_DIRECTORY = "./js"

@@ -107,6 +107,7 @@ class PromptGenOptions:
         }
 
     CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Configure LLM model, sampling parameters, and system prompt for the Prompt Generator."
     RETURN_TYPES = ("OPTIONS",)
     RETURN_NAMES = ("options",)
     FUNCTION = "create_options"

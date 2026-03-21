@@ -45,6 +45,7 @@ class PromptManager:
         }
 
     CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Simple prompt manager for saving and loading prompts by category. Prompt-only, no LoRA support."
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
     FUNCTION = "get_prompt"

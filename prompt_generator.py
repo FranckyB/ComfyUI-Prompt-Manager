@@ -345,6 +345,7 @@ class PromptGenerator:
         }
 
     CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Generate or enhance prompts using a local LLM via llama.cpp or Ollama."
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("output", "thoughts")
     FUNCTION = "convert_prompt"

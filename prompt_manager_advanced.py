@@ -272,6 +272,7 @@ class PromptManagerAdvanced:
         }
 
     CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Full-featured prompt manager with dual LoRA stack support, trigger words, and thumbnail browser."
     RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK")
     RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b")
     FUNCTION = "get_prompt"

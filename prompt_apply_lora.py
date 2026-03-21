@@ -28,6 +28,7 @@ class PromptApplyLora:
     RETURN_NAMES = ("model", "clip")
     FUNCTION = "apply_stack"
     CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Apply a LoRA stack to a model and optional CLIP."
 
     def apply_stack(self, model, lora_stack, clip=None):
         if not lora_stack:
