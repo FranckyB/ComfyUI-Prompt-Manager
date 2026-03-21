@@ -14,7 +14,7 @@ from .prompt_apply_lora import PromptApplyLora
 from .prompt_extractor import PromptExtractor
 from .model_manager import get_local_models
 from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo, GetVideoComponentsPlus
-from .switch_any import SwitchAny
+from .switch_any import SwitchAny, SwitchAnyBool
 from server import PromptServer
 
 # Initialize latent preview hook (with VHS conflict detection)
@@ -33,6 +33,7 @@ NODE_CLASS_MAPPINGS = {
     "AudioMonoToStereo": MonoToStereo,
     "GetVideoComponentsPlus": GetVideoComponentsPlus,
     "SwitchAny": SwitchAny,
+    "SwitchAnyBool": SwitchAnyBool,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -47,6 +48,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "AudioMonoToStereo": "Audio Mono to Stereo",
     "GetVideoComponentsPlus": "Get Video Components+",
     "SwitchAny": "Switch Any",
+    "SwitchAnyBool": "Switch Any (Boolean)",
 }
 
 WEB_DIRECTORY = "./js"

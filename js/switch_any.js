@@ -53,6 +53,15 @@ app.registerExtension({
                         }
                     }
                 }
+
+                for (const nd of Object.values(result.output)) {
+                    if (nd.class_type !== "SwitchAnyBool") continue;
+                    if (nd.inputs.condition) {
+                        delete nd.inputs.on_false;
+                    } else {
+                        delete nd.inputs.on_true;
+                    }
+                }
             }
             return result;
         };

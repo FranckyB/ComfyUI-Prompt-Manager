@@ -77,3 +77,39 @@ class SwitchAny:
                     raise ValueError(f"Selected input '{name}' is not connected.")
                 return (value,)
         raise ValueError(f"No input matches selection '{select}'.")
+
+
+class SwitchAnyBool:
+    """Boolean switch node — passes through the on_true or on_false input based on a toggle."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "condition": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "on_true": ("*", {"lazy": True}),
+                "on_false": ("*", {"lazy": True}),
+            },
+        }
+
+    CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Boolean switch with true/false inputs. Only the active branch is evaluated."
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("output",)
+    FUNCTION = "switch"
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        return True
+
+    def check_lazy_status(self, condition, **kwargs):
+        return ["on_true"] if condition else ["on_false"]
+
+    def switch(self, condition, on_true=None, on_false=None):
+        value = on_true if condition else on_false
+        label = "on_true" if condition else "on_false"
+        if value is None:
+            raise ValueError(f"Selected input '{label}' is not connected.")
+        return (value,)
