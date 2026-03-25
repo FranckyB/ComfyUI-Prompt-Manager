@@ -7,8 +7,12 @@
 let currentSubfolder = '';
 
 export function createFileBrowserModal(currentFile, onFileSelect) {
-    // Reset to root on open
-    currentSubfolder = '';
+    // If a file is currently selected and lives in a subfolder, open in that folder
+    if (currentFile && currentFile.includes('/')) {
+        currentSubfolder = currentFile.substring(0, currentFile.lastIndexOf('/'));
+    } else {
+        currentSubfolder = '';
+    }
     
     // Create modal overlay
     const overlay = document.createElement('div');
@@ -251,6 +255,17 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
             const item = createThumbnailItem(filename, currentFile, onFileSelect, overlay);
             container.appendChild(item);
         });
+
+        // Scroll to the currently selected file
+        if (currentFile) {
+            const selectedItem = container.querySelector(`.thumbnail-item[data-filename="${CSS.escape(currentFile)}"]`);
+            if (selectedItem) {
+                // Use requestAnimationFrame to ensure layout is complete before scrolling
+                requestAnimationFrame(() => {
+                    selectedItem.scrollIntoView({ block: 'center', behavior: 'instant' });
+                });
+            }
+        }
 
     } catch (error) {
         console.error('[FileBrowser] Error loading files:', error);
