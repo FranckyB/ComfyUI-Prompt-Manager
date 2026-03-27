@@ -4440,26 +4440,9 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#2a2a2a'; viewModeBtn.style.color = '#aaa'; };
         updateViewModeBtn();
 
-        // Thumbnail preview toggle button
-        let thumbnailPreviewEnabled = getThumbnailPreviewEnabled();
-        const previewBtn = document.createElement("button");
-        const updatePreviewBtn = () => {
-            previewBtn.textContent = thumbnailPreviewEnabled ? "🔍 Preview" : "🔍 Off";
-            previewBtn.title = thumbnailPreviewEnabled ? "Hover preview enabled — click to disable" : "Hover preview disabled — click to enable";
-            if (!thumbnailPreviewEnabled) {
-                previewBtn.style.cssText = btnStyle + `background: #3a2020; border-color: #744; color: #c88;`;
-            } else {
-                previewBtn.style.cssText = btnStyle;
-            }
-        };
-        previewBtn.onmouseover = () => { if (thumbnailPreviewEnabled) { previewBtn.style.background = '#3a3a3a'; previewBtn.style.color = '#fff'; } };
-        previewBtn.onmouseout = () => { if (thumbnailPreviewEnabled) { previewBtn.style.background = '#2a2a2a'; previewBtn.style.color = '#aaa'; } };
-        updatePreviewBtn();
-
         controlsBar.appendChild(searchWrapper);
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
-        controlsBar.appendChild(previewBtn);
 
         // Category selector
         const categoryContainer = document.createElement("div");
@@ -5253,15 +5236,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             sessionViewMode = currentViewMode;
             updateViewModeBtn();
             renderContent(searchInput.value);
-        };
-
-        previewBtn.onclick = () => {
-            thumbnailPreviewEnabled = !thumbnailPreviewEnabled;
-            sessionEnableThumbnailPreview = thumbnailPreviewEnabled;
-            // Save to settings API (primary) and localStorage (backward compatibility)
-            app.ui.settings.setSettingValue("PromptManager.EnableThumbnailPreview", thumbnailPreviewEnabled);
-            localStorage.setItem("PromptManager.EnableThumbnailPreview", thumbnailPreviewEnabled.toString());
-            updatePreviewBtn();
         };
 
         // Initial render
