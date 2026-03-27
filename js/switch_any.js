@@ -81,6 +81,8 @@ app.registerExtension({
             const numWidget = node.widgets.find(w => w.name === "num_inputs");
             const namesWidget = node.widgets.find(w => w.name === "names");
 
+            node._refreshSwitchAny = refreshNode;
+
             function refreshNode() {
                 if (!selectWidget || !numWidget || !namesWidget) return;
                 const count = numWidget.value ?? 2;
@@ -131,6 +133,14 @@ app.registerExtension({
             // Initial sync
             setTimeout(refreshNode, 50);
 
+            return result;
+        };
+
+        // Refresh names every time the node is executed
+        const onExecuted = nodeType.prototype.onExecuted;
+        nodeType.prototype.onExecuted = function (data) {
+            const result = onExecuted?.apply(this, arguments);
+            if (this._refreshSwitchAny) this._refreshSwitchAny();
             return result;
         };
 

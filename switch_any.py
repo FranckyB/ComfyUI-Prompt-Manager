@@ -99,6 +99,7 @@ class SwitchAnyBool:
     RETURN_TYPES = ("*",)
     RETURN_NAMES = ("output",)
     FUNCTION = "switch"
+    OUTPUT_NODE = True
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):
