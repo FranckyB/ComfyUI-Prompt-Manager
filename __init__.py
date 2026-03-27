@@ -2,7 +2,7 @@
 ComfyUI Prompt Manager - A simple custom node for saving and reusing prompts
 A prompt management system for ComfyUI with LLM input support
 """
-__version__ = "1.19.0"
+__version__ = "1.20.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
@@ -11,7 +11,7 @@ from .prompt_manager_advanced import PromptManagerAdvanced
 from .prompt_generator import PromptGenerator
 from .prompt_generator_options import PromptGenOptions
 from .prompt_apply_lora import PromptApplyLora
-from .prompt_extractor import PromptExtractor
+from .prompt_extractor import PromptExtractor, BetterImageLoader
 from .model_manager import get_local_models
 from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo, GetVideoComponentsPlus
 from .switch_any import SwitchAny, SwitchAnyBool
@@ -28,6 +28,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptGenOptions": PromptGenOptions,
     "PromptApplyLora": PromptApplyLora,
     "PromptExtractor": PromptExtractor,
+    "BetterImageLoader": BetterImageLoader,
     "SaveVideoH26x": SaveVideoH26x,
     "LoadLatentFile": LoadLatentFile,
     "AudioMonoToStereo": MonoToStereo,
@@ -43,6 +44,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptGenOptions": "Prompt Generator Options",
     "PromptApplyLora": "Prompt Apply LoRA",
     "PromptExtractor": "Prompt Extractor",
+    "BetterImageLoader": "Better Image Loader",
     "SaveVideoH26x": "Save Video H264/H265",
     "LoadLatentFile": "Load Latent File",
     "AudioMonoToStereo": "Audio Mono to Stereo",

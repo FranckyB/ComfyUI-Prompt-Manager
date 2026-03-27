@@ -9,7 +9,9 @@ A complete prompt management solution featuring three core capabilities:
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp) or [Ollama](https://ollama.com). Supports text enhancement, image analysis with vision models (Qwen3.5), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
-**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai.
+**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai. Browse files from both your input and output folders.
+
+**Better Image Loader** — A streamlined image and video loader with the same powerful file browser as Prompt Extractor, but focused purely on loading media. Browse input or output folders, preview images and videos, scrub through video frames, and drag-and-drop files — without any metadata extraction or LoRA processing.
 ___
 
 <div align="center">
@@ -66,10 +68,20 @@ ___
 ### Prompt Extractor:
 - **Extract from Images/Videos**: Load images or videos and extract embedded prompts, LoRAs, and workflow metadata
 - **JSON Workflow Support**: Browse and load JSON workflow files directly to extract prompts and LoRA configurations
+- **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
 - **Dual LoRA Stack Output**: Outputs two separate LoRA stacks for workflows using dual stacking (e.g., Wan video)
 - **Active LoRA Filtering**: Only extracts LoRAs that are marked as active in the source workflow
 - **Wide Node Compatibility**: Supports extraction from CLIP Text Encode, various sampler nodes, and LoRA stackers including Power Lora Loader
 - **Preview in Manager**: View extracted data and repathed loras using Manager Advanced.
+
+### Better Image Loader:
+- **Lightweight Image/Video Loading**: Load images and video frames without metadata extraction or LoRA processing
+- **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
+- **File Browser**: Same thumbnail browser as Prompt Extractor with subfolder navigation
+- **Video Frame Scrubbing**: Load any frame from a video using the frame position slider
+- **Drag-and-Drop Support**: Drop images or videos directly onto the node
+- **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
+- **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
@@ -182,11 +194,20 @@ ___
 ### Prompt Extractor
 
 1. **Add the Node**: Add Node → Prompt Manager → Prompt Extractor
-2. **Load Media**: Select an image or video from your input folder or use the upload button to access file from anywhere.
-3. **JSON Workflows**: Support extracting from JSON, by importing workflow files directly using the upload button.
-4. **Extract Data**: The node automatically extracts prompts, LoRAs, and trigger words from embedded metadata
-5. **View Results**: Extracted positive/negative prompts display in the text outputs, LoRA stacks output as LORA_STACK
-6. **Use with Manager**: Connect the LoRA stack outputs to Prompt Manager Advanced to view and save the extracted configuration
+2. **Choose Source Folder**: Use the `source_folder` dropdown to browse files from either your **input** or **output** folder
+3. **Load Media**: Select an image or video from the file browser, or drag-and-drop files onto the node
+4. **JSON Workflows**: Support extracting from JSON, by importing workflow files directly
+5. **Extract Data**: The node automatically extracts prompts, LoRAs, and trigger words from embedded metadata
+6. **View Results**: Extracted positive/negative prompts display in the text outputs, LoRA stacks output as LORA_STACK
+7. **Use with Manager**: Connect the LoRA stack outputs to Prompt Manager Advanced to view and save the extracted configuration
+
+### Better Image Loader
+
+1. **Add the Node**: Add Node → Prompt Manager → Better Image Loader
+2. **Choose Source Folder**: Use the `source_folder` dropdown to browse files from either your **input** or **output** folder
+3. **Load Media**: Select an image or video from the file browser, or drag-and-drop files onto the node
+4. **Video Frames**: For videos, use the `frame_position` slider to select which frame to load (0.0 = first, 1.0 = last)
+5. **Connect Output**: Use the IMAGE output with any node that accepts an image input
 
 ### Prompt Generator
 
@@ -305,6 +326,18 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.20.0
+- **New Node: Better Image Loader**
+  - Streamlined image and video loader with the same file browser as Prompt Extractor
+  - Browse input or output folders, preview images and videos, scrub through video frames
+  - Drag-and-drop support, single IMAGE output — no metadata extraction or LoRA processing
+- **Prompt Extractor: Input/Output Folder Switching**
+  - New `source_folder` toggle to browse files from either your input or output directory
+  - File browser, thumbnails, and previews all respect the selected source folder
+- **Switch Any Bug Fix**
+  - Fixed SwitchAnyBool not triggering upstream node execution
+  - Fixed SwitchAny input names reverting to defaults after execution
 
 ### version 1.19.0
 - **True Switch Any Node**

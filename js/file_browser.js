@@ -5,8 +5,12 @@
 
 // Track current subfolder for navigation
 let currentSubfolder = '';
+// Track current source folder (input or output)
+let currentSourceFolder = 'input';
 
-export function createFileBrowserModal(currentFile, onFileSelect) {
+export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) {
+    // Store source folder
+    currentSourceFolder = sourceFolder || 'input';
     // If a file is currently selected and lives in a subfolder, open in that folder
     if (currentFile && currentFile.includes('/')) {
         currentSubfolder = currentFile.substring(0, currentFile.lastIndexOf('/'));
@@ -59,7 +63,7 @@ export function createFileBrowserModal(currentFile, onFileSelect) {
     const topRow = document.createElement('div');
     topRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
     topRow.innerHTML = `
-        <h3 style="margin: 0; color: #aaa;">Select File from Input Folder</h3>
+        <h3 style="margin: 0; color: #aaa;">Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder</h3>
         <div style="display: flex; gap: 10px; align-items: center;">
             <button class="regenerate-cache-btn" style="
                 background: #333;
@@ -86,7 +90,7 @@ export function createFileBrowserModal(currentFile, onFileSelect) {
     const breadcrumb = document.createElement('div');
     breadcrumb.className = 'folder-breadcrumb';
     breadcrumb.style.cssText = 'font-size: 12px; color: #888; cursor: pointer;';
-    breadcrumb.textContent = 'input/';
+    breadcrumb.textContent = `${currentSourceFolder}/`;
     breadcrumb.onclick = () => {
         if (currentSubfolder) {
             currentSubfolder = '';
@@ -197,19 +201,19 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
     try {
         // Update breadcrumb
         if (!currentSubfolder) {
-            breadcrumbElement.textContent = 'input/';
+            breadcrumbElement.textContent = `${currentSourceFolder}/`;
         } else {
-            breadcrumbElement.textContent = `input/${currentSubfolder}/`;
+            breadcrumbElement.textContent = `${currentSourceFolder}/${currentSubfolder}/`;
         }
         
         // Fetch file list from server
-        const response = await fetch('/prompt-extractor/list-files');
+        const response = await fetch(`/prompt-extractor/list-files?source=${encodeURIComponent(currentSourceFolder)}`);
         const data = await response.json();
         
         container.innerHTML = '';
         
         if (!data.files || data.files.length === 0) {
-            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #aaa;">No files found in input directory</div>';
+            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #aaa;">No files found in ' + currentSourceFolder + ' directory</div>';
             return;
         }
 
@@ -445,7 +449,7 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
             subfolder = filename.substring(0, lastSlash);
             basename = filename.substring(lastSlash + 1);
         }
-        img.src = `/view?filename=${encodeURIComponent(basename)}&type=input&subfolder=${encodeURIComponent(subfolder)}`;
+        img.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}`;
         img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
         img.onerror = () => {
             // Use placeholder image
@@ -760,7 +764,7 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
         subfolder = filename.substring(0, lastSlash);
         basename = filename.substring(lastSlash + 1);
     }
-    video.src = `/view?filename=${encodeURIComponent(basename)}&type=input&subfolder=${encodeURIComponent(subfolder)}&${Date.now()}`;
+    video.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}&${Date.now()}`;
 }
 
 /**

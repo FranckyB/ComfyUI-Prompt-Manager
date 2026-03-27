@@ -438,7 +438,7 @@ async function cacheVideoFrame(filename, frameData, framePosition) {
 /**
  * Create and show image preview modal
  */
-function showImagePreviewModal(filename) {
+function showImagePreviewModal(filename, viewType) {
     // Build image URL
     let actualFilename = filename;
     let subfolder = "";
@@ -449,7 +449,7 @@ function showImagePreviewModal(filename) {
         actualFilename = filename.substring(lastSlash + 1);
     }
     
-    let imageUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+    let imageUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType || 'input'}`;
     if (subfolder) {
         imageUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
     }
@@ -590,7 +590,7 @@ function showImagePreviewModal(filename) {
 /**
  * Create and show video preview modal
  */
-function showVideoPreviewModal(filename) {
+function showVideoPreviewModal(filename, viewType) {
     // Build video URL
     let actualFilename = filename;
     let subfolder = "";
@@ -601,7 +601,7 @@ function showVideoPreviewModal(filename) {
         actualFilename = filename.substring(lastSlash + 1);
     }
     
-    let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+    let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType || 'input'}`;
     if (subfolder) {
         videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
     }
@@ -812,9 +812,38 @@ app.registerExtension({
                 // Track the currently loaded image filename and frame position to prevent unnecessary reloads
                 node._loadedImageFilename = null;
                 node._loadedFramePosition = null;
+                // Track source folder for URL type
+                node._sourceFolder = 'input';
 
                 // Find the frame_position widget (slider) early so we can reference it
                 const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
+
+                // Find the source_folder widget
+                const sourceFolderWidget = this.widgets?.find(w => w.name === "source_folder");
+                if (sourceFolderWidget) {
+                    node._sourceFolder = sourceFolderWidget.value || 'input';
+                    const origSourceFolderCb = sourceFolderWidget.callback;
+                    sourceFolderWidget.callback = async function(value) {
+                        if (origSourceFolderCb) origSourceFolderCb.apply(this, arguments);
+                        node._sourceFolder = value || 'input';
+                        // Refresh file list for the new source folder
+                        try {
+                            const listResponse = await api.fetchApi(`/prompt-extractor/list-files?source=${encodeURIComponent(value)}`);
+                            if (listResponse.ok) {
+                                const result = await listResponse.json();
+                                if (imageWidget) {
+                                    imageWidget.options.values = ["(none)", ...(result.files || [])];
+                                    // Reset selection since files are from a different folder
+                                    imageWidget.value = "(none)";
+                                    if (imageWidget.callback) imageWidget.callback("(none)");
+                                }
+                            }
+                        } catch (err) {
+                            console.warn('[PromptExtractor] Could not fetch file list for source folder:', err);
+                        }
+                        node.setDirtyCanvas(true);
+                    };
+                }
 
                 // Find the image widget (combo dropdown)
                 const imageWidget = this.widgets?.find(w => w.name === "image");
@@ -870,6 +899,7 @@ app.registerExtension({
                         value: null,
                         callback: () => {
                             const currentFile = imageWidget.value === "(none)" ? null : imageWidget.value;
+                            const sourceFolder = node._sourceFolder || 'input';
                             
                             // Open file browser modal
                             createFileBrowserModal(currentFile, (selectedFile) => {
@@ -883,7 +913,7 @@ app.registerExtension({
                                 
                                 // Mark node as needing update
                                 node.setDirtyCanvas(true);
-                            });
+                            }, sourceFolder);
                         },
                         serialize: false // Don't save button state
                     };
@@ -966,6 +996,12 @@ app.registerExtension({
                 const onConfigure = node.onConfigure;
                 node.onConfigure = function(info) {
                     const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+
+                    // Restore source_folder from widget value
+                    const sfWidget = this.widgets?.find(w => w.name === "source_folder");
+                    if (sfWidget) {
+                        node._sourceFolder = sfWidget.value || 'input';
+                    }
 
                     // Restore frame_position if it exists in the workflow data
                     if (info && info.widgets_values && framePositionWidget) {
@@ -1064,7 +1100,8 @@ app.registerExtension({
                             if (imageWidget) {
                                 // Fetch updated file list from server
                                 try {
-                                    const listResponse = await api.fetchApi('/prompt-extractor/list-files');
+                                    const sourceFolder = node._sourceFolder || 'input';
+                                    const listResponse = await api.fetchApi(`/prompt-extractor/list-files?source=${encodeURIComponent(sourceFolder)}`);
                                     if (listResponse.ok) {
                                         const result = await listResponse.json();
                                         if (result.files && result.files.length > 0) {
@@ -1205,11 +1242,12 @@ app.registerExtension({
                             localPos[1] >= bounds.y && localPos[1] <= bounds.y + bounds.height) {
                             // Open preview modal
                             const imageWidget = node.widgets?.find(w => w.name === "image");
+                            const viewType = node._sourceFolder || 'input';
                             if (imageWidget && imageWidget.value) {
                                 if (node._isVideoFile) {
-                                    showVideoPreviewModal(imageWidget.value);
+                                    showVideoPreviewModal(imageWidget.value, viewType);
                                 } else {
-                                    showImagePreviewModal(imageWidget.value);
+                                    showImagePreviewModal(imageWidget.value, viewType);
                                 }
                             }
                             return true; // Consume the event
@@ -1237,6 +1275,7 @@ async function extractAndUpdateMetadata(node, filename) {
 
     try {
         const ext = filename.split('.').pop().toLowerCase();
+        const viewType = node._sourceFolder || 'input';
         
         // Split path into filename and subfolder for proper URL handling
         let actualFilename = filename;
@@ -1249,7 +1288,7 @@ async function extractAndUpdateMetadata(node, filename) {
         }
         
         // Build URL with subfolder parameter if present
-        let fileUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+        let fileUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType}`;
         if (subfolder) {
             fileUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
         }
@@ -1356,9 +1395,23 @@ async function loadAndDisplayImage(node, filename) {
  */
 async function loadImageFile(node, filename) {
     try {
+        const viewType = node._sourceFolder || 'input';
+
         // Fetch the image file to extract metadata
-        const imageBlob = await fetch(`/view?filename=${encodeURIComponent(filename)}&type=input`)
-            .then(res => res.blob());
+        // Handle subfolder paths
+        let actualFilename = filename;
+        let subfolder = "";
+        if (filename.includes('/')) {
+            const lastSlash = filename.lastIndexOf('/');
+            subfolder = filename.substring(0, lastSlash);
+            actualFilename = filename.substring(lastSlash + 1);
+        }
+        let fileUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType}`;
+        if (subfolder) {
+            fileUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
+        }
+
+        const imageBlob = await fetch(fileUrl).then(res => res.blob());
 
         // Extract metadata from image file (PNG or JPEG/WebP)
         const ext = filename.split('.').pop().toLowerCase();
@@ -1402,8 +1455,8 @@ async function loadImageFile(node, filename) {
             showPlaceholder(node);
         };
 
-        // Load from input directory
-        img.src = `/view?filename=${encodeURIComponent(filename)}&type=input&${Date.now()}`;
+        // Load from input/output directory
+        img.src = `${fileUrl}&${Date.now()}`;
     } catch (error) {
         console.error("[PromptExtractor] Error loading image:", error);
         showPlaceholder(node);
@@ -1415,9 +1468,22 @@ async function loadImageFile(node, filename) {
  */
 async function loadJSONFile(node, filename) {
     try {
+        const viewType = node._sourceFolder || 'input';
+
         // Fetch the JSON file
-        const jsonBlob = await fetch(`/view?filename=${encodeURIComponent(filename)}&type=input`)
-            .then(res => res.blob());
+        let actualFilename = filename;
+        let subfolder = "";
+        if (filename.includes('/')) {
+            const lastSlash = filename.lastIndexOf('/');
+            subfolder = filename.substring(0, lastSlash);
+            actualFilename = filename.substring(lastSlash + 1);
+        }
+        let fileUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType}`;
+        if (subfolder) {
+            fileUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
+        }
+
+        const jsonBlob = await fetch(fileUrl).then(res => res.blob());
 
         // Extract metadata from JSON file
         const metadata = await getJSONMetadata(jsonBlob);
@@ -1450,6 +1516,7 @@ async function loadVideoFrame(node, filename) {
         // Get frame position from the widget (0.0 to 1.0)
         const framePositionWidget = node.widgets?.find(w => w.name === "frame_position");
         const framePosition = framePositionWidget ? framePositionWidget.value : 0.0;
+        const viewType = node._sourceFolder || 'input';
 
         // Split path into filename and subfolder for ComfyUI's /view endpoint
         let actualFilename = filename;
@@ -1462,7 +1529,7 @@ async function loadVideoFrame(node, filename) {
         }
         
         // Build URL with subfolder parameter if present
-        let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=input`;
+        let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType}`;
         if (subfolder) {
             videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
         }
@@ -1573,3 +1640,330 @@ function showPlaceholder(node) {
 }
 
 console.log("[PromptExtractor] Extension loaded");
+
+/**
+ * BetterImageLoader - stripped-down image loader with same UI but no metadata extraction
+ */
+app.registerExtension({
+    name: "BetterImageLoader",
+
+    async setup() {
+        // Listen for frame extraction requests from Python backend
+        api.addEventListener("better-image-loader-extract-frame", async (event) => {
+            const { filename, frame_position } = event.detail;
+            if (app.graph && app.graph._nodes) {
+                for (const node of app.graph._nodes) {
+                    if (node.type === "BetterImageLoader") {
+                        const imageWidget = node.widgets?.find(w => w.name === "image");
+                        const frameWidget = node.widgets?.find(w => w.name === "frame_position");
+                        if (imageWidget && imageWidget.value === filename) {
+                            if (frameWidget && frame_position !== undefined) {
+                                frameWidget.value = frame_position;
+                            }
+                            await loadAndDisplayImage(node, filename);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    },
+
+    async beforeRegisterNodeDef(nodeType, nodeData, app) {
+        if (nodeData.name !== "BetterImageLoader") return;
+
+        const onNodeCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+            const result = onNodeCreated?.apply(this, arguments);
+            const node = this;
+
+            node._loadedImageFilename = null;
+            node._loadedFramePosition = null;
+            node._sourceFolder = 'input';
+
+            const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
+
+            // Source folder widget
+            const sourceFolderWidget = this.widgets?.find(w => w.name === "source_folder");
+            if (sourceFolderWidget) {
+                node._sourceFolder = sourceFolderWidget.value || 'input';
+                const origSfCb = sourceFolderWidget.callback;
+                sourceFolderWidget.callback = async function(value) {
+                    if (origSfCb) origSfCb.apply(this, arguments);
+                    node._sourceFolder = value || 'input';
+                    try {
+                        const listResponse = await api.fetchApi(`/prompt-extractor/list-files?source=${encodeURIComponent(value)}`);
+                        if (listResponse.ok) {
+                            const result = await listResponse.json();
+                            if (imageWidget) {
+                                imageWidget.options.values = ["(none)", ...(result.files || [])];
+                                imageWidget.value = "(none)";
+                                if (imageWidget.callback) imageWidget.callback("(none)");
+                            }
+                        }
+                    } catch (err) {
+                        console.warn('[BetterImageLoader] Could not fetch file list:', err);
+                    }
+                    node.setDirtyCanvas(true);
+                };
+            }
+
+            // Image widget
+            const imageWidget = this.widgets?.find(w => w.name === "image");
+            if (imageWidget) {
+                let lastImageValue = imageWidget.value;
+
+                const originalCallback = imageWidget.callback;
+                imageWidget.callback = function(value) {
+                    if (originalCallback) originalCallback.apply(this, arguments);
+
+                    if (value && framePositionWidget) {
+                        const ext = value.split('.').pop().toLowerCase();
+                        if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
+                            framePositionWidget.value = 0;
+                        }
+                    }
+
+                    loadAndDisplayImage(node, value);
+                };
+
+                // Browse Files button
+                const imageWidgetIndex = this.widgets.indexOf(imageWidget);
+                const browseButton = {
+                    type: "button",
+                    name: "\u{1F4C1} Browse Files",
+                    value: null,
+                    callback: () => {
+                        const currentFile = imageWidget.value === "(none)" ? null : imageWidget.value;
+                        const sourceFolder = node._sourceFolder || 'input';
+                        createFileBrowserModal(currentFile, (selectedFile) => {
+                            imageWidget.value = selectedFile;
+                            if (imageWidget.callback) imageWidget.callback(selectedFile);
+                            node.setDirtyCanvas(true);
+                        }, sourceFolder);
+                    },
+                    serialize: false
+                };
+                this.widgets.splice(imageWidgetIndex + 1, 0, browseButton);
+                Object.defineProperty(browseButton, "node", { value: node });
+
+                node._isVideoFile = false;
+
+                const updateVideoUIVisibility = () => {
+                    const isVideo = isVideoFile(imageWidget.value);
+                    node._isVideoFile = isVideo;
+                    if (framePositionWidget) {
+                        framePositionWidget.hidden = !isVideo;
+                    }
+                    node.setDirtyCanvas(true);
+                };
+
+                const wrappedCallback = imageWidget.callback;
+                imageWidget.callback = function(value) {
+                    if (wrappedCallback) wrappedCallback.apply(this, arguments);
+                    updateVideoUIVisibility();
+                };
+
+                setTimeout(updateVideoUIVisibility, 100);
+            }
+
+            // Frame position widget
+            if (framePositionWidget) {
+                framePositionWidget.serialize = true;
+                framePositionWidget.hidden = true;
+
+                const origFrameCb = framePositionWidget.callback;
+                let frameUpdateTimer = null;
+
+                framePositionWidget.callback = function(value) {
+                    if (origFrameCb) origFrameCb.apply(this, arguments);
+                    if (frameUpdateTimer) clearTimeout(frameUpdateTimer);
+                    frameUpdateTimer = setTimeout(() => {
+                        if (imageWidget && imageWidget.value) {
+                            const ext = imageWidget.value.split('.').pop().toLowerCase();
+                            if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
+                                loadVideoFrame(node, imageWidget.value);
+                            }
+                        }
+                    }, 300);
+                };
+            }
+
+            // Restore on workflow load
+            const onConfigure = node.onConfigure;
+            node.onConfigure = function(info) {
+                const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+
+                const sfWidget = this.widgets?.find(w => w.name === "source_folder");
+                if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
+
+                if (info && info.widgets_values && framePositionWidget) {
+                    const idx = this.widgets.findIndex(w => w.name === "frame_position");
+                    if (idx >= 0 && info.widgets_values[idx] !== undefined) {
+                        framePositionWidget.value = info.widgets_values[idx];
+                    }
+                }
+
+                if (imageWidget && imageWidget.value && imageWidget.value !== "(none)") {
+                    const isVideo = isVideoFile(imageWidget.value);
+                    const currentFramePos = framePositionWidget ? framePositionWidget.value : 0.0;
+                    const expectedFilename = encodeURIComponent(imageWidget.value);
+                    const hasCorrectImage = node.imgs && node.imgs[0] &&
+                        node.imgs[0].src && node.imgs[0].src.includes(expectedFilename);
+                    const alreadyLoaded = node._loadedImageFilename === imageWidget.value &&
+                        (!isVideo || node._loadedFramePosition === currentFramePos) &&
+                        hasCorrectImage;
+                    if (!alreadyLoaded) {
+                        loadAndDisplayImage(node, imageWidget.value);
+                    }
+                }
+                return result;
+            };
+
+            // Initial load
+            if (imageWidget) {
+                setTimeout(() => {
+                    if (imageWidget.value && imageWidget.value !== "(none)") {
+                        if (node._loadedImageFilename !== imageWidget.value) {
+                            loadAndDisplayImage(node, imageWidget.value);
+                        }
+                    } else {
+                        showPlaceholder(node);
+                    }
+                }, 10);
+            }
+
+            // Drag and drop
+            node.onDragOver = function(e) {
+                if (e.dataTransfer && e.dataTransfer.items) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return true;
+                }
+                return false;
+            };
+
+            node.onDragDrop = async function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) return false;
+
+                const file = e.dataTransfer.files[0];
+                const filename = file.name;
+                const ext = filename.split('.').pop().toLowerCase();
+                if (!['png', 'jpg', 'jpeg', 'webp', 'mp4', 'webm', 'mov', 'avi'].includes(ext)) return false;
+
+                const formData = new FormData();
+                formData.append('image', file);
+                formData.append('subfolder', '');
+                formData.append('type', 'input');
+
+                try {
+                    const response = await api.fetchApi('/upload/image', { method: 'POST', body: formData });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (imageWidget) {
+                            try {
+                                const sf = node._sourceFolder || 'input';
+                                const listResponse = await api.fetchApi(`/prompt-extractor/list-files?source=${encodeURIComponent(sf)}`);
+                                if (listResponse.ok) {
+                                    const result = await listResponse.json();
+                                    imageWidget.options.values = ["(none)", ...(result.files || [])];
+                                }
+                            } catch (err) {}
+                            imageWidget.value = data.name;
+                            if (imageWidget.callback) imageWidget.callback(data.name);
+                        }
+                    }
+                } catch (error) {
+                    console.error('[BetterImageLoader] Error uploading file:', error);
+                }
+                return true;
+            };
+
+            // Preview play icon
+            const onDrawForeground = node.onDrawForeground;
+            node.onDrawForeground = function(ctx) {
+                const result = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
+
+                if (node.imgs && node.imgs.length > 0 && !(node.flags && node.flags.collapsed)) {
+                    const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+
+                    const imageWidget = node.widgets?.find(w => w.name === "image");
+                    const currentFile = imageWidget?.value;
+                    if (isPreviewableFile(currentFile)) {
+                        const playX = node.size[0] - 8 - 14;
+                        const playY = (titleHeight / 2) - 30;
+                        const triSize = 8;
+
+                        ctx.beginPath();
+                        ctx.moveTo(playX - triSize, playY - triSize);
+                        ctx.lineTo(playX - triSize, playY + triSize);
+                        ctx.lineTo(playX + triSize, playY);
+                        ctx.closePath();
+                        ctx.fillStyle = node._hoverPreviewIcon ? '#ffffff' : 'rgba(255, 255, 255, 0.7)';
+                        ctx.fill();
+
+                        node._previewIconBounds = {
+                            x: playX - triSize - 3,
+                            y: playY - triSize - 3,
+                            width: triSize * 2 + 6,
+                            height: triSize * 2 + 6
+                        };
+                    } else {
+                        node._previewIconBounds = null;
+                    }
+                } else {
+                    node._previewIconBounds = null;
+                }
+
+                return result;
+            };
+
+            const onMouseMove = node.onMouseMove;
+            node.onMouseMove = function(e, localPos, canvas) {
+                const result = onMouseMove ? onMouseMove.apply(this, arguments) : undefined;
+                if (node._previewIconBounds) {
+                    const bounds = node._previewIconBounds;
+                    if (localPos[0] >= bounds.x && localPos[0] <= bounds.x + bounds.width &&
+                        localPos[1] >= bounds.y && localPos[1] <= bounds.y + bounds.height) {
+                        canvas.canvas.style.cursor = 'pointer';
+                        canvas.canvas.title = 'Click to preview';
+                        node._hoverPreviewIcon = true;
+                        node.setDirtyCanvas(true);
+                    } else {
+                        if (node._hoverPreviewIcon) {
+                            node._hoverPreviewIcon = false;
+                            node.setDirtyCanvas(true);
+                        }
+                        canvas.canvas.style.cursor = '';
+                    }
+                }
+                return result;
+            };
+
+            const onMouseDown = node.onMouseDown;
+            node.onMouseDown = function(e, localPos, canvas) {
+                if (node._previewIconBounds && node.imgs && node.imgs.length > 0) {
+                    const bounds = node._previewIconBounds;
+                    if (localPos[0] >= bounds.x && localPos[0] <= bounds.x + bounds.width &&
+                        localPos[1] >= bounds.y && localPos[1] <= bounds.y + bounds.height) {
+                        const imageWidget = node.widgets?.find(w => w.name === "image");
+                        const viewType = node._sourceFolder || 'input';
+                        if (imageWidget && imageWidget.value) {
+                            if (node._isVideoFile) {
+                                showVideoPreviewModal(imageWidget.value, viewType);
+                            } else {
+                                showImagePreviewModal(imageWidget.value, viewType);
+                            }
+                        }
+                        return true;
+                    }
+                }
+                return onMouseDown ? onMouseDown.apply(this, arguments) : undefined;
+            };
+
+            return result;
+        };
+    }
+});

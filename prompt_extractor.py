@@ -239,24 +239,29 @@ async def extract_video_metadata_api(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
-# API endpoint to list files in input directory
+# API endpoint to list files in input or output directory
 @server.PromptServer.instance.routes.get("/prompt-extractor/list-files")
 async def list_input_files(request):
-    """API endpoint to get list of supported files in input directory, including subfolders"""
+    """API endpoint to get list of supported files in input or output directory, including subfolders"""
     try:
-        input_dir = folder_paths.get_input_directory()
+        source = request.rel_url.query.get('source', 'input')
+        if source == 'output':
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
+
         files = []
         supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
 
-        if os.path.exists(input_dir):
+        if os.path.exists(base_dir):
             # Walk through directory recursively
-            for root, dirs, filenames in os.walk(input_dir):
+            for root, dirs, filenames in os.walk(base_dir):
                 for filename in filenames:
                     ext = os.path.splitext(filename)[1].lower()
                     if ext in supported_extensions:
-                        # Get relative path from input directory
+                        # Get relative path from base directory
                         full_path = os.path.join(root, filename)
-                        rel_path = os.path.relpath(full_path, input_dir)
+                        rel_path = os.path.relpath(full_path, base_dir)
                         # Convert Windows backslashes to forward slashes
                         rel_path = rel_path.replace('\\', '/')
                         files.append(rel_path)
@@ -2152,7 +2157,11 @@ class PromptExtractor:
 
         return {
             "required": {
-                "image": (files, {"image_upload": True}),
+                "source_folder": (["input", "output"], {
+                    "default": "input",
+                    "tooltip": "Browse files from the input or output folder"
+                }),
+                "image": (files, {}),
                 "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
                 "use_lora_input_only": ("BOOLEAN", {
                     "default": False,
@@ -2177,7 +2186,7 @@ class PromptExtractor:
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
-    def extract(self, image="", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, unique_id=None):
+    def extract(self, image="", source_folder="input", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, unique_id=None):
         """Extract prompts and LoRAs from the specified file."""
 
         # Handle None for frame_position (workflow compatibility)
@@ -2206,11 +2215,14 @@ class PromptExtractor:
         if image and image.strip():
             file_path = image.strip()
 
-            # Handle relative paths (check input directory first, then temp as fallback)
+            # Handle relative paths (check selected source directory first, then temp as fallback)
             if not os.path.isabs(file_path):
-                # Check input directory first (this is where files should be)
-                input_dir = folder_paths.get_input_directory()
-                potential_path = os.path.join(input_dir, file_path)
+                # Check selected source directory first
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                potential_path = os.path.join(base_dir, file_path)
                 if os.path.exists(potential_path):
                     resolved_path = potential_path
                 else:
@@ -2220,7 +2232,7 @@ class PromptExtractor:
                     if os.path.exists(potential_path):
                         resolved_path = potential_path
                     else:
-                        print(f"[PromptExtractor] File not found in input or temp directories: {file_path}")
+                        print(f"[PromptExtractor] File not found in {source_folder} or temp directories: {file_path}")
             else:
                 if os.path.exists(file_path):
                     resolved_path = file_path
@@ -2253,10 +2265,13 @@ class PromptExtractor:
             elif ext in ['.mp4', '.webm', '.mov', '.avi']:
                 prompt_data, workflow_data = extract_metadata_from_video(resolved_path)
                 # Get frame cached by JavaScript at the specified position
-                # Get relative path from input directory to match JavaScript cache keys
-                input_dir = folder_paths.get_input_directory()
-                if resolved_path.startswith(input_dir):
-                    relative_path = os.path.relpath(resolved_path, input_dir)
+                # Get relative path from base directory to match JavaScript cache keys
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                if resolved_path.startswith(base_dir):
+                    relative_path = os.path.relpath(resolved_path, base_dir)
                     relative_path = relative_path.replace('\\', '/')  # Normalize to forward slashes
                 else:
                     relative_path = os.path.basename(resolved_path)
@@ -2429,9 +2444,9 @@ class PromptExtractor:
         return results
 
     @classmethod
-    def IS_CHANGED(cls, image, frame_position, use_lora_input_only=False, **kwargs):
+    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, use_lora_input_only=False, **kwargs):
         """
-        Check if the file has changed or if frame position or use_lora_input_only changed.
+        Check if the file has changed or if frame position, source_folder, or use_lora_input_only changed.
         Returns a tuple to track changes.
         """
         mtime = "no_file"
@@ -2439,11 +2454,170 @@ class PromptExtractor:
             file_path = image.strip()
             # Handle relative paths
             if not os.path.isabs(file_path):
-                input_dir = folder_paths.get_input_directory()
-                potential_path = os.path.join(input_dir, file_path)
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                potential_path = os.path.join(base_dir, file_path)
                 if os.path.exists(potential_path):
                     mtime = os.path.getmtime(potential_path)
             elif os.path.exists(file_path):
                 mtime = os.path.getmtime(file_path)
 
-        return (mtime, frame_position, use_lora_input_only)
+        return (mtime, source_folder, frame_position, use_lora_input_only)
+
+
+class BetterImageLoader:
+    """
+    A streamlined image loader with file browser, preview, and input/output folder switching.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        input_dir = folder_paths.get_input_directory()
+        files = ["(none)"]
+        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
+
+        if os.path.exists(input_dir):
+            for root, dirs, filenames in os.walk(input_dir):
+                for filename in filenames:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext in supported_extensions:
+                        full_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(full_path, input_dir)
+                        rel_path = rel_path.replace('\\', '/')
+                        files.append(rel_path)
+
+        files_to_sort = files[1:]
+        files_to_sort.sort()
+        files = ["(none)"] + files_to_sort
+
+        return {
+            "required": {
+                "source_folder": (["input", "output"], {
+                    "default": "input",
+                    "tooltip": "Browse files from the input or output folder"
+                }),
+                "image": (files, {}),
+                "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+            },
+        }
+
+    CATEGORY = "Prompt Manager"
+    DESCRIPTION = "A better image/video loader with file browser, preview, and input/output folder switching."
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "load"
+    OUTPUT_NODE = True
+
+    def load(self, image="", source_folder="input", frame_position=0.0, unique_id=None):
+        if frame_position is None:
+            frame_position = 0.0
+
+        image_tensor = None
+
+        if image is None:
+            image = ""
+        if image == "(none)":
+            image = ""
+
+        resolved_path = None
+        file_path = ""
+        if image and image.strip():
+            file_path = image.strip()
+
+            if not os.path.isabs(file_path):
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                potential_path = os.path.join(base_dir, file_path)
+                if os.path.exists(potential_path):
+                    resolved_path = potential_path
+                else:
+                    temp_dir = folder_paths.get_temp_directory()
+                    potential_path = os.path.join(temp_dir, file_path)
+                    if os.path.exists(potential_path):
+                        resolved_path = potential_path
+            else:
+                if os.path.exists(file_path):
+                    resolved_path = file_path
+
+        if resolved_path:
+            ext = os.path.splitext(resolved_path)[1].lower()
+
+            if ext in ['.png', '.jpg', '.jpeg', '.webp']:
+                image_tensor = load_image_as_tensor(resolved_path)
+
+            elif ext in ['.mp4', '.webm', '.mov', '.avi']:
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                if resolved_path.startswith(base_dir):
+                    relative_path = os.path.relpath(resolved_path, base_dir)
+                    relative_path = relative_path.replace('\\', '/')
+                else:
+                    relative_path = os.path.basename(resolved_path)
+                image_tensor = get_cached_video_frame(relative_path, frame_position)
+
+                if image_tensor is None:
+                    image_tensor = get_placeholder_image_tensor()
+
+        if image_tensor is None:
+            image_tensor = get_placeholder_image_tensor()
+
+        preview_images = self._save_preview_images(image_tensor)
+
+        return {
+            "ui": {"images": preview_images},
+            "result": (image_tensor,)
+        }
+
+    def _save_preview_images(self, images):
+        import random
+        results = []
+        output_dir = folder_paths.get_temp_directory()
+
+        for i in range(images.shape[0]):
+            img = images[i]
+            if hasattr(img, 'cpu'):
+                img = img.cpu().numpy()
+            img = (img * 255).astype(np.uint8)
+            pil_img = Image.fromarray(img)
+
+            filename = f"better_image_loader_preview_{random.randint(0, 0xFFFFFF):06x}.png"
+            filepath = os.path.join(output_dir, filename)
+            pil_img.save(filepath)
+
+            results.append({
+                "filename": filename,
+                "subfolder": "",
+                "type": "temp"
+            })
+
+        return results
+
+    @classmethod
+    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, **kwargs):
+        mtime = "no_file"
+        if image:
+            file_path = image.strip()
+            if not os.path.isabs(file_path):
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                potential_path = os.path.join(base_dir, file_path)
+                if os.path.exists(potential_path):
+                    mtime = os.path.getmtime(potential_path)
+            elif os.path.exists(file_path):
+                mtime = os.path.getmtime(file_path)
+
+        return (mtime, source_folder, frame_position)
