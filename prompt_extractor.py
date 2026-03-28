@@ -158,15 +158,19 @@ async def extract_video_metadata_api(request):
     try:
         data = await request.json()
         filename = data.get('filename')
+        source = data.get('source', 'input')
 
         print(f"[PromptExtractor] JavaScript requested ffprobe extraction for: {filename}")
 
         if not filename:
             return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
 
-        # Build full path
-        input_dir = folder_paths.get_input_directory()
-        file_path = os.path.join(input_dir, filename.replace('/', os.sep))
+        # Build full path based on source folder
+        if source == 'output':
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
 
         if not os.path.exists(file_path):
             print(f"[PromptExtractor] File not found: {file_path}")
@@ -308,10 +312,13 @@ def resolve_lora_path(lora_name):
 def extract_metadata_from_png(file_path):
     """Extract workflow/prompt metadata from PNG file (cached from JavaScript)"""
     try:
-        # Try to get relative path from input directory first (matches JavaScript cache keys)
+        # Try to get relative path from input or output directory (matches JavaScript cache keys)
         input_dir = folder_paths.get_input_directory()
+        output_dir = folder_paths.get_output_directory()
         if file_path.startswith(input_dir):
             cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
+        elif file_path.startswith(output_dir):
+            cache_key = os.path.relpath(file_path, output_dir).replace('\\', '/')
         else:
             cache_key = os.path.basename(file_path)
 
@@ -397,10 +404,13 @@ def extract_metadata_from_png(file_path):
 def extract_metadata_from_jpeg(file_path):
     """Extract workflow/prompt metadata from JPEG/WebP file (cached from JavaScript)"""
     try:
-        # Try to get relative path from input directory first (matches JavaScript cache keys)
+        # Try to get relative path from input or output directory (matches JavaScript cache keys)
         input_dir = folder_paths.get_input_directory()
+        output_dir = folder_paths.get_output_directory()
         if file_path.startswith(input_dir):
             cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
+        elif file_path.startswith(output_dir):
+            cache_key = os.path.relpath(file_path, output_dir).replace('\\', '/')
         else:
             cache_key = os.path.basename(file_path)
 
@@ -465,10 +475,13 @@ def extract_metadata_from_jpeg(file_path):
 def extract_metadata_from_json(file_path):
     """Extract workflow data from JSON file (cached from JavaScript)"""
     try:
-        # Try to get relative path from input directory first (matches JavaScript cache keys)
+        # Try to get relative path from input or output directory (matches JavaScript cache keys)
         input_dir = folder_paths.get_input_directory()
+        output_dir = folder_paths.get_output_directory()
         if file_path.startswith(input_dir):
             cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
+        elif file_path.startswith(output_dir):
+            cache_key = os.path.relpath(file_path, output_dir).replace('\\', '/')
         else:
             cache_key = os.path.basename(file_path)
 
@@ -512,13 +525,14 @@ def extract_metadata_from_json(file_path):
 def extract_metadata_from_video(file_path):
     """Extract workflow/prompt metadata from video file (cached from JavaScript)"""
     try:
-        # Get the relative path from input directory to match JavaScript cache keys
+        # Get the relative path from input or output directory to match JavaScript cache keys
         input_dir = folder_paths.get_input_directory()
+        output_dir = folder_paths.get_output_directory()
         if file_path.startswith(input_dir):
-            # Normalize path separators to forward slashes
             cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
+        elif file_path.startswith(output_dir):
+            cache_key = os.path.relpath(file_path, output_dir).replace('\\', '/')
         else:
-            # Fallback to basename for absolute paths outside input dir
             cache_key = os.path.basename(file_path)
 
         # Check if metadata was cached by JavaScript
@@ -2186,6 +2200,10 @@ class PromptExtractor:
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        return True
+
     def extract(self, image="", source_folder="input", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, unique_id=None):
         """Extract prompts and LoRAs from the specified file."""
 
@@ -2515,6 +2533,10 @@ class BetterImageLoader:
     RETURN_NAMES = ("image",)
     FUNCTION = "load"
     OUTPUT_NODE = True
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        return True
 
     def load(self, image="", source_folder="input", frame_position=0.0, unique_id=None):
         if frame_position is None:

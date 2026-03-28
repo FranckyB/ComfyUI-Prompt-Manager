@@ -362,13 +362,13 @@ async function getVideoMetadata(file) {
 /**
  * Request Python to extract video metadata using ffprobe (fallback)
  */
-async function extractVideoMetadataWithPython(filename) {
+async function extractVideoMetadataWithPython(filename, source = 'input') {
     try {
         console.log(`[PromptExtractor] Requesting Python ffprobe extraction for: ${filename}`);
         const response = await api.fetchApi("/prompt-extractor/extract-video-metadata", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ filename })
+            body: JSON.stringify({ filename, source })
         });
 
         if (response.ok) {
@@ -1003,6 +1003,23 @@ app.registerExtension({
                         node._sourceFolder = sfWidget.value || 'input';
                     }
 
+                    // Refresh file list if source folder is not the default (input)
+                    // INPUT_TYPES only lists input files, so output files need to be fetched
+                    if (node._sourceFolder === 'output' && imageWidget) {
+                        api.fetchApi(`/prompt-extractor/list-files?source=output`).then(resp => {
+                            if (resp.ok) return resp.json();
+                        }).then(data => {
+                            if (data && data.files) {
+                                const savedValue = imageWidget.value;
+                                imageWidget.options.values = ["(none)", ...data.files];
+                                // Restore saved value if it exists in the new list
+                                if (savedValue && data.files.includes(savedValue)) {
+                                    imageWidget.value = savedValue;
+                                }
+                            }
+                        }).catch(() => {});
+                    }
+
                     // Restore frame_position if it exists in the workflow data
                     if (info && info.widgets_values && framePositionWidget) {
                         // Find the frame_position widget's index
@@ -1319,7 +1336,7 @@ async function extractAndUpdateMetadata(node, filename) {
             // If JavaScript parser failed, ask Python to try with ffprobe
             if (metadata === null) {
                 console.log(`[PromptExtractor] JavaScript parser returned null, trying Python ffprobe for: ${filename}`);
-                metadata = await extractVideoMetadataWithPython(filename);
+                metadata = await extractVideoMetadataWithPython(filename, viewType);
                 
                 if (metadata) {
                     console.log(`[PromptExtractor] Successfully got metadata from Python for: ${filename}`);
@@ -1796,6 +1813,21 @@ app.registerExtension({
 
                 const sfWidget = this.widgets?.find(w => w.name === "source_folder");
                 if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
+
+                // Refresh file list if source folder is output (INPUT_TYPES only lists input files)
+                if (node._sourceFolder === 'output' && imageWidget) {
+                    api.fetchApi(`/prompt-extractor/list-files?source=output`).then(resp => {
+                        if (resp.ok) return resp.json();
+                    }).then(data => {
+                        if (data && data.files) {
+                            const savedValue = imageWidget.value;
+                            imageWidget.options.values = ["(none)", ...data.files];
+                            if (savedValue && data.files.includes(savedValue)) {
+                                imageWidget.value = savedValue;
+                            }
+                        }
+                    }).catch(() => {});
+                }
 
                 if (info && info.widgets_values && framePositionWidget) {
                     const idx = this.widgets.findIndex(w => w.name === "frame_position");
