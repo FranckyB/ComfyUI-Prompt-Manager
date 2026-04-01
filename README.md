@@ -10,8 +10,6 @@ A complete prompt management solution featuring three core capabilities:
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp) or [Ollama](https://ollama.com). Supports text enhancement, image analysis with vision models (Qwen3.5), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
 **Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai. Browse files from both your input and output folders.
-
-**Better Image Loader** — A streamlined image and video loader with the same powerful file browser as Prompt Extractor, but focused purely on loading media. Browse input or output folders, preview images and videos, scrub through video frames, and drag-and-drop files — without any metadata extraction or LoRA processing.
 ___
 
 <div align="center">
@@ -59,12 +57,6 @@ ___
 - **LoRA Manager Integration**: If [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) is installed, hovering over LoRA tags shows preview images
 - **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
 
-
-### Prompt Apply LoRA:
-- **Simple LoRA Application**: Takes a LORA_STACK and applies it to your model/clip
-- **Works with Any Stacker**: Compatible with LoRA Manager's stacker or any node outputting LORA_STACK
-- **Optional CLIP**: CLIP input is optional for workflows that don't need it
-
 ### Prompt Extractor:
 - **Extract from Images/Videos**: Load images or videos and extract embedded prompts, LoRAs, and workflow metadata
 - **JSON Workflow Support**: Browse and load JSON workflow files directly to extract prompts and LoRA configurations
@@ -73,15 +65,6 @@ ___
 - **Active LoRA Filtering**: Only extracts LoRAs that are marked as active in the source workflow
 - **Wide Node Compatibility**: Supports extraction from CLIP Text Encode, various sampler nodes, and LoRA stackers including Power Lora Loader
 - **Preview in Manager**: View extracted data and repathed loras using Manager Advanced.
-
-### Better Image Loader:
-- **Lightweight Image/Video Loading**: Load images and video frames without metadata extraction or LoRA processing
-- **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
-- **File Browser**: Same thumbnail browser as Prompt Extractor with subfolder navigation
-- **Video Frame Scrubbing**: Load any frame from a video using the frame position slider
-- **Drag-and-Drop Support**: Drop images or videos directly onto the node
-- **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
-- **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
@@ -108,30 +91,6 @@ ___
 - Set custom Location for Llama.cpp. If Llama.cpp was not added to the system Path, this option let's you specify it's location.
 - **LLM Backend**: Choose between llama.cpp (default) or Ollama as the generation backend.
 - **Ollama Settings**: Configure Ollama URL and keep-alive duration for model memory management.
-
-### Switch Any
-- **Universal Input Switch**: Select one of up to 10 inputs of any type — models, LoRAs, strings, images, anything
-- **True Lazy Switching**: Non-selected inputs are completely invisible to ComfyUI — upstream nodes are never validated or executed, so unused models won't be loaded
-- **Named Inputs**: Provide custom names via a single string field using comma or semicolon separators (e.g., `WAN; FLUX; SDXL`)
-- **Adjustable Input Count**: Slider to set 1–10 active inputs — unused slots are hidden from the node
-- **Named Dropdown**: The select dropdown displays your custom names instead of generic numbers
-
-### Save Video H264/H265
-- **Codec Selection**: Choose between H.264 (8-bit, better compatibility) or H.265/HEVC (10-bit, better compression and gradients)
-- **Chroma Subsampling**: Select yuv420 (most compatible), yuv422 (better for video editing), or yuv444 (best color, no chroma loss)
-- **Quality Control**: Constant Rate Factor (CRF) from 0-51 for fine-tuned quality vs file size balance
-- **Preview Mode**: Quick preview encoding to temp folder without saving to output
-- **Save Latent**: Optionally save the latent alongside the video for later experimentation without regeneration
-- **Audio Support**: Preserves audio from VIDEO input with proper sync
-- **Workflow Metadata**: Embeds full workflow metadata in MP4 (unlike VideoHelperSuite which strips it from audio clips)
-- **Browser Preview**: Automatically generates browser-compatible preview for H.265 + yuv422/444 combinations
-
-### Animated Latent Preview
-- **Video Sampling Preview**: Display animated previews during KSampler execution for video models
-- **TAESD Support**: Works with both Latent2RGB and TAESD preview methods (including high-quality video TAESD)
-- **Auto Frame Rate**: Automatically detects optimal playback rate based on video model (Wan, Mochi, LTXV, HunyuanVideo, etc.)
-- **Manual Rate Override**: Optional playback rate override in preferences
-- **VHS Compatible**: Automatically defers to VideoHelperSuite if installed to avoid conflicts
 
 
 ## Installation
@@ -183,14 +142,6 @@ ___
 7. **Override Mode**: Enable "Override Lora" checkbox to ignore connected inputs and use only the saved preset LoRAs
 8. **Connect Outputs**: Use `lora_stack_a` and `lora_stack_b` outputs with the Apply LoRA Stack node
 
-### Apply LoRA Stack
-
-1. **Add the Node**: Add Node → Prompt Manager → Apply LoRA Stack
-2. **Connect Model**: Connect your model (e.g., from Load Checkpoint) to the `model` input
-3. **Connect LoRA Stack**: Connect a `LORA_STACK` output (from Prompt Manager Advanced or LoRA Manager's stacker)
-4. **Optional CLIP**: Connect CLIP if your workflow needs it (some video workflows don't)
-5. **Use Outputs**: Connect the modified model/clip to your sampler or other nodes
-
 ### Prompt Extractor
 
 1. **Add the Node**: Add Node → Prompt Manager → Prompt Extractor
@@ -201,13 +152,6 @@ ___
 6. **View Results**: Extracted positive/negative prompts display in the text outputs, LoRA stacks output as LORA_STACK
 7. **Use with Manager**: Connect the LoRA stack outputs to Prompt Manager Advanced to view and save the extracted configuration
 
-### Better Image Loader
-
-1. **Add the Node**: Add Node → Prompt Manager → Better Image Loader
-2. **Choose Source Folder**: Use the `source_folder` dropdown to browse files from either your **input** or **output** folder
-3. **Load Media**: Select an image or video from the file browser, or drag-and-drop files onto the node
-4. **Video Frames**: For videos, use the `frame_position` slider to select which frame to load (0.0 = first, 1.0 = last)
-5. **Connect Output**: Use the IMAGE output with any node that accepts an image input
 
 ### Prompt Generator
 
@@ -255,34 +199,6 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - **Ollama URL**: Set the Ollama server address (default: http://127.0.0.1:11434)
 - **Keep Alive Duration**: How long Ollama keeps the model loaded after a request (e.g. 5m, 30m, 0 for immediate unload)
 
-### Save Video H264/H265
-
-1. **Add the Node**: Add Node → Prompt Manager → Save Video H264/H265
-2. **Connect VIDEO**: Connect a VIDEO output (e.g., from VAE Decode for video models)
-3. **Choose Codec**: Select h264 for compatibility or h265 for better quality/compression
-4. **Set Quality**: Adjust CRF (18-23 recommended for high quality, lower = better quality but larger files)
-5. **Chroma Options**: Use yuv420 for maximum compatibility, yuv444 for best color preservation
-6. **Save Latent**: Connect a LATENT input and enable "save_latent" to save the latent alongside your video
-7. **Preview Mode**: Set "save" to false for quick preview encoding without saving to output folder
-
-### Switch Any
-
-1. **Add the Node**: Add Node → Prompt Manager → Switch Any
-2. **Set Input Count**: Use the `num_inputs` slider to choose how many inputs you need (1–10)
-3. **Name Your Inputs**: Type names in the `names` field separated by commas or semicolons (e.g., `WAN; FLUX; SDXL`)
-4. **Connect Inputs**: Connect anything to the visible input slots — they'll show your custom names
-5. **Select**: Use the dropdown to pick which input to pass through — only that input's upstream will be executed
-
-### Animated Latent Preview
-
-1. **Enable in Settings**: Go to ComfyUI Settings → Prompt Manager → 5. Video Sampling
-2. **Toggle On**: Enable "Display animated previews when sampling"
-3. **Optional Rate**: Set "Playback rate override" to force a specific FPS (0 = auto-detect from model)
-4. **Run Video Workflow**: During KSampler execution, you'll see an animated preview of the video being generated
-5. **Works with TAESD**: Enable TAESD in ComfyUI preview settings for higher quality previews
-
-**Note**: If VideoHelperSuite is installed and enabled, its latent preview takes priority to avoid conflicts.
-
 ## Requirements
 
 - ComfyUI
@@ -326,6 +242,10 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.21.0
+- **Removed miscellaneous tools** — Switch Any, Save Video H26x, Apply LoRA Stack, Better Image Loader, and Animated Latent Preview have been moved to a dedicated repository: [ComfyUI-FBnodes](https://github.com/FranckyB/ComfyUI-FBnodes)
+- **Project restructure** — Organized node files into `nodes/` and utility modules into `py/` for cleaner codebase
 
 ### version 1.20.0
 - **New Node: Better Image Loader**

@@ -1,5 +1,5 @@
-from .model_manager import get_all_models, is_model_local, download_model, get_mmproj_for_model, get_mmproj_path, _preferences_cache
-from .ollama_wrapper import discover_ollama_models, is_ollama_available
+from ..py.model_manager import get_all_models, is_model_local, download_model, get_mmproj_for_model, get_mmproj_path, _preferences_cache
+from ..py.ollama_wrapper import discover_ollama_models, is_ollama_available
 import time
 
 # Global timestamp to track when models were last updated

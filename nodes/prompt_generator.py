@@ -13,17 +13,17 @@ import numpy as np
 from colorama import Fore, Style
 from PIL import Image
 from io import BytesIO
-from .model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, has_vision_support
+from ..py.model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, has_vision_support
 
 # Ollama integration
-from .ollama_wrapper import generate_chat as ollama_generate_chat, unload_model as ollama_unload_model
+from ..py.ollama_wrapper import generate_chat as ollama_generate_chat, unload_model as ollama_unload_model
 
 # ComfyUI interrupt helper
 import comfy.model_management
 
 # Try to import preferences cache, fallback to empty dict if not available
 try:
-    from .model_manager import _preferences_cache
+    from ..py.model_manager import _preferences_cache
 except ImportError:
     _preferences_cache = {}
 
@@ -687,7 +687,7 @@ class PromptGenerator:
                 model_to_use = options["model"]
             else:
                 # Auto-discover available models from Ollama
-                from .ollama_wrapper import discover_ollama_models
+                from ..py.ollama_wrapper import discover_ollama_models
                 discovered, status = discover_ollama_models(_preferences_cache)
                 if discovered:
                     model_to_use = discovered[0]
