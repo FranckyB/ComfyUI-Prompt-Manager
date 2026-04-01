@@ -457,8 +457,8 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
         };
         preview.appendChild(img);
     } else if (videoExts.includes(ext)) {
-        // Extract video thumbnail with caching
-        extractVideoThumbnailCached(filename, preview);
+        // Extract video thumbnail via server-side PyAV
+        extractVideoThumbnailServer(filename, preview);
     } else if (ext === 'json') {
         // Use placeholder for JSON
         const img = document.createElement('img');
@@ -612,7 +612,7 @@ function refreshIndividualThumbnail(filename, previewElement) {
     console.log(`[FileBrowser] Refreshing thumbnail for: ${filename}`);
     
     // Clear cache for this specific file
-    const cacheKey = `video_thumb_${filename.replace(/[\/\\]/g, '_')}`;
+    const cacheKey = `video_thumb_pyav_${filename.replace(/[\/\\]/g, '_')}`;
     
     try {
         localStorage.removeItem(cacheKey);
@@ -621,8 +621,8 @@ function refreshIndividualThumbnail(filename, previewElement) {
         console.error('[FileBrowser] Error clearing cache:', error);
     }
     
-    // Re-extract thumbnail
-    extractVideoThumbnail(filename, previewElement, cacheKey);
+    // Re-extract thumbnail via server-side PyAV
+    extractVideoThumbnailServer(filename, previewElement);
 }
 
 function filterThumbnails(container, searchText, fileType) {
@@ -796,6 +796,63 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
         basename = filename.substring(lastSlash + 1);
     }
     video.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}&${Date.now()}`;
+}
+
+/**
+ * Extract thumbnail using server-side PyAV for all videos.
+ * Fetches a JPEG frame from /prompt-extractor/video-frame and caches to localStorage.
+ */
+function extractVideoThumbnailServer(filename, previewElement) {
+    const cacheKey = `video_thumb_pyav_${filename.replace(/[\/\\]/g, '_')}`;
+    try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+            const img = document.createElement('img');
+            img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+            img.src = cached;
+            previewElement.innerHTML = '';
+            previewElement.appendChild(img);
+            return;
+        }
+    } catch (e) { /* ignore */ }
+
+    // Show placeholder while loading
+    const placeholderImg = document.createElement('img');
+    placeholderImg.src = new URL("./placeholder.png", import.meta.url).href;
+    placeholderImg.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+    previewElement.innerHTML = '';
+    previewElement.appendChild(placeholderImg);
+
+    const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${currentSourceFolder}&position=0`;
+    const img = document.createElement('img');
+    img.onload = () => {
+        // Scale down to thumbnail size
+        const maxW = 180, maxH = 150;
+        const ar = img.naturalWidth / img.naturalHeight;
+        let w, h;
+        if (ar > maxW / maxH) { w = maxW; h = maxW / ar; }
+        else { h = maxH; w = maxH * ar; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        const result = document.createElement('img');
+        result.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+        result.src = dataUrl;
+        previewElement.innerHTML = '';
+        previewElement.appendChild(result);
+        try { localStorage.setItem(cacheKey, dataUrl); } catch (e) { /* ignore */ }
+    };
+    img.onerror = () => {
+        previewElement.innerHTML = `
+            <div style="text-align: center; color: #888; font-size: 11px; padding: 10px;">
+                <div style="font-size: 24px; margin-bottom: 6px;">🎬</div>
+                <div>Preview unavailable</div>
+            </div>`;
+    };
+    img.src = frameUrl;
 }
 
 /**
