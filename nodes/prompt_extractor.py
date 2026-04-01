@@ -669,6 +669,7 @@ def base64_to_tensor(base64_data):
 def get_cached_video_frame(relative_path, frame_position):
     """
     Retrieve cached video frame extracted by JavaScript at the specified position.
+    Falls back to server-side extraction using PyAV for H265/yuv444 videos.
 
     Args:
         relative_path: The video file path relative to input directory (e.g., "workflow/video.mp4")
@@ -707,7 +708,7 @@ def get_cached_video_frame(relative_path, frame_position):
             if path_key in _video_frames_cache:
                 print(f"[PromptExtractor] Frame cached successfully for: {relative_path}")
             else:
-                print(f"[PromptExtractor] Timeout waiting for frame extraction: {relative_path}")
+                print(f"[PromptExtractor] Timeout waiting for JS frame extraction, trying PyAV...")
                 return None
 
         except Exception as e:
@@ -720,6 +721,129 @@ def get_cached_video_frame(relative_path, frame_position):
     frame_tensor = base64_to_tensor(frame_data)
 
     return frame_tensor
+
+
+def extract_video_frame_av(file_path, frame_position=0.0):
+    """
+    Extract a video frame using PyAV. Works with H265, yuv444, and other codecs
+    that browsers cannot decode.
+
+    Args:
+        file_path: Absolute path to the video file
+        frame_position: float from 0.0 to 1.0 representing position in video
+
+    Returns:
+        PIL Image or None on failure
+    """
+    try:
+        import av
+    except ImportError:
+        print("[PromptExtractor] PyAV not available, cannot extract frame server-side")
+        return None
+
+    try:
+        container = av.open(file_path)
+        stream = container.streams.video[0]
+
+        # Calculate target timestamp
+        duration = stream.duration
+        if duration and stream.time_base:
+            target_ts = int(frame_position * duration)
+            container.seek(target_ts, stream=stream)
+        elif frame_position == 0.0:
+            pass  # Just decode the first frame
+        else:
+            # Fallback: try pts-based seeking
+            total_frames = stream.frames
+            if total_frames > 0:
+                target_frame = int(frame_position * total_frames)
+                target_ts = int(target_frame * stream.time_base.denominator / (stream.time_base.numerator * stream.average_rate))
+                container.seek(target_ts, stream=stream)
+
+        # Decode the first frame after seeking
+        for frame in container.decode(video=0):
+            img = frame.to_image()  # Converts to PIL RGB
+            container.close()
+            return img
+
+        container.close()
+        return None
+    except Exception as e:
+        print(f"[PromptExtractor] PyAV frame extraction error: {e}")
+        return None
+
+
+def extract_video_frame_av_to_tensor(file_path, frame_position=0.0):
+    """
+    Extract a video frame using PyAV and return as a ComfyUI tensor.
+
+    Args:
+        file_path: Absolute path to the video file
+        frame_position: float from 0.0 to 1.0
+
+    Returns:
+        Tensor (B, H, W, C) or None
+    """
+    img = extract_video_frame_av(file_path, frame_position)
+    if img is None:
+        return None
+
+    try:
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        img_array = np.array(img).astype(np.float32) / 255.0
+        return torch.from_numpy(img_array).unsqueeze(0)
+    except Exception as e:
+        print(f"[PromptExtractor] Error converting PyAV frame to tensor: {e}")
+        return None
+
+
+# API endpoint to extract a video frame server-side using PyAV (for H265/yuv444)
+@server.PromptServer.instance.routes.get("/prompt-extractor/video-frame")
+async def extract_video_frame_api(request):
+    """Extract a video frame server-side for videos the browser can't decode (H265, yuv444)"""
+    try:
+        filename = request.rel_url.query.get('filename', '')
+        source = request.rel_url.query.get('source', 'input')
+        position = float(request.rel_url.query.get('position', '0.0'))
+
+        if not filename:
+            return server.web.json_response({"error": "Missing filename"}, status=400)
+
+        # Build full path
+        if source == 'output':
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
+
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+
+        if not os.path.exists(file_path):
+            return server.web.json_response({"error": "File not found"}, status=404)
+
+        # Validate path stays within base directory
+        real_base = os.path.realpath(base_dir)
+        real_path = os.path.realpath(file_path)
+        if not real_path.startswith(real_base):
+            return server.web.json_response({"error": "Invalid path"}, status=403)
+
+        img = extract_video_frame_av(file_path, position)
+        if img is None:
+            return server.web.json_response({"error": "Failed to extract frame"}, status=500)
+
+        # Return as JPEG image
+        import io
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=85)
+        buf.seek(0)
+
+        return server.web.Response(
+            body=buf.read(),
+            content_type='image/jpeg'
+        )
+    except Exception as e:
+        print(f"[PromptExtractor] Error in video-frame API: {e}")
+        return server.web.json_response({"error": str(e)}, status=500)
 
 
 def build_link_map(workflow_data):
@@ -2122,8 +2246,8 @@ def get_placeholder_image_tensor():
 
     try:
         # Get the path to placeholder.png relative to this file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        png_path = os.path.join(current_dir, 'js', 'placeholder.png')
+        package_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        png_path = os.path.join(package_dir, 'js', 'placeholder.png')
 
         if os.path.exists(png_path):
             return load_image_as_tensor(png_path)
@@ -2295,7 +2419,11 @@ class PromptExtractor:
                     relative_path = os.path.basename(resolved_path)
                 image_tensor = get_cached_video_frame(relative_path, frame_position)
 
-                # If no cached frame, use placeholder (JavaScript will cache before execution)
+                # If no cached frame (browser can't decode H265/yuv444), try PyAV
+                if image_tensor is None:
+                    image_tensor = extract_video_frame_av_to_tensor(resolved_path, frame_position)
+
+                # Last resort: placeholder
                 if image_tensor is None:
                     image_tensor = get_placeholder_image_tensor()
 
@@ -2483,163 +2611,3 @@ class PromptExtractor:
                 mtime = os.path.getmtime(file_path)
 
         return (mtime, source_folder, frame_position, use_lora_input_only)
-
-
-class BetterImageLoader:
-    """
-    A streamlined image loader with file browser, preview, and input/output folder switching.
-    """
-
-    def __init__(self):
-        pass
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        input_dir = folder_paths.get_input_directory()
-        files = ["(none)"]
-        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
-
-        if os.path.exists(input_dir):
-            for root, dirs, filenames in os.walk(input_dir):
-                for filename in filenames:
-                    ext = os.path.splitext(filename)[1].lower()
-                    if ext in supported_extensions:
-                        full_path = os.path.join(root, filename)
-                        rel_path = os.path.relpath(full_path, input_dir)
-                        rel_path = rel_path.replace('\\', '/')
-                        files.append(rel_path)
-
-        files_to_sort = files[1:]
-        files_to_sort.sort()
-        files = ["(none)"] + files_to_sort
-
-        return {
-            "required": {
-                "source_folder": (["input", "output"], {
-                    "default": "input",
-                    "tooltip": "Browse files from the input or output folder"
-                }),
-                "image": (files, {}),
-                "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
-            },
-            "hidden": {
-                "unique_id": "UNIQUE_ID",
-            },
-        }
-
-    CATEGORY = "Prompt Manager"
-    DESCRIPTION = "A better image/video loader with file browser, preview, and input/output folder switching."
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "load"
-    OUTPUT_NODE = True
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs):
-        return True
-
-    def load(self, image="", source_folder="input", frame_position=0.0, unique_id=None):
-        if frame_position is None:
-            frame_position = 0.0
-
-        image_tensor = None
-
-        if image is None:
-            image = ""
-        if image == "(none)":
-            image = ""
-
-        resolved_path = None
-        file_path = ""
-        if image and image.strip():
-            file_path = image.strip()
-
-            if not os.path.isabs(file_path):
-                if source_folder == "output":
-                    base_dir = folder_paths.get_output_directory()
-                else:
-                    base_dir = folder_paths.get_input_directory()
-                potential_path = os.path.join(base_dir, file_path)
-                if os.path.exists(potential_path):
-                    resolved_path = potential_path
-                else:
-                    temp_dir = folder_paths.get_temp_directory()
-                    potential_path = os.path.join(temp_dir, file_path)
-                    if os.path.exists(potential_path):
-                        resolved_path = potential_path
-            else:
-                if os.path.exists(file_path):
-                    resolved_path = file_path
-
-        if resolved_path:
-            ext = os.path.splitext(resolved_path)[1].lower()
-
-            if ext in ['.png', '.jpg', '.jpeg', '.webp']:
-                image_tensor = load_image_as_tensor(resolved_path)
-
-            elif ext in ['.mp4', '.webm', '.mov', '.avi']:
-                if source_folder == "output":
-                    base_dir = folder_paths.get_output_directory()
-                else:
-                    base_dir = folder_paths.get_input_directory()
-                if resolved_path.startswith(base_dir):
-                    relative_path = os.path.relpath(resolved_path, base_dir)
-                    relative_path = relative_path.replace('\\', '/')
-                else:
-                    relative_path = os.path.basename(resolved_path)
-                image_tensor = get_cached_video_frame(relative_path, frame_position)
-
-                if image_tensor is None:
-                    image_tensor = get_placeholder_image_tensor()
-
-        if image_tensor is None:
-            image_tensor = get_placeholder_image_tensor()
-
-        preview_images = self._save_preview_images(image_tensor)
-
-        return {
-            "ui": {"images": preview_images},
-            "result": (image_tensor,)
-        }
-
-    def _save_preview_images(self, images):
-        import random
-        results = []
-        output_dir = folder_paths.get_temp_directory()
-
-        for i in range(images.shape[0]):
-            img = images[i]
-            if hasattr(img, 'cpu'):
-                img = img.cpu().numpy()
-            img = (img * 255).astype(np.uint8)
-            pil_img = Image.fromarray(img)
-
-            filename = f"better_image_loader_preview_{random.randint(0, 0xFFFFFF):06x}.png"
-            filepath = os.path.join(output_dir, filename)
-            pil_img.save(filepath)
-
-            results.append({
-                "filename": filename,
-                "subfolder": "",
-                "type": "temp"
-            })
-
-        return results
-
-    @classmethod
-    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, **kwargs):
-        mtime = "no_file"
-        if image:
-            file_path = image.strip()
-            if not os.path.isabs(file_path):
-                if source_folder == "output":
-                    base_dir = folder_paths.get_output_directory()
-                else:
-                    base_dir = folder_paths.get_input_directory()
-                potential_path = os.path.join(base_dir, file_path)
-                if os.path.exists(potential_path):
-                    mtime = os.path.getmtime(potential_path)
-            elif os.path.exists(file_path):
-                mtime = os.path.getmtime(file_path)
-
-        return (mtime, source_folder, frame_position)

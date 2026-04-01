@@ -750,9 +750,40 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
     };
     
     video.onerror = () => {
-        console.error('[FileBrowser] Error loading video for thumbnail:', filename);
-        // Keep placeholder on error
+        console.log('[FileBrowser] Browser cannot decode video, trying server-side extraction:', filename);
         video.remove();
+        // Fall back to server-side frame extraction (PyAV handles H265/yuv444)
+        const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${currentSourceFolder}&position=0`;
+        const img = document.createElement('img');
+        img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+        img.onload = () => {
+            previewElement.innerHTML = '';
+            previewElement.appendChild(img);
+            // Cache the server-extracted thumbnail
+            if (cacheKey) {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                    localStorage.setItem(cacheKey, dataUrl);
+                } catch (e) {
+                    console.log('[FileBrowser] Failed to cache server thumbnail:', e);
+                }
+            }
+        };
+        img.onerror = () => {
+            // Show "can't display" message
+            previewElement.innerHTML = `
+                <div style="text-align: center; color: #888; font-size: 11px; padding: 10px;">
+                    <div style="font-size: 24px; margin-bottom: 6px;">🎬</div>
+                    <div>Preview unavailable</div>
+                    <div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">H265/yuv444 format</div>
+                </div>`;
+        };
+        img.src = frameUrl;
     };
     
     // Load video from input directory

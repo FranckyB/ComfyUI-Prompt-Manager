@@ -319,7 +319,7 @@ class PromptManagerAdvanced:
     @staticmethod
     def get_default_prompts_path():
         """Get the path to the default prompts JSON file"""
-        return os.path.join(os.path.dirname(__file__), "default_prompts.json")
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "default_prompts.json")
 
     @classmethod
     def load_prompts(cls):
