@@ -10,6 +10,9 @@ import { createFileBrowserModal } from "./file_browser.js";
 // Placeholder image path - loaded from static PNG file
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
 
+// Track videos that the browser cannot decode (H265/yuv444) - skip browser attempts on scrub
+const _nonBrowserDecodableVideos = new Set();
+
 /**
  * Extract metadata from PNG file
  * Reads tEXt/iTXt chunks for prompt and workflow (ComfyUI native approach)
@@ -861,6 +864,9 @@ app.registerExtension({
                             originalCallback.apply(this, arguments);
                         }
 
+                        // Reset metadata cache when selecting a new file
+                        node._metadataCached = false;
+
                         // Reset frame position to 0 when selecting a new video
                         if (value && framePositionWidget) {
                             const ext = value.split('.').pop().toLowerCase();
@@ -895,7 +901,7 @@ app.registerExtension({
                     const imageWidgetIndex = this.widgets.indexOf(imageWidget);
                     const browseButton = {
                         type: "button",
-                        name: "?? Browse Files",
+                        name: "\uD83D\uDCC1 Browse Files",
                         value: null,
                         callback: () => {
                             const currentFile = imageWidget.value === "(none)" ? null : imageWidget.value;
@@ -1201,6 +1207,20 @@ app.registerExtension({
                         }
                     } else {
                         node._previewIconBounds = null;
+                    }
+
+                    // Draw "Loading frame..." overlay when server-side extraction is in progress
+                    if (node._frameLoading && !(node.flags && node.flags.collapsed)) {
+                        const w = node.size[0];
+                        const h = node.size[1];
+                        // Semi-transparent overlay on lower portion of node
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                        ctx.fillRect(0, h - 36, w, 36);
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = '13px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('Loading frame...', w / 2, h - 14);
+                        ctx.textAlign = 'left';
                     }
 
                     return result;
@@ -1526,6 +1546,49 @@ async function loadJSONFile(node, filename) {
 }
 
 /**
+ * Load a video frame from the server-side PyAV endpoint (for H265/yuv444 videos).
+ * Shows a "Loading frame..." overlay on the node while fetching.
+ */
+function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
+    // Show loading overlay on the node
+    node._frameLoading = true;
+    node.setDirtyCanvas(true, true);
+
+    const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${viewType}&position=${framePosition}`;
+    const img = new Image();
+    img.onload = () => {
+        node._frameLoading = false;
+        node.imgs = [img];
+        node.imageIndex = 0;
+        node._loadedImageFilename = filename;
+        node._loadedFramePosition = framePosition;
+
+        // Cache as base64 for Python backend
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const frameData = canvas.toDataURL('image/png');
+        cacheVideoFrame(filename, frameData, framePosition);
+
+        // Resize node to fit image
+        const targetWidth = Math.max(node.size[0], 256);
+        const targetHeight = Math.max(node.size[1], img.naturalHeight * (targetWidth / img.naturalWidth) + 100);
+        node.setSize([targetWidth, targetHeight]);
+
+        node.setDirtyCanvas(true, true);
+        app.graph.setDirtyCanvas(true, true);
+    };
+    img.onerror = () => {
+        node._frameLoading = false;
+        console.error(`[PromptExtractor] Server-side frame extraction failed for: ${filename}`);
+        showPlaceholder(node);
+    };
+    img.src = frameUrl;
+}
+
+/**
  * Load frame from a video file at specified position and extract metadata
  */
 async function loadVideoFrame(node, filename) {
@@ -1551,21 +1614,46 @@ async function loadVideoFrame(node, filename) {
             videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
         }
 
-        // Fetch the video file to extract metadata
-        const videoBlob = await fetch(videoUrl)
-            .then(res => res.blob());
+        // If this video is already known to be non-browser-decodable, go straight to server
+        if (_nonBrowserDecodableVideos.has(filename)) {
+            // Still fetch metadata on first load (not on scrub)
+            if (!node._metadataCached) {
+                try {
+                    const videoBlob = await fetch(videoUrl).then(res => res.blob());
+                    const metadata = await getVideoMetadata(videoBlob);
+                    await cacheFileMetadata(filename, metadata);
+                    node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
+                    node._metadataCached = true;
+                    node.setDirtyCanvas(true, true);
+                } catch (e) {
+                    console.warn("[PromptExtractor] Metadata extraction failed:", e);
+                }
+            }
+            loadVideoFrameFromServer(node, filename, framePosition, viewType);
+            return;
+        }
 
-        // Extract metadata from video file
-        const metadata = await getVideoMetadata(videoBlob);
-        // Cache metadata (or lack thereof) for Python backend
-        await cacheFileMetadata(filename, metadata);
+        // Fetch metadata only once per video (not on every scrub)
+        if (!node._metadataCached) {
+            try {
+                const videoBlob = await fetch(videoUrl).then(res => res.blob());
 
-        // Update workflow status flag - check for workflow or parameters
-        node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
-        
-        // Force canvas redraw to update indicator immediately
-        node.setDirtyCanvas(true, true);
-        app.graph.setDirtyCanvas(true, true);
+                // Extract metadata from video file
+                const metadata = await getVideoMetadata(videoBlob);
+                // Cache metadata (or lack thereof) for Python backend
+                await cacheFileMetadata(filename, metadata);
+                node._metadataCached = true;
+
+                // Update workflow status flag - check for workflow or parameters
+                node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
+
+                // Force canvas redraw to update indicator immediately
+                node.setDirtyCanvas(true, true);
+                app.graph.setDirtyCanvas(true, true);
+            } catch (e) {
+                console.warn("[PromptExtractor] Metadata extraction failed:", e);
+            }
+        }
 
         // Create a video element for frame extraction
         const video = document.createElement('video');
@@ -1620,38 +1708,10 @@ async function loadVideoFrame(node, filename) {
         };
 
         video.onerror = () => {
-            console.log(`[PromptExtractor] Browser cannot decode video, trying server-side extraction: ${filename}`);
-            // Fall back to server-side frame extraction via PyAV (handles H265/yuv444)
-            const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${viewType}&position=${framePosition}`;
-            const img = new Image();
-            img.onload = () => {
-                node.imgs = [img];
-                node.imageIndex = 0;
-                node._loadedImageFilename = filename;
-                node._loadedFramePosition = framePosition;
-
-                // Cache as base64 for Python backend
-                const canvas = document.createElement('canvas');
-                canvas.width = img.naturalWidth;
-                canvas.height = img.naturalHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-                const frameData = canvas.toDataURL('image/png');
-                cacheVideoFrame(filename, frameData, framePosition);
-
-                // Resize node to fit image
-                const targetWidth = Math.max(node.size[0], 256);
-                const targetHeight = Math.max(node.size[1], img.naturalHeight * (targetWidth / img.naturalWidth) + 100);
-                node.setSize([targetWidth, targetHeight]);
-
-                node.setDirtyCanvas(true, true);
-                app.graph.setDirtyCanvas(true, true);
-            };
-            img.onerror = () => {
-                console.error(`[PromptExtractor] Server-side frame extraction also failed for: ${filename}`);
-                showPlaceholder(node);
-            };
-            img.src = frameUrl;
+            console.log(`[PromptExtractor] Browser cannot decode video, using server-side extraction: ${filename}`);
+            // Remember this video can't be decoded by browser - skip browser attempt on future scrubs
+            _nonBrowserDecodableVideos.add(filename);
+            loadVideoFrameFromServer(node, filename, framePosition, viewType);
         };
 
         // Load video from input directory (using same URL with subfolder support)
@@ -1669,6 +1729,7 @@ function showPlaceholder(node) {
     // Clear the loaded filename and frame position since we're showing a placeholder
     node._loadedImageFilename = null;
     node._loadedFramePosition = null;
+    node._metadataCached = false;
     
     const placeholderImg = new Image();
     placeholderImg.src = PLACEHOLDER_IMAGE_PATH;

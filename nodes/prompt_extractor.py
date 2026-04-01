@@ -728,6 +728,9 @@ def extract_video_frame_av(file_path, frame_position=0.0):
     Extract a video frame using PyAV. Works with H265, yuv444, and other codecs
     that browsers cannot decode.
 
+    Seeks to the nearest keyframe before the target position, then decodes forward
+    to the exact target frame for frame-accurate extraction.
+
     Args:
         file_path: Absolute path to the video file
         frame_position: float from 0.0 to 1.0 representing position in video
@@ -745,26 +748,52 @@ def extract_video_frame_av(file_path, frame_position=0.0):
         container = av.open(file_path)
         stream = container.streams.video[0]
 
-        # Calculate target timestamp
+        # For position 0.0, just return the first frame
+        if frame_position <= 0.0:
+            for frame in container.decode(video=0):
+                img = frame.to_image()
+                container.close()
+                return img
+            container.close()
+            return None
+
+        # Calculate target timestamp in stream time_base units
         duration = stream.duration
+        target_ts = None
+
         if duration and stream.time_base:
             target_ts = int(frame_position * duration)
-            container.seek(target_ts, stream=stream)
-        elif frame_position == 0.0:
-            pass  # Just decode the first frame
         else:
-            # Fallback: try pts-based seeking
+            # Fallback: estimate from frame count and average rate
             total_frames = stream.frames
-            if total_frames > 0:
+            if total_frames > 0 and stream.average_rate:
                 target_frame = int(frame_position * total_frames)
-                target_ts = int(target_frame * stream.time_base.denominator / (stream.time_base.numerator * stream.average_rate))
-                container.seek(target_ts, stream=stream)
+                fps = float(stream.average_rate)
+                if fps > 0 and stream.time_base:
+                    target_sec = target_frame / fps
+                    target_ts = int(target_sec / float(stream.time_base))
 
-        # Decode the first frame after seeking
-        for frame in container.decode(video=0):
-            img = frame.to_image()  # Converts to PIL RGB
-            container.close()
-            return img
+        if target_ts is not None:
+            # Seek to nearest keyframe before target (backward seek)
+            container.seek(target_ts, stream=stream, backward=True)
+
+            # Decode forward until we reach or pass the target timestamp
+            best_frame = None
+            for frame in container.decode(video=0):
+                best_frame = frame
+                if frame.pts is not None and frame.pts >= target_ts:
+                    break
+
+            if best_frame is not None:
+                img = best_frame.to_image()
+                container.close()
+                return img
+        else:
+            # No duration info - just decode the first frame
+            for frame in container.decode(video=0):
+                img = frame.to_image()
+                container.close()
+                return img
 
         container.close()
         return None
@@ -2417,11 +2446,13 @@ class PromptExtractor:
                     relative_path = relative_path.replace('\\', '/')  # Normalize to forward slashes
                 else:
                     relative_path = os.path.basename(resolved_path)
-                image_tensor = get_cached_video_frame(relative_path, frame_position)
 
-                # If no cached frame (browser can't decode H265/yuv444), try PyAV
+                # Prefer PyAV for frame extraction (accurate frame_position, handles H265/yuv444)
+                image_tensor = extract_video_frame_av_to_tensor(resolved_path, frame_position)
+
+                # Fall back to JS-cached frame if PyAV unavailable
                 if image_tensor is None:
-                    image_tensor = extract_video_frame_av_to_tensor(resolved_path, frame_position)
+                    image_tensor = get_cached_video_frame(relative_path, frame_position)
 
                 # Last resort: placeholder
                 if image_tensor is None:

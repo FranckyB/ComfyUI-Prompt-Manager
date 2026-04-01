@@ -243,6 +243,9 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.21.1
+- **Bug Fix** - Fixed issues caused by restructure
+
 ### version 1.21.0
 - **Removed miscellaneous tools** — Switch Any, Save Video H26x, Apply LoRA Stack, Better Image Loader, and Animated Latent Preview have been moved to a dedicated repository: [ComfyUI-FBnodes](https://github.com/FranckyB/ComfyUI-FBnodes)
 - **Project restructure** — Organized node files into `nodes/` and utility modules into `py/` for cleaner codebase
