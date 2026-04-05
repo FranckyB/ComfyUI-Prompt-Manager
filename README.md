@@ -13,20 +13,20 @@ A complete prompt management solution featuring three core capabilities:
 ___
 
 <div align="center">
-  <figcaption>Simple Prompt Generator Usage</figcaption>
-  <img src="docs/prompt_manager.png" alt="Prompt Manager">
-</div>
-<div align="center">
-  <figcaption>Advanced Prompt Generator Usage</figcaption>
-  <img src="docs/prompt_generator_advanced.png" alt="Prompt Manager">
-</div>
-<div align="center">
   <figcaption>Prompt Manager Advanced, with Lora and trigger word support</figcaption>
   <img src="docs/prompt_manager_advanced.png" alt="Prompt Manager">
 </div>
 <div align="center">
   <figcaption>Prompt Extractor connected to Manager Advanced, so workflow can be saved with Loras</figcaption>
   <img src="docs/prompt_extractor.png" alt="Prompt Manager">
+</div>
+<div align="center">
+  <figcaption>Advanced Prompt Generator Usage</figcaption>
+  <img src="docs/prompt_generator_advanced.png" alt="Prompt Manager">
+</div>
+<div align="center">
+  <figcaption>Simple Prompt Generator Usage</figcaption>
+  <img src="docs/prompt_manager.png" alt="Prompt Manager">
 </div>
 
 ### Key features:
