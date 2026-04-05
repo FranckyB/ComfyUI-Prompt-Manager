@@ -497,7 +497,7 @@ class PromptGenerator:
             _current_context_size = context_size
 
             # Wait for server to be ready
-            for i in range(120):  # Wait up to 120 seconds
+            for i in range(60):  # Wait up to 60 seconds
                 time.sleep(1)
                 try:
                     comfy.model_management.throw_exception_if_processing_interrupted()
@@ -523,7 +523,7 @@ class PromptGenerator:
                 if PromptGenerator.is_server_alive():
                     return (True, None)
 
-            error_msg = "Error: Server did not start in time (120s)"
+            error_msg = "Error: Server did not start in time (60s)"
             print_pg(error_msg, RED)
             PromptGenerator.stop_server()
             return (False, error_msg)
@@ -691,7 +691,7 @@ class PromptGenerator:
         if (mode == "Enhance Prompt (Image)" or mode == "Enhance Prompt (Video)") and not prompt.strip():
             error_msg = "Did you perhaps forget to enter a User Prompt?"
             print_pg(error_msg, RED)
-            return (error_msg,)
+            raise RuntimeError(error_msg)
 
         # Always determine a valid model filename before running server
         model_to_use = None
@@ -712,7 +712,7 @@ class PromptGenerator:
                     error_msg = (f"Error: No Ollama model available. {status}\n"
                                  "Pull a model first (e.g. `ollama pull llama3.1`).")
                     print_pg(error_msg, RED)
-                    return (error_msg,)
+                    raise RuntimeError(error_msg)
 
             print_pg("Backend       : Ollama")
 
@@ -732,14 +732,14 @@ class PromptGenerator:
                     if model_to_use is None:
                         error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                         print_pg(error_msg, RED)
-                        return (error_msg,)
+                        raise RuntimeError(error_msg)
                 else:
                     # Try to find a vision model automatically
                     model_to_use = self.find_vision_model(available_models)
                     if model_to_use is None:
                         error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                         print_pg(error_msg, RED)
-                        return (error_msg,)
+                        raise RuntimeError(error_msg)
             else:
                 # Enhance Prompt mode - any model works, prefer text-only for efficiency
                 if options and "model" in options and is_model_local(options["model"]):
@@ -748,12 +748,12 @@ class PromptGenerator:
                     if not available_models:
                         error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
                         print_pg(error_msg, RED)
-                        return (error_msg,)
+                        raise RuntimeError(error_msg)
                     model_to_use = self.find_text_model(available_models)
                     if not model_to_use:
                         error_msg = "Error: No suitable model found. Please add a .gguf model or use the Generator Options node to download one."
                         print_pg(error_msg, RED)
-                        return (error_msg,)
+                        raise RuntimeError(error_msg)
 
             # Thinking mode is only meaningful if the model explicitly supports it
             # (no longer tied to Qwen3VL naming — generic check)
@@ -779,8 +779,8 @@ class PromptGenerator:
 
             if not images:
                 error_msg = f"Error: '{mode}' mode requires at least one image to be connected. Please connect an image or switch to 'Enhance Prompt' mode."
-                print_pg(error_msg)
-                return (error_msg,)
+                print_pg(error_msg, RED)
+                raise RuntimeError(error_msg)
 
         # If the current model is not the one we want, or server is not running, restart
         # Also restart if context_size has changed (llama.cpp only)
@@ -791,7 +791,7 @@ class PromptGenerator:
                 # Get context_size from options or use default
                 success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
                 if not success:
-                    return (error_msg,)
+                    raise RuntimeError(error_msg)
 
         # Build the endpoint URL
         full_url = f"http://localhost:{self.SERVER_PORT}/v1/chat/completions"
@@ -950,7 +950,7 @@ class PromptGenerator:
                         stream=True
                     )
                 else:
-                    return (error_msg,)
+                    raise RuntimeError(error_msg)
 
             response.raise_for_status()
 
@@ -1061,18 +1061,18 @@ class PromptGenerator:
         except requests.exceptions.ConnectionError:
             error_msg = f"Error: Could not connect to server at {full_url}. Server may have crashed."
             print_pg(error_msg, RED)
-            return (error_msg,)
+            raise RuntimeError(error_msg)
         except requests.exceptions.Timeout:
             error_msg = "Error: Request timed out (>120s)"
             print_pg(error_msg, RED)
-            return (error_msg,)
+            raise RuntimeError(error_msg)
         except Exception as e:
             error_msg = f"Error: {e}"
             print_pg(error_msg, RED)
             if response.status_code == 400:
                 print_pg("Perhaps your query requires a larger context size.\nConsider increasing it using the Generator Options node.", RED)
                 error_msg += "\nConsider increasing context size using Generator Options node."
-            return (error_msg,)
+            raise RuntimeError(error_msg)
 
     # ================================================================
     # Ollama generation helper
@@ -1232,15 +1232,15 @@ class PromptGenerator:
         except requests.exceptions.ConnectionError:
             error_msg = "Error: Lost connection to Ollama during generation."
             print_pg(error_msg, RED)
-            return (error_msg,)
+            raise RuntimeError(error_msg)
         except requests.exceptions.Timeout:
             error_msg = "Error: Ollama request timed out (>120s)"
             print_pg(error_msg, RED)
-            return (error_msg,)
+            raise RuntimeError(error_msg)
         except Exception as e:
             error_msg = f"Error (Ollama): {e}"
             print_pg(error_msg, RED)
-            return (error_msg,)
+            raise RuntimeError(error_msg)
 
     def print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):
         """Print token statistics using pre-cached counts"""
