@@ -243,6 +243,15 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.21.2
+- **Improved Thumbnail Extraction**
+  - prompt extractor: enhance video thumbnail extraction and error handling for unsupported formats
+
+- **Improve llama-server**
+  - Increase server startup timeout from 30s to 120s for large models
+  - Detect early server crashes and show stderr output to user
+  - Fix _get_model_keywords docstring to reflect version preservation (qwen3.5)
+
 ### version 1.21.1
 - **Bug Fix** - Fixed issues caused by restructure
 

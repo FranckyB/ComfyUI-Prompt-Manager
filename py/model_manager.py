@@ -200,18 +200,33 @@ _QUANT_PARTS = frozenset({
 })
 
 
-def _get_model_identity(name):
-    """Extract the model's identity parts from a filename, stripping quant info.
+def _get_model_keywords(name):
+    """Extract normalised keyword set from a model filename for fuzzy matching.
 
-    Splits on hyphens, underscores, and spaces but preserves dots within tokens
-    so that version strings like 'Qwen3.5' stay intact.
+    Splits on hyphens, underscores, dots, and spaces, lowercases everything,
+    and strips quantisation tags + the literal 'mmproj' token.
 
-    Example: 'Qwen3.5-9B-Q4_K_M.gguf' → ('Qwen3.5', '9B')
-             'mmproj-Qwen3.5-9B-F16.gguf' → ('Qwen3.5', '9B')
+    Example: 'qwen3.5-9b-nsfw-captioning-v3.Q8_0.gguf'
+             → {'qwen3.5', '9b', 'nsfw', 'captioning', 'v3'}
+             'qwen3.5-9b-nsfw-captioning-v3.mmproj-Q8_0.gguf'
+             → {'qwen3.5', '9b', 'nsfw', 'captioning', 'v3'}
     """
     base = os.path.splitext(os.path.basename(name))[0]
-    parts = [p for p in re.split(r"[-_ ]", base) if p]
-    return tuple(p for p in parts if p not in _QUANT_PARTS and p.lower() != "mmproj")
+    # First split on hyphens, underscores, spaces (not dots)
+    raw_parts = [p for p in re.split(r"[-_ ]", base) if p]
+    # Then split tokens on dots, UNLESS the token is a version string like 'qwen3.5'
+    parts = []
+    for token in raw_parts:
+        if re.match(r'^[a-zA-Z]+\d+\.\d+$', token):
+            # Version string (e.g. 'qwen3.5') — keep intact
+            parts.append(token)
+        elif '.' in token:
+            # Split other dotted tokens (e.g. 'v3.Q8' → 'v3', 'Q8')
+            parts.extend(p for p in token.split('.') if p)
+        else:
+            parts.append(token)
+    lc_quant = {q.lower() for q in _QUANT_PARTS}
+    return {p.lower() for p in parts if p.lower() not in lc_quant and p.lower() != "mmproj" and p.lower() != "gguf"}
 
 
 def get_mmproj_for_model(model_name):
@@ -238,42 +253,29 @@ def get_mmproj_path(model_name):
         # Mapped but file not found on disk
         return None
 
-    # --- 2. Heuristic: match by model identity ---
-    model_identity = _get_model_identity(model_name)
-    if not model_identity:
+    # --- 2. Heuristic: keyword-based matching ---
+    # Split the model name into normalised keywords (no quant tags, no 'mmproj')
+    # and find the mmproj file that shares the most keywords (minimum 4).
+    model_keywords = _get_model_keywords(model_name)
+    if len(model_keywords) < 2:
         return None
+
+    MIN_KEYWORD_MATCH = min(4, len(model_keywords))  # at least 4, or all if fewer
 
     all_dirs = get_all_model_directories()
     best_match = None
-    best_match_len = 0
+    best_match_count = 0
     for models_dir in all_dirs:
         if not os.path.exists(models_dir):
             continue
         for f in os.listdir(models_dir):
             if 'mmproj' not in f.lower() or not f.endswith('.gguf'):
                 continue
-            mmproj_identity = _get_model_identity(f)
-            if not mmproj_identity:
-                continue
-            # Exact match
-            if mmproj_identity == model_identity:
-                return os.path.join(models_dir, f)
-            # Subset match: mmproj identity parts are all contained in the model identity
-            # e.g. mmproj ('Qwen3','5','9B') matches model ('Qwen3','5','9B','abliterated','vision')
-            if len(mmproj_identity) > best_match_len and set(mmproj_identity).issubset(set(model_identity)):
-                # Verify ordering is preserved (not just any subset)
-                model_list = list(model_identity)
-                try:
-                    last_idx = -1
-                    ordered = True
-                    for part in mmproj_identity:
-                        idx = model_list.index(part, last_idx + 1)
-                        last_idx = idx
-                    if ordered:
-                        best_match = os.path.join(models_dir, f)
-                        best_match_len = len(mmproj_identity)
-                except ValueError:
-                    pass
+            mmproj_keywords = _get_model_keywords(f)
+            common = model_keywords & mmproj_keywords
+            if len(common) >= MIN_KEYWORD_MATCH and len(common) > best_match_count:
+                best_match = os.path.join(models_dir, f)
+                best_match_count = len(common)
 
     return best_match
 

@@ -699,13 +699,37 @@ function showVideoPreviewModal(filename, viewType) {
 
     // Error handling - browser can't decode (H265/yuv444)
     video.onerror = () => {
-        videoContainer.innerHTML = `
-            <div style="color: #aaa; font-family: sans-serif; text-align: center;">
-                <div style="font-size: 48px; margin-bottom: 10px;">??</div>
-                <div>This video format cannot be played in the browser</div>
-                <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">H265 or yuv444 encoded � frame extraction still works on the node</div>
-            </div>
+        // Fall back to server-extracted frame with overlay
+        const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${viewType || 'input'}&position=0`;
+        const fallbackImg = document.createElement('img');
+        fallbackImg.style.cssText = `
+            max-width: 100%; max-height: 80vh; border-radius: 8px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
         `;
+        fallbackImg.onload = () => {
+            videoContainer.innerHTML = '';
+            videoContainer.style.position = 'relative';
+            videoContainer.appendChild(fallbackImg);
+            const msgOverlay = document.createElement('div');
+            msgOverlay.style.cssText = `
+                position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.75); color: #ccc; padding: 8px 16px;
+                border-radius: 6px; font-family: sans-serif; font-size: 13px;
+                pointer-events: none; white-space: nowrap;
+            `;
+            msgOverlay.textContent = 'H265/yuv444 \u2014 browser playback not supported';
+            videoContainer.appendChild(msgOverlay);
+        };
+        fallbackImg.onerror = () => {
+            videoContainer.innerHTML = `
+                <div style="color: #aaa; font-family: sans-serif; text-align: center;">
+                    <div style="font-size: 48px; margin-bottom: 10px;">\uD83C\uDFAC</div>
+                    <div>This video format cannot be played in the browser</div>
+                    <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">H265 or yuv444 encoded</div>
+                </div>
+            `;
+        };
+        fallbackImg.src = frameUrl;
     };
 
     videoContainer.appendChild(video);
@@ -1209,20 +1233,6 @@ app.registerExtension({
                         node._previewIconBounds = null;
                     }
 
-                    // Draw "Loading frame..." overlay when server-side extraction is in progress
-                    if (node._frameLoading && !(node.flags && node.flags.collapsed)) {
-                        const w = node.size[0];
-                        const h = node.size[1];
-                        // Semi-transparent overlay on lower portion of node
-                        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-                        ctx.fillRect(0, h - 36, w, 36);
-                        ctx.fillStyle = '#ffffff';
-                        ctx.font = '13px Arial';
-                        ctx.textAlign = 'center';
-                        ctx.fillText('Loading frame...', w / 2, h - 14);
-                        ctx.textAlign = 'left';
-                    }
-
                     return result;
                 };
 
@@ -1547,17 +1557,11 @@ async function loadJSONFile(node, filename) {
 
 /**
  * Load a video frame from the server-side PyAV endpoint (for H265/yuv444 videos).
- * Shows a "Loading frame..." overlay on the node while fetching.
  */
 function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
-    // Show loading overlay on the node
-    node._frameLoading = true;
-    node.setDirtyCanvas(true, true);
-
     const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${viewType}&position=${framePosition}`;
     const img = new Image();
     img.onload = () => {
-        node._frameLoading = false;
         node.imgs = [img];
         node.imageIndex = 0;
         node._loadedImageFilename = filename;
@@ -1581,7 +1585,6 @@ function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
         app.graph.setDirtyCanvas(true, true);
     };
     img.onerror = () => {
-        node._frameLoading = false;
         console.error(`[PromptExtractor] Server-side frame extraction failed for: ${filename}`);
         showPlaceholder(node);
     };
@@ -1658,7 +1661,18 @@ async function loadVideoFrame(node, filename) {
         // Create a video element for frame extraction
         const video = document.createElement('video');
         video.crossOrigin = 'anonymous';
-        video.preload = 'metadata';
+        video.preload = 'auto';
+        video.muted = true;
+        video.playsInline = true;
+        video.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+
+        const cleanupVideo = () => {
+            video.onloadedmetadata = null;
+            video.onseeked = null;
+            video.onerror = null;
+            try { video.src = ''; video.load(); } catch (e) { /* ignore */ }
+            if (video.parentNode) video.parentNode.removeChild(video);
+        };
 
         video.onloadedmetadata = () => {
             // Calculate frame time based on position (0.0 = start, 1.0 = end)
@@ -1697,10 +1711,12 @@ async function loadVideoFrame(node, filename) {
 
                 node.setDirtyCanvas(true, true);
                 app.graph.setDirtyCanvas(true, true);
+                cleanupVideo();
             };
 
             img.onerror = () => {
                 console.error(`[PromptExtractor] Failed to create image from video frame at position ${framePosition.toFixed(2)}`);
+                cleanupVideo();
                 showPlaceholder(node);
             };
 
@@ -1711,10 +1727,12 @@ async function loadVideoFrame(node, filename) {
             console.log(`[PromptExtractor] Browser cannot decode video, using server-side extraction: ${filename}`);
             // Remember this video can't be decoded by browser - skip browser attempt on future scrubs
             _nonBrowserDecodableVideos.add(filename);
+            cleanupVideo();
             loadVideoFrameFromServer(node, filename, framePosition, viewType);
         };
 
-        // Load video from input directory (using same URL with subfolder support)
+        // Append to DOM (some browsers require this for decoding) and load
+        document.body.appendChild(video);
         video.src = videoUrl + `&${Date.now()}`;
     } catch (error) {
         console.error("[PromptExtractor] Error loading video:", error);

@@ -497,17 +497,33 @@ class PromptGenerator:
             _current_context_size = context_size
 
             # Wait for server to be ready
-            for i in range(30):  # Wait up to 30 seconds
+            for i in range(120):  # Wait up to 120 seconds
                 time.sleep(1)
                 try:
                     comfy.model_management.throw_exception_if_processing_interrupted()
                 except Exception:
                     # Propagate interrupt up to caller
                     raise
+                # Check if process has crashed
+                if _server_process.poll() is not None:
+                    stderr_output = ""
+                    try:
+                        stderr_output = _server_process.stderr.read().decode("utf-8", errors="replace").strip()
+                    except Exception:
+                        pass
+                    error_msg = f"Error: llama-server exited with code {_server_process.returncode}"
+                    if stderr_output:
+                        # Show last 5 lines of stderr for context
+                        last_lines = "\n".join(stderr_output.splitlines()[-5:])
+                        error_msg += f"\n{last_lines}"
+                    print_pg(error_msg, RED)
+                    _server_process = None
+                    _current_model = None
+                    return (False, error_msg)
                 if PromptGenerator.is_server_alive():
                     return (True, None)
 
-            error_msg = "Error: Server did not start in time"
+            error_msg = "Error: Server did not start in time (120s)"
             print_pg(error_msg, RED)
             PromptGenerator.stop_server()
             return (False, error_msg)
