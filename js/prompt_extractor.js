@@ -231,38 +231,58 @@ async function getJPEGMetadata(file) {
 }
 
 /**
- * Parse EXIF IFD (Image File Directory) for UserComment
+ * Parse EXIF IFD (Image File Directory) for ComfyUI metadata
+ * ComfyUI stores metadata in:
+ *   - 0x010e (ImageDescription): "Workflow: {json}" 
+ *   - 0x010f (Make): "Prompt: {json}"
+ *   - 0x9286 (UserComment): direct JSON (some tools)
  */
 function parseIFD(imageData, ifdOffset, tiffOffset, littleEndian, decoder) {
     const dataView = new DataView(imageData.buffer);
     const numEntries = dataView.getUint16(ifdOffset, littleEndian);
 
+    // Collect workflow and prompt from separate EXIF tags
+    let workflow = null;
+    let prompt = null;
+
     for (let i = 0; i < numEntries; i++) {
         const entryOffset = ifdOffset + 2 + (i * 12);
         const tag = dataView.getUint16(entryOffset, littleEndian);
 
-        // UserComment tag (0x9286)
-        if (tag === 0x9286) {
-            const format = dataView.getUint16(entryOffset + 2, littleEndian);
+        // Tags that store string data: 0x010e (ImageDescription), 0x010f (Make), 0x9286 (UserComment)
+        if (tag === 0x010e || tag === 0x010f || tag === 0x9286) {
             const count = dataView.getUint32(entryOffset + 4, littleEndian);
             const valueOffset = dataView.getUint32(entryOffset + 8, littleEndian);
 
-            // Get actual data offset
+            // Get actual data offset (values > 4 bytes are stored at an offset)
             const dataOffset = count > 4 ? tiffOffset + valueOffset : entryOffset + 8;
 
-            // Read comment data
-            const commentData = imageData.slice(dataOffset, dataOffset + count);
-            let comment = decoder.decode(commentData);
+            // Read the raw string data
+            const rawData = imageData.slice(dataOffset, dataOffset + count);
+            let text = decoder.decode(rawData);
 
-            // Remove ASCII/UNICODE prefix and null bytes
-            comment = comment.replace(/^(ASCII|UNICODE)\x00*/, '').replace(/\x00/g, '');
+            // Remove ASCII/UNICODE prefix and null bytes (for UserComment tag)
+            text = text.replace(/^(ASCII|UNICODE)\x00*/, '').replace(/\x00/g, '').trim();
 
-            // Try to parse as JSON
-            try {
-                const json = JSON.parse(comment);
-                return json;
-            } catch (e) {
-                console.error('[PromptExtractor] Failed to parse JPEG EXIF metadata:', e);
+            // ComfyUI format: "Workflow: {json}" or "Prompt: {json}" with prefix
+            if (text.startsWith('Workflow:')) {
+                const jsonStr = text.substring('Workflow:'.length).trim();
+                try { workflow = JSON.parse(jsonStr); } catch (e) {
+                    console.error('[PromptExtractor] Failed to parse Workflow from EXIF:', e);
+                }
+            } else if (text.startsWith('Prompt:')) {
+                const jsonStr = text.substring('Prompt:'.length).trim();
+                try { prompt = JSON.parse(jsonStr); } catch (e) {
+                    console.error('[PromptExtractor] Failed to parse Prompt from EXIF:', e);
+                }
+            } else {
+                // Try parsing as direct JSON (UserComment from some tools)
+                try {
+                    const json = JSON.parse(text);
+                    return json;
+                } catch (e) {
+                    // Not JSON, skip
+                }
             }
         }
 
@@ -274,7 +294,77 @@ function parseIFD(imageData, ifdOffset, tiffOffset, littleEndian, decoder) {
         }
     }
 
+    // Return collected workflow/prompt if found
+    if (workflow || prompt) {
+        return { workflow, prompt };
+    }
+
     return null;
+}
+
+/**
+ * Extract metadata from WebP file
+ * WebP uses RIFF container format with EXIF data stored in an "EXIF" chunk
+ */
+async function getWebPMetadata(file) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const data = new Uint8Array(event.target.result);
+            const dataView = new DataView(data.buffer);
+            const decoder = new TextDecoder();
+
+            // Verify RIFF + WEBP signature
+            if (data.length < 12) { resolve(null); return; }
+            const riff = String.fromCharCode(data[0], data[1], data[2], data[3]);
+            const webp = String.fromCharCode(data[8], data[9], data[10], data[11]);
+            if (riff !== 'RIFF' || webp !== 'WEBP') {
+                resolve(null);
+                return;
+            }
+
+            // Walk RIFF chunks looking for EXIF chunk
+            let offset = 12;
+            while (offset < data.length - 8) {
+                const chunkId = String.fromCharCode(data[offset], data[offset + 1], data[offset + 2], data[offset + 3]);
+                const chunkSize = dataView.getUint32(offset + 4, true); // RIFF uses little-endian
+
+                if (chunkId === 'EXIF') {
+                    // EXIF chunk data starts after the chunk header (8 bytes)
+                    let exifStart = offset + 8;
+
+                    // Some WebP files include "Exif\0\0" prefix before TIFF header, some don't
+                    const possibleExif = String.fromCharCode(data[exifStart], data[exifStart + 1], data[exifStart + 2], data[exifStart + 3]);
+                    if (possibleExif === 'Exif') {
+                        exifStart += 6; // Skip "Exif\0\0"
+                    }
+
+                    // Parse TIFF header
+                    if (exifStart + 8 <= data.length) {
+                        const byteOrder = dataView.getUint16(exifStart);
+                        const littleEndian = byteOrder === 0x4949;
+
+                        // Verify TIFF magic number (42)
+                        const tiffMagic = dataView.getUint16(exifStart + 2, littleEndian);
+                        if (tiffMagic === 42) {
+                            const ifd0Offset = exifStart + dataView.getUint32(exifStart + 4, littleEndian);
+                            const metadata = parseIFD(data, ifd0Offset, exifStart, littleEndian, decoder);
+                            if (metadata) {
+                                resolve(metadata);
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Move to next chunk (pad to even size per RIFF spec)
+                offset += 8 + chunkSize + (chunkSize % 2);
+            }
+
+            resolve(null);
+        };
+        reader.readAsArrayBuffer(file);
+    });
 }
 
 /**
@@ -1355,7 +1445,9 @@ async function extractAndUpdateMetadata(node, filename) {
         // Extract based on file type
         if (ext === 'png') {
             metadata = await getPNGMetadata(fileBlob);
-        } else if (['jpg', 'jpeg', 'webp'].includes(ext)) {
+        } else if (ext === 'webp') {
+            metadata = await getWebPMetadata(fileBlob);
+        } else if (['jpg', 'jpeg'].includes(ext)) {
             metadata = await getJPEGMetadata(fileBlob);
         } else if (ext === 'json') {
             metadata = await getJSONMetadata(fileBlob);
@@ -1466,7 +1558,9 @@ async function loadImageFile(node, filename) {
 
         if (ext === 'png') {
             metadata = await getPNGMetadata(imageBlob);
-        } else if (['jpg', 'jpeg', 'webp'].includes(ext)) {
+        } else if (ext === 'webp') {
+            metadata = await getWebPMetadata(imageBlob);
+        } else if (['jpg', 'jpeg'].includes(ext)) {
             metadata = await getJPEGMetadata(imageBlob);
         }
 

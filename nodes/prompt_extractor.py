@@ -440,7 +440,35 @@ def extract_metadata_from_jpeg(file_path):
             # Try EXIF data
             exif = img.getexif()
             if exif:
-                # UserComment field (0x9286)
+                prompt_data = None
+                workflow_data = None
+
+                # ComfyUI stores metadata in EXIF tags:
+                # 0x010e (ImageDescription): "Workflow: {json}"
+                # 0x010f (Make): "Prompt: {json}"
+                for tag_id in (0x010e, 0x010f):
+                    tag_val = exif.get(tag_id)
+                    if tag_val:
+                        if isinstance(tag_val, bytes):
+                            tag_val = tag_val.decode('utf-8', errors='ignore')
+                        tag_val = tag_val.strip().rstrip('\x00')
+                        if tag_val.startswith('Workflow:'):
+                            json_str = tag_val[len('Workflow:'):].strip()
+                            try:
+                                workflow_data = json.loads(json_str)
+                            except:
+                                pass
+                        elif tag_val.startswith('Prompt:'):
+                            json_str = tag_val[len('Prompt:'):].strip()
+                            try:
+                                prompt_data = json.loads(json_str)
+                            except:
+                                pass
+
+                if prompt_data or workflow_data:
+                    return prompt_data, workflow_data
+
+                # Fallback: UserComment field (0x9286) - used by some tools
                 user_comment = exif.get(0x9286)
                 if user_comment:
                     # Try to parse as JSON
