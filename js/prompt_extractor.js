@@ -168,6 +168,12 @@ function parseA1111Parameters(parametersText) {
         result.negative_prompt = remainder.trim();
     }
 
+    // Extract model name from settings line (e.g. "Model: modelName")
+    const modelMatch = parametersText.match(/\bModel:\s*([^,\n]+)/);
+    if (modelMatch) {
+        result.model = modelMatch[1].trim();
+    }
+
     return result;
 }
 

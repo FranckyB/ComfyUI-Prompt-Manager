@@ -95,6 +95,11 @@ def parse_a1111_parameters(parameters_text):
     else:
         result['negative_prompt'] = remainder.strip()
 
+    # Extract model name from settings line (e.g. "Model: modelName")
+    model_match = re.search(r'\bModel:\s*([^,\n]+)', parameters_text)
+    if model_match:
+        result['model'] = model_match.group(1).strip()
+
     return result
 
 
@@ -280,6 +285,62 @@ async def list_input_files(request):
 def get_available_loras():
     """Get all available LoRAs from ComfyUI's folder system"""
     return folder_paths.get_filename_list("loras")
+
+
+# Known model file extensions
+MODEL_EXTENSIONS = ['.safetensors', '.ckpt', '.pt', '.bin', '.pth', '.gguf']
+
+
+def strip_model_extension(name):
+    """Remove known model file extensions from a name."""
+    name_lower = name.lower()
+    for ext in MODEL_EXTENSIONS:
+        if name_lower.endswith(ext):
+            return name[:-len(ext)]
+    return name
+
+
+def get_available_models():
+    """Get all available models from ComfyUI's checkpoints and diffusion_models folders."""
+    models = []
+    for folder_name in ['checkpoints', 'diffusion_models']:
+        try:
+            models.extend(folder_paths.get_filename_list(folder_name))
+        except Exception:
+            pass
+    return models
+
+
+def resolve_model_path(model_name):
+    """
+    Resolve a model name to its relative path in ComfyUI's folder system.
+    Strips any path prefix from the extracted name and searches by basename.
+    Returns (resolved_path, found) tuple.
+    If not found, returns the sanitized basename (so the user gets a clear 'not found' error).
+    """
+    if not model_name:
+        return "", False
+
+    available_models = get_available_models()
+
+    # Sanitize: extract just the filename (strip any directory path from the source workflow)
+    sanitized_name = os.path.basename(model_name.replace('\\', '/'))
+    sanitized_name_no_ext = strip_model_extension(sanitized_name).lower()
+
+    # Try exact match first (full relative path as stored in metadata)
+    for model_file in available_models:
+        if model_file == model_name or model_file.replace('/', '\\') == model_name.replace('/', '\\'):
+            return model_file, True
+
+    # Try matching by basename without extension
+    for model_file in available_models:
+        file_basename_no_ext = strip_model_extension(os.path.basename(model_file)).lower()
+        if file_basename_no_ext == sanitized_name_no_ext:
+            return model_file, True
+
+    # Not found - return sanitized name so ComfyUI shows a clear error
+    print(f"[PromptExtractor] Model not found: {model_name} (searched as '{sanitized_name}')")
+    return sanitized_name, False
 
 
 def resolve_lora_path(lora_name):
@@ -622,19 +683,37 @@ def extract_metadata_from_video(file_path):
                         prompt_val = None
                         workflow_val = None
 
-                        # Extract prompt if present
+                        # Extract prompt if present as direct tag
                         if 'prompt' in tags:
                             try:
                                 prompt_val = json.loads(tags['prompt'])
                             except:
                                 prompt_val = tags['prompt']
 
-                        # Extract workflow if present
+                        # Extract workflow if present as direct tag
                         if 'workflow' in tags:
                             try:
                                 workflow_val = json.loads(tags['workflow'])
                             except:
                                 workflow_val = tags['workflow']
+
+                        # Fallback: check 'comment' tag which may contain JSON with prompt/workflow
+                        if not prompt_val and not workflow_val and 'comment' in tags:
+                            try:
+                                comment_data = json.loads(tags['comment'])
+                                if isinstance(comment_data, dict):
+                                    if 'prompt' in comment_data:
+                                        try:
+                                            prompt_val = json.loads(comment_data['prompt']) if isinstance(comment_data['prompt'], str) else comment_data['prompt']
+                                        except:
+                                            prompt_val = comment_data['prompt']
+                                    if 'workflow' in comment_data:
+                                        try:
+                                            workflow_val = json.loads(comment_data['workflow']) if isinstance(comment_data['workflow'], str) else comment_data['workflow']
+                                        except:
+                                            workflow_val = comment_data['workflow']
+                            except (json.JSONDecodeError, TypeError):
+                                pass
 
                         if prompt_val or workflow_val:
                             print("[PromptExtractor] Successfully extracted metadata using ffprobe")
@@ -1512,6 +1591,85 @@ def collect_lora_model_chain(start_node_id, node_map, link_map, visited=None):
     return all_loras, all_titles
 
 
+# Node types that load checkpoints or diffusion models (not LoRA, VAE, or CLIP loaders)
+MODEL_LOADER_TYPES = [
+    'CheckpointLoader',
+    'CheckpointLoaderSimple',
+    'CheckpointLoaderKJ',
+    'CheckpointLoaderNF4',
+    'UNETLoader',
+    'UnetLoaderGGUF',
+    'DiffusionModelLoader',
+    'DiffusionModelLoaderKJ',
+    'WanVideoModelLoader',
+    'SeaArtUnetLoader',
+    'CyberdyneModelHub',
+]
+
+
+def is_model_loader_node(node_type):
+    """Check if a node type is a checkpoint or diffusion model loader"""
+    return node_type in MODEL_LOADER_TYPES
+
+
+def get_model_name_from_node(node, prompt_node=None):
+    """
+    Extract the model/checkpoint name from a model loader node.
+    Checks both workflow widgets_values and API-format inputs.
+    Returns the model name string or None.
+    """
+    node_type = node.get('type', '')
+
+    # From API format (prompt_data) — most reliable for active nodes
+    if prompt_node and isinstance(prompt_node, dict):
+        inputs = prompt_node.get('inputs', {})
+        for key in ['ckpt_name', 'unet_name', 'model_name', 'diffusion_model', 'model']:
+            val = inputs.get(key)
+            if val and isinstance(val, str):
+                return val
+
+    # From workflow widgets_values — fallback
+    widgets = node.get('widgets_values', [])
+    if widgets and isinstance(widgets[0], str):
+        return widgets[0]
+
+    return None
+
+
+def trace_to_model_loader(node_id, node_map, link_map, visited=None, max_depth=20):
+    """
+    Trace backwards through MODEL connections to find the model loader node at the root.
+    Passes through LoRA nodes, ModelSamplingSD3, etc.
+    Returns the model loader node ID, or None if not found.
+    """
+    if visited is None:
+        visited = set()
+    if max_depth <= 0 or node_id in visited:
+        return None
+
+    visited.add(node_id)
+    node = node_map.get(node_id)
+    if not node:
+        return None
+
+    if is_model_loader_node(node.get('type', '')):
+        return node_id
+
+    # Trace backwards through MODEL input
+    inputs = node.get('inputs', [])
+    for inp in inputs:
+        inp_name = inp.get('name', '')
+        inp_type = inp.get('type', '')
+        if (inp_name in ['model', 'MODEL'] or inp_type == 'MODEL') and inp.get('link'):
+            link_info = link_map.get(inp['link'])
+            if link_info:
+                result = trace_to_model_loader(link_info['source_node'], node_map, link_map, visited, max_depth - 1)
+                if result:
+                    return result
+
+    return None
+
+
 def collect_lora_stack_chain(start_node_id, node_map, link_map, visited=None):
     """
     Traverse backwards through lora_stack connections to collect all LoRAs in a chain.
@@ -1691,12 +1849,16 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         - negative_prompt: str
         - loras_a: list of {name, model_strength, clip_strength} - first lora loader (High noise)
         - loras_b: list of {name, model_strength, clip_strength} - second lora loader (Low noise)
+        - models_a: list of model names - first/high model chain
+        - models_b: list of model names - second/low model chain
     """
     result = {
         'positive_prompt': '',
         'negative_prompt': '',
         'loras_a': [],
-        'loras_b': []
+        'loras_b': [],
+        'models_a': [],
+        'models_b': []
     }
 
     if not prompt_data and not workflow_data:
@@ -1721,6 +1883,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             })
 
         print(f"[PromptExtractor] Extracted A1111: {len(result['loras_a'])} LoRAs, prompt length: {len(result['positive_prompt'])}")
+
+        # Extract model if present
+        model_name = prompt_data.get('model', '')
+        if model_name:
+            result['models_a'].append(model_name)
+            print(f"[PromptExtractor] A1111 Model: {model_name}")
+
         return result
 
     # Build maps for traversal if workflow_data is available
@@ -2209,6 +2378,164 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     result['loras_a'] = loras_a
     result['loras_b'] = loras_b
 
+    # ========================================
+    # MODEL / CHECKPOINT EXTRACTION
+    # ========================================
+    # Find model loaders (CheckpointLoader*, UNETLoader, etc.) and assign to A/B
+    # using the same high/low chain logic as LoRAs.
+    #
+    # Strategy:
+    # 1. Find model loaders that are at the root of LoRA chains (already traced)
+    # 2. Find model loaders connected directly to KSamplers (no LoRAs in chain)
+    # 3. Find standalone model loaders from API format
+    # 4. Assign to A (high/first) or B (low/second) based on chain context
+
+    models_a = []
+    models_b = []
+    model_names_seen = set()
+
+    if workflow_data and node_map:
+        # Approach: trace each KSampler/terminal MODEL input back to its model loader
+        # and use the terminal's high/low context for assignment
+        model_input_names = [
+            'model', 'MODEL',
+            'model_high_noise', 'model_low_noise',
+            'base_model', 'refiner_model',
+            'unet',
+        ]
+
+        for node in all_workflow_nodes:
+            node_id = node.get('id')
+            node_type = node.get('type', '')
+
+            # Skip LoRA loaders and model loaders themselves
+            if is_lora_node(node_type) or is_model_loader_node(node_type):
+                continue
+
+            inputs = node.get('inputs', [])
+            for inp in inputs:
+                inp_name = inp.get('name', '')
+                inp_type = inp.get('type', '')
+                is_model_input = (inp_type == 'MODEL' or inp_name in model_input_names)
+
+                if is_model_input and inp.get('link'):
+                    link_info = link_map.get(inp['link'])
+                    if not link_info:
+                        continue
+
+                    # Trace back through the chain to find the model loader
+                    loader_id = trace_to_model_loader(link_info['source_node'], node_map, link_map)
+                    if not loader_id:
+                        continue
+
+                    loader_node = node_map.get(loader_id)
+                    if not loader_node:
+                        continue
+
+                    loader_type = loader_node.get('type', '')
+                    prompt_node = data.get(str(loader_id))
+
+                    # Special handling for CyberdyneModelHub which outputs high/low from different slots
+                    if loader_type == 'CyberdyneModelHub':
+                        inputs_api = prompt_node.get('inputs', {}) if prompt_node else {}
+                        high_name = inputs_api.get('model_high_name')
+                        low_name = inputs_api.get('model_low_name')
+                        if high_name and isinstance(high_name, str) and high_name not in model_names_seen:
+                            model_names_seen.add(high_name)
+                            print(f"[PromptExtractor] Model → A (high, CyberdyneModelHub): {high_name}")
+                            models_a.append(high_name)
+                        if low_name and isinstance(low_name, str) and low_name not in model_names_seen:
+                            model_names_seen.add(low_name)
+                            print(f"[PromptExtractor] Model → B (low, CyberdyneModelHub): {low_name}")
+                            models_b.append(low_name)
+                        continue
+
+                    # Get model name - prefer API format (prompt_data) for active nodes
+                    model_name = get_model_name_from_node(loader_node, prompt_node)
+                    if not model_name or model_name in model_names_seen:
+                        continue
+
+                    model_names_seen.add(model_name)
+
+                    # Determine high/low assignment from context
+                    inp_label = inp.get('label', '').lower()
+                    inp_name_lower = inp_name.lower()
+                    terminal_title = node.get('title', '').lower()
+                    loader_title = loader_node.get('title', '').lower()
+                    model_name_lower = model_name.lower()
+
+                    # Check all available context for high/low indicators
+                    all_context = f"{inp_label} {inp_name_lower} {terminal_title} {loader_title} {model_name_lower}"
+
+                    has_high = bool(
+                        re.search(r'\bhigh\b', all_context) or
+                        'highnoise' in all_context.replace('_', '').replace('-', '').replace(' ', '') or
+                        'high_noise' in all_context
+                    )
+                    has_low = bool(
+                        re.search(r'\blow\b', all_context) or
+                        'lownoise' in all_context.replace('_', '').replace('-', '').replace(' ', '') or
+                        'low_noise' in all_context
+                    )
+
+                    if has_low and not has_high:
+                        print(f"[PromptExtractor] Model → B (low): {model_name}")
+                        models_b.append(model_name)
+                    else:
+                        print(f"[PromptExtractor] Model → A (high/default): {model_name}")
+                        models_a.append(model_name)
+
+    # Fallback: extract from API format if workflow traversal found nothing
+    if not models_a and not models_b and data:
+        for node_id_str, node_data in data.items():
+            if not isinstance(node_data, dict):
+                continue
+            class_type = node_data.get('class_type', '')
+            if class_type not in MODEL_LOADER_TYPES:
+                continue
+
+            inputs = node_data.get('inputs', {})
+
+            # Special handling for CyberdyneModelHub which has high/low in one node
+            if class_type == 'CyberdyneModelHub':
+                high_name = inputs.get('model_high_name')
+                low_name = inputs.get('model_low_name')
+                if high_name and isinstance(high_name, str) and high_name not in model_names_seen:
+                    model_names_seen.add(high_name)
+                    print(f"[PromptExtractor] Model → A (high, CyberdyneModelHub): {high_name}")
+                    models_a.append(high_name)
+                if low_name and isinstance(low_name, str) and low_name not in model_names_seen:
+                    model_names_seen.add(low_name)
+                    print(f"[PromptExtractor] Model → B (low, CyberdyneModelHub): {low_name}")
+                    models_b.append(low_name)
+                continue
+
+            model_name = None
+            for key in ['ckpt_name', 'unet_name', 'model_name', 'diffusion_model', 'model']:
+                val = inputs.get(key)
+                if val and isinstance(val, str):
+                    model_name = val
+                    break
+
+            if not model_name or model_name in model_names_seen:
+                continue
+
+            model_names_seen.add(model_name)
+            model_name_lower = model_name.lower()
+
+            has_low = bool('low_noise' in model_name_lower or '_low' in model_name_lower)
+            has_high = bool('high_noise' in model_name_lower or '_high' in model_name_lower)
+
+            if has_low and not has_high:
+                print(f"[PromptExtractor] Model → B (low, API fallback): {model_name}")
+                models_b.append(model_name)
+            else:
+                print(f"[PromptExtractor] Model → A (high/default, API fallback): {model_name}")
+                models_a.append(model_name)
+
+    result['models_a'] = models_a
+    result['models_b'] = models_b
+
     return result
 
 
@@ -2264,6 +2591,32 @@ def convert_workflow_to_prompt_format(workflow_data):
                 if isinstance(val, str) and len(val) > 20:  # Likely the prompt text
                     inputs['text'] = val
                     break
+
+        elif class_type in ['CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderKJ', 'CheckpointLoaderNF4']:
+            if widgets_values:
+                inputs['ckpt_name'] = widgets_values[0]
+
+        elif class_type in ['UNETLoader', 'UnetLoaderGGUF', 'DiffusionModelLoader']:
+            if widgets_values:
+                inputs['unet_name'] = widgets_values[0]
+
+        elif class_type == 'DiffusionModelLoaderKJ':
+            if widgets_values:
+                inputs['model_name'] = widgets_values[0]
+
+        elif class_type == 'WanVideoModelLoader':
+            if widgets_values:
+                inputs['model'] = widgets_values[0]
+
+        elif class_type == 'SeaArtUnetLoader':
+            if widgets_values:
+                inputs['unet_name'] = widgets_values[0]
+
+        elif class_type == 'CyberdyneModelHub':
+            if len(widgets_values) >= 1:
+                inputs['model_high_name'] = widgets_values[0]
+            if len(widgets_values) >= 3:
+                inputs['model_low_name'] = widgets_values[2]
 
         result[node_id] = {
             'class_type': class_type,
@@ -2375,9 +2728,9 @@ class PromptExtractor:
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Extract prompts and LoRA configurations from images, videos, and workflow files."
-    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "metadata_json")
+    DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
+    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "metadata_json", "model_a", "model_b")
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
@@ -2399,6 +2752,8 @@ class PromptExtractor:
         extracted_lora_stack_b = []
         image_tensor = None
         metadata_json = ""
+        model_a = ""
+        model_b = ""
 
         # Handle None or missing image parameter
         if image is None:
@@ -2494,6 +2849,24 @@ class PromptExtractor:
                 negative_prompt = parsed['negative_prompt'] or ""
                 loras_a = parsed['loras_a']
                 loras_b = parsed['loras_b']
+
+                # Resolve model paths
+                raw_models_a = parsed.get('models_a', [])
+                raw_models_b = parsed.get('models_b', [])
+                if raw_models_a:
+                    resolved_path, found = resolve_model_path(raw_models_a[0])
+                    model_a = resolved_path
+                    if found:
+                        print(f"[PromptExtractor] Model A resolved: {model_a}")
+                    else:
+                        print(f"[PromptExtractor] Model A not found locally, using: {model_a}")
+                if raw_models_b:
+                    resolved_path, found = resolve_model_path(raw_models_b[0])
+                    model_b = resolved_path
+                    if found:
+                        print(f"[PromptExtractor] Model B resolved: {model_b}")
+                    else:
+                        print(f"[PromptExtractor] Model B not found locally, using: {model_b}")
 
             # Output raw JSON for metadata_json output
             # Priority: ComfyUI workflow_data (full workflow) > ComfyUI prompt_data (API format)
@@ -2615,10 +2988,14 @@ class PromptExtractor:
             negative_prompt = " "
         if not metadata_json:
             metadata_json = " "
+        if not model_a:
+            model_a = " "
+        if not model_b:
+            model_b = " "
 
         return {
             "ui": {"images": preview_images},
-            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, metadata_json)
+            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, metadata_json, model_a, model_b)
         }
 
     def save_preview_images(self, images):
