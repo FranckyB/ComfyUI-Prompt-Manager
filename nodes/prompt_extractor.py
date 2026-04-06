@@ -2730,7 +2730,7 @@ class PromptExtractor:
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
     RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "metadata_json", "model_a", "model_b")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "model_a", "model_b", "metadata_json")
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
@@ -2995,7 +2995,7 @@ class PromptExtractor:
 
         return {
             "ui": {"images": preview_images},
-            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, metadata_json, model_a, model_b)
+            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, model_a, model_b, metadata_json)
         }
 
     def save_preview_images(self, images):
