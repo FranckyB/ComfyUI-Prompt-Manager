@@ -2475,12 +2475,14 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                     has_high = bool(
                         re.search(r'\bhigh\b', all_context) or
                         re.search(r'high(?:noise|_noise)', all_context_compact) or
-                        re.search(r'i2v\s*high|t2v\s*high|_high|high_', all_context)
+                        re.search(r'i2v\s*high|t2v\s*high|_high|high_', all_context) or
+                        re.search(r'high', model_name_lower)
                     )
                     has_low = bool(
                         re.search(r'\blow\b', all_context) or
                         re.search(r'low(?:noise|_noise)', all_context_compact) or
-                        re.search(r'i2v\s*low|t2v\s*low|_low|low_', all_context)
+                        re.search(r'i2v\s*low|t2v\s*low|_low|low_', all_context) or
+                        re.search(r'low', model_name_lower)
                     )
 
                     if has_low and not has_high:
@@ -2530,11 +2532,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
             has_low = bool(
                 'low_noise' in model_name_lower or '_low' in model_name_lower or
-                re.search(r'i2v\s*low|t2v\s*low|low_', model_name_lower)
+                re.search(r'i2v\s*low|t2v\s*low|low_', model_name_lower) or
+                re.search(r'low', model_name_lower)
             )
             has_high = bool(
                 'high_noise' in model_name_lower or '_high' in model_name_lower or
-                re.search(r'i2v\s*high|t2v\s*high|high_', model_name_lower)
+                re.search(r'i2v\s*high|t2v\s*high|high_', model_name_lower) or
+                re.search(r'high', model_name_lower)
             )
 
             if has_low and not has_high:
