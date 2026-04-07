@@ -4687,6 +4687,89 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             };
             menu.appendChild(deleteItem);
 
+            // Generate Missing Thumbnails
+            const thumbDivider = document.createElement("div");
+            thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(thumbDivider);
+
+            const thumbItem = document.createElement("div");
+            thumbItem.textContent = "🎨 Generate Missing Thumbnails";
+            thumbItem.style.cssText = `
+                padding: 8px 16px;
+                color: #ccc;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            thumbItem.onmouseover = () => thumbItem.style.background = '#3a3a3a';
+            thumbItem.onmouseout = () => thumbItem.style.background = 'transparent';
+            thumbItem.onclick = async () => {
+                menu.remove();
+                const catPrompts = node.prompts[cat];
+                if (!catPrompts) return;
+
+                // Collect prompts without thumbnails
+                const missing = Object.keys(catPrompts).filter(name => {
+                    const data = catPrompts[name];
+                    return data && typeof data === "object" && !data.thumbnail;
+                });
+
+                if (missing.length === 0) {
+                    await showInfo("No Missing Thumbnails", `All prompts in "${cat}" already have thumbnails.`);
+                    return;
+                }
+
+                if (!await showConfirm("Generate Missing Thumbnails", `Generate thumbnails for ${missing.length} prompt(s) in "${cat}"?`, "Generate", "#4CAF50")) {
+                    return;
+                }
+
+                // Ensure checkpoint is selected upfront
+                if (!_thumbnailCheckpoint) {
+                    _thumbnailCheckpoint = await showCheckpointPicker();
+                    if (!_thumbnailCheckpoint) return;
+                    app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", _thumbnailCheckpoint);
+                }
+
+                // Progress indicator
+                const progress = document.createElement("div");
+                progress.style.cssText = `
+                    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                    background: #222; border: 2px solid #4CAF50; border-radius: 8px;
+                    padding: 20px 30px; z-index: 10000; color: #fff; font-size: 14px;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 280px;
+                `;
+                const progressText = document.createElement("div");
+                progressText.style.cssText = `display: flex; align-items: center; gap: 12px;`;
+                progressText.innerHTML = `
+                    <div style="width: 20px; height: 20px; border: 3px solid #4CAF50; border-top-color: transparent; border-radius: 50%; animation: thumb-spin 1s linear infinite;"></div>
+                    <span></span>
+                `;
+                progress.appendChild(progressText);
+                const styleEl = document.createElement("style");
+                styleEl.textContent = `@keyframes thumb-spin { to { transform: rotate(360deg); } }`;
+                progress.appendChild(styleEl);
+                document.body.appendChild(progress);
+
+                let generated = 0;
+                let failed = 0;
+                for (let i = 0; i < missing.length; i++) {
+                    const pName = missing[i];
+                    progressText.querySelector("span").textContent = `Generating ${i + 1} / ${missing.length}: ${pName}`;
+                    try {
+                        await generateThumbnailForPrompt(node, cat, pName, () => {
+                            renderContent(searchInput.value);
+                        }, { silent: true });
+                        generated++;
+                    } catch (e) {
+                        console.error(`[ThumbnailGen] Failed for "${pName}":`, e);
+                        failed++;
+                    }
+                }
+
+                if (progress.parentNode) progress.remove();
+                await showInfo("Batch Complete", `Generated: ${generated}, Failed: ${failed}`);
+            };
+            menu.appendChild(thumbItem);
+
             document.body.appendChild(menu);
             const closeMenu = (e) => {
                 if (!menu.contains(e.target)) {
@@ -5367,6 +5450,437 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
     });
 }
 
+// ========================
+// Thumbnail Generation System
+// ========================
+
+// Cached checkpoint selection for thumbnail generation (persisted in ComfyUI settings)
+let _thumbnailCheckpoint = null;
+
+// Load saved checkpoint from preferences on init
+try {
+    const saved = app.ui.settings.getSettingValue("PromptManager.ThumbnailCheckpoint");
+    if (saved) _thumbnailCheckpoint = saved;
+} catch (e) { /* settings not ready yet, will be loaded on first use */ }
+
+/**
+ * Show a checkpoint picker dialog for thumbnail generation
+ * @returns {Promise<string|null>} Selected checkpoint path or null if cancelled
+ */
+async function showCheckpointPicker(preselected = null) {
+    const resp = await fetch("/prompt-manager-advanced/list-checkpoints");
+    const data = await resp.json();
+    if (!data.success || !data.checkpoints?.length) {
+        await showInfo("No Checkpoints", "No checkpoints found in your ComfyUI models folder.");
+        return null;
+    }
+
+    const checkpoints = data.checkpoints.sort((a, b) => a.localeCompare(b));
+
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 9999;`;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #222; border: 2px solid #444; border-radius: 8px;
+            padding: 20px; z-index: 10000; min-width: 400px; max-width: 500px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        // Build option list
+        const optionsHtml = checkpoints.map(c => {
+            const shortName = c.includes("\\") ? c.split("\\").pop() : c.includes("/") ? c.split("/").pop() : c;
+            const selected = c === preselected ? ' selected' : '';
+            // Sanitize for HTML attribute
+            const escaped = c.replace(/"/g, '&quot;');
+            return `<option value="${escaped}"${selected}>${shortName}</option>`;
+        }).join('');
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">Select Checkpoint</div>
+            <div style="margin-bottom: 10px; color: #aaa; font-size: 13px;">Choose the checkpoint model for generating thumbnails:</div>
+            <input type="text" placeholder="Filter checkpoints..." style="width: 100%; padding: 8px; margin-bottom: 8px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; box-sizing: border-box;" />
+            <select size="10" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; box-sizing: border-box; margin-bottom: 15px;">
+                ${optionsHtml}
+            </select>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Select</button>
+            </div>
+        `;
+
+        const filterInput = dialog.querySelector('input[type="text"]');
+        const selectEl = dialog.querySelector('select');
+        const okBtn = dialog.querySelector('.ok-btn');
+        const cancelBtn = dialog.querySelector('.cancel-btn');
+
+        // Filter checkpoints as user types
+        filterInput.oninput = () => {
+            const filter = filterInput.value.toLowerCase();
+            selectEl.innerHTML = checkpoints
+                .filter(c => c.toLowerCase().includes(filter))
+                .map(c => {
+                    const shortName = c.includes("\\") ? c.split("\\").pop() : c.includes("/") ? c.split("/").pop() : c;
+                    const escaped = c.replace(/"/g, '&quot;');
+                    return `<option value="${escaped}">${shortName}</option>`;
+                }).join('');
+        };
+
+        const cleanup = () => {
+            document.body.removeChild(overlay);
+            document.body.removeChild(dialog);
+        };
+
+        okBtn.onclick = () => {
+            const val = selectEl.value;
+            if (val) { resolve(val); cleanup(); }
+        };
+        cancelBtn.onclick = () => { resolve(null); cleanup(); };
+        overlay.onclick = () => { resolve(null); cleanup(); };
+
+        // Enter to select, Escape to cancel
+        dialog.onkeydown = (e) => {
+            if (e.key === 'Enter') { okBtn.click(); }
+            else if (e.key === 'Escape') { cancelBtn.click(); }
+        };
+
+        // Double-click to select immediately
+        selectEl.ondblclick = () => { okBtn.click(); };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        filterInput.focus();
+    });
+}
+
+/**
+ * Build and queue a thumbnail generation workflow
+ * @param {string} promptText - The positive prompt text
+ * @param {string} checkpoint - The checkpoint path
+ * @param {Array} loras - Array of {path, strength, clip_strength}
+ * @returns {Promise<string|null>} Generated image filename or null
+ */
+async function generateThumbnailWorkflow(promptText, checkpoint, loras) {
+    const negativePrompt = "blurry, bad quality, worst quality, low resolution, watermark, text, logo, deformed, ugly, disfigured";
+
+    // Build the API workflow
+    const workflow = {};
+    let nodeId = 1;
+
+    // 1. Checkpoint loader
+    const checkpointId = String(nodeId++);
+    workflow[checkpointId] = {
+        class_type: "CheckpointLoaderSimple",
+        inputs: { ckpt_name: checkpoint }
+    };
+
+    // Track current model/clip outputs (may chain through LoRAs)
+    let modelOutput = [checkpointId, 0];
+    let clipOutput = [checkpointId, 1];
+
+    // 2. LoRA loaders (chained)
+    for (const lora of loras) {
+        const loraId = String(nodeId++);
+        workflow[loraId] = {
+            class_type: "LoraLoader",
+            inputs: {
+                lora_name: lora.path,
+                strength_model: lora.strength,
+                strength_clip: lora.clip_strength,
+                model: modelOutput,
+                clip: clipOutput
+            }
+        };
+        modelOutput = [loraId, 0];
+        clipOutput = [loraId, 1];
+    }
+
+    // 3. Positive CLIP encode
+    const positiveId = String(nodeId++);
+    workflow[positiveId] = {
+        class_type: "CLIPTextEncode",
+        inputs: {
+            text: promptText,
+            clip: clipOutput
+        }
+    };
+
+    // 4. Negative CLIP encode
+    const negativeId = String(nodeId++);
+    workflow[negativeId] = {
+        class_type: "CLIPTextEncode",
+        inputs: {
+            text: negativePrompt,
+            clip: clipOutput
+        }
+    };
+
+    // 5. Empty latent image (768x768)
+    const latentId = String(nodeId++);
+    workflow[latentId] = {
+        class_type: "EmptyLatentImage",
+        inputs: { width: 768, height: 1024, batch_size: 1 }
+    };
+
+    // 6. KSampler with random seed
+    const seed = Math.floor(Math.random() * 2147483647);
+    const samplerId = String(nodeId++);
+    workflow[samplerId] = {
+        class_type: "KSampler",
+        inputs: {
+            seed: seed,
+            steps: 30,
+            cfg: 6.0,
+            sampler_name: "euler",
+            scheduler: "normal",
+            denoise: 1.0,
+            model: modelOutput,
+            positive: [positiveId, 0],
+            negative: [negativeId, 0],
+            latent_image: [latentId, 0]
+        }
+    };
+
+    // 7. VAE Decode
+    const decodeId = String(nodeId++);
+    workflow[decodeId] = {
+        class_type: "VAEDecode",
+        inputs: {
+            samples: [samplerId, 0],
+            vae: [checkpointId, 2]
+        }
+    };
+
+    // 8. Save image to temp
+    const saveId = String(nodeId++);
+    workflow[saveId] = {
+        class_type: "SaveImage",
+        inputs: {
+            filename_prefix: "_thumb_gen_",
+            images: [decodeId, 0]
+        }
+    };
+
+    // Queue the workflow via ComfyUI API
+    const promptId = await queueThumbnailPrompt(workflow);
+    if (!promptId) return null;
+
+    // Wait for completion and get the image
+    return await waitForThumbnailResult(promptId, saveId);
+}
+
+/**
+ * Queue a workflow via ComfyUI's /prompt API
+ * @returns {Promise<string|null>} prompt_id or null
+ */
+async function queueThumbnailPrompt(workflow) {
+    try {
+        const body = {
+            prompt: workflow,
+            client_id: api.clientId
+        };
+        const resp = await fetch("/prompt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        const data = await resp.json();
+        if (data.prompt_id) {
+            return data.prompt_id;
+        }
+        console.error("[ThumbnailGen] Queue failed:", data);
+        if (data.error) {
+            const detail = data.node_errors ? Object.values(data.node_errors).map(e => e.errors?.map(err => err.message).join(', ')).join('; ') : data.error;
+            await showInfo("Generation Failed", `Could not queue thumbnail: ${detail}`);
+        }
+        return null;
+    } catch (e) {
+        console.error("[ThumbnailGen] Error queueing:", e);
+        return null;
+    }
+}
+
+/**
+ * Wait for a queued prompt to complete and return the generated image as base64 thumbnail
+ * @param {string} promptId - The prompt_id from queueing
+ * @param {string} saveNodeId - The SaveImage node ID in the workflow
+ * @returns {Promise<string|null>} Base64 thumbnail data URL or null
+ */
+function waitForThumbnailResult(promptId, saveNodeId) {
+    return new Promise((resolve) => {
+        let timeout = null;
+
+        const onExecuted = (event) => {
+            const detail = event.detail;
+            if (detail?.prompt_id !== promptId) return;
+
+            // Check for our save node's output
+            const output = detail?.output;
+            if (output?.images?.[0]) {
+                cleanup();
+                const img = output.images[0];
+                fetchThumbnailImage(img.filename, img.subfolder, img.type).then(resolve);
+            }
+        };
+
+        const onError = (event) => {
+            if (event.detail?.prompt_id !== promptId) return;
+            cleanup();
+            console.error("[ThumbnailGen] Execution error:", event.detail);
+            resolve(null);
+        };
+
+        const cleanup = () => {
+            clearTimeout(timeout);
+            api.removeEventListener("executed", onExecuted);
+            api.removeEventListener("execution_error", onError);
+        };
+
+        // Timeout after 120 seconds
+        timeout = setTimeout(() => {
+            cleanup();
+            console.warn("[ThumbnailGen] Timed out waiting for result");
+            resolve(null);
+        }, 120000);
+
+        api.addEventListener("executed", onExecuted);
+        api.addEventListener("execution_error", onError);
+    });
+}
+
+/**
+ * Fetch a generated image from ComfyUI and convert to base64 thumbnail
+ * @param {string} filename
+ * @param {string} subfolder
+ * @param {string} type
+ * @returns {Promise<string|null>} Base64 data URL
+ */
+async function fetchThumbnailImage(filename, subfolder, type) {
+    try {
+        const params = new URLSearchParams({ filename, subfolder: subfolder || '', type: type || 'output' });
+        const resp = await fetch(`/view?${params}`);
+        if (!resp.ok) return null;
+
+        const blob = await resp.blob();
+
+        // Resize to thumbnail using canvas
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const minSize = 200;
+                let w = img.width, h = img.height;
+                const minDim = Math.min(w, h);
+                if (minDim > minSize) {
+                    const scale = minSize / minDim;
+                    w = Math.round(w * scale);
+                    h = Math.round(h * scale);
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                resolve(canvas.toDataURL('image/jpeg', 0.85));
+            };
+            img.onerror = () => resolve(null);
+            img.src = URL.createObjectURL(blob);
+        });
+    } catch (e) {
+        console.error("[ThumbnailGen] Error fetching image:", e);
+        return null;
+    }
+}
+
+/**
+ * Main entry point: generate a thumbnail for a prompt
+ * Handles checkpoint selection, LoRA resolution, workflow building, and saving
+ */
+async function generateThumbnailForPrompt(node, category, promptName, onUpdate, { silent = false } = {}) {
+    const promptData = node.prompts[category]?.[promptName];
+    if (!promptData) {
+        if (!silent) await showInfo("Error", "Prompt data not found.");
+        return;
+    }
+
+    // Ensure a checkpoint is selected
+    if (!_thumbnailCheckpoint) {
+        _thumbnailCheckpoint = await showCheckpointPicker();
+        if (!_thumbnailCheckpoint) return; // User cancelled
+        app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", _thumbnailCheckpoint);
+    }
+
+    const promptText = promptData.prompt || promptName;
+
+    // Resolve LoRAs — combine A and B stacks, only active ones
+    const allLoras = [
+        ...(promptData.loras_a || []).filter(l => l.active !== false),
+        ...(promptData.loras_b || []).filter(l => l.active !== false)
+    ];
+
+    let resolvedLoras = [];
+    if (allLoras.length > 0) {
+        try {
+            const resp = await fetch("/prompt-manager-advanced/resolve-loras", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    lora_names: allLoras.map(l => ({
+                        name: l.name,
+                        strength: l.strength ?? 1.0,
+                        clip_strength: l.clip_strength ?? l.strength ?? 1.0
+                    }))
+                })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                resolvedLoras = data.loras;
+            }
+        } catch (e) {
+            console.warn("[ThumbnailGen] Could not resolve LoRAs, continuing without:", e);
+        }
+    }
+
+    // Show generating indicator (only in non-silent/single mode)
+    let indicator = null;
+    if (!silent) {
+        indicator = document.createElement("div");
+        indicator.style.cssText = `
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #222; border: 2px solid #4CAF50; border-radius: 8px;
+            padding: 20px 30px; z-index: 10000; color: #fff; font-size: 14px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+        indicator.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 20px; height: 20px; border: 3px solid #4CAF50; border-top-color: transparent; border-radius: 50%; animation: thumb-spin 1s linear infinite;"></div>
+                <span>Generating thumbnail...</span>
+            </div>
+            <style>@keyframes thumb-spin { to { transform: rotate(360deg); } }</style>
+        `;
+        document.body.appendChild(indicator);
+    }
+
+    try {
+        const thumbnail = await generateThumbnailWorkflow(promptText, _thumbnailCheckpoint, resolvedLoras);
+
+        if (thumbnail) {
+            await saveThumbnail(node, category, promptName, thumbnail);
+            onUpdate();
+        } else {
+            if (!silent) await showInfo("Generation Failed", "Could not generate thumbnail. The model may be incompatible or an error occurred.");
+        }
+    } catch (e) {
+        console.error("[ThumbnailGen] Error:", e);
+        if (!silent) await showInfo("Error", `Thumbnail generation failed: ${e.message}`);
+        else throw e;
+    } finally {
+        if (indicator?.parentNode) {
+            document.body.removeChild(indicator);
+        }
+    }
+}
+
 /**
  * Show context menu for thumbnail operations
  */
@@ -5448,6 +5962,28 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
         } catch (error) {
             console.error("[PromptManagerAdvanced] Error reading clipboard:", error);
             await showInfo("Error", "Failed to read clipboard. Make sure you have an image copied.");
+        }
+    }));
+
+    // Generate thumbnail divider
+    const genDivider = document.createElement("div");
+    genDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(genDivider);
+
+    // Generate Thumbnail
+    menu.appendChild(createMenuItem("🎨 Generate Thumbnail", async () => {
+        await generateThumbnailForPrompt(node, category, promptName, onUpdate);
+    }));
+
+    // Change Thumbnail Model
+    const modelLabel = _thumbnailCheckpoint
+        ? `🔧 Model: ${_thumbnailCheckpoint.split(/[/\\]/).pop()}`
+        : "🔧 Select Thumbnail Model";
+    menu.appendChild(createMenuItem(modelLabel, async () => {
+        const picked = await showCheckpointPicker(_thumbnailCheckpoint);
+        if (picked) {
+            _thumbnailCheckpoint = picked;
+            app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", picked);
         }
     }));
 

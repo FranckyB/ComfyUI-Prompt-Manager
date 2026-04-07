@@ -1477,3 +1477,38 @@ async def toggle_nsfw_advanced(request):
     except Exception as e:
         print(f"[PromptManagerAdvanced] Error in toggle_nsfw API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/prompt-manager-advanced/list-checkpoints")
+async def list_checkpoints(request):
+    """API endpoint to list available checkpoints for thumbnail generation"""
+    try:
+        checkpoints = folder_paths.get_filename_list("checkpoints")
+        return server.web.json_response({"success": True, "checkpoints": checkpoints})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error listing checkpoints: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/resolve-loras")
+async def resolve_loras(request):
+    """API endpoint to resolve LoRA names to paths for thumbnail generation workflow"""
+    try:
+        data = await request.json()
+        lora_names = data.get("lora_names", [])
+
+        resolved = []
+        for lora in lora_names:
+            name = lora.get("name", "")
+            path, found = get_lora_relative_path(name)
+            if found:
+                resolved.append({
+                    "path": path,
+                    "strength": lora.get("strength", 1.0),
+                    "clip_strength": lora.get("clip_strength", 1.0)
+                })
+
+        return server.web.json_response({"success": True, "loras": resolved})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error resolving LoRAs: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)

@@ -9,7 +9,9 @@ A complete prompt management solution featuring three core capabilities:
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp) or [Ollama](https://ollama.com). Supports text enhancement, image analysis with vision models (Qwen3.5), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
-**Prompt Extractor** — Extract prompts and LoRA configurations from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai. Browse files from both your input and output folders.
+**Prompt Extractor** — Extract prompts, LoRA configurations, and checkpoint/model paths from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks, plus resolved model paths (High/Low for dual-model workflows like Wan). Supports ComfyUI, A1111/Forge, and WebP metadata formats. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai. Browse files from both your input and output folders.
+
+**Prompt Model Loader** — Load checkpoints, diffusion, or GGUF models from a string path output by Prompt Extractor. Auto-detects whether the model is a checkpoint (outputs MODEL + CLIP + VAE) or a diffusion/UNET/GGUF model (outputs MODEL only). Displays model type badge and name directly on the node. Works around ComfyUI's combo type limitation, allowing extracted model paths to connect directly to a loader. Supports [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) models when the extension is installed.
 ___
 
 <div align="center">
@@ -56,15 +58,29 @@ ___
 - **Merge Mode**: When override is off, connected LoRAs are merged with saved presets
 - **LoRA Manager Integration**: If [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) is installed, hovering over LoRA tags shows preview images
 - **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
+- **Thumbnail Generation**: Right-click any prompt to generate a thumbnail using a selectable checkpoint model. Model choice persists in ComfyUI preferences.
 
 ### Prompt Extractor:
 - **Extract from Images/Videos**: Load images or videos and extract embedded prompts, LoRAs, and workflow metadata
+- **Model/Checkpoint Extraction**: Extracts checkpoint and UNET model paths from workflows, with High/Low (A/B) assignment for dual-model setups like Wan video
+- **A1111/Forge Support**: Parses A1111 parameters format to extract prompts, LoRAs, and model names from Forge/A1111 generated images
+- **WebP Metadata Support**: Reads EXIF metadata from WebP images (RIFF format parser)
 - **JSON Workflow Support**: Browse and load JSON workflow files directly to extract prompts and LoRA configurations
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
 - **Dual LoRA Stack Output**: Outputs two separate LoRA stacks for workflows using dual stacking (e.g., Wan video)
 - **Active LoRA Filtering**: Only extracts LoRAs that are marked as active in the source workflow
-- **Wide Node Compatibility**: Supports extraction from CLIP Text Encode, various sampler nodes, and LoRA stackers including Power Lora Loader
+- **Wide Node Compatibility**: Supports 11+ model loader types including CheckpointLoader, UNETLoader, UnetLoaderGGUF, DiffusionModelLoader, WanVideoModelLoader, CyberdyneModelHub, and more
 - **Preview in Manager**: View extracted data and repathed loras using Manager Advanced.
+
+### Prompt Model Loader:
+- **String-to-Model Loading**: Takes a model path string (from Prompt Extractor) and loads the model directly
+- **Auto-Detection**: Automatically detects whether the path is a checkpoint (returns MODEL + CLIP + VAE) or diffusion/UNET/GGUF model (returns MODEL only)
+- **GGUF Support**: Loads GGUF models when [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) is installed, with automatic runtime detection
+- **Visual Model Info**: Displays model type badge (Checkpoint/Diffusion/GGUF) and model name directly on the node
+- **State Persistence**: Model info display and output slot visibility persist across tab switches and workflow reloads
+- **Graceful Error Handling**: Displays a red "NOT FOUND" badge instead of crashing when a model path cannot be resolved
+- **Model Path Resolution**: Works with both full paths and relative paths, searching checkpoints, diffusion_models, and unet folders
+- **Weight Dtype Support**: Optional weight dtype selection for memory optimization
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
@@ -242,6 +258,54 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.22.5
+- **Thumbnail Generation in Prompt Manager Advanced**
+  - Right-click any prompt to generate a thumbnail using a basic KSampler workflow
+  - Checkpoint model selector with filterable list of all available checkpoints
+  - Includes saved LoRAs (both stacks, active only) for more accurate thumbnails
+  - LoRA paths resolved via existing fuzzy matching — renamed LoRAs are found automatically
+  - Random seed on each generation — re-generate to get a different result
+  - Selected checkpoint persists in ComfyUI preferences across sessions
+  - Change model anytime via right-click menu or ComfyUI Settings → Prompt Manager
+  - Spinner overlay during generation with 120s timeout
+
+- **Improved Model High/Low Detection**
+  - Better detection of embedded high/low indicators in model names (e.g., `tastysinHighV81`, `tastysinLowV81`)
+
+### version 1.22.1
+- **Prompt Model Loader Improvements**
+  - Added GGUF model support via runtime detection of [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) extension
+  - Visual model type badge (Checkpoint/Diffusion/GGUF/NOT FOUND) and model name displayed on the node
+  - CLIP and VAE output slots automatically hidden for non-checkpoint models
+  - State persistence: model info and output slot visibility survive tab switches and workflow reloads
+  - Graceful error handling: shows red "NOT FOUND" badge instead of crashing on missing models
+  - Searches `unet_gguf` folder paths registered by ComfyUI-GGUF
+
+### version 1.22.0
+- **New Node: Prompt Model Loader**
+  - Loads checkpoints or diffusion/UNET models from a string path (output by Prompt Extractor)
+  - Auto-detects model type: checkpoints return MODEL + CLIP + VAE, diffusion models return MODEL only
+  - Searches ComfyUI checkpoints, diffusion_models, and unet folders automatically
+  - Optional weight dtype selection for memory optimization
+
+- **Model/Checkpoint Extraction in Prompt Extractor**
+  - Extracts checkpoint and UNET model paths from workflow metadata
+  - High/Low (A/B) model assignment for dual-model workflows (e.g., Wan video with different models per noise level)
+  - Resolves extracted model names to local file paths using ComfyUI's folder system
+  - Supports 11+ model loader types: CheckpointLoaderSimple, UNETLoader, UnetLoaderGGUF, DiffusionModelLoader, WanVideoModelLoader, CyberdyneModelHub (dual high/low), and more
+  - New `model_a` and `model_b` STRING outputs on the Prompt Extractor node
+
+- **A1111/Forge Image Support**
+  - Parses `Model:` field from A1111/Forge parameters format (both JS and Python paths)
+  - Extracts model names from images generated by Automatic1111, Forge, and compatible UIs
+
+- **WebP Metadata Support**
+  - Added RIFF/EXIF parser for reading ComfyUI metadata from WebP images
+  - Fixed EXIF tag reading to use correct tags (0x010e ImageDescription, 0x010f Make) for ComfyUI metadata
+
+- **Video Metadata Improvements**
+  - Added `comment` tag parsing in ffprobe fallback for videos that store metadata as JSON wrapper
 
 ### version 1.21.2
 - **Improved Thumbnail Extraction**
