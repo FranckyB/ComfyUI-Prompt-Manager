@@ -11,7 +11,7 @@ A complete prompt management solution featuring three core capabilities:
 
 **Prompt Extractor** — Extract prompts, LoRA configurations, and checkpoint/model paths from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks, plus resolved model paths (High/Low for dual-model workflows like Wan). Supports ComfyUI, A1111/Forge, and WebP metadata formats. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai. Browse files from both your input and output folders.
 
-**Prompt Model Loader** — Load checkpoints or diffusion models from a string path output by Prompt Extractor. Auto-detects whether the model is a checkpoint (outputs MODEL + CLIP + VAE) or a diffusion/UNET model (outputs MODEL only). Works around ComfyUI's combo type limitation, allowing extracted model paths to connect directly to a loader.
+**Prompt Model Loader** — Load checkpoints, diffusion, or GGUF models from a string path output by Prompt Extractor. Auto-detects whether the model is a checkpoint (outputs MODEL + CLIP + VAE) or a diffusion/UNET/GGUF model (outputs MODEL only). Displays model type badge and name directly on the node. Works around ComfyUI's combo type limitation, allowing extracted model paths to connect directly to a loader. Supports [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) models when the extension is installed.
 ___
 
 <div align="center">
@@ -73,8 +73,12 @@ ___
 
 ### Prompt Model Loader:
 - **String-to-Model Loading**: Takes a model path string (from Prompt Extractor) and loads the model directly
-- **Auto-Detection**: Automatically detects whether the path is a checkpoint (returns MODEL + CLIP + VAE) or diffusion/UNET model (returns MODEL only)
-- **Model Path Resolution**: Works with both full paths and relative paths, searching checkpoints and diffusion_models folders
+- **Auto-Detection**: Automatically detects whether the path is a checkpoint (returns MODEL + CLIP + VAE) or diffusion/UNET/GGUF model (returns MODEL only)
+- **GGUF Support**: Loads GGUF models when [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) is installed, with automatic runtime detection
+- **Visual Model Info**: Displays model type badge (Checkpoint/Diffusion/GGUF) and model name directly on the node
+- **State Persistence**: Model info display and output slot visibility persist across tab switches and workflow reloads
+- **Graceful Error Handling**: Displays a red "NOT FOUND" badge instead of crashing when a model path cannot be resolved
+- **Model Path Resolution**: Works with both full paths and relative paths, searching checkpoints, diffusion_models, and unet folders
 - **Weight Dtype Support**: Optional weight dtype selection for memory optimization
 
 ### Prompt Generator
@@ -253,6 +257,15 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.22.1
+- **Prompt Model Loader Improvements**
+  - Added GGUF model support via runtime detection of [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) extension
+  - Visual model type badge (Checkpoint/Diffusion/GGUF/NOT FOUND) and model name displayed on the node
+  - CLIP and VAE output slots automatically hidden for non-checkpoint models
+  - State persistence: model info and output slot visibility survive tab switches and workflow reloads
+  - Graceful error handling: shows red "NOT FOUND" badge instead of crashing on missing models
+  - Searches `unet_gguf` folder paths registered by ComfyUI-GGUF
 
 ### version 1.22.0
 - **New Node: Prompt Model Loader**

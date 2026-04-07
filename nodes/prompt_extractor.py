@@ -301,11 +301,15 @@ def strip_model_extension(name):
 
 
 def get_available_models():
-    """Get all available models from ComfyUI's checkpoints and diffusion_models folders."""
+    """Get all available models from ComfyUI's checkpoints, diffusion_models and unet folders."""
     models = []
-    for folder_name in ['checkpoints', 'diffusion_models']:
+    seen = set()
+    for folder_name in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
         try:
-            models.extend(folder_paths.get_filename_list(folder_name))
+            for m in folder_paths.get_filename_list(folder_name):
+                if m not in seen:
+                    seen.add(m)
+                    models.append(m)
         except Exception:
             pass
     return models
@@ -2466,16 +2470,17 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
                     # Check all available context for high/low indicators
                     all_context = f"{inp_label} {inp_name_lower} {terminal_title} {loader_title} {model_name_lower}"
+                    all_context_compact = all_context.replace('_', '').replace('-', '').replace(' ', '')
 
                     has_high = bool(
                         re.search(r'\bhigh\b', all_context) or
-                        'highnoise' in all_context.replace('_', '').replace('-', '').replace(' ', '') or
-                        'high_noise' in all_context
+                        re.search(r'high(?:noise|_noise)', all_context_compact) or
+                        re.search(r'i2v\s*high|t2v\s*high|_high|high_', all_context)
                     )
                     has_low = bool(
                         re.search(r'\blow\b', all_context) or
-                        'lownoise' in all_context.replace('_', '').replace('-', '').replace(' ', '') or
-                        'low_noise' in all_context
+                        re.search(r'low(?:noise|_noise)', all_context_compact) or
+                        re.search(r'i2v\s*low|t2v\s*low|_low|low_', all_context)
                     )
 
                     if has_low and not has_high:
@@ -2523,8 +2528,14 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             model_names_seen.add(model_name)
             model_name_lower = model_name.lower()
 
-            has_low = bool('low_noise' in model_name_lower or '_low' in model_name_lower)
-            has_high = bool('high_noise' in model_name_lower or '_high' in model_name_lower)
+            has_low = bool(
+                'low_noise' in model_name_lower or '_low' in model_name_lower or
+                re.search(r'i2v\s*low|t2v\s*low|low_', model_name_lower)
+            )
+            has_high = bool(
+                'high_noise' in model_name_lower or '_high' in model_name_lower or
+                re.search(r'i2v\s*high|t2v\s*high|high_', model_name_lower)
+            )
 
             if has_low and not has_high:
                 print(f"[PromptExtractor] Model → B (low, API fallback): {model_name}")
