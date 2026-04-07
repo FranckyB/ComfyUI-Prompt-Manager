@@ -58,6 +58,7 @@ ___
 - **Merge Mode**: When override is off, connected LoRAs are merged with saved presets
 - **LoRA Manager Integration**: If [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) is installed, hovering over LoRA tags shows preview images
 - **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
+- **Thumbnail Generation**: Right-click any prompt to generate a thumbnail using a selectable checkpoint model. Model choice persists in ComfyUI preferences.
 
 ### Prompt Extractor:
 - **Extract from Images/Videos**: Load images or videos and extract embedded prompts, LoRAs, and workflow metadata
@@ -257,6 +258,20 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 1.22.5
+- **Thumbnail Generation in Prompt Manager Advanced**
+  - Right-click any prompt to generate a thumbnail using a basic KSampler workflow
+  - Checkpoint model selector with filterable list of all available checkpoints
+  - Includes saved LoRAs (both stacks, active only) for more accurate thumbnails
+  - LoRA paths resolved via existing fuzzy matching — renamed LoRAs are found automatically
+  - Random seed on each generation — re-generate to get a different result
+  - Selected checkpoint persists in ComfyUI preferences across sessions
+  - Change model anytime via right-click menu or ComfyUI Settings → Prompt Manager
+  - Spinner overlay during generation with 120s timeout
+
+- **Improved Model High/Low Detection**
+  - Better detection of embedded high/low indicators in model names (e.g., `tastysinHighV81`, `tastysinLowV81`)
 
 ### version 1.22.1
 - **Prompt Model Loader Improvements**

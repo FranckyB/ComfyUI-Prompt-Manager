@@ -141,6 +141,14 @@ app.registerExtension({
             defaultValue: true
         },
         {
+            id: "PromptManager.ThumbnailCheckpoint",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Thumbnail Generation Checkpoint"],
+            name: "Checkpoint for thumbnail generation",
+            tooltip: "The checkpoint model used when generating thumbnails via right-click menu. Can also be changed from the prompt context menu.",
+            type: "text",
+            defaultValue: ""
+        },
+        {
             id: "PromptManager.LLMBackend",
             category: ["Prompt Manager", "5. Ollama Settings", "LLM Backend"],
             name: "LLM Backend",
