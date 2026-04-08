@@ -1608,6 +1608,7 @@ MODEL_LOADER_TYPES = [
     'WanVideoModelLoader',
     'SeaArtUnetLoader',
     'CyberdyneModelHub',
+    'PromptModelLoader',
 ]
 
 
@@ -1627,7 +1628,7 @@ def get_model_name_from_node(node, prompt_node=None):
     # From API format (prompt_data) — most reliable for active nodes
     if prompt_node and isinstance(prompt_node, dict):
         inputs = prompt_node.get('inputs', {})
-        for key in ['ckpt_name', 'unet_name', 'model_name', 'diffusion_model', 'model']:
+        for key in ['ckpt_name', 'unet_name', 'model_name', 'diffusion_model', 'model', 'model_path']:
             val = inputs.get(key)
             if val and isinstance(val, str):
                 return val
@@ -1922,6 +1923,12 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     lora_names_seen_a = set()
     lora_names_seen_b = set()
 
+    # Track models extracted from our own nodes (PromptExtractor embedded data)
+    _pe_extracted_models = []
+
+    # Initialize lora_chains early so embedded data extraction can append to it
+    lora_chains = []
+
     # Iterate through all nodes (workflow format) - including subgraphs
     all_workflow_nodes = []
     if workflow_data:
@@ -1990,11 +1997,73 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         positive_prompts.append(text_found)
 
             # PromptManager nodes
-            elif node_type in ['PromptManager', 'PromptManagerAdvanced']:
+            elif node_type == 'PromptManager':
                 for val in widgets_values:
                     if isinstance(val, str) and len(val) > 20:
                         positive_prompts.append(val.strip())
                         break
+
+            elif node_type == 'PromptManagerAdvanced':
+                # Widget order: [category, name, use_prompt_input, use_lora_input, text, swap_lora_outputs]
+                pm_text = widgets_values[4] if len(widgets_values) > 4 else None
+                if pm_text and isinstance(pm_text, str) and len(pm_text.strip()) > 0:
+                    positive_prompts.append(pm_text.strip())
+                else:
+                    # Fallback: find first long string
+                    for val in widgets_values:
+                        if isinstance(val, str) and len(val) > 20:
+                            positive_prompts.append(val.strip())
+                            break
+
+            # PromptExtractor nodes — read back embedded extracted_data
+            elif node_type == 'PromptExtractor':
+                ext_data = node.get('extracted_data')
+                if ext_data and isinstance(ext_data, dict):
+                    ext_pos = ext_data.get('positive_prompt', '').strip()
+                    ext_neg = ext_data.get('negative_prompt', '').strip()
+                    if ext_pos:
+                        positive_prompts.append(ext_pos)
+                    if ext_neg:
+                        negative_prompts.append(ext_neg)
+
+                    # Extract LoRAs from embedded data
+                    for stack_label, key in [('A', 'loras_a'), ('B', 'loras_b')]:
+                        ext_loras = ext_data.get(key, [])
+                        if not ext_loras:
+                            continue
+                        chain_loras_list = []
+                        for lora_item in ext_loras:
+                            if not isinstance(lora_item, dict):
+                                continue
+                            lora_name = lora_item.get('name', '')
+                            if not lora_name or is_lora_blacklisted(lora_name):
+                                continue
+                            strength = float(lora_item.get('strength', 1.0))
+                            clip_strength = float(lora_item.get('clip_strength', strength))
+                            chain_loras_list.append({
+                                'name': lora_name,
+                                'path': lora_item.get('path', lora_name),
+                                'model_strength': strength,
+                                'clip_strength': clip_strength,
+                                'active': True
+                            })
+                        if chain_loras_list:
+                            print(f"[PromptExtractor] PromptExtractor embedded data stack {stack_label}: {len(chain_loras_list)} LoRAs")
+                            lora_chains.append({
+                                'titles': [title or 'PromptExtractor'],
+                                'loras': chain_loras_list,
+                                'terminal_title': title or 'PromptExtractor',
+                                'source_id': node_id,
+                                '_pm_stack': stack_label
+                            })
+
+                    # Extract model info
+                    ext_model_a = ext_data.get('model_a', '').strip()
+                    ext_model_b = ext_data.get('model_b', '').strip()
+                    if ext_model_a:
+                        _pe_extracted_models.append(('a', ext_model_a, title or 'PromptExtractor'))
+                    if ext_model_b:
+                        _pe_extracted_models.append(('b', ext_model_b, title or 'PromptExtractor'))
 
             # PrimitiveStringMultiline - direct prompt text (only add if connected to something)
             elif node_type == 'PrimitiveStringMultiline':
@@ -2017,7 +2086,6 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # Find all LoRA chains by starting from terminal nodes (non-LoRA nodes that receive MODEL input)
     # and traversing backwards through MODEL connections
 
-    lora_chains = []
     processed_terminals = set()  # Track by (terminal_id, input_name) tuple to allow multiple inputs per node
 
     if workflow_data:
@@ -2114,6 +2182,82 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                     'source_id': terminal_id
                 })
 
+        # Method 3: Extract LoRAs from PromptManagerAdvanced nodes
+        # These store LoRA data in the saved prompt JSON file, keyed by category/name
+        _pm_prompts_cache = None
+        for node in all_workflow_nodes:
+            if node.get('type') != 'PromptManagerAdvanced':
+                continue
+
+            wv = node.get('widgets_values', [])
+            if len(wv) < 6:
+                continue
+
+            pm_category = wv[0] if isinstance(wv[0], str) else None
+            pm_name = wv[1] if isinstance(wv[1], str) else None
+            pm_swap = wv[5] if len(wv) > 5 else False
+
+            if not pm_category or not pm_name:
+                continue
+
+            # Load prompt data from disk (cached)
+            if _pm_prompts_cache is None:
+                try:
+                    pm_data_path = os.path.join(folder_paths.get_user_directory(), "default", "prompt_manager_data.json")
+                    if os.path.exists(pm_data_path):
+                        with open(pm_data_path, 'r', encoding='utf-8') as f:
+                            _pm_prompts_cache = json.load(f)
+                    else:
+                        _pm_prompts_cache = {}
+                except Exception as e:
+                    print(f"[PromptExtractor] Could not load prompt manager data: {e}")
+                    _pm_prompts_cache = {}
+
+            prompt_entry = _pm_prompts_cache.get(pm_category, {}).get(pm_name, {})
+            pm_loras_a = prompt_entry.get('loras_a', [])
+            pm_loras_b = prompt_entry.get('loras_b', [])
+
+            if pm_swap:
+                pm_loras_a, pm_loras_b = pm_loras_b, pm_loras_a
+
+            node_title = node.get('title', f'PromptManagerAdvanced ({pm_name})')
+
+            for stack_label, pm_loras in [('A', pm_loras_a), ('B', pm_loras_b)]:
+                if not pm_loras:
+                    continue
+                chain_loras_list = []
+                for lora_item in pm_loras:
+                    if not isinstance(lora_item, dict):
+                        continue
+                    lora_name = lora_item.get('name', '')
+                    if not lora_name:
+                        continue
+                    if lora_item.get('active', True) is False:
+                        continue
+                    if is_lora_blacklisted(lora_name):
+                        continue
+                    strength = float(lora_item.get('strength', 1.0))
+                    clip_strength = float(lora_item.get('clip_strength', strength))
+                    chain_loras_list.append({
+                        'name': lora_name,
+                        'path': lora_name,
+                        'model_strength': strength,
+                        'clip_strength': clip_strength,
+                        'active': True
+                    })
+
+                if chain_loras_list:
+                    # Use explicit stack assignment marker in title
+                    stack_title = f"{node_title} [stack_{stack_label.lower()}]"
+                    print(f"[PromptExtractor] PromptManagerAdvanced '{pm_name}' stack {stack_label}: {len(chain_loras_list)} LoRAs")
+                    lora_chains.append({
+                        'titles': [stack_title],
+                        'loras': chain_loras_list,
+                        'terminal_title': stack_title,
+                        'source_id': node.get('id', 0),
+                        '_pm_stack': stack_label  # Direct stack assignment marker
+                    })
+
     # ========================================
     # ASSIGN LORA CHAINS TO STACKS A AND B
     # ========================================
@@ -2123,6 +2267,18 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
     print(f"[PromptExtractor] Processing {len(lora_chains)} chains for stack assignment")
     for i, chain in enumerate(lora_chains):
+        # Direct stack assignment from PromptManagerAdvanced nodes
+        pm_stack = chain.get('_pm_stack')
+        if pm_stack:
+            target_stack = loras_a if pm_stack == 'A' else loras_b
+            target_seen = lora_names_seen_a if pm_stack == 'A' else lora_names_seen_b
+            print(f"[PromptExtractor] Chain {i} → STACK {pm_stack} (PromptManagerAdvanced direct assignment)")
+            for lora in chain['loras']:
+                if lora['name'] not in target_seen:
+                    target_seen.add(lora['name'])
+                    target_stack.append(lora)
+            continue
+
         # Check ALL titles in the chain for high/low hints
         all_titles = chain.get('titles', []) + [chain.get('terminal_title', '')]
         all_titles_lower = ' '.join(all_titles).lower()
@@ -2299,10 +2455,54 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                     positive_prompts.append(text)
 
         # PromptManager nodes (always positive)
-        elif class_type in ['PromptManager', 'PromptManagerAdvanced']:
+        elif class_type == 'PromptManager':
             text = inputs.get('text', '')
             if text and isinstance(text, str):
                 positive_prompts.append(text)
+
+        elif class_type == 'PromptManagerAdvanced':
+            text = inputs.get('text', '')
+            if text and isinstance(text, str):
+                positive_prompts.append(text)
+
+            # Extract LoRAs from toggle data (API format has these as JSON strings)
+            pm_swap = inputs.get('swap_lora_outputs', False)
+            for stack_key, stack_label in [('loras_a_toggle', 'A'), ('loras_b_toggle', 'B')]:
+                toggle_raw = inputs.get(stack_key, '')
+                if not toggle_raw or not isinstance(toggle_raw, str):
+                    continue
+                try:
+                    toggle_list = json.loads(toggle_raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(toggle_list, list):
+                    continue
+
+                # Determine actual stack after swap
+                actual_label = stack_label
+                if pm_swap:
+                    actual_label = 'B' if stack_label == 'A' else 'A'
+                target_stack = loras_a if actual_label == 'A' else loras_b
+                target_seen = lora_names_seen_a if actual_label == 'A' else lora_names_seen_b
+
+                for lora_item in toggle_list:
+                    if not isinstance(lora_item, dict):
+                        continue
+                    lora_name = lora_item.get('name', '')
+                    if not lora_name or lora_item.get('active', True) is False:
+                        continue
+                    if is_lora_blacklisted(lora_name):
+                        continue
+                    if lora_name not in target_seen:
+                        target_seen.add(lora_name)
+                        strength = float(lora_item.get('strength', 1.0))
+                        clip_strength = float(lora_item.get('clip_strength', strength))
+                        target_stack.append({
+                            'name': lora_name,
+                            'path': lora_name,
+                            'model_strength': strength,
+                            'clip_strength': clip_strength
+                        })
 
         # Standard LoRA loaders (API format)
         # Skip this if we already extracted LoRAs from workflow chains
@@ -2518,7 +2718,7 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 continue
 
             model_name = None
-            for key in ['ckpt_name', 'unet_name', 'model_name', 'diffusion_model', 'model']:
+            for key in ['ckpt_name', 'unet_name', 'model_name', 'diffusion_model', 'model', 'model_path']:
                 val = inputs.get(key)
                 if val and isinstance(val, str):
                     model_name = val
@@ -2550,6 +2750,16 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
 
     result['models_a'] = models_a
     result['models_b'] = models_b
+
+    # Add models from PromptExtractor embedded data (if no models found from other sources)
+    if _pe_extracted_models and not models_a and not models_b:
+        for stack, model_path, source in _pe_extracted_models:
+            if stack == 'a':
+                print(f"[PromptExtractor] Model → A (from embedded PromptExtractor data): {model_path}")
+                models_a.append(model_path)
+            elif stack == 'b':
+                print(f"[PromptExtractor] Model → B (from embedded PromptExtractor data): {model_path}")
+                models_b.append(model_path)
 
     return result
 
@@ -2739,6 +2949,8 @@ class PromptExtractor:
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "prompt": "PROMPT",
             },
         }
 
@@ -2753,7 +2965,7 @@ class PromptExtractor:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def extract(self, image="", source_folder="input", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, unique_id=None):
+    def extract(self, image="", source_folder="input", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, unique_id=None, extra_pnginfo=None, prompt=None):
         """Extract prompts and LoRAs from the specified file."""
 
         # Handle None for frame_position (workflow compatibility)
@@ -3007,6 +3219,31 @@ class PromptExtractor:
             model_a = " "
         if not model_b:
             model_b = " "
+
+        # Embed extracted data into workflow so it's saved in the PNG metadata
+        # This allows re-extraction from images generated using PromptExtractor
+        if extra_pnginfo and isinstance(extra_pnginfo, dict) and unique_id is not None:
+            workflow = extra_pnginfo.get('workflow', {})
+            for wf_node in workflow.get('nodes', []):
+                if str(wf_node.get('id')) == str(unique_id):
+                    # Store extracted data as special properties on the node
+                    loras_a_data = []
+                    for lora_path, strength, clip_strength in final_lora_stack_a:
+                        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+                        loras_a_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
+                    loras_b_data = []
+                    for lora_path, strength, clip_strength in final_lora_stack_b:
+                        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+                        loras_b_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
+                    wf_node['extracted_data'] = {
+                        'positive_prompt': positive_prompt.strip(),
+                        'negative_prompt': negative_prompt.strip(),
+                        'loras_a': loras_a_data,
+                        'loras_b': loras_b_data,
+                        'model_a': model_a.strip(),
+                        'model_b': model_b.strip(),
+                    }
+                    break
 
         return {
             "ui": {"images": preview_images},
