@@ -259,6 +259,10 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 1.22.6
+- **Prompt Extractor now extract Prompt Extractor**
+  - Prompt Extractor now embeds extracted data in the worklow, so it can extract itself.
+
 ### version 1.22.5
 - **Thumbnail Generation in Prompt Manager Advanced**
   - Right-click any prompt to generate a thumbnail using a basic KSampler workflow
