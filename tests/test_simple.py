@@ -31,7 +31,7 @@ for f in sorted(glob.glob(os.path.join(pics_dir, '*.png'))):
         parameters_str = img.info.get('parameters', '')
         if not prompt_str and not workflow_str and not parameters_str:
             continue
-        
+
         # Handle A1111 parameters format
         if not prompt_str and not workflow_str and parameters_str:
             parsed_a1111 = parse_a1111_parameters(parameters_str)
@@ -40,7 +40,7 @@ for f in sorted(glob.glob(os.path.join(pics_dir, '*.png'))):
         else:
             prompt_data = json.loads(prompt_str) if prompt_str else {}
             workflow_data = json.loads(workflow_str) if workflow_str else {}
-        
+
         # Check what model loaders exist
         api_loaders = []
         if prompt_data:
@@ -49,7 +49,7 @@ for f in sorted(glob.glob(os.path.join(pics_dir, '*.png'))):
                     ct = ndata.get('class_type', '')
                     if ct in MODEL_LOADER_TYPES:
                         api_loaders.append((nid, ct))
-        
+
         wf_loaders = []
         wf_loader_types = set()
         if workflow_data and 'nodes' in workflow_data:
@@ -63,11 +63,11 @@ for f in sorted(glob.glob(os.path.join(pics_dir, '*.png'))):
                     nt_lower = ntype.lower()
                     if any(k in nt_lower for k in ['checkpoint', 'unet', 'diffusion', 'model_loader']):
                         wf_loader_types.add(ntype)
-        
+
         parsed = parse_workflow_for_prompts(prompt_data, workflow_data)
         models_a = parsed.get('models_a', [])
         models_b = parsed.get('models_b', [])
-        
+
         basename = os.path.basename(f)
         if not models_a and not models_b:
             no_model_count += 1

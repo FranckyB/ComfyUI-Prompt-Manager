@@ -3077,23 +3077,15 @@ class PromptExtractor:
                 loras_a = parsed['loras_a']
                 loras_b = parsed['loras_b']
 
-                # Resolve model paths
+                # Return model base names (without extension) — PromptModelLoader handles resolution
                 raw_models_a = parsed.get('models_a', [])
                 raw_models_b = parsed.get('models_b', [])
                 if raw_models_a:
-                    resolved_path, found = resolve_model_path(raw_models_a[0])
-                    model_a = resolved_path
-                    if found:
-                        print(f"[PromptExtractor] Model A resolved: {model_a}")
-                    else:
-                        print(f"[PromptExtractor] Model A not found locally, using: {model_a}")
+                    model_a = os.path.basename(raw_models_a[0].replace('\\', '/'))
+                    print(f"[PromptExtractor] Model A: {model_a}")
                 if raw_models_b:
-                    resolved_path, found = resolve_model_path(raw_models_b[0])
-                    model_b = resolved_path
-                    if found:
-                        print(f"[PromptExtractor] Model B resolved: {model_b}")
-                    else:
-                        print(f"[PromptExtractor] Model B not found locally, using: {model_b}")
+                    model_b = os.path.basename(raw_models_b[0].replace('\\', '/'))
+                    print(f"[PromptExtractor] Model B: {model_b}")
 
             # Output raw JSON for metadata_json output
             # Priority: ComfyUI workflow_data (full workflow) > ComfyUI prompt_data (API format)
