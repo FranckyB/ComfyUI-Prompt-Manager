@@ -3214,27 +3214,40 @@ class PromptExtractor:
 
         # Embed extracted data into workflow so it's saved in the PNG metadata
         # This allows re-extraction from images generated using PromptExtractor
-        if extra_pnginfo and isinstance(extra_pnginfo, dict) and unique_id is not None:
-            workflow = extra_pnginfo.get('workflow', {})
-            for wf_node in workflow.get('nodes', []):
+        if extra_pnginfo is not None and unique_id is not None:
+            # Handle extra_pnginfo whether it's a dict or a list wrapper
+            pnginfo = extra_pnginfo
+            if isinstance(pnginfo, list) and len(pnginfo) > 0:
+                pnginfo = pnginfo[0]
+            if hasattr(pnginfo, 'get'):
+                workflow = pnginfo.get('workflow', {})
+            elif hasattr(pnginfo, 'workflow'):
+                workflow = pnginfo.workflow
+            else:
+                workflow = {}
+
+            loras_a_data = []
+            for lora_path, strength, clip_strength in final_lora_stack_a:
+                lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+                loras_a_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
+            loras_b_data = []
+            for lora_path, strength, clip_strength in final_lora_stack_b:
+                lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+                loras_b_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
+
+            extracted_data = {
+                'positive_prompt': positive_prompt.strip(),
+                'negative_prompt': negative_prompt.strip(),
+                'loras_a': loras_a_data,
+                'loras_b': loras_b_data,
+                'model_a': model_a.strip(),
+                'model_b': model_b.strip(),
+            }
+
+            wf_nodes = workflow.get('nodes', []) if isinstance(workflow, dict) else []
+            for wf_node in wf_nodes:
                 if str(wf_node.get('id')) == str(unique_id):
-                    # Store extracted data as special properties on the node
-                    loras_a_data = []
-                    for lora_path, strength, clip_strength in final_lora_stack_a:
-                        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                        loras_a_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
-                    loras_b_data = []
-                    for lora_path, strength, clip_strength in final_lora_stack_b:
-                        lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                        loras_b_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
-                    wf_node['extracted_data'] = {
-                        'positive_prompt': positive_prompt.strip(),
-                        'negative_prompt': negative_prompt.strip(),
-                        'loras_a': loras_a_data,
-                        'loras_b': loras_b_data,
-                        'model_a': model_a.strip(),
-                        'model_b': model_b.strip(),
-                    }
+                    wf_node['extracted_data'] = extracted_data
                     break
 
         return {
