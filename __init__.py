@@ -12,6 +12,7 @@ from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_extractor import PromptExtractor
 from .nodes.prompt_model_loader import PromptModelLoader
+from .nodes.workflow_extractor import WorkflowExtractor
 
 NODE_CLASS_MAPPINGS = {
     "PromptManager": PromptManager,
@@ -20,6 +21,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptGenOptions": PromptGenOptions,
     "PromptExtractor": PromptExtractor,
     "PromptModelLoader": PromptModelLoader,
+    "WorkflowExtractor": WorkflowExtractor,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -29,6 +31,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptGenOptions": "Prompt Generator Options",
     "PromptExtractor": "Prompt Extractor",
     "PromptModelLoader": "Prompt Model Loader",
+    "WorkflowExtractor": "Workflow Extractor",
 }
 
 WEB_DIRECTORY = "./js"
