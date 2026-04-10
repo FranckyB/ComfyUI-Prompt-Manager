@@ -1360,25 +1360,51 @@ app.registerExtension({
             root.appendChild(negSec);
             node._weNegBox = negBox;
 
-            // ── Height recalculation ─────────────────────────────
-            // Native widgets above DOM: title(26) + source_folder(26) + image(26) + browse(26) = 104
-            const NATIVE_H = 108;  // title(30) + source_folder(26) + image(26) + browse(26)
+            // ── Height recalculation ─────────────────────────────────────────
+            // NATIVE_H: height of ComfyUI's own widgets above our DOM widget.
+            // title(30) + source_folder(26) + image(26) + browse(26) = 108
+            const NATIVE_H = 108;
+
+            // We compute _domH by summing our known child heights — NEVER from
+            // root.scrollHeight (ComfyUI constrains root, causing a shrink loop).
+            const ROOT_PAD   = 12;  // padding: 6px top + 6px bottom
+            const ROOT_GAP   = 4;   // flex gap between children
+            const THUMB_GAP  = 4;   // extra gap below thumbnail
+            const BTN_H      = 28;  // Extract button
+            const SEC_HEAD_H = 26;  // Section header (font + padding + border + marginTop)
+            const SEC_PAD    = 8;   // Section body: 4px top + 4px bottom padding
+            const STATUS_H   = 16;  // Status bar
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
 
             function recalcHeight() {
-                // Use root.scrollHeight as the source of truth — it measures
-                // the actual rendered DOM height with no manual constant guessing.
-                // A small rAF ensures the DOM has fully painted before we measure.
-                requestAnimationFrame(() => {
-                    const h = root.scrollHeight || 400;
-                    _domH = h;
-                    if (node.size) {
-                        node.setSize([node.size[0], _domH + NATIVE_H]);
-                        node.setDirtyCanvas(true, true);
+                // Sum intrinsic heights of each child we control.
+                // sec._body.scrollHeight is reliable — those elements are not constrained.
+                let h = ROOT_PAD + BTN_H + STATUS_H;
+                let numGaps = 1; // gap after button
+
+                if (node._weThumbH > 0) {
+                    h += node._weThumbH + THUMB_GAP;
+                    numGaps++;
+                }
+
+                for (const sec of allSections) {
+                    h += SEC_HEAD_H;
+                    numGaps++;
+                    if (!sec._collapsed) {
+                        const bodyH = sec._body.scrollHeight;
+                        h += SEC_PAD + (bodyH > 0 ? bodyH : sec._bodyH);
                     }
-                });
+                }
+
+                h += ROOT_GAP * numGaps;
+                _domH = Math.max(h, 80);
+
+                if (node.size) {
+                    node.setSize([node.size[0], _domH + NATIVE_H]);
+                    node.setDirtyCanvas(true, true);
+                }
             }
             node._weRecalc = recalcHeight;
             requestAnimationFrame(() => requestAnimationFrame(() => recalcHeight()));
@@ -1668,9 +1694,10 @@ app.registerExtension({
             });
 
             domW.computeSize = function (nodeWidth) {
-                // Prefer live scrollHeight so the widget always reports
-                // its true rendered height to ComfyUI (no stale constants).
-                return [nodeWidth, root.scrollHeight || _domH];
+                // _domH is the authoritative height we computed from our children.
+                // Never read root.scrollHeight here — ComfyUI constrains root,
+                // so reading it back would cause a feedback shrink loop.
+                return [nodeWidth, _domH];
             };
 
             // ── Preview arrow + workflow status dot in title bar ─────────────────
@@ -1762,8 +1789,7 @@ app.registerExtension({
             const _origComputeSize = node.computeSize;
             node.computeSize = function () {
                 const s = _origComputeSize?.apply(this, arguments) || [450, 500];
-                const liveH = (root.scrollHeight || _domH) + NATIVE_H;
-                s[1] = Math.max(s[1], liveH);
+                s[1] = Math.max(s[1], _domH + NATIVE_H);
                 return s;
             };
 
