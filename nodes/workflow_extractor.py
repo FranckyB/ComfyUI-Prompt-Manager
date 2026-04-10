@@ -576,9 +576,15 @@ def _load_clip(clip_info, overrides, existing_clip=None):
         return existing_clip
 
     clip_type_str = clip_info.get('type', '')
-    if clip_type_str and 'flux' in clip_type_str.lower():
+    t = clip_type_str.lower() if clip_type_str else ''
+    # Check flux2 BEFORE flux — 'flux2' also contains 'flux' so order matters.
+    # CLIPType.FLUX2 is required for Klein (Qwen text encoder); CLIPType.FLUX
+    # is for Flux1 (T5-XXL + CLIP-L). Using the wrong type causes shape mismatch.
+    if t and 'flux2' in t:
+        clip_type = comfy.sd.CLIPType.FLUX2
+    elif t and 'flux' in t:
         clip_type = comfy.sd.CLIPType.FLUX
-    elif clip_type_str and 'sd3' in clip_type_str.lower():
+    elif t and 'sd3' in t:
         clip_type = comfy.sd.CLIPType.SD3
     else:
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
@@ -634,7 +640,9 @@ class WorkflowGenerator:
     """
 
     def __init__(self):
-        pass
+        # Cache loaded model/clip/vae by (full_path, family_key) to avoid
+        # reloading from disk on every generation when inputs are unchanged.
+        self._model_cache = {}  # key: (full_path_a, family_key) -> (model, clip, vae)
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -765,7 +773,13 @@ class WorkflowGenerator:
         if resolved_a is None:
             raise RuntimeError(f"[WorkflowGenerator] Model not found: {model_name_a}")
         full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
-        model_a, clip_a, vae_a = _load_model_from_path(resolved_a, folder_a, full_path_a)
+        _cache_key_a = (full_path_a, family_key)
+        if _cache_key_a not in self._model_cache:
+            print(f"[WorkflowGenerator] Loading model (not cached): {resolved_a}")
+            self._model_cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a)
+        else:
+            print(f"[WorkflowGenerator] Using cached model: {resolved_a}")
+        model_a, clip_a, vae_a = self._model_cache[_cache_key_a]
 
         # ── Load VAE ─────────────────────────────────────────────────────
         vae = _load_vae(vae_name, existing_vae=vae_a)
@@ -775,7 +789,16 @@ class WorkflowGenerator:
             )
 
         # ── Load CLIP ────────────────────────────────────────────────────
-        clip = _load_clip(extracted['clip'], overrides, existing_clip=clip_a)
+        # If the extracted workflow didn't capture a clip type, fall back to
+        # the family's known clip_type (e.g. "flux2" for Klein, ensuring
+        # CLIPType.FLUX2 / Qwen is used instead of CLIPType.FLUX / T5).
+        clip_info = dict(extracted['clip'])
+        if not clip_info.get('type') and family_key:
+            from py.workflow_families import MODEL_FAMILIES
+            family_clip_type = MODEL_FAMILIES.get(family_key, {}).get('clip_type', '')
+            if family_clip_type:
+                clip_info['type'] = family_clip_type
+        clip = _load_clip(clip_info, overrides, existing_clip=clip_a)
         if clip is None:
             raise RuntimeError("[WorkflowGenerator] No CLIP available for text encoding")
 
@@ -823,7 +846,13 @@ class WorkflowGenerator:
             model_b_obj = clip_b = None
             if resolved_b:
                 full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
-                model_b_obj, clip_b_raw, _ = _load_model_from_path(resolved_b, folder_b, full_path_b)
+                _cache_key_b = (full_path_b, family_key)
+                if _cache_key_b not in self._model_cache:
+                    print(f"[WorkflowGenerator] Loading model B (not cached): {resolved_b}")
+                    self._model_cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b)
+                else:
+                    print(f"[WorkflowGenerator] Using cached model B: {resolved_b}")
+                model_b_obj, clip_b_raw, _ = self._model_cache[_cache_key_b]
 
                 # Apply stack B LoRAs to model B
                 clip_b = clip_b_raw or clip  # Use checkpoint clip or fall back to A's clip

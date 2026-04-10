@@ -26,7 +26,12 @@ MODEL_FAMILIES = {
         "folders": ["klein/", "flux2/"],
         "names":   ["flux2", "flux-2", "flux_2", "klein", "flux.2"],
         "vae":     ["flux2-vae", "flux2_vae", "ae.safetensors"],
-        "clip":    ["mistral_3_small_flux2", "clip_l"],
+        # Klein uses Qwen text encoders (NOT T5/CLIP-L/Mistral):
+        #   4B model → qwen_3_4b.safetensors
+        #   9B model → qwen_3_8b_fp8mixed.safetensors
+        # CLIPLoader type must be "flux2" so CLIPType.FLUX2 is used.
+        "clip":    ["qwen_3_4b", "qwen_3_8b", "qwen_3"],
+        "clip_type": "flux2",
         "sampler": "flux2",
     },
     # ── Flux 1 (Dev + Schnell merged) ────────────────────────────────────────
