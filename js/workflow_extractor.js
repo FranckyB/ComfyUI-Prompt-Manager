@@ -1360,7 +1360,7 @@ app.registerExtension({
             const NATIVE_H = 108;  // title(30) + source_folder(26) + image(26) + browse(26)
             const HEADER_H = 26;
             const EXTRACT_BTN_H = 30;  // extract button + gap
-            const PADDING = 16;        // root padding top+bottom=12 + small buffer
+            const PADDING = 20;        // root padding top+bottom=12 + small buffer + 4px bottom gap
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
@@ -1760,11 +1760,12 @@ app.registerExtension({
 
             const _origComputeSize = node.computeSize;
             node.computeSize = function () {
-                // Always return the exact stored height — never let LiteGraph
-                // grow the node beyond what recalcHeight computed. This prevents
-                // the "chin" feedback loop where computeSize is called on every
-                // render frame and returns a slightly larger value each time.
-                return [node.size[0] || 450, _domH + NATIVE_H];
+                // Return our computed minimum. Use Math.max so ComfyUI's live
+                // generation preview (which temporarily expands node.size[1])
+                // is not clamped back down on the next render frame.
+                // We still never let LiteGraph's own widget math shrink us
+                // below _domH + NATIVE_H.
+                return [node.size[0] || 450, Math.max(node.size[1] || 0, _domH + NATIVE_H)];
             };
 
             // ── Only hide data widgets, keep source_folder + image + browse visible ─
