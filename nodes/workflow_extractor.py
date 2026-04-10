@@ -353,41 +353,33 @@ def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
 
 def _run_flux2_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     """
-    Flux2/Klein: Uses Flux2Scheduler + SamplerCustomAdvanced + CFGGuider.
-    Key difference from flux: uses CFGGuider (has CFG scale) and Flux2Scheduler.
-    Must use EmptyFlux2LatentImage-compatible latent dimensions.
+    Flux2/Klein: CFGGuider + BasicScheduler('beta') + SamplerCustomAdvanced.
+    Uses CFGGuider (has CFG scale) like standard SD, but custom advanced sampler
+    path like Flux1.  The ComfyUI Flux2Scheduler node is dimension-based and
+    cannot be called programmatically here; BasicScheduler with 'beta' schedule
+    is the correct equivalent.
     """
     import latent_preview
     from comfy_extras.nodes_custom_sampler import (
-        CFGGuider, KSamplerSelect, SamplerCustomAdvanced, RandomNoise
+        CFGGuider, KSamplerSelect, BasicScheduler, SamplerCustomAdvanced, RandomNoise
     )
-    # Flux2Scheduler is in nodes_custom_sampler or nodes_flux — try both
-    try:
-        from comfy_extras.nodes_custom_sampler import Flux2Scheduler
-    except ImportError:
-        from comfy_extras.nodes_flux import Flux2Scheduler
 
     steps        = int(sampler_params.get('steps', 20))
     cfg          = float(sampler_params.get('cfg', 1.0))
     seed         = int(sampler_params.get('seed', 0))
     sampler_name = sampler_params.get('sampler_name', 'euler')
+    scheduler    = sampler_params.get('scheduler', 'beta')
     denoise      = float(sampler_params.get('denoise', 1.0))
 
-    guider_node   = CFGGuider()
-    sampler_node  = KSamplerSelect()
-    scheduler_node = Flux2Scheduler()
-    noise_node    = RandomNoise()
-    custom_node   = SamplerCustomAdvanced()
+    guider_node    = CFGGuider()
+    sampler_node   = KSamplerSelect()
+    scheduler_node = BasicScheduler()
+    noise_node     = RandomNoise()
+    custom_node    = SamplerCustomAdvanced()
 
-    (guider,)  = guider_node.get_guider(model, cond_pos, cond_neg, cfg)
-    (sampler,) = sampler_node.get_sampler(sampler_name)
-    # Flux2Scheduler takes model, steps, denoise — check exact signature
-    try:
-        (sigmas,) = scheduler_node.get_sigmas(model, steps, denoise)
-    except TypeError:
-        # Fallback if signature differs
-        from comfy_extras.nodes_custom_sampler import BasicScheduler
-        (sigmas,) = BasicScheduler().get_sigmas(model, 'beta', steps, denoise)
+    (guider,)    = guider_node.get_guider(model, cond_pos, cond_neg, cfg)
+    (sampler,)   = sampler_node.get_sampler(sampler_name)
+    (sigmas,)    = scheduler_node.get_sigmas(model, scheduler, steps, denoise)
     (noise_obj,) = noise_node.get_noise(seed)
 
     latent_image = comfy.sample.fix_empty_latent_channels(
