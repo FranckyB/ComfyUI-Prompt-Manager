@@ -41,6 +41,7 @@ from ..py.workflow_extractor_utils import (
     resolve_clip_names,
     extract_all_from_file,
     enrich_with_availability,
+    build_simplified_workflow_data,
 )
 
 # ── Shared extraction functions from PromptExtractor ────────────────────────
@@ -598,35 +599,6 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
     return model, clip
 
 
-def _build_simplified_workflow_json(model_name, extracted, overrides, sampler_params,
-                                     family, family_strategy):
-    """
-    Build a simplified workflow JSON dict that can be saved/shared.
-    This represents the minimal workflow used by WorkflowExtractor.
-    """
-    return {
-        "_version": 1,
-        "_source": "WorkflowGenerator",
-        "family": family,
-        "family_strategy": family_strategy,
-        "model_a": overrides.get('model_a', extracted.get('model_a', '')),
-        "model_b": overrides.get('model_b', extracted.get('model_b', '')),
-        "positive_prompt": overrides.get('positive_prompt', extracted.get('positive_prompt', '')),
-        "negative_prompt": overrides.get('negative_prompt', extracted.get('negative_prompt', '')),
-        "loras_a": extracted.get('loras_a', []),
-        "loras_b": extracted.get('loras_b', []),
-        "vae": overrides.get('vae', extracted.get('vae', {}).get('name', '')),
-        "clip": overrides.get('clip_names', extracted.get('clip', {}).get('names', [])),
-        "sampler": sampler_params,
-        "resolution": {
-            "width":      overrides.get('width',      extracted['resolution']['width']),
-            "height":     overrides.get('height',     extracted['resolution']['height']),
-            "batch_size": overrides.get('batch_size', extracted['resolution']['batch_size']),
-            "length":     overrides.get('length',     extracted['resolution']['length']),
-        },
-    }
-
-
 # ─── Main Node ──────────────────────────────────────────────────────────────
 
 class WorkflowGenerator:
@@ -870,10 +842,11 @@ class WorkflowGenerator:
         decoded = vae.decode(samples)
 
         # ── Build simplified workflow JSON ────────────────────────────────
-        simplified_wf = _build_simplified_workflow_json(
-            model_name_a, extracted, overrides, sampler_params,
-            family_key, strategy
-        )
+        wf_overrides = dict(overrides)
+        wf_overrides['_source'] = 'WorkflowGenerator'
+        extracted['model_family']       = family_key
+        extracted['model_family_label'] = strategy
+        simplified_wf = build_simplified_workflow_data(extracted, wf_overrides, sampler_params)
         workflow_data_str = json.dumps(simplified_wf, indent=2)
 
         # ── Build UI info for JS ──────────────────────────────────────────

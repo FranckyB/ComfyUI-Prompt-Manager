@@ -515,3 +515,49 @@ def enrich_with_availability(result):
     result['clip_found'] = clip_found
 
     return result
+
+
+def build_simplified_workflow_data(extracted, overrides=None, sampler_params=None):
+    """
+    Build the shared workflow_data dict that both WorkflowGenerator and PromptExtractor output.
+
+    Parameters
+    ----------
+    extracted : dict  — result of extract_all_from_file() or an equivalent dict with the same keys
+    overrides : dict  — optional JS-side override values (model_a, positive_prompt, …)
+    sampler_params : dict — optional sampler values (already-merged steps/cfg/seed/…)
+
+    Returns a serialisable dict (same schema for both nodes).
+    """
+    if overrides is None:
+        overrides = {}
+    sampler = sampler_params if sampler_params is not None else extracted.get('sampler', {
+        'steps': 20, 'cfg': 7.0, 'seed': 0,
+        'sampler_name': 'euler', 'scheduler': 'normal',
+        'denoise': 1.0, 'guidance': None,
+    })
+
+    family      = extracted.get('model_family', '')
+    family_strat = extracted.get('model_family_label', '')
+
+    return {
+        "_version":        1,
+        "_source":         overrides.get('_source', 'PromptExtractor'),
+        "family":          family,
+        "family_strategy": family_strat,
+        "model_a":         overrides.get('model_a',   extracted.get('model_a', '')),
+        "model_b":         overrides.get('model_b',   extracted.get('model_b', '')),
+        "positive_prompt": overrides.get('positive_prompt', extracted.get('positive_prompt', '')),
+        "negative_prompt": overrides.get('negative_prompt', extracted.get('negative_prompt', '')),
+        "loras_a":         extracted.get('loras_a', []),
+        "loras_b":         extracted.get('loras_b', []),
+        "vae":             overrides.get('vae',  extracted.get('vae', {}).get('name', '')),
+        "clip":            overrides.get('clip_names', extracted.get('clip', {}).get('names', [])),
+        "sampler":         sampler,
+        "resolution": {
+            "width":      overrides.get('width',      extracted.get('resolution', {}).get('width',      512)),
+            "height":     overrides.get('height',     extracted.get('resolution', {}).get('height',     512)),
+            "batch_size": overrides.get('batch_size', extracted.get('resolution', {}).get('batch_size', 1)),
+            "length":     overrides.get('length',     extracted.get('resolution', {}).get('length',     None)),
+        },
+    }

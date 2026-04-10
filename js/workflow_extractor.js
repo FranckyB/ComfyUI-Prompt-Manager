@@ -1363,33 +1363,22 @@ app.registerExtension({
             // ── Height recalculation ─────────────────────────────
             // Native widgets above DOM: title(26) + source_folder(26) + image(26) + browse(26) = 104
             const NATIVE_H = 108;  // title(30) + source_folder(26) + image(26) + browse(26)
-            const HEADER_H = 26;
-            const EXTRACT_BTN_H = 30;  // extract button + gap
-            const STATUS_H = 18;       // status bar at bottom
-            const PADDING = 16;        // root padding top+bottom=12 + small buffer
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
 
             function recalcHeight() {
-                let h = EXTRACT_BTN_H + STATUS_H + PADDING;
-                // Thumbnail (actual rendered height, max 200)
-                h += node._weThumbH || 0;
-                if (node._weThumbH > 0) h += 4; // gap
-                // Sections: header always visible, body measured from DOM if open
-                for (const sec of allSections) {
-                    h += HEADER_H;
-                    if (!sec._collapsed) {
-                        // Measure actual body content height
-                        const measured = sec._body.scrollHeight;
-                        h += Math.min(measured > 4 ? measured + 6 : sec._bodyH, 600);
+                // Use root.scrollHeight as the source of truth — it measures
+                // the actual rendered DOM height with no manual constant guessing.
+                // A small rAF ensures the DOM has fully painted before we measure.
+                requestAnimationFrame(() => {
+                    const h = root.scrollHeight || 400;
+                    _domH = h;
+                    if (node.size) {
+                        node.setSize([node.size[0], _domH + NATIVE_H]);
+                        node.setDirtyCanvas(true, true);
                     }
-                }
-                _domH = h;
-                if (node.size) {
-                    node.setSize([node.size[0], _domH + NATIVE_H]);
-                    node.setDirtyCanvas(true, true);
-                }
+                });
             }
             node._weRecalc = recalcHeight;
             requestAnimationFrame(() => requestAnimationFrame(() => recalcHeight()));
@@ -1679,7 +1668,9 @@ app.registerExtension({
             });
 
             domW.computeSize = function (nodeWidth) {
-                return [nodeWidth, _domH];
+                // Prefer live scrollHeight so the widget always reports
+                // its true rendered height to ComfyUI (no stale constants).
+                return [nodeWidth, root.scrollHeight || _domH];
             };
 
             // ── Preview arrow + workflow status dot in title bar ─────────────────
@@ -1771,7 +1762,8 @@ app.registerExtension({
             const _origComputeSize = node.computeSize;
             node.computeSize = function () {
                 const s = _origComputeSize?.apply(this, arguments) || [450, 500];
-                s[1] = Math.max(s[1], _domH + NATIVE_H);
+                const liveH = (root.scrollHeight || _domH) + NATIVE_H;
+                s[1] = Math.max(s[1], liveH);
                 return s;
             };
 
@@ -1813,6 +1805,47 @@ app.registerExtension({
             }
 
             return r;
+        };
+
+        // ── onExecuted: intercept ComfyUI's auto-preview injection ───
+        // ComfyUI's default onExecuted renders generated images as a widget
+        // below our DOM widget, creating a gap. We intercept it, route the
+        // image into our own _weThumbEl, and block the default injection.
+        nodeType.prototype.onExecuted = function (message) {
+            const node = this;
+            const images = message?.images;
+            if (!images || images.length === 0) return;
+
+            // Remove any ComfyUI-injected imgs widget to prevent the gap
+            node.imgs = null;
+
+            // Show the first output image in our thumbnail div
+            const img0 = images[0];
+            const url = api.apiURL(
+                `/view?filename=${encodeURIComponent(img0.filename)}` +
+                `&type=${encodeURIComponent(img0.type)}` +
+                (img0.subfolder ? `&subfolder=${encodeURIComponent(img0.subfolder)}` : "") +
+                `&t=${Date.now()}`
+            );
+
+            const thumbEl = node._weThumbEl;
+            if (!thumbEl) return;
+
+            const img = document.createElement("img");
+            Object.assign(img.style, {
+                width: "100%", maxHeight: "200px", objectFit: "contain",
+                borderRadius: "4px", display: "block", margin: "0 auto",
+            });
+            img.onload = () => {
+                thumbEl.innerHTML = "";
+                thumbEl.appendChild(img);
+                thumbEl.style.display = "block";
+                node._weThumbH = Math.min(img.naturalHeight, 200);
+                node._weThumbFilename = img0.filename;
+                if (node._weRecalc) node._weRecalc();
+                node.setDirtyCanvas(true, true);
+            };
+            img.src = url;
         };
 
         // ── On configure (graph load / paste / tab return) ───────────

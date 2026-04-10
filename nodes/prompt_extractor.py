@@ -3087,24 +3087,60 @@ class PromptExtractor:
                     model_b = os.path.basename(raw_models_b[0].replace('\\', '/'))
                     print(f"[PromptExtractor] Model B: {model_b}")
 
-            # Output raw JSON for workflow_data output
-            # Priority: ComfyUI workflow_data (full workflow) > ComfyUI prompt_data (API format)
-            # Skip A1111 parsed parameters (they're dicts with 'prompt', 'loras' keys)
-            if workflow_data:
+            # Build workflow_data in the same structured format as WorkflowGenerator
+            # so both nodes output identical workflow_data that can feed PromptManagerAdvanced.
+            if prompt_data or workflow_data:
                 try:
-                    workflow_data = json.dumps(workflow_data, indent=2)
-                    print(f"[PromptExtractor] Output workflow JSON ({len(workflow_data)} chars)")
+                    # Late import to avoid circular dependency (py/ imports from nodes/)
+                    from ..py.workflow_extractor_utils import (
+                        extract_sampler_params,
+                        extract_vae_info,
+                        extract_clip_info,
+                        extract_resolution,
+                        build_simplified_workflow_data,
+                        get_model_family,
+                        get_family_label,
+                    )
+                    # Use raw workflow_data dict (before we overwrite the var below)
+                    _raw_wf = workflow_data  # still a dict here
+                    _sampler  = extract_sampler_params(prompt_data, _raw_wf)
+                    _sampler['denoise'] = 1.0   # always 1.0 — not user-controllable
+                    _vae      = extract_vae_info(prompt_data, _raw_wf)
+                    _clip     = extract_clip_info(prompt_data, _raw_wf)
+                    _res      = extract_resolution(prompt_data, _raw_wf)
+
+                    # Resolve model family from model_a path
+                    _raw_models_a = parsed.get('models_a', [])
+                    _model_a_path = _raw_models_a[0] if _raw_models_a else model_a
+                    _family = get_model_family(_model_a_path)
+
+                    _extracted_for_wf = {
+                        'positive_prompt': positive_prompt,
+                        'negative_prompt': negative_prompt,
+                        'loras_a':  loras_a,
+                        'loras_b':  loras_b,
+                        'model_a':  model_a,
+                        'model_b':  model_b,
+                        'vae':      _vae,
+                        'clip':     _clip,
+                        'sampler':  _sampler,
+                        'resolution': _res,
+                        'model_family':       _family,
+                        'model_family_label': get_family_label(_family),
+                    }
+                    _simplified = build_simplified_workflow_data(
+                        _extracted_for_wf,
+                        overrides={'_source': 'PromptExtractor'},
+                        sampler_params=_sampler,
+                    )
+                    workflow_data = json.dumps(_simplified, indent=2)
+                    print(f"[PromptExtractor] Output structured workflow_data ({len(workflow_data)} chars)")
                 except Exception as e:
-                    print(f"[PromptExtractor] Error serializing workflow to JSON: {e}")
+                    print(f"[PromptExtractor] Error building structured workflow_data: {e}")
+                    import traceback; traceback.print_exc()
                     workflow_data = ""
-            elif prompt_data and not isinstance(prompt_data, dict) or (isinstance(prompt_data, dict) and 'loras' not in prompt_data):
-                # Only use prompt_data if it's ComfyUI format (not parsed A1111 parameters)
-                try:
-                    workflow_data = json.dumps(prompt_data, indent=2)
-                    print(f"[PromptExtractor] Output prompt JSON ({len(workflow_data)} chars)")
-                except Exception as e:
-                    print(f"[PromptExtractor] Error serializing prompt to JSON: {e}")
-                    workflow_data = ""
+            else:
+                workflow_data = ""
 
             # Process loras only if use_lora_input_only is disabled (extract mode)
             if not use_lora_input_only:
