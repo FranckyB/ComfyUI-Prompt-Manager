@@ -3092,7 +3092,7 @@ class PromptExtractor:
             if prompt_data or workflow_data:
                 try:
                     # Late import to avoid circular dependency (py/ imports from nodes/)
-                    from ..py.workflow_extractor_utils import (
+                    from ..py.workflow_extraction_utils import (
                         extract_sampler_params,
                         extract_vae_info,
                         extract_clip_info,

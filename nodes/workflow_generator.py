@@ -31,7 +31,7 @@ from ..py.workflow_families import (
     list_compatible_vaes,
     list_compatible_clips,
 )
-from ..py.workflow_extractor_utils import (
+from ..py.workflow_extraction_utils import (
     extract_sampler_params,
     extract_vae_info,
     extract_clip_info,
@@ -794,7 +794,7 @@ class WorkflowGenerator:
         # CLIPType.FLUX2 / Qwen is used instead of CLIPType.FLUX / T5).
         clip_info = dict(extracted['clip'])
         if not clip_info.get('type') and family_key:
-            from py.workflow_families import MODEL_FAMILIES
+            from ..py.workflow_families import MODEL_FAMILIES
             family_clip_type = MODEL_FAMILIES.get(family_key, {}).get('clip_type', '')
             if family_clip_type:
                 clip_info['type'] = family_clip_type
@@ -805,8 +805,7 @@ class WorkflowGenerator:
         # ── Apply LoRAs (Stack A → model A) ──────────────────────────────
         has_both_stacks = bool(extracted['loras_a']) and bool(extracted['loras_b'])
         stack_key_a     = "a" if has_both_stacks else ""
-        model_a, clip   = _apply_loras(model_a, clip, extracted['loras_a'],
-                                        lora_overrides, stack_key=stack_key_a)
+        model_a, clip   = _apply_loras(model_a, clip, extracted['loras_a'], lora_overrides, stack_key=stack_key_a)
 
         # ── Encode prompts ───────────────────────────────────────────────
         tokens_pos = clip.tokenize(positive_prompt)

@@ -1,7 +1,7 @@
 """
 Model family definitions and compatibility helpers for ComfyUI Prompt Manager.
 
-Shared by workflow_extractor, workflow_generator, workflow_manager, and workflow_extractor_utils.
+Shared by workflow_generator, workflow_generator, workflow_manager, and workflow_extraction_utils.
 
 Each family dict specifies:
   "label"   — human-readable name shown in UI dropdowns

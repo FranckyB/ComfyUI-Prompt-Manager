@@ -12,7 +12,7 @@ from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_extractor import PromptExtractor
 from .nodes.prompt_model_loader import PromptModelLoader
-from .nodes.workflow_extractor import WorkflowGenerator
+from .nodes.workflow_generator import WorkflowGenerator
 
 NODE_CLASS_MAPPINGS = {
     "PromptManager":         PromptManager,
