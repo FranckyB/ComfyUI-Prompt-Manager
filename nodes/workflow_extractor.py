@@ -1208,19 +1208,24 @@ class WorkflowExtractor:
         if clip is None:
             raise RuntimeError("[WorkflowExtractor] No CLIP available for text encoding")
 
-        # ─── Apply LoRAs ────────────────────────────────────────────────
-        all_loras = extracted['loras_a'] + extracted['loras_b']
-        for lora in all_loras:
+        # ─── Apply LoRAs (Stack A only — matches Model A) ────────────
+        # JS stores lora state with keys like "a:loraName" or just "loraName"
+        has_both_stacks = bool(extracted['loras_a']) and bool(extracted['loras_b'])
+        for lora in extracted['loras_a']:
             lora_name = lora.get('name', '')
 
+            # JS uses "a:name" key when both stacks exist, plain "name" otherwise
+            state_key = f"a:{lora_name}" if has_both_stacks else lora_name
+            lora_state = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
+
             # Check if disabled via JS
-            if lora_overrides.get(lora_name, {}).get('active') is False:
+            if lora_state.get('active') is False:
                 print(f"[WorkflowExtractor] Skipping disabled LoRA: {lora_name}")
                 continue
 
             # Get strength (possibly overridden from JS)
-            model_strength = lora_overrides.get(lora_name, {}).get('model_strength', lora.get('model_strength', 1.0))
-            clip_strength = lora_overrides.get(lora_name, {}).get('clip_strength', lora.get('clip_strength', 1.0))
+            model_strength = lora_state.get('model_strength', lora.get('model_strength', 1.0))
+            clip_strength = lora_state.get('clip_strength', lora.get('clip_strength', 1.0))
 
             lora_path, found = resolve_lora_path(lora_name)
             if not found:
@@ -1249,13 +1254,12 @@ class WorkflowExtractor:
         if length is not None:
             batch_size = int(length)
 
-        # Create latent exactly like EmptyLatentImage: 4ch, //8, proper dtype.
+        # Create latent exactly like EmptyLatentImage: 4ch, //8, default dtype.
         # fix_empty_latent_channels will auto-adjust channels/spatial for the model.
         print(f"[WorkflowExtractor] Creating latent: {width}x{height}, batch={batch_size}")
         latent_tensor = torch.zeros(
             [batch_size, 4, height // 8, width // 8],
             device=comfy.model_management.intermediate_device(),
-            dtype=comfy.model_management.intermediate_dtype(),
         )
         latent_dict = {"samples": latent_tensor, "downscale_ratio_spacial": 8}
 
@@ -1287,7 +1291,7 @@ class WorkflowExtractor:
             cond_pos, cond_neg, latent_image,
             denoise=denoise, disable_noise=False,
             start_step=None, last_step=None,
-            force_full_denoise=True, noise_mask=None,
+            force_full_denoise=False, noise_mask=None,
             callback=callback, disable_pbar=disable_pbar, seed=seed,
         )
 
