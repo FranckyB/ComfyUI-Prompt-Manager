@@ -174,6 +174,88 @@ async def api_list_clips(request):
         return server.web.json_response({"clips": [], "error": str(e)})
 
 
+@server.PromptServer.instance.routes.get("/workflow-extractor/video-frame")
+async def api_video_frame(request):
+    """Extract first frame of a video file and return as PNG. Used by JS thumbnail fallback."""
+    try:
+        filename = request.rel_url.query.get('filename', '')
+        source   = request.rel_url.query.get('source', 'input')
+        position = float(request.rel_url.query.get('position', '0'))
+
+        if not filename:
+            return server.web.Response(status=400)
+
+        base_dir  = folder_paths.get_output_directory() if source == 'output' \
+                    else folder_paths.get_input_directory()
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+
+        real_base = os.path.realpath(base_dir)
+        real_path = os.path.realpath(file_path)
+        if not real_path.startswith(real_base) or not os.path.exists(file_path):
+            return server.web.Response(status=404)
+
+        # Try PyAV first
+        try:
+            import av
+            import io
+            container = av.open(file_path)
+            video_stream = next((s for s in container.streams if s.type == 'video'), None)
+            if video_stream is None:
+                return server.web.Response(status=404)
+
+            target_time = None
+            if position > 0 and video_stream.duration:
+                target_time = int(position * video_stream.duration)
+                container.seek(target_time, stream=video_stream)
+
+            frame = None
+            for packet in container.demux(video_stream):
+                for f in packet.decode():
+                    frame = f
+                    break
+                if frame is not None:
+                    break
+            container.close()
+
+            if frame is None:
+                return server.web.Response(status=404)
+
+            img = frame.to_image()
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            buf.seek(0)
+            return server.web.Response(body=buf.read(), content_type='image/png')
+
+        except ImportError:
+            pass  # PyAV not available — try ffmpeg subprocess
+
+        # Fallback: ffmpeg subprocess
+        import subprocess, io, tempfile
+        tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+        tmp.close()
+        try:
+            cmd = [
+                'ffmpeg', '-y', '-i', file_path,
+                '-vframes', '1',
+                '-f', 'image2', tmp.name,
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=10)
+            if result.returncode == 0 and os.path.exists(tmp.name):
+                with open(tmp.name, 'rb') as f:
+                    data = f.read()
+                return server.web.Response(body=data, content_type='image/png')
+        except Exception:
+            pass
+        finally:
+            try: os.unlink(tmp.name)
+            except: pass
+
+        return server.web.Response(status=500)
+    except Exception as e:
+        print(f"[WorkflowExtractor] video-frame API error: {e}")
+        return server.web.Response(status=500)
+
+
 @server.PromptServer.instance.routes.get("/workflow-extractor/list-families")
 async def api_list_families(request):
     """List all known model families for the type selector."""

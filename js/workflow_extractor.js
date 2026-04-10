@@ -272,11 +272,20 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
     row.appendChild(resetBtn);
     const sel = document.createElement("select");
     Object.assign(sel.style, { ...INPUT_STYLE });
-    if (initialValue) {
-        const o = document.createElement("option"); o.value = initialValue;
-        o.textContent = grouped ? cleanModelName(initialValue) : initialValue;
-        sel.appendChild(o);
-        sel.value = initialValue;
+    {
+        // Initial default option
+        const defOpt = document.createElement("option");
+        defOpt.value = "";
+        defOpt.textContent = grouped ? "(none)" : "(Default)";
+        sel.appendChild(defOpt);
+        if (initialValue && initialValue !== "\u2014" && !initialValue.startsWith("(")) {
+            const o = document.createElement("option"); o.value = initialValue;
+            o.textContent = grouped ? cleanModelName(initialValue) : initialValue;
+            sel.appendChild(o);
+            sel.value = initialValue;
+        } else {
+            sel.value = "";
+        }
     }
     let _loaded = false;
     _recolor = () => {
@@ -289,10 +298,14 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
         _loaded = true;
         const options = await lazyFetch();
         const currentVal = sel.value;
+        sel.innerHTML = "";
+        // Always prepend default option first
+        const defOpt = document.createElement("option");
+        defOpt.value = ""; defOpt.textContent = grouped ? "(none)" : "(Default)";
+        sel.appendChild(defOpt);
         if (grouped) {
-            populateGroupedSelect(sel, options, false);
+            populateGroupedSelect(sel, options, true); // keepFirst=true preserves (none)/(Default)
         } else {
-            sel.innerHTML = "";
             for (const opt of options) {
                 const o = document.createElement("option"); o.value = opt; o.textContent = opt;
                 o.style.color = C.text;
@@ -319,15 +332,23 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
         _origVal = v || "";
         _loaded = false;
         sel.innerHTML = "";
-        if (v) {
+        // Always add a default first option
+        const defOpt = document.createElement("option");
+        defOpt.value = "";
+        // For model rows (grouped): "(none)"; for VAE/CLIP rows (non-grouped): "(Default)"
+        defOpt.textContent = grouped ? "(none)" : "(Default)";
+        sel.appendChild(defOpt);
+        if (v && v !== "\u2014" && !v.startsWith("(")) {
             const o = document.createElement("option"); o.value = v;
             o.textContent = grouped ? cleanModelName(v) : v;
             if (found === false) { o.style.color = C.error; o.dataset.missing = "1"; }
             else { o.style.color = C.text; }
             sel.appendChild(o);
             sel.value = v;
+        } else {
+            sel.value = "";
         }
-        sel.style.color = (found === false) ? C.error : C.text;
+        sel.style.color = (found === false && v && !v.startsWith("(")) ? C.error : C.text;
         resetBtn.style.visibility = "hidden";
     };
     row._getValue = () => sel.value;
@@ -563,12 +584,13 @@ function updateUI(node) {
         node._weModelRow._setOriginal(name, d.model_a_found !== false);
     }
 
-    // Model B (show/hide based on extracted data)
-    const hasModelB = !!(d.model_b);
+    // Model B (always visible)
     if (node._weModelBRow) {
-        node._weModelBRow.style.display = hasModelB ? "flex" : "none";
-        if (hasModelB && node._weModelBRow._setOriginal) {
+        node._weModelBRow.style.display = "flex";  // always visible
+        if (d.model_b) {
             node._weModelBRow._setOriginal(d.model_b, d.model_b_found !== false);
+        } else {
+            node._weModelBRow._setOriginal("", false);  // shows "(none)"
         }
     }
 
@@ -577,14 +599,16 @@ function updateUI(node) {
 
     // VAE
     if (node._weVaeRow?._setOriginal) {
-        const vn = d.vae?.name || "—";
-        node._weVaeRow._setOriginal(vn, d.vae_found !== false);
+        const vn = d.vae?.name || "";
+        const isDefault = !vn || vn.startsWith("(") || vn === "\u2014";
+        node._weVaeRow._setOriginal(isDefault ? "" : vn, d.vae_found !== false);
     }
 
     // CLIP
     if (node._weClipRow?._setOriginal) {
-        const cn = (d.clip?.names || []).map(n => n || "—").join(", ") || "—";
-        node._weClipRow._setOriginal(cn);
+        const firstName = (d.clip?.names || [])[0] || "";
+        const isDefault = !firstName || firstName.startsWith("(") || firstName === "\u2014";
+        node._weClipRow._setOriginal(isDefault ? "" : firstName);
     }
 
     // Sampler
@@ -902,7 +926,44 @@ const SCHEDULERS = [
     "beta",
 ];
 
+// ─── Preview modal helpers ───────────────────────────────────────────────────
+function _showImageModal(filename, url) {
+    const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+        position: "fixed", inset: "0", background: "rgba(0,0,0,0.85)",
+        zIndex: "10000", display: "flex", alignItems: "center", justifyContent: "center",
+    });
+    const img = document.createElement("img");
+    img.src = url;
+    Object.assign(img.style, { maxWidth: "90%", maxHeight: "90vh", borderRadius: "8px", boxShadow: "0 10px 40px rgba(0,0,0,0.5)" });
+    overlay.appendChild(img);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.addEventListener("keydown", function esc(e) { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", esc); } });
+    document.body.appendChild(overlay);
+}
+
+function _showVideoModal(filename, url) {
+    const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+        position: "fixed", inset: "0", background: "rgba(0,0,0,0.85)",
+        zIndex: "10000", display: "flex", alignItems: "center", justifyContent: "center",
+    });
+    const video = document.createElement("video");
+    video.src = url;
+    video.controls = true;
+    video.autoplay = true;
+    video.loop = true;
+    Object.assign(video.style, { maxWidth: "90%", maxHeight: "90vh", borderRadius: "8px" });
+    video.onerror = () => { video.remove(); overlay.appendChild(document.createTextNode("Cannot play this video format in browser.")); };
+    overlay.appendChild(video);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.addEventListener("keydown", function esc(e) { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", esc); } });
+    document.body.appendChild(overlay);
+}
+
 // ─── Thumbnail helper ────────────────────────────────────────────────────────
+const VIDEO_EXTENSIONS_THUMB = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v'];
+
 function loadThumbnail(node, filename) {
     const thumbEl = node._weThumbEl;
     if (!thumbEl) return;
@@ -915,7 +976,6 @@ function loadThumbnail(node, filename) {
     }
     node._weThumbFilename = filename;
     const src = node._weSourceFolder || "input";
-    // Handle subfolder paths (e.g. "subfolder/image.png")
     let actualFilename = filename;
     let subfolder = "";
     if (filename.includes("/")) {
@@ -923,26 +983,120 @@ function loadThumbnail(node, filename) {
         subfolder = filename.substring(0, lastSlash);
         actualFilename = filename.substring(lastSlash + 1);
     }
-    let url = `/view?filename=${encodeURIComponent(actualFilename)}&type=${encodeURIComponent(src)}`;
-    if (subfolder) url += `&subfolder=${encodeURIComponent(subfolder)}`;
-    url += `&t=${Date.now()}`;
-    const img = document.createElement("img");
-    img.src = url;
-    Object.assign(img.style, {
-        width: "100%", maxHeight: "200px", objectFit: "contain",
-        borderRadius: "4px", display: "block", margin: "0 auto",
-    });
-    img.onload = () => {
-        node._weThumbH = Math.min(img.naturalHeight, 200);
-        if (node._weRecalc) node._weRecalc();
-    };
-    img.onerror = () => {
-        thumbEl.innerHTML = "";
-        node._weThumbH = 0;
-        if (node._weRecalc) node._weRecalc();
-    };
+    const ext = actualFilename.split('.').pop().toLowerCase();
+    const isVideo = VIDEO_EXTENSIONS_THUMB.includes(ext);
+
     thumbEl.innerHTML = "";
-    thumbEl.appendChild(img);
+
+    if (isVideo) {
+        // ── Video: try browser canvas extraction first, fall back to server endpoint ──
+        let url = `/view?filename=${encodeURIComponent(actualFilename)}&type=${encodeURIComponent(src)}`;
+        if (subfolder) url += `&subfolder=${encodeURIComponent(subfolder)}`;
+        url += `&t=${Date.now()}`;
+
+        const video = document.createElement("video");
+        video.crossOrigin = "anonymous";
+        video.preload = "auto";
+        video.muted = true;
+        video.playsInline = true;
+        video.style.cssText = "position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;";
+
+        let cleaned = false;
+        const cleanupVideo = () => {
+            if (cleaned) return;
+            cleaned = true;
+            video.onloadedmetadata = null;
+            video.onseeked = null;
+            video.onerror = null;
+            try { video.src = ""; video.load(); } catch(e) {}
+            if (video.parentNode) video.parentNode.removeChild(video);
+        };
+
+        const showServerFrame = () => {
+            cleanupVideo();
+            // Fall back to Python /workflow-extractor/video-frame endpoint
+            const frameUrl = `/workflow-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${src}&position=0`;
+            const img = document.createElement("img");
+            Object.assign(img.style, {
+                width: "100%", maxHeight: "200px", objectFit: "contain",
+                borderRadius: "4px", display: "block", margin: "0 auto",
+            });
+            img.onload = () => {
+                thumbEl.innerHTML = "";
+                thumbEl.appendChild(img);
+                node._weThumbH = Math.min(img.naturalHeight, 200);
+                if (node._weRecalc) node._weRecalc();
+            };
+            img.onerror = () => {
+                thumbEl.innerHTML = "";
+                node._weThumbH = 0;
+                if (node._weRecalc) node._weRecalc();
+            };
+            img.src = frameUrl;
+        };
+
+        video.onloadedmetadata = () => {
+            video.currentTime = 0.01; // seek to first frame
+        };
+
+        video.onseeked = () => {
+            try {
+                const canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 360;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                cleanupVideo();
+                const img = document.createElement("img");
+                Object.assign(img.style, {
+                    width: "100%", maxHeight: "200px", objectFit: "contain",
+                    borderRadius: "4px", display: "block", margin: "0 auto",
+                });
+                img.onload = () => {
+                    thumbEl.innerHTML = "";
+                    thumbEl.appendChild(img);
+                    node._weThumbH = Math.min(img.naturalHeight, 200);
+                    if (node._weRecalc) node._weRecalc();
+                };
+                img.onerror = () => { thumbEl.innerHTML = ""; node._weThumbH = 0; if (node._weRecalc) node._weRecalc(); };
+                img.src = canvas.toDataURL("image/png");
+            } catch (e) {
+                showServerFrame();
+            }
+        };
+
+        video.onerror = () => { showServerFrame(); };
+
+        // Timeout fallback (5s) in case onseeked never fires
+        setTimeout(() => { if (!cleaned) showServerFrame(); }, 5000);
+
+        document.body.appendChild(video);
+        video.src = url;
+    } else {
+        // ── Image: original path ──
+        let url = `/view?filename=${encodeURIComponent(actualFilename)}&type=${encodeURIComponent(src)}`;
+        if (subfolder) url += `&subfolder=${encodeURIComponent(subfolder)}`;
+        url += `&t=${Date.now()}`;
+        const img = document.createElement("img");
+        img.src = url;
+        Object.assign(img.style, {
+            width: "100%", maxHeight: "200px", objectFit: "contain",
+            borderRadius: "4px", display: "block", margin: "0 auto",
+        });
+        img.onload = () => {
+            thumbEl.innerHTML = "";
+            thumbEl.appendChild(img);
+            node._weThumbH = Math.min(img.naturalHeight, 200);
+            if (node._weRecalc) node._weRecalc();
+        };
+        img.onerror = () => {
+            thumbEl.innerHTML = "";
+            node._weThumbH = 0;
+            if (node._weRecalc) node._weRecalc();
+        };
+        thumbEl.innerHTML = "";
+        thumbEl.appendChild(img);
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1154,21 +1308,19 @@ app.registerExtension({
                         try {
                             const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
                             const d = await r.json();
-                            return ["(from checkpoint)", ...(d.vaes || [])];
+                            return d.vaes || [];
                         } catch { return []; }
-                    }, true),
+                    }, false),
                     reloadGroupedSelect(node._weClipRow, async () => {
                         try {
                             const r = await fetch(`/workflow-extractor/list-clips?family=${fam}`);
                             const d = await r.json();
-                            return ["(from checkpoint)", ...(d.clips || [])];
+                            return d.clips || [];
                         } catch { return []; }
-                    }, true),
+                    }, false),
                 ];
-                // Also reload model B if it's visible
-                if (node._weModelBRow && node._weModelBRow.style.display !== "none") {
-                    reloads.push(reloadGroupedSelect(node._weModelBRow, fetchModelsForFamily, true));
-                }
+                // Always reload model B (now always visible)
+                reloads.push(reloadGroupedSelect(node._weModelBRow, fetchModelsForFamily, true));
                 await Promise.all(reloads);
                 syncHidden(node);
             };
@@ -1224,7 +1376,7 @@ app.registerExtension({
             };
 
             // Checkpoint A row (grouped display)
-            const modelRow = makeSelectRow("Checkpoint A", "—",
+            const modelRow = makeSelectRow("Checkpoint A", "",
                 fetchModels,
                 (v) => { node._weOverrides.model_a = v; syncHidden(node); },
                 true, // grouped
@@ -1233,12 +1385,11 @@ app.registerExtension({
             node._weModelRow = modelRow;
 
             // Checkpoint B row (grouped display, hidden when no model_b)
-            const modelBRow = makeSelectRow("Checkpoint B", "—",
+            const modelBRow = makeSelectRow("Checkpoint B", "",
                 fetchModels,
                 (v) => { node._weOverrides.model_b = v; syncHidden(node); },
                 true, // grouped
             );
-            modelBRow.style.display = "none";
             modelSec._body.appendChild(modelBRow);
             node._weModelBRow = modelBRow;
 
@@ -1292,29 +1443,29 @@ app.registerExtension({
             // ── VAE / CLIP section ───────────────────────────────────
             const vcSec = makeSection("VAE / CLIP", true, 56, () => { recalcHeight(); syncHidden(node); });
             node._weSections.vae_clip = vcSec;
-            const vaeRow = makeSelectRow("VAE", "—",
+            const vaeRow = makeSelectRow("VAE", "",
                 async () => {
                     try {
                         const fam = encodeURIComponent(node._weFamily || "");
                         const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
                         const d = await r.json();
-                        return ["(from checkpoint)", ...(d.vaes || [])];
+                        return d.vaes || [];
                     } catch { return []; }
                 },
                 (v) => { node._weOverrides.vae = v; syncHidden(node); },
-                true,
+                false,
             );
-            const clipRow = makeSelectRow("CLIP", "—",
+            const clipRow = makeSelectRow("CLIP", "",
                 async () => {
                     try {
                         const fam = encodeURIComponent(node._weFamily || "");
                         const r = await fetch(`/workflow-extractor/list-clips?family=${fam}`);
                         const d = await r.json();
-                        return ["(from checkpoint)", ...(d.clips || [])];
+                        return d.clips || [];
                     } catch { return []; }
                 },
                 (v) => { node._weOverrides.clip_names = [v]; syncHidden(node); },
-                true,
+                false,
             );
             vcSec._body.append(vaeRow, clipRow);
             root.appendChild(vcSec);
@@ -1382,9 +1533,73 @@ app.registerExtension({
                 return [nodeWidth, _domH];
             };
 
+            // ── Preview arrow in title bar (like Prompt Extractor) ───────────────
+            const _origDrawFg = node.onDrawForeground;
+            node.onDrawForeground = function(ctx) {
+                _origDrawFg?.apply(this, arguments);
+                if (!node._weThumbFilename || (node.flags && node.flags.collapsed)) return;
+                const titleH = LiteGraph.NODE_TITLE_HEIGHT || 30;
+                const triSize = 8;
+                const playX = node.size[0] - triSize - 12;
+                const playY = -(titleH / 2);
+                ctx.beginPath();
+                ctx.moveTo(playX - triSize, playY - triSize);
+                ctx.lineTo(playX - triSize, playY + triSize);
+                ctx.lineTo(playX + triSize, playY);
+                ctx.closePath();
+                ctx.fillStyle = node._weHoverPreview ? "#ffffff" : "rgba(255,255,255,0.7)";
+                ctx.fill();
+                node._wePreviewBounds = { x: playX - triSize - 3, y: playY - triSize - 3, w: triSize * 2 + 6, h: triSize * 2 + 6 };
+            };
+
+            const _origMouseMove = node.onMouseMove;
+            node.onMouseMove = function(e, localPos, canvas) {
+                const res = _origMouseMove?.apply(this, arguments);
+                if (node._wePreviewBounds) {
+                    const b = node._wePreviewBounds;
+                    const hit = localPos[0] >= b.x && localPos[0] <= b.x + b.w &&
+                                localPos[1] >= b.y && localPos[1] <= b.y + b.h;
+                    if (hit !== node._weHoverPreview) {
+                        node._weHoverPreview = hit;
+                        if (hit) canvas.canvas.style.cursor = "pointer";
+                        else canvas.canvas.style.cursor = "";
+                        node.setDirtyCanvas(true);
+                    }
+                }
+                return res;
+            };
+
+            const _origMouseDown = node.onMouseDown;
+            node.onMouseDown = function(e, localPos, canvas) {
+                if (node._wePreviewBounds && node._weThumbFilename) {
+                    const b = node._wePreviewBounds;
+                    if (localPos[0] >= b.x && localPos[0] <= b.x + b.w &&
+                        localPos[1] >= b.y && localPos[1] <= b.y + b.h) {
+                        // Open preview — video or image
+                        const src = node._weSourceFolder || "input";
+                        const fname = node._weThumbFilename;
+                        const ext = fname.split('.').pop().toLowerCase();
+                        const isVid = VIDEO_EXTENSIONS_THUMB.includes(ext);
+                        // Build preview URL
+                        let af = fname, sf = "";
+                        if (fname.includes("/")) { const sl = fname.lastIndexOf("/"); sf = fname.substring(0, sl); af = fname.substring(sl + 1); }
+                        let previewUrl = `/view?filename=${encodeURIComponent(af)}&type=${encodeURIComponent(src)}`;
+                        if (sf) previewUrl += `&subfolder=${encodeURIComponent(sf)}`;
+
+                        if (isVid) {
+                            _showVideoModal(fname, previewUrl);
+                        } else {
+                            _showImageModal(fname, previewUrl);
+                        }
+                        return true;
+                    }
+                }
+                return _origMouseDown?.apply(this, arguments);
+            };
+
             const _origComputeSize = node.computeSize;
             node.computeSize = function () {
-                const s = _origComputeSize?.apply(this, arguments) || [440, 500];
+                const s = _origComputeSize?.apply(this, arguments) || [560, 500];
                 s[1] = Math.max(s[1], _domH + NATIVE_H);
                 return s;
             };
@@ -1401,7 +1616,7 @@ app.registerExtension({
             }
 
             // Set size to match PM Advanced width (440)
-            node.setSize([440, _domH + NATIVE_H]);
+            node.setSize([560, _domH + NATIVE_H]);
 
             // ── Zoom-aware font scaling for dropdown text ────────────
             applyZoomScaling(root);
