@@ -99,6 +99,60 @@ class PromptModelLoader:
     OUTPUT_NODE = True
     DESCRIPTION = "Load a checkpoint, diffusion, UNET, or GGUF model from a path string. Auto-detects model type. Supports GGUF when ComfyUI-GGUF is installed. CLIP and VAE are None for non-checkpoint models."
 
+    # Known model file extensions for stripping during name matching
+    MODEL_EXTENSIONS = ['.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.sft']
+
+    @staticmethod
+    def _resolve_model_name(model_name):
+        """
+        Resolve a model name (which may be a basename, basename without extension,
+        or full relative path) to the actual relative path in ComfyUI's folder system.
+        Returns (relative_path, folder_name) or (None, None) if not found.
+        """
+        if not model_name:
+            return None, None
+
+        model_name_clean = model_name.strip().replace('\\', '/')
+        name_base = os.path.basename(model_name_clean).lower()
+
+        # Strip extension for extensionless matching
+        name_no_ext = name_base
+        for ext in PromptModelLoader.MODEL_EXTENSIONS:
+            if name_no_ext.endswith(ext):
+                name_no_ext = name_no_ext[:-len(ext)]
+                break
+
+        # Build lookup in a single pass per folder
+        for folder_name in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
+            try:
+                file_list = folder_paths.get_filename_list(folder_name)
+            except Exception:
+                continue
+
+            for f in file_list:
+                f_normalized = f.replace('\\', '/')
+
+                # Exact relative path match
+                if f_normalized == model_name_clean:
+                    return f, folder_name
+
+                f_base = os.path.basename(f_normalized).lower()
+
+                # Basename match (with extension)
+                if f_base == name_base:
+                    return f, folder_name
+
+                # Basename match without extension
+                f_no_ext = f_base
+                for ext in PromptModelLoader.MODEL_EXTENSIONS:
+                    if f_no_ext.endswith(ext):
+                        f_no_ext = f_no_ext[:-len(ext)]
+                        break
+                if f_no_ext == name_no_ext:
+                    return f, folder_name
+
+        return None, None
+
     def _build_model_options(self, weight_dtype):
         """Build model_options dict from weight_dtype selection."""
         model_options = {}
@@ -121,7 +175,6 @@ class PromptModelLoader:
 
         # Extract display name (basename without directory)
         display_name = os.path.basename(model_path.replace('\\', '/'))
-        is_gguf = model_path.lower().endswith('.gguf')
 
         def _result(model_type, model, clip, vae):
             return {
@@ -129,46 +182,52 @@ class PromptModelLoader:
                 "result": (model, clip, vae)
             }
 
+        # Resolve model name to actual relative path in ComfyUI's folder system
+        resolved_path, resolved_folder = self._resolve_model_name(model_path)
+
+        if resolved_path is None:
+            print(f"[ModelLoader] Model not found: '{model_path}' — searched checkpoints, diffusion_models, unet, unet_gguf")
+            return _result("NOT FOUND", None, None, None)
+
+        # Update display name from resolved path
+        display_name = os.path.basename(resolved_path.replace('\\', '/'))
+        is_gguf = resolved_path.lower().endswith('.gguf')
+
         # GGUF models — use ComfyUI-GGUF if active
         if is_gguf:
             if _get_gguf_module() is None:
-                print(f"[ModelLoader] GGUF model detected but ComfyUI-GGUF is not installed: {model_path}")
+                print(f"[ModelLoader] GGUF model detected but ComfyUI-GGUF is not installed: {resolved_path}")
                 return _result("NOT FOUND", None, None, None)
 
-            # Search unet_gguf (registered by ComfyUI-GGUF), unet, and diffusion_models folders
-            for folder_name in ['unet_gguf', 'unet', 'diffusion_models']:
-                try:
-                    full_path = folder_paths.get_full_path(folder_name, model_path)
-                    if full_path and os.path.isfile(full_path):
-                        print(f"[ModelLoader] Loading GGUF model via ComfyUI-GGUF: {model_path} (from {folder_name})")
-                        model = _load_gguf_unet(full_path)
-                        return _result("GGUF", model, None, None)
-                except Exception:
-                    continue
+            full_path = folder_paths.get_full_path(resolved_folder, resolved_path)
+            if full_path and os.path.isfile(full_path):
+                print(f"[ModelLoader] Loading GGUF model via ComfyUI-GGUF: {resolved_path} (from {resolved_folder})")
+                model = _load_gguf_unet(full_path)
+                return _result("GGUF", model, None, None)
 
-            print(f"[ModelLoader] GGUF model not found: '{model_path}' — searched unet_gguf, unet, diffusion_models")
+            print(f"[ModelLoader] GGUF model file not accessible: {resolved_path}")
             return _result("NOT FOUND", None, None, None)
 
-        # Try checkpoint first
-        ckpt_path = folder_paths.get_full_path("checkpoints", model_path)
-        if ckpt_path and os.path.isfile(ckpt_path):
-            print(f"[ModelLoader] Loading checkpoint: {model_path}")
-            out = comfy.sd.load_checkpoint_guess_config(
-                ckpt_path,
-                output_vae=True,
-                output_clip=True,
-                embedding_directory=folder_paths.get_folder_paths("embeddings"),
-            )
-            return _result("Checkpoint", out[0], out[1], out[2])
+        # Checkpoint
+        if resolved_folder == 'checkpoints':
+            ckpt_path = folder_paths.get_full_path("checkpoints", resolved_path)
+            if ckpt_path and os.path.isfile(ckpt_path):
+                print(f"[ModelLoader] Loading checkpoint: {resolved_path}")
+                out = comfy.sd.load_checkpoint_guess_config(
+                    ckpt_path,
+                    output_vae=True,
+                    output_clip=True,
+                    embedding_directory=folder_paths.get_folder_paths("embeddings"),
+                )
+                return _result("Checkpoint", out[0], out[1], out[2])
 
-        # Try diffusion_models and unet folders
+        # Diffusion / UNET
         model_options = self._build_model_options(weight_dtype)
-        for folder_name in ['diffusion_models', 'unet']:
-            full_path = folder_paths.get_full_path(folder_name, model_path)
-            if full_path and os.path.isfile(full_path):
-                print(f"[ModelLoader] Loading diffusion/UNET model: {model_path} (from {folder_name})")
-                model = comfy.sd.load_diffusion_model(full_path, model_options=model_options)
-                return _result("Diffusion", model, None, None)
+        full_path = folder_paths.get_full_path(resolved_folder, resolved_path)
+        if full_path and os.path.isfile(full_path):
+            print(f"[ModelLoader] Loading diffusion/UNET model: {resolved_path} (from {resolved_folder})")
+            model = comfy.sd.load_diffusion_model(full_path, model_options=model_options)
+            return _result("Diffusion", model, None, None)
 
-        print(f"[ModelLoader] Model not found: '{model_path}' — searched checkpoints, diffusion_models, unet")
+        print(f"[ModelLoader] Model file not accessible after resolution: {resolved_path}")
         return _result("NOT FOUND", None, None, None)
