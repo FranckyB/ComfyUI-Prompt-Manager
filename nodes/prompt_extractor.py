@@ -2957,7 +2957,7 @@ class PromptExtractor:
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
     RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "model_a", "model_b", "metadata_json")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "model_a", "model_b", "workflow_data")
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
@@ -2978,7 +2978,7 @@ class PromptExtractor:
         extracted_lora_stack_a = []
         extracted_lora_stack_b = []
         image_tensor = None
-        metadata_json = ""
+        workflow_data = ""
         model_a = ""
         model_b = ""
 
@@ -3087,24 +3087,24 @@ class PromptExtractor:
                     model_b = os.path.basename(raw_models_b[0].replace('\\', '/'))
                     print(f"[PromptExtractor] Model B: {model_b}")
 
-            # Output raw JSON for metadata_json output
+            # Output raw JSON for workflow_data output
             # Priority: ComfyUI workflow_data (full workflow) > ComfyUI prompt_data (API format)
             # Skip A1111 parsed parameters (they're dicts with 'prompt', 'loras' keys)
             if workflow_data:
                 try:
-                    metadata_json = json.dumps(workflow_data, indent=2)
-                    print(f"[PromptExtractor] Output workflow JSON ({len(metadata_json)} chars)")
+                    workflow_data = json.dumps(workflow_data, indent=2)
+                    print(f"[PromptExtractor] Output workflow JSON ({len(workflow_data)} chars)")
                 except Exception as e:
                     print(f"[PromptExtractor] Error serializing workflow to JSON: {e}")
-                    metadata_json = ""
+                    workflow_data = ""
             elif prompt_data and not isinstance(prompt_data, dict) or (isinstance(prompt_data, dict) and 'loras' not in prompt_data):
                 # Only use prompt_data if it's ComfyUI format (not parsed A1111 parameters)
                 try:
-                    metadata_json = json.dumps(prompt_data, indent=2)
-                    print(f"[PromptExtractor] Output prompt JSON ({len(metadata_json)} chars)")
+                    workflow_data = json.dumps(prompt_data, indent=2)
+                    print(f"[PromptExtractor] Output prompt JSON ({len(workflow_data)} chars)")
                 except Exception as e:
                     print(f"[PromptExtractor] Error serializing prompt to JSON: {e}")
-                    metadata_json = ""
+                    workflow_data = ""
 
             # Process loras only if use_lora_input_only is disabled (extract mode)
             if not use_lora_input_only:
@@ -3205,8 +3205,8 @@ class PromptExtractor:
             positive_prompt = " "
         if not negative_prompt:
             negative_prompt = " "
-        if not metadata_json:
-            metadata_json = " "
+        if not workflow_data:
+            workflow_data = " "
         if not model_a:
             model_a = " "
         if not model_b:
@@ -3252,7 +3252,7 @@ class PromptExtractor:
 
         return {
             "ui": {"images": preview_images},
-            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, model_a, model_b, metadata_json)
+            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, model_a, model_b, workflow_data)
         }
 
     def save_preview_images(self, images):

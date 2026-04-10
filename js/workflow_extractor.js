@@ -1202,7 +1202,7 @@ function loadThumbnail(node, filename) {
 // ─── Main extension ─────────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
 app.registerExtension({
-    name: "FBnodes.WorkflowGenerator",
+    name: "WorkflowGenerator",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "WorkflowGenerator") return;
