@@ -1365,41 +1365,43 @@ app.registerExtension({
             // title(30) + source_folder(26) + image(26) + browse(26) = 108
             const NATIVE_H = 108;
 
-            // We compute _domH by summing our known child heights — NEVER from
-            // root.scrollHeight (ComfyUI constrains root, causing a shrink loop).
-            const ROOT_PAD   = 12;  // padding: 6px top + 6px bottom
-            const ROOT_GAP   = 4;   // flex gap between children
-            const THUMB_GAP  = 4;   // extra gap below thumbnail
-            const BTN_H      = 28;  // Extract button
-            const SEC_HEAD_H = 26;  // Section header (font + padding + border + marginTop)
-            const SEC_PAD    = 8;   // Section body: 4px top + 4px bottom padding
-            const STATUS_H   = 16;  // Status bar
+            // _domH is computed from child offsetHeights — NEVER from root.scrollHeight.
+            // ROOT_PAD = root's own padding (6px top + 6px bottom = 12px).
+            // ROOT_GAP = flex gap applied between visible children.
+            const ROOT_PAD = 12;
+            const ROOT_GAP = 4;
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
 
             function recalcHeight() {
-                // Sum intrinsic heights of each child we control.
-                // sec._body.scrollHeight is reliable — those elements are not constrained.
-                let h = ROOT_PAD + BTN_H + STATUS_H;
-                let numGaps = 1; // gap after button
+                // Use offsetHeight on each direct child of root.
+                // offsetHeight measures each element's own rendered box and is NOT
+                // affected by the parent being constrained by ComfyUI — unlike
+                // root.scrollHeight which collapses in a feedback loop.
+                //
+                // Root children (always in DOM, display:none when inactive):
+                //   thumbEl, extractBtn, posSec, negSec, modelSec,
+                //   loraSec, vcSec, sampSec, resSec, statusEl
+                let h = ROOT_PAD;
+                let visibleChildren = 0;
 
-                if (node._weThumbH > 0) {
-                    h += node._weThumbH + THUMB_GAP;
-                    numGaps++;
+                for (const child of root.children) {
+                    if (child.style.display === "none") continue;
+                    h += child.offsetHeight;
+                    visibleChildren++;
                 }
 
-                for (const sec of allSections) {
-                    h += SEC_HEAD_H;
-                    numGaps++;
-                    if (!sec._collapsed) {
-                        const bodyH = sec._body.scrollHeight;
-                        h += SEC_PAD + (bodyH > 0 ? bodyH : sec._bodyH);
-                    }
-                }
+                // flex gap is BETWEEN visible children only
+                if (visibleChildren > 1) h += ROOT_GAP * (visibleChildren - 1);
 
-                h += ROOT_GAP * numGaps;
-                _domH = Math.max(h, 80);
+                const newH = Math.max(h, 80);
+
+                // Only call setSize when the computed height actually changed.
+                // Calling it on every click (even when nothing changed) causes the
+                // node to grow a "chin" as ComfyUI re-lays out and we overshoot.
+                if (newH === _domH) return;
+                _domH = newH;
 
                 if (node.size) {
                     node.setSize([node.size[0], _domH + NATIVE_H]);
