@@ -21,10 +21,10 @@ async function getLoraManagerPreviewTooltip() {
         if (mod?.PreviewTooltip) {
             loraManagerPreviewTooltip = new mod.PreviewTooltip({ modelType: "loras" });
             loraManagerAvailable = true;
-            console.log("[WorkflowExtractor] LoRA Manager preview integration enabled");
+            console.log("[WorkflowGenerator] LoRA Manager preview integration enabled");
         }
     } catch (e) {
-        console.log("[WorkflowExtractor] LoRA Manager preview not available:", e.message);
+        console.log("[WorkflowGenerator] LoRA Manager preview not available:", e.message);
         loraManagerAvailable = false;
     }
     return loraManagerPreviewTooltip;
@@ -642,7 +642,6 @@ function updateUI(node) {
         if (rows.seed?._setOriginal) rows.seed._setOriginal(s.seed ?? 0);
         if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
         if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "normal");
-        if (rows.denoise?._setOriginal) rows.denoise._setOriginal(s.denoise ?? 1.0);
     }
 
     // Resolution
@@ -834,7 +833,6 @@ function syncHidden(node) {
         if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
         if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
         if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
-        if (r.denoise?._inp) ov.denoise = parseFloat(r.denoise._inp.value) || 1.0;
     }
     if (node._weResRows) {
         const r = node._weResRows;
@@ -959,7 +957,6 @@ function applyOverrides(node, ovJson, lsJson) {
         if (ov.seed != null && ov.seed !== (s.seed ?? 0)) applyInput(rows.seed, ov.seed);
         if (ov.sampler_name && ov.sampler_name !== (s.sampler_name ?? "euler")) applyInput(rows.sampler, ov.sampler_name);
         if (ov.scheduler && ov.scheduler !== (s.scheduler ?? "normal")) applyInput(rows.scheduler, ov.scheduler);
-        if (ov.denoise != null && ov.denoise !== (s.denoise ?? 1.0)) applyInput(rows.denoise, ov.denoise);
     }
 
     // Resolution fields
@@ -1205,10 +1202,10 @@ function loadThumbnail(node, filename) {
 // ─── Main extension ─────────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
 app.registerExtension({
-    name: "FBnodes.WorkflowExtractor",
+    name: "FBnodes.WorkflowGenerator",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "WorkflowExtractor") return;
+        if (nodeData.name !== "WorkflowGenerator") return;
 
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -1244,7 +1241,7 @@ app.registerExtension({
                     if (origSfCb) origSfCb.apply(this, arguments);
                     node._weSourceFolder = value || "input";
                     try {
-                        const resp = await api.fetchApi(`/fbnodes/list-files?source=${encodeURIComponent(value)}`);
+                        const resp = await api.fetchApi(`/workflow-extractor/list-files?source=${encodeURIComponent(value)}`);
                         if (resp.ok) {
                             const data = await resp.json();
                             if (imageW) {
@@ -1635,7 +1632,6 @@ app.registerExtension({
                 seed:      makeInput("Seed",      "number", 0,       { min: 0, step: 1 }, _syncS),
                 sampler:   makeInput("Sampler",   "select", "euler", { options: SAMPLERS }, _syncS),
                 scheduler: makeInput("Scheduler", "select", "normal",{ options: SCHEDULERS }, _syncS),
-                denoise:   makeInput("Denoise",   "number", 1.0,     { min: 0, max: 1, step: 0.05 }, _syncS),
             };
             for (const row of Object.values(sampRows)) {
                 sampSec._body.appendChild(row);
@@ -1774,7 +1770,7 @@ app.registerExtension({
 
             const _origComputeSize = node.computeSize;
             node.computeSize = function () {
-                const s = _origComputeSize?.apply(this, arguments) || [560, 500];
+                const s = _origComputeSize?.apply(this, arguments) || [450, 500];
                 s[1] = Math.max(s[1], _domH + NATIVE_H);
                 return s;
             };
@@ -1791,7 +1787,7 @@ app.registerExtension({
             }
 
             // Set size to match PM Advanced width (440)
-            node.setSize([560, _domH + NATIVE_H]);
+            node.setSize([450, _domH + NATIVE_H]);
 
             // ── Zoom-aware font scaling for dropdown text ────────────
             applyZoomScaling(root);
@@ -1881,7 +1877,7 @@ app.registerExtension({
             // Restore output folder file list (async, doesn't touch state)
             if (node._weSourceFolder === "output") {
                 const imageW = node.widgets?.find(w => w.name === "image");
-                api.fetchApi("/fbnodes/list-files?source=output").then(resp => {
+                api.fetchApi("/workflow-extractor/list-files?source=output").then(resp => {
                     if (resp.ok) return resp.json();
                 }).then(data => {
                     if (data?.files && imageW) {
