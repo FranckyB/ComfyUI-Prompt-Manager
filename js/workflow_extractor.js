@@ -1360,49 +1360,32 @@ app.registerExtension({
             root.appendChild(negSec);
             node._weNegBox = negBox;
 
-            // ── Height recalculation ─────────────────────────────────────────
-            // NATIVE_H: height of ComfyUI's own widgets above our DOM widget.
-            // title(30) + source_folder(26) + image(26) + browse(26) = 108
-            const NATIVE_H = 108;
-
-            // _domH is computed from child offsetHeights — NEVER from root.scrollHeight.
-            // ROOT_PAD = root's own padding (6px top + 6px bottom = 12px).
-            // ROOT_GAP = flex gap applied between visible children.
-            const ROOT_PAD = 12;
-            const ROOT_GAP = 4;
+            // ── Height recalculation ─────────────────────────────
+            // Native widgets above DOM: title(26) + source_folder(26) + image(26) + browse(26) = 104
+            const NATIVE_H = 108;  // title(30) + source_folder(26) + image(26) + browse(26)
+            const HEADER_H = 26;
+            const EXTRACT_BTN_H = 30;  // extract button + gap
+            const STATUS_H = 18;       // status bar at bottom
+            const PADDING = 16;        // root padding top+bottom=12 + small buffer
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
 
             function recalcHeight() {
-                // Use offsetHeight on each direct child of root.
-                // offsetHeight measures each element's own rendered box and is NOT
-                // affected by the parent being constrained by ComfyUI — unlike
-                // root.scrollHeight which collapses in a feedback loop.
-                //
-                // Root children (always in DOM, display:none when inactive):
-                //   thumbEl, extractBtn, posSec, negSec, modelSec,
-                //   loraSec, vcSec, sampSec, resSec, statusEl
-                let h = ROOT_PAD;
-                let visibleChildren = 0;
-
-                for (const child of root.children) {
-                    if (child.style.display === "none") continue;
-                    h += child.offsetHeight;
-                    visibleChildren++;
+                let h = EXTRACT_BTN_H + STATUS_H + PADDING;
+                // Thumbnail (actual rendered height, max 200)
+                h += node._weThumbH || 0;
+                if (node._weThumbH > 0) h += 4; // gap
+                // Sections: header always visible, body measured from DOM if open
+                for (const sec of allSections) {
+                    h += HEADER_H;
+                    if (!sec._collapsed) {
+                        // Measure actual body content height
+                        const measured = sec._body.scrollHeight;
+                        h += Math.min(measured > 4 ? measured + 6 : sec._bodyH, 600);
+                    }
                 }
-
-                // flex gap is BETWEEN visible children only
-                if (visibleChildren > 1) h += ROOT_GAP * (visibleChildren - 1);
-
-                const newH = Math.max(h, 80);
-
-                // Only call setSize when the computed height actually changed.
-                // Calling it on every click (even when nothing changed) causes the
-                // node to grow a "chin" as ComfyUI re-lays out and we overshoot.
-                if (newH === _domH) return;
-                _domH = newH;
-
+                _domH = h;
                 if (node.size) {
                     node.setSize([node.size[0], _domH + NATIVE_H]);
                     node.setDirtyCanvas(true, true);
@@ -1696,9 +1679,6 @@ app.registerExtension({
             });
 
             domW.computeSize = function (nodeWidth) {
-                // _domH is the authoritative height we computed from our children.
-                // Never read root.scrollHeight here — ComfyUI constrains root,
-                // so reading it back would cause a feedback shrink loop.
                 return [nodeWidth, _domH];
             };
 
@@ -1836,18 +1816,15 @@ app.registerExtension({
         };
 
         // ── onExecuted: intercept ComfyUI's auto-preview injection ───
-        // ComfyUI's default onExecuted renders generated images as a widget
-        // below our DOM widget, creating a gap. We intercept it, route the
-        // image into our own _weThumbEl, and block the default injection.
+        // Routes the generated image into our own _weThumbEl instead of
+        // letting ComfyUI inject a preview widget below our DOM widget.
         nodeType.prototype.onExecuted = function (message) {
             const node = this;
             const images = message?.images;
             if (!images || images.length === 0) return;
 
-            // Remove any ComfyUI-injected imgs widget to prevent the gap
-            node.imgs = null;
+            node.imgs = null;  // prevent ComfyUI default preview injection
 
-            // Show the first output image in our thumbnail div
             const img0 = images[0];
             const url = api.apiURL(
                 `/view?filename=${encodeURIComponent(img0.filename)}` +
