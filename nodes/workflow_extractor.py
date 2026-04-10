@@ -7,7 +7,15 @@ Part of ComfyUI-Prompt-Manager — shares extraction logic with PromptExtractor.
 import os
 import json
 import traceback
+import numpy as np
+import torch
+from PIL import Image as PILImage, ImageOps
 import folder_paths
+import comfy.sd
+import comfy.utils
+import comfy.sample
+import comfy.samplers
+import comfy.model_management
 import server
 
 # Shared extraction functions from prompt_extractor (same package)
@@ -20,7 +28,23 @@ from .prompt_extractor import (
     resolve_lora_path,
     build_node_map,
     build_link_map,
+    extract_video_frame_av_to_tensor,
+    get_cached_video_frame,
+    get_placeholder_image_tensor,
 )
+
+# Try to import GGUF support (optional)
+try:
+    from comfyui_gguf.nodes import load_gguf_unet as _load_gguf_unet
+    GGUF_SUPPORT = True
+except (ImportError, ModuleNotFoundError, AttributeError):
+    try:
+        import gguf_connector
+        GGUF_SUPPORT = True
+    except (ImportError, ModuleNotFoundError):
+        GGUF_SUPPORT = False
+    if not GGUF_SUPPORT:
+        _load_gguf_unet = None
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -561,7 +585,7 @@ def extract_vae_info(prompt_data, workflow_data):
             if class_type in ('CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderNF4'):
                 ckpt_name = inputs.get('ckpt_name', '')
                 if ckpt_name:
-                    vae_info['name'] = f"(bundled with {os.path.basename(ckpt_name)})"
+                    vae_info['name'] = '(from checkpoint)'
                     vae_info['source'] = 'checkpoint'
                     # Don't return yet — a separate VAE loader overrides checkpoint VAE
 
@@ -580,7 +604,7 @@ def extract_vae_info(prompt_data, workflow_data):
             if node_type in ('CheckpointLoaderSimple', 'CheckpointLoader') and widgets:
                 ckpt_name = str(widgets[0]) if widgets[0] else ''
                 if ckpt_name and not vae_info['name']:
-                    vae_info['name'] = f"(bundled with {os.path.basename(ckpt_name)})"
+                    vae_info['name'] = '(from checkpoint)'
                     vae_info['source'] = 'checkpoint'
 
     return vae_info
@@ -626,7 +650,7 @@ def extract_clip_info(prompt_data, workflow_data):
             if class_type in ('CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderNF4'):
                 ckpt_name = inputs.get('ckpt_name', '')
                 if ckpt_name:
-                    clip_info['names'] = [f"(bundled with {os.path.basename(ckpt_name)})"]
+                    clip_info['names'] = ['(from checkpoint)']
                     clip_info['source'] = 'checkpoint'
 
     # Fallback: workflow format
@@ -654,7 +678,7 @@ def extract_clip_info(prompt_data, workflow_data):
             if node_type in ('CheckpointLoaderSimple', 'CheckpointLoader') and widgets:
                 ckpt_name = str(widgets[0]) if widgets[0] else ''
                 if ckpt_name and not clip_info['names']:
-                    clip_info['names'] = [f"(bundled with {os.path.basename(ckpt_name)})"]
+                    clip_info['names'] = ['(from checkpoint)']
                     clip_info['source'] = 'checkpoint'
 
     return clip_info
@@ -1052,13 +1076,16 @@ class WorkflowExtractor:
                 "override_data": ("STRING", {
                     "default": "{}",
                     "multiline": True,
-                    "hidden": True,
                 }),
                 # LoRA toggle state — stored as JSON string from JS
                 "lora_state": ("STRING", {
                     "default": "{}",
                     "multiline": True,
-                    "hidden": True,
+                }),
+                # Cached extracted data — for tab-switch persistence (JS only)
+                "extracted_cache": ("STRING", {
+                    "default": "{}",
+                    "multiline": True,
                 }),
             },
             "hidden": {
@@ -1068,15 +1095,235 @@ class WorkflowExtractor:
             },
         }
 
-    RETURN_TYPES = ()
-    RETURN_NAMES = ()
+    RETURN_TYPES = ("IMAGE", "LATENT")
+    RETURN_NAMES = ("image", "latent")
     FUNCTION = "execute"
     CATEGORY = "FBnodes"
-    OUTPUT_NODE = False
-    DESCRIPTION = "Extract and display ALL generation parameters from an image/video. Pure display node — does not execute."
+    OUTPUT_NODE = True
+    DESCRIPTION = "Extract ALL generation parameters from an image/video and regenerate. Shows model, LoRAs, VAE, CLIP, sampler settings with override controls."
 
     def execute(self, source_folder="input", image="", override_data="{}", lora_state="{}",
-                unique_id=None, extra_pnginfo=None, prompt=None):
-        """No-op: this node is display-only. Parameters are extracted via the API."""
-        return {}
+                extracted_cache="{}", unique_id=None, extra_pnginfo=None, prompt=None):
+        """Main execution: extract parameters, load model, apply LoRAs, sample, decode."""
+
+        # Build file path
+        if source_folder == 'output':
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
+        file_path = os.path.join(base_dir, image.replace('/', os.sep))
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"[WorkflowExtractor] File not found: {file_path}")
+
+        # Extract all parameters
+        extracted = extract_all_from_file(file_path, source_folder)
+
+        # Parse override data from JS
+        try:
+            overrides = json.loads(override_data) if override_data else {}
+        except json.JSONDecodeError:
+            overrides = {}
+
+        # Parse LoRA state from JS
+        try:
+            lora_overrides = json.loads(lora_state) if lora_state else {}
+        except json.JSONDecodeError:
+            lora_overrides = {}
+
+        # Apply overrides
+        positive_prompt = overrides.get('positive_prompt', extracted['positive_prompt'])
+        negative_prompt = overrides.get('negative_prompt', extracted['negative_prompt'])
+        model_name = overrides.get('model_a', extracted['model_a'])
+
+        sampler_params = extracted['sampler'].copy()
+        for key in ['steps', 'cfg', 'seed', 'sampler_name', 'scheduler', 'denoise']:
+            if key in overrides:
+                sampler_params[key] = overrides[key]
+
+        # ─── Load Model ─────────────────────────────────────────────────
+        resolved_path, resolved_folder = resolve_model_name(model_name)
+        if resolved_path is None:
+            raise RuntimeError(f"[WorkflowExtractor] Model not found: {model_name}")
+
+        full_model_path = folder_paths.get_full_path(resolved_folder, resolved_path)
+        is_gguf = resolved_path.lower().endswith('.gguf')
+        is_checkpoint = resolved_folder == 'checkpoints'
+
+        model = None
+        clip = None
+        vae = None
+
+        if is_gguf and GGUF_SUPPORT:
+            print(f"[WorkflowExtractor] Loading GGUF model: {resolved_path}")
+            model = _load_gguf_unet(full_model_path)
+        elif is_checkpoint:
+            print(f"[WorkflowExtractor] Loading checkpoint: {resolved_path}")
+            out = comfy.sd.load_checkpoint_guess_config(
+                full_model_path, output_vae=True, output_clip=True,
+                embedding_directory=folder_paths.get_folder_paths("embeddings"),
+            )
+            model, clip, vae = out[0], out[1], out[2]
+        else:
+            print(f"[WorkflowExtractor] Loading diffusion model: {resolved_path}")
+            model = comfy.sd.load_diffusion_model(full_model_path)
+
+        # ─── Load VAE (if not from checkpoint or override) ──────────────
+        vae_name = overrides.get('vae', extracted['vae']['name'])
+        if vae is None or (vae_name and not vae_name.startswith('(')):
+            vae_path = resolve_vae_name(vae_name)
+            if vae_path:
+                print(f"[WorkflowExtractor] Loading VAE: {vae_name}")
+                sd, metadata = comfy.utils.load_torch_file(vae_path, return_metadata=True)
+                vae = comfy.sd.VAE(sd=sd, metadata=metadata)
+                vae.throw_exception_if_invalid()
+            elif vae is None:
+                raise RuntimeError(f"[WorkflowExtractor] No VAE available. Model: {model_name}, VAE: {vae_name}")
+
+        # ─── Load CLIP (if not from checkpoint or override) ─────────────
+        clip_info = extracted['clip']
+        override_clip_names = overrides.get('clip_names')
+        if override_clip_names:
+            clip_names = override_clip_names if isinstance(override_clip_names, list) else [override_clip_names]
+        else:
+            clip_names = clip_info['names']
+
+        if clip is None and clip_names:
+            clip_paths = resolve_clip_names(clip_names, clip_info.get('type', ''))
+            valid_paths = [p for p in clip_paths if p is not None]
+            if valid_paths:
+                clip_type_str = clip_info.get('type', '')
+                if clip_type_str:
+                    clip_type = comfy.sd.CLIPType.FLUX if 'flux' in clip_type_str.lower() else comfy.sd.CLIPType.STABLE_DIFFUSION
+                else:
+                    clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
+
+                print(f"[WorkflowExtractor] Loading CLIP: {clip_names}")
+                clip = comfy.sd.load_clip(
+                    ckpt_paths=valid_paths,
+                    embedding_directory=folder_paths.get_folder_paths("embeddings"),
+                    clip_type=clip_type,
+                )
+
+        if clip is None:
+            raise RuntimeError("[WorkflowExtractor] No CLIP available for text encoding")
+
+        # ─── Apply LoRAs ────────────────────────────────────────────────
+        all_loras = extracted['loras_a'] + extracted['loras_b']
+        for lora in all_loras:
+            lora_name = lora.get('name', '')
+
+            # Check if disabled via JS
+            if lora_overrides.get(lora_name, {}).get('active') is False:
+                print(f"[WorkflowExtractor] Skipping disabled LoRA: {lora_name}")
+                continue
+
+            # Get strength (possibly overridden from JS)
+            model_strength = lora_overrides.get(lora_name, {}).get('model_strength', lora.get('model_strength', 1.0))
+            clip_strength = lora_overrides.get(lora_name, {}).get('clip_strength', lora.get('clip_strength', 1.0))
+
+            lora_path, found = resolve_lora_path(lora_name)
+            if not found:
+                print(f"[WorkflowExtractor] LoRA not found, skipping: {lora_name}")
+                continue
+
+            print(f"[WorkflowExtractor] Applying LoRA: {lora_name} (model={model_strength}, clip={clip_strength})")
+            lora_data = comfy.utils.load_torch_file(lora_path, safe_load=True)
+            model, clip = comfy.sd.load_lora_for_models(model, clip, lora_data, model_strength, clip_strength)
+
+        # ─── Encode prompts ─────────────────────────────────────────────
+        tokens_pos = clip.tokenize(positive_prompt)
+        cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
+
+        tokens_neg = clip.tokenize(negative_prompt)
+        cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
+
+        # ─── Create empty latent (same as EmptyLatentImage node) ────────
+        res = extracted['resolution']
+        width = int(overrides.get('width', res['width']))
+        height = int(overrides.get('height', res['height']))
+        batch_size = int(overrides.get('batch_size', res.get('batch_size', 1)))
+
+        # For video workflows with length
+        length = overrides.get('length', res.get('length'))
+        if length is not None:
+            batch_size = int(length)
+
+        # Create latent exactly like EmptyLatentImage: 4ch, //8, proper dtype.
+        # fix_empty_latent_channels will auto-adjust channels/spatial for the model.
+        print(f"[WorkflowExtractor] Creating latent: {width}x{height}, batch={batch_size}")
+        latent_tensor = torch.zeros(
+            [batch_size, 4, height // 8, width // 8],
+            device=comfy.model_management.intermediate_device(),
+            dtype=comfy.model_management.intermediate_dtype(),
+        )
+        latent_dict = {"samples": latent_tensor, "downscale_ratio_spacial": 8}
+
+        # ─── Sample (same path as ComfyUI's common_ksampler) ───────────
+        steps = int(sampler_params['steps'])
+        cfg = float(sampler_params['cfg'])
+        seed = int(sampler_params['seed'])
+        sampler_name = sampler_params['sampler_name']
+        scheduler = sampler_params['scheduler']
+        denoise = float(sampler_params['denoise'])
+
+        print(f"[WorkflowExtractor] Sampling: steps={steps}, cfg={cfg}, seed={seed}, "
+              f"sampler={sampler_name}, scheduler={scheduler}, denoise={denoise}")
+        print(f"[WorkflowExtractor] Prompt+: {positive_prompt[:120]}...")
+        print(f"[WorkflowExtractor] Prompt-: {negative_prompt[:120]}...")
+
+        # Fix latent channels/spatial to match model (same as common_ksampler)
+        latent_image = comfy.sample.fix_empty_latent_channels(
+            model, latent_dict["samples"], latent_dict.get("downscale_ratio_spacial", None)
+        )
+        noise = comfy.sample.prepare_noise(latent_image, seed)
+
+        import latent_preview
+        callback = latent_preview.prepare_callback(model, steps)
+        disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
+
+        samples = comfy.sample.sample(
+            model, noise, steps, cfg, sampler_name, scheduler,
+            cond_pos, cond_neg, latent_image,
+            denoise=denoise, disable_noise=False,
+            start_step=None, last_step=None,
+            force_full_denoise=True, noise_mask=None,
+            callback=callback, disable_pbar=disable_pbar, seed=seed,
+        )
+
+        out_latent = latent_dict.copy()
+        out_latent.pop("downscale_ratio_spacial", None)
+        out_latent["samples"] = samples
+
+        # ─── Decode ─────────────────────────────────────────────────────
+        print("[WorkflowExtractor] Decoding latent...")
+        decoded = vae.decode(samples)
+
+        # Detect family from resolved model path
+        resolved_model, _ = resolve_model_name(model_name)
+        family = get_model_family(resolved_model or model_name)
+
+        # Build UI info for JS
+        ui_info = {
+            'extracted': {
+                'positive_prompt': extracted['positive_prompt'],
+                'negative_prompt': extracted['negative_prompt'],
+                'model_a': extracted['model_a'],
+                'model_b': extracted['model_b'],
+                'loras_a': extracted['loras_a'],
+                'loras_b': extracted['loras_b'],
+                'vae': extracted['vae'],
+                'clip': extracted['clip'],
+                'sampler': extracted['sampler'],
+                'resolution': extracted['resolution'],
+                'is_video': extracted.get('is_video', False),
+                'model_family': family,
+                'model_family_label': get_family_label(family),
+            }
+        }
+
+        return {
+            "ui": {"workflow_info": [ui_info]},
+            "result": (decoded, out_latent)
+        }
 

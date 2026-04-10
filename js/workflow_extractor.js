@@ -387,6 +387,10 @@ function makeInput(label, type, value, attrs, onChange) {
         resetBtn.style.visibility = String(inp.value) !== String(_origVal) ? "visible" : "hidden";
         if (onChange) onChange();
     };
+    inp.oninput = () => {
+        resetBtn.style.visibility = String(inp.value) !== String(_origVal) ? "visible" : "hidden";
+        if (onChange) onChange();
+    };
     row.appendChild(inp);
     row._inp = inp;
     row._resetBtn = resetBtn;
@@ -525,6 +529,8 @@ async function doExtract(node) {
         node._weLoraState = {};
         node._weOverrides = {};
         updateUI(node);
+        // Persist state to properties immediately so tab switches preserve it
+        syncHidden(node);
         if (statusEl) { statusEl.textContent = ""; }
     } catch (err) {
         console.error("[WE] extract error", err);
@@ -551,10 +557,19 @@ function updateUI(node) {
         sel.value = family || "";
     }
 
-    // Model
+    // Model A
     if (node._weModelRow?._setOriginal) {
         const name = d.model_a || "—";
         node._weModelRow._setOriginal(name, d.model_a_found !== false);
+    }
+
+    // Model B (show/hide based on extracted data)
+    const hasModelB = !!(d.model_b);
+    if (node._weModelBRow) {
+        node._weModelBRow.style.display = hasModelB ? "flex" : "none";
+        if (hasModelB && node._weModelBRow._setOriginal) {
+            node._weModelBRow._setOriginal(d.model_b, d.model_b_found !== false);
+        }
     }
 
     // LoRAs
@@ -612,34 +627,61 @@ function updateUI(node) {
 }
 
 function updateLoras(node) {
-    const container = node._weLoraContainer;
-    if (!container) return;
-    container.innerHTML = "";
+    const containerA = node._weLoraAContainer;
+    const containerB = node._weLoraBContainer;
+    const labelA = node._weLoraALabel;
+    const labelB = node._weLoraBLabel;
+    if (!containerA) return;
+    containerA.innerHTML = "";
+    if (containerB) containerB.innerHTML = "";
+
     const d = node._weExtracted;
     if (!d) return;
-    const allLoras = [...(d.loras_a || []), ...(d.loras_b || [])];
-    if (!allLoras.length) {
-        container.appendChild(makeEl("div", {
-            color: "rgba(200, 200, 200, 0.5)", fontStyle: "italic",
-            fontSize: "11px", padding: "8px", width: "100%", textAlign: "center",
-        }, "No LoRAs connected"));
+
+    const lorasA = d.loras_a || [];
+    const lorasB = d.loras_b || [];
+    const hasBoth = lorasA.length > 0 && lorasB.length > 0;
+
+    // Show/hide A/B labels based on whether both stacks exist
+    if (labelA) labelA.style.display = hasBoth ? "block" : "none";
+    if (labelB) labelB.style.display = lorasB.length > 0 ? "block" : "none";
+    if (containerB) containerB.style.display = lorasB.length > 0 ? "flex" : "none";
+
+    const noLorasMsg = () => makeEl("div", {
+        color: "rgba(200, 200, 200, 0.5)", fontStyle: "italic",
+        fontSize: "11px", padding: "8px", width: "100%", textAlign: "center",
+    }, "No LoRAs connected");
+
+    if (!lorasA.length && !lorasB.length) {
+        containerA.appendChild(noLorasMsg());
         return;
     }
-    for (const lora of allLoras) {
-        const name = lora.name || "";
-        const avail = d.lora_availability?.[name] !== false;
-        if (node._weLoraState[name] === undefined) {
-            node._weLoraState[name] = { active: true, model_strength: lora.model_strength ?? 1.0, clip_strength: lora.clip_strength ?? 1.0 };
+
+    // Populate a container with lora tags
+    const populateStack = (container, loras, stackKey) => {
+        for (const lora of loras) {
+            const name = lora.name || "";
+            const stateKey = stackKey ? `${stackKey}:${name}` : name;
+            const avail = d.lora_availability?.[name] !== false;
+            if (node._weLoraState[stateKey] === undefined) {
+                node._weLoraState[stateKey] = { active: true, model_strength: lora.model_strength ?? 1.0, clip_strength: lora.clip_strength ?? 1.0 };
+            }
+            const st = node._weLoraState[stateKey];
+            lora._active = st.active;
+            lora.model_strength = st.model_strength;
+            const tag = makeLoraTag(lora, avail,
+                () => { st.active = !st.active; updateLoras(node); syncHidden(node); },
+                (v) => { st.model_strength = v; st.clip_strength = v; syncHidden(node); },
+            );
+            container.appendChild(tag);
         }
-        const st = node._weLoraState[name];
-        lora._active = st.active;
-        lora.model_strength = st.model_strength;
-        const tag = makeLoraTag(lora, avail,
-            () => { st.active = !st.active; updateLoras(node); syncHidden(node); },
-            (v) => { st.model_strength = v; st.clip_strength = v; syncHidden(node); },
-        );
-        container.appendChild(tag);
+    };
+
+    populateStack(containerA, lorasA, hasBoth ? "a" : "");
+    if (containerB && lorasB.length) {
+        populateStack(containerB, lorasB, "b");
     }
+
     // Recalc node height after lora tags change
     if (node._weRecalc) setTimeout(() => node._weRecalc(), 10);
 }
@@ -653,6 +695,10 @@ function syncHidden(node) {
     if (node._weModelRow?._getValue) {
         const v = node._weModelRow._getValue();
         if (v && v !== "—") ov.model_a = v;
+    }
+    if (node._weModelBRow?._getValue) {
+        const v = node._weModelBRow._getValue();
+        if (v && v !== "—") ov.model_b = v;
     }
     if (node._weVaeRow?._getValue) {
         const v = node._weVaeRow._getValue();
@@ -683,8 +729,32 @@ function syncHidden(node) {
     if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
     if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
 
+    // Save family selection
+    if (node._weFamily) ov._family = node._weFamily;
+
+    // Save section collapse states
+    if (node._weSections) {
+        const ss = {};
+        for (const [key, sec] of Object.entries(node._weSections)) {
+            ss[key] = !!sec._collapsed;
+        }
+        ov._section_states = ss;
+    }
+
     wSet("override_data", JSON.stringify(ov));
     wSet("lora_state", JSON.stringify(node._weLoraState || {}));
+    // Cache extracted data for tab-switch persistence (avoids API call on restore)
+    if (node._weExtracted) {
+        wSet("extracted_cache", JSON.stringify(node._weExtracted));
+    }
+
+    // Also persist to node.properties (survives tab switch reliably)
+    node.properties ||= {};
+    node.properties.we_override_data = JSON.stringify(ov);
+    node.properties.we_lora_state = JSON.stringify(node._weLoraState || {});
+    if (node._weExtracted) {
+        node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
+    }
 }
 
 // ─── Apply saved overrides back to UI after reload ───────────────────────────
@@ -710,6 +780,8 @@ function applyOverrides(node, ovJson, lsJson) {
             sel.appendChild(o);
         }
         sel.value = ovVal;
+        // User-selected override is always valid — clear any "not found" red
+        sel.style.color = C.text;
         if (row._resetBtn) {
             row._resetBtn.style.visibility = sel.value !== sel.options[0]?.value ? "visible" : "hidden";
         }
@@ -726,9 +798,27 @@ function applyOverrides(node, ovJson, lsJson) {
         }
     };
 
-    // Model
+    // Restore family selection
+    if (ov._family && node._weFamilySel) {
+        const sel = node._weFamilySel;
+        if (![...sel.options].some(o => o.value === ov._family)) {
+            const o = document.createElement("option");
+            o.value = ov._family;
+            o.textContent = ov._family;
+            sel.appendChild(o);
+        }
+        sel.value = ov._family;
+        node._weFamily = ov._family;
+    }
+
+    // Model A
     if (ov.model_a && ov.model_a !== (d.model_a || "—")) {
         applySelect(node._weModelRow, ov.model_a, true);
+    }
+
+    // Model B
+    if (ov.model_b && ov.model_b !== (d.model_b || "—")) {
+        applySelect(node._weModelBRow, ov.model_b, true);
     }
 
     // VAE
@@ -777,6 +867,23 @@ function applyOverrides(node, ovJson, lsJson) {
         updateLoras(node);
     }
 
+    // Restore section collapse states
+    if (ov._section_states && node._weSections) {
+        for (const [key, collapsed] of Object.entries(ov._section_states)) {
+            const sec = node._weSections[key];
+            if (!sec) continue;
+            const isCurrentlyCollapsed = sec._collapsed;
+            if (collapsed !== isCurrentlyCollapsed) {
+                // Toggle it
+                sec._body.style.display = collapsed ? "none" : "block";
+                const arrow = sec.querySelector("span");
+                if (arrow) arrow.textContent = collapsed ? "▶" : "▼";
+                sec._collapsed = collapsed;
+            }
+        }
+        if (node._weRecalc) node._weRecalc();
+    }
+
     // Re-sync hidden widgets with the restored values
     syncHidden(node);
 }
@@ -802,9 +909,11 @@ function loadThumbnail(node, filename) {
     if (!filename || filename === "(none)") {
         thumbEl.innerHTML = "";
         node._weThumbH = 0;
+        node._weThumbFilename = null;
         if (node._weRecalc) node._weRecalc();
         return;
     }
+    node._weThumbFilename = filename;
     const src = node._weSourceFolder || "input";
     // Handle subfolder paths (e.g. "subfolder/image.png")
     let actualFilename = filename;
@@ -856,6 +965,8 @@ app.registerExtension({
             node._weOverrides = {};
             node._weLastImage = null;
             node._weSourceFolder = "input";
+            node._weSections = {};  // section refs for collapse state
+            this.serialize_widgets = true;
 
             // ── Widget helpers ─────────────────────────────────────
             const wGet = (name) => node.widgets?.find(w => w.name === name)?.value;
@@ -946,6 +1057,7 @@ app.registerExtension({
             });
             root.appendChild(thumbEl);
             node._weThumbEl = thumbEl;
+            node._weThumbFilename = null;
 
             // ── Extract button ───────────────────────────────────────
             root.appendChild(makeBtn("🔍 Extract Parameters", () => doExtract(node), {
@@ -953,7 +1065,8 @@ app.registerExtension({
             }));
 
             // ── PROMPTS (positive open, negative closed) ─────────────
-            const posSec = makeSection("POSITIVE PROMPT", false, 110, recalcHeight);
+            const posSec = makeSection("POSITIVE PROMPT", false, 110, () => { recalcHeight(); syncHidden(node); });
+            node._weSections.positive = posSec;
             const posBox = document.createElement("textarea");
             posBox.placeholder = "Positive prompt";
             posBox.rows = 5;
@@ -966,11 +1079,13 @@ app.registerExtension({
                 maxHeight: "90px", overflow: "auto",
             });
             posBox.onchange = () => syncHidden(node);
+            posBox.oninput = () => syncHidden(node);
             posSec._body.appendChild(posBox);
             root.appendChild(posSec);
             node._wePosBox = posBox;
 
-            const negSec = makeSection("NEGATIVE PROMPT", true, 110, recalcHeight);
+            const negSec = makeSection("NEGATIVE PROMPT", true, 110, () => { recalcHeight(); syncHidden(node); });
+            node._weSections.negative = negSec;
             const negBox = document.createElement("textarea");
             negBox.placeholder = "Negative prompt";
             negBox.rows = 5;
@@ -983,6 +1098,7 @@ app.registerExtension({
                 maxHeight: "90px", overflow: "auto",
             });
             negBox.onchange = () => syncHidden(node);
+            negBox.oninput = () => syncHidden(node);
             negSec._body.appendChild(negBox);
             root.appendChild(negSec);
             node._weNegBox = negBox;
@@ -1026,13 +1142,14 @@ app.registerExtension({
             const onFamilyChanged = async (familyKey) => {
                 node._weFamily = familyKey;
                 const fam = encodeURIComponent(familyKey || "");
-                await Promise.all([
-                    reloadGroupedSelect(node._weModelRow, async () => {
-                        try {
-                            const r = await fetch(`/workflow-extractor/list-models?family=${fam}`);
-                            const d = await r.json(); return d.models || [];
-                        } catch { return []; }
-                    }, true),
+                const fetchModelsForFamily = async () => {
+                    try {
+                        const r = await fetch(`/workflow-extractor/list-models?family=${fam}`);
+                        const d = await r.json(); return d.models || [];
+                    } catch { return []; }
+                };
+                const reloads = [
+                    reloadGroupedSelect(node._weModelRow, fetchModelsForFamily, true),
                     reloadGroupedSelect(node._weVaeRow, async () => {
                         try {
                             const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
@@ -1047,12 +1164,18 @@ app.registerExtension({
                             return ["(from checkpoint)", ...(d.clips || [])];
                         } catch { return []; }
                     }, true),
-                ]);
+                ];
+                // Also reload model B if it's visible
+                if (node._weModelBRow && node._weModelBRow.style.display !== "none") {
+                    reloads.push(reloadGroupedSelect(node._weModelBRow, fetchModelsForFamily, true));
+                }
+                await Promise.all(reloads);
                 syncHidden(node);
             };
 
             // ── Model section ────────────────────────────────────────
-            const modelSec = makeSection("MODEL", false, 56, recalcHeight);
+            const modelSec = makeSection("MODEL / CHECKPOINT", false, 56, () => { recalcHeight(); syncHidden(node); });
+            node._weSections.model = modelSec;
 
             // Family type row
             const familyRow = makeEl("div", { ...ROW_STYLE });
@@ -1087,27 +1210,41 @@ app.registerExtension({
             modelSec._body.appendChild(familyRow);
             node._weFamilySel = familySel;
 
-            // Checkpoint row (grouped display)
-            const modelRow = makeSelectRow("Checkpoint", "—",
-                async () => {
-                    try {
-                        const fam = node._weFamily;
-                        const url = fam
-                            ? `/workflow-extractor/list-models?family=${encodeURIComponent(fam)}`
-                            : `/workflow-extractor/list-models?ref=${encodeURIComponent(node._weModelRow?._getValue() || "")}`;
-                        const r = await fetch(url);
-                        const d = await r.json();
-                        return d.models || [];
-                    } catch { return []; }
-                },
+            // Fetch models helper (shared by A and B rows)
+            const fetchModels = async () => {
+                try {
+                    const fam = node._weFamily;
+                    const url = fam
+                        ? `/workflow-extractor/list-models?family=${encodeURIComponent(fam)}`
+                        : `/workflow-extractor/list-models?ref=${encodeURIComponent(node._weModelRow?._getValue() || "")}`;
+                    const r = await fetch(url);
+                    const d = await r.json();
+                    return d.models || [];
+                } catch { return []; }
+            };
+
+            // Checkpoint A row (grouped display)
+            const modelRow = makeSelectRow("Checkpoint A", "—",
+                fetchModels,
                 (v) => { node._weOverrides.model_a = v; syncHidden(node); },
                 true, // grouped
             );
             modelSec._body.appendChild(modelRow);
-            root.appendChild(modelSec);
             node._weModelRow = modelRow;
 
-            // When checkpoint reset is clicked, also restore original family
+            // Checkpoint B row (grouped display, hidden when no model_b)
+            const modelBRow = makeSelectRow("Checkpoint B", "—",
+                fetchModels,
+                (v) => { node._weOverrides.model_b = v; syncHidden(node); },
+                true, // grouped
+            );
+            modelBRow.style.display = "none";
+            modelSec._body.appendChild(modelBRow);
+            node._weModelBRow = modelBRow;
+
+            root.appendChild(modelSec);
+
+            // When checkpoint A reset is clicked, also restore original family
             modelRow._onReset = () => {
                 const origFamily = node._weExtracted?.model_family || null;
                 if (origFamily && origFamily !== node._weFamily) {
@@ -1117,16 +1254,44 @@ app.registerExtension({
             };
 
             // ── LoRAs section ────────────────────────────────────────
-            const loraSec = makeSection("LORAS", true, 50, recalcHeight);
-            const loraContainer = makeEl("div", {
+            const loraSec = makeSection("LORAS", true, 50, () => { recalcHeight(); syncHidden(node); });
+            node._weSections.loras = loraSec;
+
+            // LoRA A label + container
+            const loraALabel = makeEl("div", {
+                color: C.textMuted, fontSize: "10px", fontWeight: "bold",
+                padding: "4px 4px 0", letterSpacing: "0.5px",
+            }, "STACK A");
+            loraSec._body.appendChild(loraALabel);
+            node._weLoraALabel = loraALabel;
+
+            const loraAContainer = makeEl("div", {
                 display: "flex", flexWrap: "wrap", gap: "4px", padding: "4px 0",
             });
-            loraSec._body.appendChild(loraContainer);
+            loraSec._body.appendChild(loraAContainer);
+            node._weLoraAContainer = loraAContainer;
+
+            // LoRA B label + container
+            const loraBLabel = makeEl("div", {
+                color: C.textMuted, fontSize: "10px", fontWeight: "bold",
+                padding: "4px 4px 0", letterSpacing: "0.5px",
+            }, "STACK B");
+            loraSec._body.appendChild(loraBLabel);
+            node._weLoraBLabel = loraBLabel;
+
+            const loraBContainer = makeEl("div", {
+                display: "flex", flexWrap: "wrap", gap: "4px", padding: "4px 0",
+            });
+            loraSec._body.appendChild(loraBContainer);
+            node._weLoraBContainer = loraBContainer;
+
             root.appendChild(loraSec);
-            node._weLoraContainer = loraContainer;
+            // Keep combined reference for backward compat
+            node._weLoraContainer = loraAContainer;
 
             // ── VAE / CLIP section ───────────────────────────────────
-            const vcSec = makeSection("VAE / CLIP", true, 56, recalcHeight);
+            const vcSec = makeSection("VAE / CLIP", true, 56, () => { recalcHeight(); syncHidden(node); });
+            node._weSections.vae_clip = vcSec;
             const vaeRow = makeSelectRow("VAE", "—",
                 async () => {
                     try {
@@ -1157,7 +1322,8 @@ app.registerExtension({
             node._weClipRow = clipRow;
 
             // ── Sampler section ──────────────────────────────────────
-            const sampSec = makeSection("SAMPLER", true, 148, recalcHeight);
+            const sampSec = makeSection("SAMPLER", true, 148, () => { recalcHeight(); syncHidden(node); });
+            node._weSections.sampler = sampSec;
             const _syncS = () => syncHidden(node);
             const sampRows = {
                 steps:     makeInput("Steps",     "number", 20,      { min: 1, max: 200, step: 1 }, _syncS),
@@ -1174,7 +1340,8 @@ app.registerExtension({
             node._weSamplerRows = sampRows;
 
             // ── Resolution section ───────────────────────────────────
-            const resSec = makeSection("RESOLUTION", true, 100, recalcHeight);
+            const resSec = makeSection("RESOLUTION", true, 100, () => { recalcHeight(); syncHidden(node); });
+            node._weSections.resolution = resSec;
             const _syncR = () => syncHidden(node);
             const resRows = {
                 width:  makeInput("Width",  "number", 512, { min: 64, max: 8192, step: 8 }, _syncR),
@@ -1239,7 +1406,7 @@ app.registerExtension({
             // ── Zoom-aware font scaling for dropdown text ────────────
             applyZoomScaling(root);
 
-            // ── Image-change handler ─────────────────────────────────
+            // ── Image-change handler (user-initiated only) ───────────
             function onImageChange(filename) {
                 node._weLastImage = filename;
                 loadThumbnail(node, filename);
@@ -1249,62 +1416,88 @@ app.registerExtension({
             }
 
             // ── Initial load if image is already set ─────────────────
+            // Only fires on FRESH node creation. On tab return / workflow
+            // load, _configuredFromWorkflow is set synchronously by
+            // onConfigure before this setTimeout fires.
             const initImg = wGet("image");
             if (initImg && initImg !== "(none)" && initImg !== "") {
-                setTimeout(() => onImageChange(initImg), 300);
+                setTimeout(() => {
+                    if (!node._configuredFromWorkflow) onImageChange(initImg);
+                }, 300);
             }
 
             return r;
         };
 
-        // ── On configure (graph load / paste) ────────────────────────
+        // ── On configure (graph load / paste / tab return) ───────────
+        // Runs SYNCHRONOUSLY right after onNodeCreated. All DOM elements
+        // already exist. Restore state from node.properties (reliable,
+        // directly serialized in workflow JSON). No API calls, no
+        // setTimeout, no thumbnail reload.
         const origConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             origConfigure?.apply(this, arguments);
             const node = this;
-            setTimeout(() => {
-                // Re-hide only data widgets on configure
-                const domW = node.widgets?.find(w => w.name === "we_ui");
-                const KEEP_VISIBLE = new Set(["source_folder", "image", "📁 Browse Files"]);
-                for (const w of (node.widgets || [])) {
-                    if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
-                    w.computeSize = () => [0, -4];
-                    w.type = "converted-widget";
-                    w.hidden = true;
-                    w.draw = function () {};
-                    if (w.element) w.element.style.display = "none";
-                }
 
-                const wGet = (name) => node.widgets?.find(w => w.name === name)?.value;
-                const src = wGet("source_folder");
-                if (src) node._weSourceFolder = src;
+            // Permanent flag — blocks initImg setTimeout from re-extracting
+            node._configuredFromWorkflow = true;
 
-                // Restore output folder file list if needed
-                if (node._weSourceFolder === "output") {
-                    const imageW = node.widgets?.find(w => w.name === "image");
-                    api.fetchApi("/fbnodes/list-files?source=output").then(resp => {
-                        if (resp.ok) return resp.json();
-                    }).then(data => {
-                        if (data?.files && imageW) {
-                            const saved = imageW.value;
-                            imageW.options.values = ["(none)", ...data.files];
-                            if (saved && data.files.includes(saved)) imageW.value = saved;
-                        }
-                    }).catch(() => {});
-                }
+            // Re-hide data widgets (DOM was rebuilt by onNodeCreated)
+            const domW = node.widgets?.find(w => w.name === "we_ui");
+            const KEEP_VISIBLE = new Set(["source_folder", "image", "📁 Browse Files"]);
+            for (const w of (node.widgets || [])) {
+                if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
+                w.computeSize = () => [0, -4];
+                w.type = "converted-widget";
+                w.hidden = true;
+                w.draw = function () {};
+                if (w.element) w.element.style.display = "none";
+            }
 
-                const img = wGet("image");
-                if (img && img !== "(none)" && img !== "") {
-                    loadThumbnail(node, img);
-                    // Save overrides before re-extracting (they persist in widget values)
-                    const savedOv = wGet("override_data");
-                    const savedLs = wGet("lora_state");
-                    doExtract(node).then(() => {
-                        applyOverrides(node, savedOv, savedLs);
-                    });
-                }
-                node.setDirtyCanvas(true, true);
-            }, 200);
+            // Read saved state from node.properties (set by syncHidden)
+            const props = node.properties || {};
+            const savedOv = props.we_override_data;
+            const savedLs = props.we_lora_state;
+            const savedCache = props.we_extracted_cache;
+
+            const wGet = (name) => node.widgets?.find(w => w.name === name)?.value;
+            const src = wGet("source_folder");
+            if (src) node._weSourceFolder = src;
+
+            // Restore extracted data from cache (no network call)
+            let cached = null;
+            try { cached = JSON.parse(savedCache || "{}"); } catch { cached = null; }
+            const hasCache = cached && Object.keys(cached).length > 0;
+
+            if (hasCache) {
+                node._weExtracted = cached;
+                node._weLoraState = {};
+                node._weOverrides = {};
+                updateUI(node);
+                applyOverrides(node, savedOv, savedLs);
+            }
+
+            // Remember thumbnail filename (no reload — avoids DOM flash)
+            const img = wGet("image");
+            if (img && img !== "(none)") node._weThumbFilename = img;
+
+            // Restore output folder file list (async, doesn't touch state)
+            if (node._weSourceFolder === "output") {
+                const imageW = node.widgets?.find(w => w.name === "image");
+                api.fetchApi("/fbnodes/list-files?source=output").then(resp => {
+                    if (resp.ok) return resp.json();
+                }).then(data => {
+                    if (data?.files && imageW) {
+                        const saved = imageW.value;
+                        imageW.options.values = ["(none)", ...data.files];
+                        if (saved && data.files.includes(saved)) imageW.value = saved;
+                    }
+                }).catch(() => {});
+            }
+
+            // Recalculate DOM height and restore node size
+            if (node._weRecalc) node._weRecalc();
+            node.setDirtyCanvas(true, true);
         };
     },
 });
