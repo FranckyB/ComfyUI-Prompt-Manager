@@ -548,13 +548,10 @@ function makeLoraTag(lora, avail, onToggle, onStrength) {
 // ─── Extract call ────────────────────────────────────────────────────────────
 async function doExtract(node) {
     const wGet = (name) => node.widgets?.find(w => w.name === name)?.value;
-    const statusEl = node._weStatusEl;
     const filename = wGet("image");
     if (!filename || filename === "(none)") {
-        if (statusEl) { statusEl.textContent = "Select an image to extract"; statusEl.style.color = C.textMuted; }
         return;
     }
-    if (statusEl) { statusEl.textContent = "⏳ Extracting…"; statusEl.style.color = C.warning; }
     try {
         const resp = await fetch("/workflow-extractor/extract", {
             method: "POST",
@@ -571,12 +568,10 @@ async function doExtract(node) {
         updateUI(node);
         // Persist state to properties immediately so tab switches preserve it
         syncHidden(node);
-        if (statusEl) { statusEl.textContent = ""; }
         node.setDirtyCanvas(true);
     } catch (err) {
         console.error("[WE] extract error", err);
         node._weHasWorkflow = false;
-        if (statusEl) { statusEl.textContent = `❌ ${err.message}`; statusEl.style.color = C.error; }
         node.setDirtyCanvas(true);
     }
 }
@@ -1365,14 +1360,13 @@ app.registerExtension({
             const NATIVE_H = 108;  // title(30) + source_folder(26) + image(26) + browse(26)
             const HEADER_H = 26;
             const EXTRACT_BTN_H = 30;  // extract button + gap
-            const STATUS_H = 18;       // status bar at bottom
             const PADDING = 16;        // root padding top+bottom=12 + small buffer
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
 
             function recalcHeight() {
-                let h = EXTRACT_BTN_H + STATUS_H + PADDING;
+                let h = EXTRACT_BTN_H + PADDING;
                 // Thumbnail (actual rendered height, max 200)
                 h += node._weThumbH || 0;
                 if (node._weThumbH > 0) h += 4; // gap
@@ -1385,6 +1379,10 @@ app.registerExtension({
                         h += Math.min(measured > 4 ? measured + 6 : sec._bodyH, 600);
                     }
                 }
+                // Guard: only call setSize if the height actually changed.
+                // This prevents recalcHeight from triggering a render loop
+                // when called spuriously (e.g. on configure/restore).
+                if (h === _domH) return;
                 _domH = h;
                 if (node.size) {
                     node.setSize([node.size[0], _domH + NATIVE_H]);
@@ -1656,14 +1654,6 @@ app.registerExtension({
             root.appendChild(resSec);
             node._weResRows = resRows;
 
-            // ── Status (at bottom) ───────────────────────────────────
-            const statusEl = makeEl("div", {
-                fontSize: "11px", color: C.textMuted, textAlign: "center",
-                padding: "1px 0", minHeight: "14px",
-            }, "");
-            root.appendChild(statusEl);
-            node._weStatusEl = statusEl;
-
             // Register all sections for height tracking
             allSections.push(posSec, negSec, modelSec, loraSec, vcSec, sampSec, resSec);
 
@@ -1770,9 +1760,11 @@ app.registerExtension({
 
             const _origComputeSize = node.computeSize;
             node.computeSize = function () {
-                const s = _origComputeSize?.apply(this, arguments) || [450, 500];
-                s[1] = Math.max(s[1], _domH + NATIVE_H);
-                return s;
+                // Always return the exact stored height — never let LiteGraph
+                // grow the node beyond what recalcHeight computed. This prevents
+                // the "chin" feedback loop where computeSize is called on every
+                // render frame and returns a slightly larger value each time.
+                return [node.size[0] || 450, _domH + NATIVE_H];
             };
 
             // ── Only hide data widgets, keep source_folder + image + browse visible ─
