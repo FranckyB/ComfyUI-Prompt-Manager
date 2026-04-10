@@ -565,15 +565,19 @@ async function doExtract(node) {
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
         node._weExtracted = data;
+        node._weHasWorkflow = true;
         node._weLoraState = {};
         node._weOverrides = {};
         updateUI(node);
         // Persist state to properties immediately so tab switches preserve it
         syncHidden(node);
         if (statusEl) { statusEl.textContent = ""; }
+        node.setDirtyCanvas(true);
     } catch (err) {
         console.error("[WE] extract error", err);
+        node._weHasWorkflow = false;
         if (statusEl) { statusEl.textContent = `❌ ${err.message}`; statusEl.style.color = C.error; }
+        node.setDirtyCanvas(true);
     }
 }
 
@@ -1063,7 +1067,6 @@ function loadThumbnail(node, filename) {
         node._weThumbH = 0;
         node._weThumbFilename = null;
         thumbEl.style.display = "none";
-        if (node._weRoot) node._weRoot.style.paddingTop = "0";
         if (node._weRecalc) node._weRecalc();
         return;
     }
@@ -1118,14 +1121,12 @@ function loadThumbnail(node, filename) {
                 thumbEl.innerHTML = "";
                 thumbEl.appendChild(img);
                 thumbEl.style.display = "block";
-                if (node._weRoot) node._weRoot.style.paddingTop = "6px";
                 node._weThumbH = Math.min(img.naturalHeight, 200);
                 if (node._weRecalc) node._weRecalc();
             };
             img.onerror = () => {
                 thumbEl.innerHTML = "";
                 thumbEl.style.display = "none";
-                if (node._weRoot) node._weRoot.style.paddingTop = "0";
                 node._weThumbH = 0;
                 if (node._weRecalc) node._weRecalc();
             };
@@ -1153,11 +1154,10 @@ function loadThumbnail(node, filename) {
                     thumbEl.innerHTML = "";
                     thumbEl.appendChild(img);
                     thumbEl.style.display = "block";
-                    if (node._weRoot) node._weRoot.style.paddingTop = "6px";
                     node._weThumbH = Math.min(img.naturalHeight, 200);
                     if (node._weRecalc) node._weRecalc();
                 };
-                img.onerror = () => { thumbEl.innerHTML = ""; thumbEl.style.display = "none"; if (node._weRoot) node._weRoot.style.paddingTop = "0"; node._weThumbH = 0; if (node._weRecalc) node._weRecalc(); };
+                img.onerror = () => { thumbEl.innerHTML = ""; thumbEl.style.display = "none"; node._weThumbH = 0; if (node._weRecalc) node._weRecalc(); };
                 img.src = canvas.toDataURL("image/png");
             } catch (e) {
                 showServerFrame();
@@ -1186,21 +1186,18 @@ function loadThumbnail(node, filename) {
             thumbEl.innerHTML = "";
             thumbEl.appendChild(img);
             thumbEl.style.display = "block";
-            if (node._weRoot) node._weRoot.style.paddingTop = "6px";
             node._weThumbH = Math.min(img.naturalHeight, 200);
             if (node._weRecalc) node._weRecalc();
         };
         img.onerror = () => {
             thumbEl.innerHTML = "";
             thumbEl.style.display = "none";
-            if (node._weRoot) node._weRoot.style.paddingTop = "0";
             node._weThumbH = 0;
             if (node._weRecalc) node._weRecalc();
         };
         thumbEl.innerHTML = "";
         thumbEl.appendChild(img);
         thumbEl.style.display = "block";
-        if (node._weRoot) node._weRoot.style.paddingTop = "6px";
     }
 }
 
@@ -1220,6 +1217,7 @@ app.registerExtension({
 
             // ── State ────────────────────────────────────────────────
             node._weExtracted = null;
+            node._weHasWorkflow = false;
             node._weLoraState = {};
             node._weOverrides = {};
             node._weLastImage = null;
@@ -1300,14 +1298,15 @@ app.registerExtension({
                 display: "flex",
                 flexDirection: "column",
                 gap: "4px",
-                padding: "0 6px 6px 6px",   // no top padding — thumb flush under Browse Files
+                padding: "6px",
+                marginTop: "-10px",   // cancel the ~10px ComfyUI injects above every DOM widget
                 width: "100%",
                 boxSizing: "border-box",
                 fontFamily: "Inter, system-ui, -apple-system, sans-serif",
                 overflow: "hidden",
             });
             forwardWheelToCanvas(root);
-            node._weRoot = root; // used by loadThumbnail to toggle top padding
+            node._weRoot = root;
 
             // ── Thumbnail preview ────────────────────────────────────
             const thumbEl = makeEl("div", {
@@ -1687,23 +1686,45 @@ app.registerExtension({
                 return [nodeWidth, _domH];
             };
 
-            // ── Preview arrow in title bar (like Prompt Extractor) ───────────────
+            // ── Preview arrow + workflow status dot in title bar ─────────────────
             const _origDrawFg = node.onDrawForeground;
             node.onDrawForeground = function(ctx) {
                 _origDrawFg?.apply(this, arguments);
-                if (!node._weThumbFilename || (node.flags && node.flags.collapsed)) return;
                 const titleH = LiteGraph.NODE_TITLE_HEIGHT || 30;
+                const centerY = -(titleH / 2);
+                if (node.flags && node.flags.collapsed) return;
+
+                // ── Green/red dot: always visible once an image is selected ──
+                const imageWidget = node.widgets?.find(w => w.name === "image");
+                const currentFile = imageWidget?.value;
+                if (currentFile && currentFile !== "(none)") {
+                    const dotRadius = 7;
+                    const dotX = node.size[0] - dotRadius - 8;
+                    ctx.beginPath();
+                    ctx.arc(dotX, centerY, dotRadius, 0, Math.PI * 2);
+                    ctx.fillStyle = node._weHasWorkflow ? "#00ff00" : "#ff3333";
+                    ctx.fill();
+                    ctx.strokeStyle = node._weHasWorkflow ? "#054405" : "#550505";
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+
+                // ── Preview triangle: only when thumbnail is loaded ──
+                if (!node._weThumbFilename) {
+                    node._wePreviewBounds = null;
+                    return;
+                }
                 const triSize = 8;
-                const playX = node.size[0] - triSize - 12;
-                const playY = -(titleH / 2);
+                const dotSlot = (currentFile && currentFile !== "(none)") ? 24 : 0; // shift left if dot is shown
+                const playX = node.size[0] - triSize - 12 - dotSlot;
                 ctx.beginPath();
-                ctx.moveTo(playX - triSize, playY - triSize);
-                ctx.lineTo(playX - triSize, playY + triSize);
-                ctx.lineTo(playX + triSize, playY);
+                ctx.moveTo(playX - triSize, centerY - triSize);
+                ctx.lineTo(playX - triSize, centerY + triSize);
+                ctx.lineTo(playX + triSize, centerY);
                 ctx.closePath();
                 ctx.fillStyle = node._weHoverPreview ? "#ffffff" : "rgba(255,255,255,0.7)";
                 ctx.fill();
-                node._wePreviewBounds = { x: playX - triSize - 3, y: playY - triSize - 3, w: triSize * 2 + 6, h: triSize * 2 + 6 };
+                node._wePreviewBounds = { x: playX - triSize - 3, y: centerY - triSize - 3, w: triSize * 2 + 6, h: triSize * 2 + 6 };
             };
 
             const _origMouseMove = node.onMouseMove;
@@ -1840,6 +1861,7 @@ app.registerExtension({
 
             if (hasCache) {
                 node._weExtracted = cached;
+                node._weHasWorkflow = true;  // restored from cache = workflow was found
                 node._weLoraState = {};
                 node._weOverrides = {};
                 updateUI(node);
