@@ -220,7 +220,7 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
 def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     """
     Flux-style sampler path — BasicGuider + SamplerCustomAdvanced.
-    Used for Flux1 Dev/Schnell, Z-Image Base/Turbo, Flux2/Klein.
+    Used for Flux1, Z-Image, LTX-Video.
     """
     import latent_preview
     from comfy_extras.nodes_custom_sampler import (
@@ -265,6 +265,54 @@ def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     return out_denoised["samples"]
 
 
+def _run_flux2_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
+    """
+    Flux2/Klein: Uses Flux2Scheduler + SamplerCustomAdvanced + CFGGuider.
+    Key difference from flux: uses CFGGuider (has CFG scale) and Flux2Scheduler.
+    Must use EmptyFlux2LatentImage-compatible latent dimensions.
+    """
+    import latent_preview
+    from comfy_extras.nodes_custom_sampler import (
+        CFGGuider, KSamplerSelect, SamplerCustomAdvanced, RandomNoise
+    )
+    # Flux2Scheduler is in nodes_custom_sampler or nodes_flux — try both
+    try:
+        from comfy_extras.nodes_custom_sampler import Flux2Scheduler
+    except ImportError:
+        from comfy_extras.nodes_flux import Flux2Scheduler
+
+    steps        = int(sampler_params.get('steps', 20))
+    cfg          = float(sampler_params.get('cfg', 1.0))
+    seed         = int(sampler_params.get('seed', 0))
+    sampler_name = sampler_params.get('sampler_name', 'euler')
+    denoise      = float(sampler_params.get('denoise', 1.0))
+
+    guider_node   = CFGGuider()
+    sampler_node  = KSamplerSelect()
+    scheduler_node = Flux2Scheduler()
+    noise_node    = RandomNoise()
+    custom_node   = SamplerCustomAdvanced()
+
+    (guider,)  = guider_node.get_guider(model, cond_pos, cond_neg, cfg)
+    (sampler,) = sampler_node.get_sampler(sampler_name)
+    # Flux2Scheduler takes model, steps, denoise — check exact signature
+    try:
+        (sigmas,) = scheduler_node.get_sigmas(model, steps, denoise)
+    except TypeError:
+        # Fallback if signature differs
+        from comfy_extras.nodes_custom_sampler import BasicScheduler
+        (sigmas,) = BasicScheduler().get_sigmas(model, 'beta', steps, denoise)
+    (noise_obj,) = noise_node.get_noise(seed)
+
+    latent_image = comfy.sample.fix_empty_latent_channels(
+        model, latent_dict["samples"],
+        latent_dict.get("downscale_ratio_spacial", None)
+    )
+    latent_in = {"samples": latent_image}
+    out, out_denoised = custom_node.sample(noise_obj, guider, sampler, sigmas, latent_in)
+    return out_denoised["samples"]
+
+
 def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
                      model_b=None, cond_pos_b=None, cond_neg_b=None,
                      sampler_params_b=None):
@@ -277,9 +325,23 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
     """
     import latent_preview
 
+    # Apply ModelSamplingSD3 shift=5.0 to all WAN models before sampling
+    try:
+        from comfy_extras.nodes_model_advanced import ModelSamplingSD3
+        (model,) = ModelSamplingSD3().patch(model, shift=5.0, multiplier=1000)
+    except Exception:
+        pass
+
     # If no second model, fall back to standard path
     if model_b is None:
         return _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_params)
+
+    # Apply shift to model B as well
+    try:
+        from comfy_extras.nodes_model_advanced import ModelSamplingSD3
+        (model_b,) = ModelSamplingSD3().patch(model_b, shift=5.0, multiplier=1000)
+    except Exception:
+        pass
 
     steps_high   = int(sampler_params.get('steps', 20))
     cfg_high     = float(sampler_params.get('cfg', 6.0))
@@ -669,7 +731,10 @@ class WorkflowExtractor:
                 cond_neg_b=cond_neg_b,
             )
 
-        elif strategy in ("flux", "flux2"):
+        elif strategy == "flux2":
+            samples = _run_flux2_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
+
+        elif strategy == "flux":
             samples = _run_flux_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
 
         else:

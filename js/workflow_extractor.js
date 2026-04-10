@@ -1105,11 +1105,11 @@ app.registerExtension({
 
             // ── Height recalculation ─────────────────────────────
             // Native widgets above DOM: title(26) + source_folder(26) + image(26) + browse(26) = 104
-            const NATIVE_H = 104;
+            const NATIVE_H = 108;  // title(30) + source_folder(26) + image(26) + browse(26)
             const HEADER_H = 26;
             const EXTRACT_BTN_H = 30;  // extract button + gap
             const STATUS_H = 18;       // status bar at bottom
-            const PADDING = 20;        // root padding + gaps
+            const PADDING = 26;        // root padding (6px*2=12) + flex gaps (6*4px=24) ≈ 26
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;

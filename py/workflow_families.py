@@ -23,160 +23,67 @@ MODEL_FAMILIES = {
     # ── Flux 2 / Klein ───────────────────────────────────────────────────────
     "flux2": {
         "label":   "Flux 2 (Klein)",
-        "folders": ["klein/"],
-        "names":   ["flux2", "flux-2", "flux_2", "klein"],
-        "vae":     ["flux2-vae", "flux2_vae"],
-        "clip":    ["mistral_3_small_flux2"],
+        "folders": ["klein/", "flux2/"],
+        "names":   ["flux2", "flux-2", "flux_2", "klein", "flux.2"],
+        "vae":     ["flux2-vae", "flux2_vae", "ae.safetensors"],
+        "clip":    ["mistral_3_small_flux2", "clip_l"],
         "sampler": "flux2",
     },
-    # ── Flux 1 variants ──────────────────────────────────────────────────────
-    "flux_dev": {
-        "label":   "Flux 1 Dev",
-        "folders": [],
-        "names":   ["flux-dev", "flux_dev", "fluxdev", "flux1-dev", "flux1_dev"],
-        "vae":     ["ae.safetensors", "ultrafluxvae"],
-        "clip":    ["t5xxl", "clip_l"],
-        "sampler": "flux",
-    },
-    "flux_schnell": {
-        "label":   "Flux 1 Schnell",
-        "folders": [],
-        "names":   ["flux-schnell", "flux_schnell", "fluxschnell", "flux1-schnell"],
-        "vae":     ["ae.safetensors", "ultrafluxvae"],
-        "clip":    ["t5xxl", "clip_l"],
-        "sampler": "flux",
-    },
-    "flux": {
+    # ── Flux 1 (Dev + Schnell merged) ────────────────────────────────────────
+    "flux1": {
         "label":   "Flux 1",
         "folders": ["flux/"],
-        "names":   ["flux"],
+        "names":   ["flux-dev", "flux_dev", "fluxdev", "flux1-dev", "flux1_dev",
+                    "flux-schnell", "flux_schnell", "fluxschnell", "flux1-schnell",
+                    "flux1_schnell", "flux1-", "flux1_", "flux.1"],
         "vae":     ["ae.safetensors", "ultrafluxvae"],
         "clip":    ["t5xxl", "clip_l"],
         "sampler": "flux",
     },
-    # ── Z-Image (Flux-architecture, own VAE/CLIP) ────────────────────────────
-    "zib": {
-        "label":   "Z-Image Base",
-        "folders": ["zib/"],
-        "names":   ["z_image_bf16", "z-image-base"],
+    # ── Z-Image (Base + Turbo merged) ────────────────────────────────────────
+    "zimage": {
+        "label":   "Z-Image",
+        "folders": ["zib/", "zit/", "zimage/"],
+        "names":   ["z_image", "z-image", "zimage", "blitz"],
         "vae":     ["zimageturbo_vae", "ae.safetensors"],
-        "clip":    ["qwen-4b-zimage", "qwen_3_4b", "qwen_3_8b"],
+        "clip":    ["qwen-4b-zimage", "qwen_3_4b", "qwen_3_8b", "t5xxl"],
         "sampler": "flux",
     },
-    "zit": {
-        "label":   "Z-Image Turbo",
-        "folders": ["zit/"],
-        "names":   ["z_image_turbo", "z-image-turbo", "blitz"],
-        "vae":     ["zimageturbo_vae", "ae.safetensors"],
-        "clip":    ["qwen-4b-zimage", "qwen_3_4b", "qwen_3_8b"],
-        "sampler": "flux",
-    },
-    # ── SD3 ──────────────────────────────────────────────────────────────────
-    "sd3.5": {
-        "label":   "SD 3.5",
-        "folders": [],
-        "names":   ["sd3.5", "sd35"],
-        "vae":     [],
-        "clip":    ["t5xxl", "clip_l", "clip_g"],
-        "sampler": "standard",
-    },
-    "sd3": {
-        "label":   "SD 3",
-        "folders": [],
-        "names":   ["sd3"],
-        "vae":     [],
-        "clip":    ["t5xxl", "clip_l", "clip_g"],
-        "sampler": "standard",
-    },
-    # ── SDXL family ──────────────────────────────────────────────────────────
-    "sdxl_turbo": {
-        "label":   "SDXL Turbo",
-        "folders": [],
-        "names":   ["sdxl-turbo", "sdxl_turbo", "sdxlturbo"],
-        "vae":     ["sdxl_vae", "sdxl-vae"],
-        "clip":    ["clip_l", "clip_g"],
-        "sampler": "standard",
-    },
-    "sdxl": {
-        "label":   "SDXL",
-        "folders": [],
-        "names":   ["sdxl"],
-        "vae":     ["sdxl_vae", "sdxl-vae"],
-        "clip":    ["clip_l", "clip_g"],
-        "sampler": "standard",
-    },
-    "illustrious": {
-        "label":   "Illustrious (SDXL)",
-        "folders": ["illustrious/"],
-        "names":   ["illustrious", "noob"],
-        "vae":     ["sdxl_vae", "sdxl-vae"],
-        "clip":    ["clip_l", "clip_g"],
-        "sampler": "standard",
-    },
-    "pony": {
-        "label":   "Pony (SDXL)",
-        "folders": [],
-        "names":   ["pony"],
-        "vae":     ["sdxl_vae", "sdxl-vae"],
-        "clip":    ["clip_l", "clip_g"],
-        "sampler": "standard",
-    },
-    # ── SD 1.x / 2.x ────────────────────────────────────────────────────────
-    "sd2": {
-        "label":   "SD 2.x",
-        "folders": [],
-        "names":   ["sd-2", "sd_2", "sd2", "v2-", "v2_", "768-v"],
-        "vae":     ["vae-ft-mse-840000"],
-        "clip":    ["clip_l"],
-        "sampler": "standard",
-    },
-    "sd1.5": {
-        "label":   "SD 1.5",
-        "folders": [],
-        "names":   ["sd-1", "sd_1", "sd1", "v1-5", "v1_5", "v1.5"],
-        "vae":     ["vae-ft-mse-840000"],
-        "clip":    ["clip_l"],
-        "sampler": "standard",
-    },
-    # ── Video models ─────────────────────────────────────────────────────────
+    # ── WAN 2.x (dual KSampler) ─────────────────────────────────────────────
     "wan": {
         "label":   "WAN 2.x",
-        "folders": ["wan2_2/", "wan/"],
-        "names":   ["wan2", "wan_", "wanvideo"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae"],
+        "folders": ["wan2_2/", "wan2_1/", "wan/"],
+        "names":   ["wan2.2", "wan2.1", "wan2_2", "wan2_1", "wanvideo", "wan_t2v", "wan_i2v",
+                    "wan2.2_t2v", "wan2.2_i2v", "wan2.1_t2v"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae"],
         "clip":    ["umt5_xxl"],
         "sampler": "wan",
     },
+    # ── LTX-Video ────────────────────────────────────────────────────────────
     "ltxv": {
         "label":   "LTX-Video",
         "folders": ["ltx/"],
-        "names":   ["ltxv", "ltx-video", "ltx-2"],
+        "names":   ["ltxv", "ltx-video", "ltx-2", "ltx2"],
         "vae":     ["ltx23_video_vae", "taeltx"],
         "clip":    ["t5xxl", "ltx-2", "gemma_3"],
+        "sampler": "flux",
+    },
+    # ── SDXL (+ Pony, Illustrious, Turbo merged) ────────────────────────────
+    "sdxl": {
+        "label":   "SDXL",
+        "folders": ["illustrious/", "pony/", "sdxl/"],
+        "names":   ["sdxl", "illustrious", "noob", "pony"],
+        "vae":     ["sdxl_vae", "sdxl-vae"],
+        "clip":    ["clip_l", "clip_g"],
         "sampler": "standard",
     },
-    "cogvideo": {
-        "label":   "CogVideo",
-        "folders": ["cogvideo/"],
-        "names":   ["cogvideo"],
-        "vae":     [],
-        "clip":    ["t5xxl"],
-        "sampler": "standard",
-    },
-    "mochi": {
-        "label":   "Mochi",
+    # ── SD 1.5 ───────────────────────────────────────────────────────────────
+    "sd15": {
+        "label":   "SD 1.5",
         "folders": [],
-        "names":   ["mochi"],
-        "vae":     [],
-        "clip":    ["t5xxl"],
-        "sampler": "standard",
-    },
-    "hunyuan": {
-        "label":   "HunyuanVideo",
-        "folders": ["hunyuan/"],
-        "names":   ["hunyuan"],
-        "vae":     [],
-        "clip":    ["llama_3", "clip_l"],
+        "names":   ["sd-1", "sd_1", "sd1", "v1-5", "v1_5", "v1.5", "dreamshaper", "realistic"],
+        "vae":     ["vae-ft-mse-840000"],
+        "clip":    ["clip_l"],
         "sampler": "standard",
     },
     # ── Qwen Image ───────────────────────────────────────────────────────────
@@ -188,55 +95,23 @@ MODEL_FAMILIES = {
         "clip":    ["qwen_2.5_vl"],
         "sampler": "standard",
     },
-    # ── Other ────────────────────────────────────────────────────────────────
-    "cascade": {
-        "label":   "Stable Cascade",
-        "folders": [],
-        "names":   ["cascade", "stable-cascade"],
-        "vae":     [],
-        "clip":    ["clip_g"],
-        "sampler": "standard",
-    },
-    "pixart": {
-        "label":   "PixArt",
-        "folders": [],
-        "names":   ["pixart"],
-        "vae":     [],
-        "clip":    ["t5xxl"],
-        "sampler": "standard",
-    },
-    "kolors": {
-        "label":   "Kolors",
-        "folders": [],
-        "names":   ["kolors"],
-        "vae":     ["sdxl_vae"],
-        "clip":    [],
-        "sampler": "standard",
-    },
-    "auraflow": {
-        "label":   "AuraFlow",
-        "folders": [],
-        "names":   ["auraflow"],
-        "vae":     [],
-        "clip":    [],
-        "sampler": "standard",
-    },
 }
 
 # Compatibility groups — checkpoint families that can share each other's models.
 # VAE/CLIP are NOT grouped (they differ per family) — model weights only.
 MODEL_COMPAT_GROUPS = [
-    {"sdxl", "sdxl_turbo", "pony", "illustrious"},  # SDXL-arch fine-tunes
-    {"flux_dev", "flux_schnell", "flux"},             # Flux1 variants
-    {"zib", "zit"},                                   # Z-Image variants
+    {"sdxl"},          # SDXL-arch — all merged into one now
+    {"flux1"},         # Flux1 variants — all merged into one now
+    {"zimage"},        # Z-Image — all merged
+    {"flux2"},         # Flux2 Klein — all merged
 ]
 
 # Sampling strategy keys (referenced by workflow_generator.py)
 # Each key maps to a specific sampling code path.
 SAMPLER_STRATEGIES = {
-    "standard": "standard",  # KSampler — SD1.5, SDXL, SD3, LTX, etc.
-    "flux":     "flux",      # SamplerCustomAdvanced + BasicGuider (Flux1, Z-Image)
-    "flux2":    "flux2",     # Flux2Scheduler + SamplerCustomAdvanced (Klein/Flux2)
+    "standard": "standard",  # KSampler — SD1.5, SDXL, Qwen
+    "flux":     "flux",      # SamplerCustomAdvanced + BasicGuider (Flux1, Z-Image, LTX-Video)
+    "flux2":    "flux2",     # Flux2Scheduler + SamplerCustomAdvanced + CFGGuider (Klein/Flux2)
     "wan":      "wan",       # Dual KSampler high/low (WAN 2.x)
 }
 

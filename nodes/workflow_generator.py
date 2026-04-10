@@ -45,6 +45,7 @@ from .workflow_extractor import (
     _apply_loras,
     _run_standard_ksampler,
     _run_flux_sampler,
+    _run_flux2_sampler,
     _run_wan_sampler,
     _build_simplified_workflow_json,
 )
@@ -384,7 +385,9 @@ class WorkflowGenerator:
                 model_a_obj, cond_pos, cond_neg, latent_dict, sampler_params,
                 model_b=model_b_obj, cond_pos_b=cond_pos_b, cond_neg_b=cond_neg_b,
             )
-        elif strategy in ("flux", "flux2"):
+        elif strategy == "flux2":
+            samples = _run_flux2_sampler(model_a_obj, cond_pos, cond_neg, latent_dict, sampler_params)
+        elif strategy == "flux":
             samples = _run_flux_sampler(model_a_obj, cond_pos, cond_neg, latent_dict, sampler_params)
         else:
             samples = _run_standard_ksampler(model_a_obj, cond_pos, cond_neg, latent_dict, sampler_params)
