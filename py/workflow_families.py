@@ -220,65 +220,85 @@ def list_all_models():
     return sorted(all_models)
 
 
-def list_compatible_vaes(family):
-    """Return sorted list of VAE files compatible with the given family."""
+def list_compatible_vaes(family, return_recommended=False):
+    """Return sorted list of VAE files compatible with the given family.
+    If return_recommended=True, returns (list, recommended_str_or_None).
+    """
+    def _ret(lst, rec):
+        return (sorted(lst), rec) if return_recommended else sorted(lst)
+
     if not family:
         try:
-            return sorted(folder_paths.get_filename_list("vae"))
+            return _ret(folder_paths.get_filename_list("vae"), None)
         except Exception:
-            return []
+            return _ret([], None)
 
     spec = MODEL_FAMILIES.get(family, {})
     patterns = [p.lower() for p in spec.get("vae", [])]
 
     if not patterns:
         try:
-            return sorted(folder_paths.get_filename_list("vae"))
+            return _ret(folder_paths.get_filename_list("vae"), None)
         except Exception:
-            return []
+            return _ret([], None)
 
     try:
         all_vaes = folder_paths.get_filename_list("vae")
     except Exception:
-        return []
+        return _ret([], None)
 
     matched = []
+    recommended = None
     for v in all_vaes:
         v_lower = v.lower().replace("\\", "/")
         v_name = os.path.basename(v_lower)
         for pat in patterns:
             if pat in v_name or pat in v_lower:
                 matched.append(v)
+                if recommended is None:
+                    recommended = v  # first match = highest-priority recommendation
                 break
 
-    return sorted(matched) if matched else sorted(all_vaes)
+    if matched:
+        return _ret(matched, recommended)
+    return _ret(all_vaes, None)
 
 
-def list_compatible_clips(family):
-    """Return sorted list of CLIP/text-encoder files compatible with the given family."""
+def list_compatible_clips(family, return_recommended=False):
+    """Return sorted list of CLIP/text-encoder files compatible with the given family.
+    If return_recommended=True, returns (list, recommended_str_or_None).
+    """
+    def _ret(lst, rec):
+        return (sorted(lst), rec) if return_recommended else sorted(lst)
+
     if not family:
         clips = _gather_all_clips()
-        return sorted(clips)
+        return _ret(clips, None)
 
     spec = MODEL_FAMILIES.get(family, {})
     patterns = [p.lower() for p in spec.get("clip", [])]
 
     if not patterns:
         clips = _gather_all_clips()
-        return sorted(clips)
+        return _ret(clips, None)
 
     all_clips = _gather_all_clips()
 
     matched = []
+    recommended = None
     for c in all_clips:
         c_lower = c.lower().replace("\\", "/")
         c_name = os.path.basename(c_lower)
         for pat in patterns:
             if pat in c_name or pat in c_lower:
                 matched.append(c)
+                if recommended is None:
+                    recommended = c  # first match = highest-priority recommendation
                 break
 
-    return sorted(matched) if matched else sorted(all_clips)
+    if matched:
+        return _ret(matched, recommended)
+    return _ret(all_clips, None)
 
 
 def _gather_all_clips():

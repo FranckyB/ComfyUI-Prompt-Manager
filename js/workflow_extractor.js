@@ -357,22 +357,39 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
 }
 
 // Helper to reload a grouped select from API
-async function reloadGroupedSelect(row, fetchFn, grouped) {
+// For VAE/CLIP (non-grouped): prepends (Default) option with value="",
+// and if recommendedValue is provided, auto-selects that file.
+async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue) {
     const options = await fetchFn();
     const sel = row._sel;
     if (grouped) {
-        populateGroupedSelect(sel, options, false);
+        sel.innerHTML = "";
+        const noneOpt = document.createElement("option");
+        noneOpt.value = ""; noneOpt.textContent = "(none)";
+        noneOpt.style.color = C.textMuted;
+        sel.appendChild(noneOpt);
+        populateGroupedSelect(sel, options, true);
+        sel.value = "";
     } else {
         sel.innerHTML = "";
+        const defOpt = document.createElement("option");
+        defOpt.value = ""; defOpt.textContent = "(Default)";
+        defOpt.style.color = C.textMuted;
+        sel.appendChild(defOpt);
         for (const opt of options) {
             const o = document.createElement("option"); o.value = opt; o.textContent = opt;
             o.style.color = C.text;
             sel.appendChild(o);
         }
+        // Auto-select recommended file if provided and present in list
+        if (recommendedValue && options.includes(recommendedValue)) {
+            sel.value = recommendedValue;
+        } else {
+            sel.value = "";
+        }
     }
     // Reset lazy-load flag so next focus re-fetches with current family
     if (row._resetLoaded) row._resetLoaded();
-    if (sel.options.length) sel.value = sel.options[0].value;
     sel.style.color = C.text;
 }
 
@@ -1046,6 +1063,7 @@ function loadThumbnail(node, filename) {
         node._weThumbH = 0;
         node._weThumbFilename = null;
         thumbEl.style.display = "none";
+        if (node._weRoot) node._weRoot.style.paddingTop = "0";
         if (node._weRecalc) node._weRecalc();
         return;
     }
@@ -1100,12 +1118,14 @@ function loadThumbnail(node, filename) {
                 thumbEl.innerHTML = "";
                 thumbEl.appendChild(img);
                 thumbEl.style.display = "block";
+                if (node._weRoot) node._weRoot.style.paddingTop = "6px";
                 node._weThumbH = Math.min(img.naturalHeight, 200);
                 if (node._weRecalc) node._weRecalc();
             };
             img.onerror = () => {
                 thumbEl.innerHTML = "";
                 thumbEl.style.display = "none";
+                if (node._weRoot) node._weRoot.style.paddingTop = "0";
                 node._weThumbH = 0;
                 if (node._weRecalc) node._weRecalc();
             };
@@ -1133,10 +1153,11 @@ function loadThumbnail(node, filename) {
                     thumbEl.innerHTML = "";
                     thumbEl.appendChild(img);
                     thumbEl.style.display = "block";
+                    if (node._weRoot) node._weRoot.style.paddingTop = "6px";
                     node._weThumbH = Math.min(img.naturalHeight, 200);
                     if (node._weRecalc) node._weRecalc();
                 };
-                img.onerror = () => { thumbEl.innerHTML = ""; thumbEl.style.display = "none"; node._weThumbH = 0; if (node._weRecalc) node._weRecalc(); };
+                img.onerror = () => { thumbEl.innerHTML = ""; thumbEl.style.display = "none"; if (node._weRoot) node._weRoot.style.paddingTop = "0"; node._weThumbH = 0; if (node._weRecalc) node._weRecalc(); };
                 img.src = canvas.toDataURL("image/png");
             } catch (e) {
                 showServerFrame();
@@ -1165,18 +1186,21 @@ function loadThumbnail(node, filename) {
             thumbEl.innerHTML = "";
             thumbEl.appendChild(img);
             thumbEl.style.display = "block";
+            if (node._weRoot) node._weRoot.style.paddingTop = "6px";
             node._weThumbH = Math.min(img.naturalHeight, 200);
             if (node._weRecalc) node._weRecalc();
         };
         img.onerror = () => {
             thumbEl.innerHTML = "";
             thumbEl.style.display = "none";
+            if (node._weRoot) node._weRoot.style.paddingTop = "0";
             node._weThumbH = 0;
             if (node._weRecalc) node._weRecalc();
         };
         thumbEl.innerHTML = "";
         thumbEl.appendChild(img);
         thumbEl.style.display = "block";
+        if (node._weRoot) node._weRoot.style.paddingTop = "6px";
     }
 }
 
@@ -1276,13 +1300,14 @@ app.registerExtension({
                 display: "flex",
                 flexDirection: "column",
                 gap: "4px",
-                padding: "6px",
+                padding: "0 6px 6px 6px",   // no top padding — thumb flush under Browse Files
                 width: "100%",
                 boxSizing: "border-box",
                 fontFamily: "Inter, system-ui, -apple-system, sans-serif",
                 overflow: "hidden",
             });
             forwardWheelToCanvas(root);
+            node._weRoot = root; // used by loadThumbnail to toggle top padding
 
             // ── Thumbnail preview ────────────────────────────────────
             const thumbEl = makeEl("div", {
@@ -1385,22 +1410,26 @@ app.registerExtension({
                         const d = await r.json(); return d.models || [];
                     } catch { return []; }
                 };
+                // VAE: fetch with recommended, then reload select and auto-select best match
+                const reloadVae = async () => {
+                    try {
+                        const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
+                        const d = await r.json();
+                        await reloadGroupedSelect(node._weVaeRow, async () => d.vaes || [], false, d.recommended || null);
+                    } catch { await reloadGroupedSelect(node._weVaeRow, async () => [], false, null); }
+                };
+                // CLIP: fetch with recommended, then reload select and auto-select best match
+                const reloadClip = async () => {
+                    try {
+                        const r = await fetch(`/workflow-extractor/list-clips?family=${fam}`);
+                        const d = await r.json();
+                        await reloadGroupedSelect(node._weClipRow, async () => d.clips || [], false, d.recommended || null);
+                    } catch { await reloadGroupedSelect(node._weClipRow, async () => [], false, null); }
+                };
                 const reloads = [
                     reloadGroupedSelect(node._weModelRow, fetchModelsForFamily, true),
-                    reloadGroupedSelect(node._weVaeRow, async () => {
-                        try {
-                            const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
-                            const d = await r.json();
-                            return d.vaes || [];
-                        } catch { return []; }
-                    }, false),
-                    reloadGroupedSelect(node._weClipRow, async () => {
-                        try {
-                            const r = await fetch(`/workflow-extractor/list-clips?family=${fam}`);
-                            const d = await r.json();
-                            return d.clips || [];
-                        } catch { return []; }
-                    }, false),
+                    reloadVae(),
+                    reloadClip(),
                 ];
                 // Always reload model B (now always visible)
                 reloads.push(reloadGroupedSelect(node._weModelBRow, fetchModelsForFamily, true));
@@ -1817,9 +1846,15 @@ app.registerExtension({
                 applyOverrides(node, savedOv, savedLs);
             }
 
-            // Remember thumbnail filename (no reload — avoids DOM flash)
+            // Restore thumbnail — reload from disk on page refresh, skip if already showing
             const img = wGet("image");
-            if (img && img !== "(none)") node._weThumbFilename = img;
+            if (img && img !== "(none)") {
+                const alreadyLoaded = node._weThumbFilename === img && node._weThumbH > 0;
+                node._weThumbFilename = img;
+                if (!alreadyLoaded) {
+                    setTimeout(() => loadThumbnail(node, img), 150);
+                }
+            }
 
             // Restore output folder file list (async, doesn't touch state)
             if (node._weSourceFolder === "output") {

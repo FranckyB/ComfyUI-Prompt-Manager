@@ -154,24 +154,28 @@ async def api_list_models(request):
 
 @server.PromptServer.instance.routes.get("/workflow-extractor/list-vaes")
 async def api_list_vaes(request):
-    """List compatible VAEs. Pass ?family=<key> to filter."""
+    """List compatible VAEs. Pass ?family=<key> to filter.
+    Returns {vaes: [...], recommended: str|null} — recommended is the best match on disk.
+    """
     try:
         family = request.rel_url.query.get('family', '') or None
-        vaes   = list_compatible_vaes(family)
-        return server.web.json_response({"vaes": vaes})
+        vaes, recommended = list_compatible_vaes(family, return_recommended=True)
+        return server.web.json_response({"vaes": vaes, "recommended": recommended})
     except Exception as e:
-        return server.web.json_response({"vaes": [], "error": str(e)})
+        return server.web.json_response({"vaes": [], "recommended": None, "error": str(e)})
 
 
 @server.PromptServer.instance.routes.get("/workflow-extractor/list-clips")
 async def api_list_clips(request):
-    """List compatible CLIPs. Pass ?family=<key> to filter."""
+    """List compatible CLIPs. Pass ?family=<key> to filter.
+    Returns {clips: [...], recommended: str|null} — recommended is the best match on disk.
+    """
     try:
         family = request.rel_url.query.get('family', '') or None
-        clips  = list_compatible_clips(family)
-        return server.web.json_response({"clips": clips})
+        clips, recommended = list_compatible_clips(family, return_recommended=True)
+        return server.web.json_response({"clips": clips, "recommended": recommended})
     except Exception as e:
-        return server.web.json_response({"clips": [], "error": str(e)})
+        return server.web.json_response({"clips": [], "recommended": None, "error": str(e)})
 
 
 @server.PromptServer.instance.routes.get("/workflow-extractor/video-frame")
