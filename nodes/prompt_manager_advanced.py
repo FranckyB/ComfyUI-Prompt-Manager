@@ -1175,6 +1175,14 @@ async def save_prompt_advanced(request):
         elif existing_prompt.get("nsfw"):
             prompt_data["nsfw"] = existing_prompt["nsfw"]
 
+        # Preserve any extra fields from an existing prompt that this node does not manage.
+        # This includes workflow_config (added by WorkflowManager) and any future extensions.
+        # Known managed keys — everything else is preserved verbatim.
+        _MANAGED_KEYS = {"prompt", "loras_a", "loras_b", "trigger_words", "thumbnail", "nsfw"}
+        for extra_key, extra_val in existing_prompt.items():
+            if extra_key not in _MANAGED_KEYS and extra_key not in prompt_data:
+                prompt_data[extra_key] = extra_val
+
         prompts[category][name] = prompt_data
         PromptManagerAdvanced.save_prompts(prompts)
 
