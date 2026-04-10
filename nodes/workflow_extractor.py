@@ -514,7 +514,30 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path):
         model, clip, vae = out[0], out[1], out[2]
     else:
         print(f"[WorkflowGenerator] Loading diffusion model: {resolved_path}")
-        model = comfy.sd.load_diffusion_model(full_model_path)
+        # ComfyUI's load_diffusion_model internally calls load_torch_file
+        # which always uses weights_only=True in PyTorch >= 2.6. Some model
+        # formats (e.g. Klein .pt/.bin) contain non-standard objects that
+        # fail with weights_only=True ("Unsupported operand 0"). In that
+        # case we fall back to loading the state_dict with weights_only=False
+        # and pass it directly to load_diffusion_model_state_dict.
+        try:
+            model = comfy.sd.load_diffusion_model(full_model_path)
+        except Exception as e:
+            if 'weights_only' in str(e).lower() or 'unpickling' in str(e).lower() or 'unsupported operand' in str(e).lower():
+                print(f"[WorkflowGenerator] weights_only load failed, retrying with weights_only=False: {e}")
+                import torch
+                pl_sd = torch.load(full_model_path, map_location='cpu', weights_only=False)
+                sd = pl_sd.get('state_dict', pl_sd)
+                if hasattr(comfy.sd, 'load_diffusion_model_state_dict'):
+                    model = comfy.sd.load_diffusion_model_state_dict(sd)
+                else:
+                    raise RuntimeError(
+                        f"[WorkflowGenerator] Cannot load model '{resolved_path}': "
+                        f"weights_only=False is needed but load_diffusion_model_state_dict "
+                        f"is not available in this ComfyUI version. Update ComfyUI."
+                    ) from e
+            else:
+                raise
 
     return model, clip, vae
 

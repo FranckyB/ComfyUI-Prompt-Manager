@@ -1311,11 +1311,6 @@ app.registerExtension({
             node._weThumbEl = thumbEl;
             node._weThumbFilename = null;
 
-            // ── Extract button ───────────────────────────────────────
-            root.appendChild(makeBtn("🔍 Extract Parameters", () => doExtract(node), {
-                fontSize: "11px", padding: "4px 8px",
-            }));
-
             // ── PROMPTS (positive open, negative closed) ─────────────
             const posSec = makeSection("POSITIVE PROMPT", false, 110, () => { recalcHeight(); syncHidden(node); });
             node._weSections.positive = posSec;
@@ -1359,14 +1354,13 @@ app.registerExtension({
             // Native widgets above DOM: title(26) + source_folder(26) + image(26) + browse(26) = 104
             const NATIVE_H = 108;  // title(30) + source_folder(26) + image(26) + browse(26)
             const HEADER_H = 26;
-            const EXTRACT_BTN_H = 30;  // extract button + gap
             const PADDING = 20;        // root padding top+bottom=12 + small buffer + 4px bottom gap
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
 
             function recalcHeight() {
-                let h = EXTRACT_BTN_H + PADDING;
+                let h = PADDING;
                 // Thumbnail (actual rendered height, max 200)
                 h += node._weThumbH || 0;
                 if (node._weThumbH > 0) h += 4; // gap
