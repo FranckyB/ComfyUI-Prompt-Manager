@@ -469,6 +469,7 @@ function makeLoraTag(lora, avail, onToggle, onStrength) {
 
     const sinp = document.createElement("input");
     sinp.type = "text";
+    sinp.className = "strength-input";
     sinp.value = str.toFixed(2);
     Object.assign(sinp.style, {
         fontSize: "10px", fontWeight: "600", padding: "1px 4px",
@@ -650,6 +651,80 @@ function updateUI(node) {
     if (node._weRecalc) setTimeout(() => node._weRecalc(), 50);
 }
 
+// ─── LoRA stack card — identical structure/CSS to Prompt Manager Advanced ─────
+function createLoraStackContainer(title, onResetStrength, onToggleAll) {
+    // Outer card (matches PMA createLoraDisplayContainer)
+    const container = document.createElement("div");
+    Object.assign(container.style, {
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        padding: "8px",
+        backgroundColor: "rgba(40, 44, 52, 0.6)",
+        borderRadius: "6px",
+        width: "100%",
+        boxSizing: "border-box",
+        marginTop: "4px",
+    });
+
+    // Title bar
+    const titleBar = document.createElement("div");
+    Object.assign(titleBar.style, {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: "4px",
+        paddingBottom: "4px",
+        borderBottom: "1px solid rgba(255,255,255,0.1)",
+    });
+
+    const titleLabel = document.createElement("span");
+    titleLabel.textContent = title;
+    Object.assign(titleLabel.style, {
+        fontSize: "12px",
+        fontWeight: "bold",
+        color: "#aaa",
+    });
+    titleBar.appendChild(titleLabel);
+
+    // Buttons
+    const btnContainer = document.createElement("div");
+    Object.assign(btnContainer.style, { display: "flex", gap: "4px" });
+
+    const mkBtn = (text, fn) => {
+        const b = document.createElement("button");
+        b.textContent = text;
+        Object.assign(b.style, {
+            fontSize: "10px", padding: "2px 8px",
+            backgroundColor: "#333", color: "#ccc",
+            border: "1px solid #555", borderRadius: "6px", cursor: "pointer",
+        });
+        b.onmouseenter = () => b.style.backgroundColor = "#444";
+        b.onmouseleave = () => b.style.backgroundColor = "#333";
+        b.onclick = (e) => { e.stopPropagation(); fn(); };
+        return b;
+    };
+    btnContainer.appendChild(mkBtn("Reset Strength", onResetStrength));
+    btnContainer.appendChild(mkBtn("Toggle All", onToggleAll));
+    titleBar.appendChild(btnContainer);
+    container.appendChild(titleBar);
+
+    // Tags container (matches PMA tagsContainer)
+    const tagsContainer = document.createElement("div");
+    tagsContainer.className = "lora-tags-container";
+    Object.assign(tagsContainer.style, {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "4px",
+        minHeight: "30px",
+    });
+    container.appendChild(tagsContainer);
+
+    // Expose the inner tags container for populating
+    container._tagsContainer = tagsContainer;
+    return container;
+}
+
 function updateLoras(node) {
     const containerA = node._weLoraAContainer;
     const containerB = node._weLoraBContainer;
@@ -666,20 +741,19 @@ function updateLoras(node) {
     const lorasB = d.loras_b || [];
     const hasBoth = lorasA.length > 0 && lorasB.length > 0;
 
-    // Show/hide A/B labels based on whether both stacks exist
-    if (labelA) labelA.style.display = hasBoth ? "block" : "none";
-    if (labelB) labelB.style.display = lorasB.length > 0 ? "block" : "none";
-    if (containerB) containerB.style.display = lorasB.length > 0 ? "flex" : "none";
+    // Both stack cards always visible (matches PMA behaviour)
+    if (labelA) labelA.style.display = "flex";
+    if (labelB) labelB.style.display = "flex";
+    if (containerB) containerB.style.display = "flex";
 
     const noLorasMsg = () => makeEl("div", {
         color: "rgba(200, 200, 200, 0.5)", fontStyle: "italic",
         fontSize: "11px", padding: "8px", width: "100%", textAlign: "center",
     }, "No LoRAs connected");
 
-    if (!lorasA.length && !lorasB.length) {
-        containerA.appendChild(noLorasMsg());
-        return;
-    }
+    if (!lorasA.length) containerA.appendChild(noLorasMsg());
+    if (!lorasB.length && containerB) containerB.appendChild(noLorasMsg());
+    if (!lorasA.length && !lorasB.length) return;
 
     // Populate a container with lora tags
     const populateStack = (container, loras, stackKey) => {
@@ -971,6 +1045,7 @@ function loadThumbnail(node, filename) {
         thumbEl.innerHTML = "";
         node._weThumbH = 0;
         node._weThumbFilename = null;
+        thumbEl.style.display = "none";
         if (node._weRecalc) node._weRecalc();
         return;
     }
@@ -1024,11 +1099,13 @@ function loadThumbnail(node, filename) {
             img.onload = () => {
                 thumbEl.innerHTML = "";
                 thumbEl.appendChild(img);
+                thumbEl.style.display = "block";
                 node._weThumbH = Math.min(img.naturalHeight, 200);
                 if (node._weRecalc) node._weRecalc();
             };
             img.onerror = () => {
                 thumbEl.innerHTML = "";
+                thumbEl.style.display = "none";
                 node._weThumbH = 0;
                 if (node._weRecalc) node._weRecalc();
             };
@@ -1055,10 +1132,11 @@ function loadThumbnail(node, filename) {
                 img.onload = () => {
                     thumbEl.innerHTML = "";
                     thumbEl.appendChild(img);
+                    thumbEl.style.display = "block";
                     node._weThumbH = Math.min(img.naturalHeight, 200);
                     if (node._weRecalc) node._weRecalc();
                 };
-                img.onerror = () => { thumbEl.innerHTML = ""; node._weThumbH = 0; if (node._weRecalc) node._weRecalc(); };
+                img.onerror = () => { thumbEl.innerHTML = ""; thumbEl.style.display = "none"; node._weThumbH = 0; if (node._weRecalc) node._weRecalc(); };
                 img.src = canvas.toDataURL("image/png");
             } catch (e) {
                 showServerFrame();
@@ -1086,16 +1164,19 @@ function loadThumbnail(node, filename) {
         img.onload = () => {
             thumbEl.innerHTML = "";
             thumbEl.appendChild(img);
+            thumbEl.style.display = "block";
             node._weThumbH = Math.min(img.naturalHeight, 200);
             if (node._weRecalc) node._weRecalc();
         };
         img.onerror = () => {
             thumbEl.innerHTML = "";
+            thumbEl.style.display = "none";
             node._weThumbH = 0;
             if (node._weRecalc) node._weRecalc();
         };
         thumbEl.innerHTML = "";
         thumbEl.appendChild(img);
+        thumbEl.style.display = "block";
     }
 }
 
@@ -1205,9 +1286,10 @@ app.registerExtension({
 
             // ── Thumbnail preview ────────────────────────────────────
             const thumbEl = makeEl("div", {
-                width: "100%", minHeight: "4px",
+                width: "100%",
                 flexShrink: "0", textAlign: "center",
                 overflow: "hidden",
+                display: "none",
             });
             root.appendChild(thumbEl);
             node._weThumbEl = thumbEl;
@@ -1263,7 +1345,7 @@ app.registerExtension({
             const HEADER_H = 26;
             const EXTRACT_BTN_H = 30;  // extract button + gap
             const STATUS_H = 18;       // status bar at bottom
-            const PADDING = 26;        // root padding (6px*2=12) + flex gaps (6*4px=24) ≈ 26
+            const PADDING = 16;        // root padding top+bottom=12 + small buffer
             const allSections = [];
             let _domH = 400;
             node._weThumbH = 0;
@@ -1279,7 +1361,7 @@ app.registerExtension({
                     if (!sec._collapsed) {
                         // Measure actual body content height
                         const measured = sec._body.scrollHeight;
-                        h += measured > 0 ? measured + 12 : sec._bodyH; // +12 for padding
+                        h += Math.min(measured > 4 ? measured + 6 : sec._bodyH, 600);
                     }
                 }
                 _domH = h;
@@ -1289,6 +1371,7 @@ app.registerExtension({
                 }
             }
             node._weRecalc = recalcHeight;
+            requestAnimationFrame(() => requestAnimationFrame(() => recalcHeight()));
 
             // ── Family state ─────────────────────────────────────────
             node._weFamily = null;
@@ -1326,7 +1409,7 @@ app.registerExtension({
             };
 
             // ── Model section ────────────────────────────────────────
-            const modelSec = makeSection("MODEL / CHECKPOINT", false, 56, () => { recalcHeight(); syncHidden(node); });
+            const modelSec = makeSection("MODEL", false, 56, () => { recalcHeight(); syncHidden(node); });
             node._weSections.model = modelSec;
 
             // Family type row
@@ -1376,7 +1459,7 @@ app.registerExtension({
             };
 
             // Checkpoint A row (grouped display)
-            const modelRow = makeSelectRow("Checkpoint A", "",
+            const modelRow = makeSelectRow("Model A", "",
                 fetchModels,
                 (v) => { node._weOverrides.model_a = v; syncHidden(node); },
                 true, // grouped
@@ -1385,7 +1468,7 @@ app.registerExtension({
             node._weModelRow = modelRow;
 
             // Checkpoint B row (grouped display, hidden when no model_b)
-            const modelBRow = makeSelectRow("Checkpoint B", "",
+            const modelBRow = makeSelectRow("Model B", "",
                 fetchModels,
                 (v) => { node._weOverrides.model_b = v; syncHidden(node); },
                 true, // grouped
@@ -1405,40 +1488,82 @@ app.registerExtension({
             };
 
             // ── LoRAs section ────────────────────────────────────────
-            const loraSec = makeSection("LORAS", true, 50, () => { recalcHeight(); syncHidden(node); });
+            const loraSec = makeSection("LORAS", true, 140, () => { recalcHeight(); syncHidden(node); });
             node._weSections.loras = loraSec;
 
-            // LoRA A label + container
-            const loraALabel = makeEl("div", {
-                color: C.textMuted, fontSize: "10px", fontWeight: "bold",
-                padding: "4px 4px 0", letterSpacing: "0.5px",
-            }, "STACK A");
-            loraSec._body.appendChild(loraALabel);
-            node._weLoraALabel = loraALabel;
+            // ── Stack A card (matches PMA createLoraDisplayContainer) ──
+            const loraACard = createLoraStackContainer(
+                "LoRA Stack A",
+                () => {
+                    // Reset Strength A
+                    const d = node._weExtracted;
+                    const lorasA = d?.loras_a || [];
+                    const hasBoth = lorasA.length > 0 && (d?.loras_b || []).length > 0;
+                    for (const lora of lorasA) {
+                        const k = hasBoth ? `a:${lora.name}` : lora.name;
+                        if (node._weLoraState[k]) {
+                            node._weLoraState[k].model_strength = lora.model_strength ?? 1.0;
+                            node._weLoraState[k].clip_strength  = lora.clip_strength  ?? 1.0;
+                        }
+                    }
+                    updateLoras(node); syncHidden(node);
+                },
+                () => {
+                    // Toggle All A
+                    const d = node._weExtracted;
+                    const lorasA = d?.loras_a || [];
+                    const hasBoth = lorasA.length > 0 && (d?.loras_b || []).length > 0;
+                    const anyActive = lorasA.some(l => {
+                        const k = hasBoth ? `a:${l.name}` : l.name;
+                        return node._weLoraState[k]?.active !== false;
+                    });
+                    for (const lora of lorasA) {
+                        const k = hasBoth ? `a:${lora.name}` : lora.name;
+                        if (!node._weLoraState[k]) node._weLoraState[k] = { active: true, model_strength: 1.0, clip_strength: 1.0 };
+                        node._weLoraState[k].active = !anyActive;
+                    }
+                    updateLoras(node); syncHidden(node);
+                },
+            );
+            loraSec._body.appendChild(loraACard);
+            node._weLoraAContainer = loraACard._tagsContainer;
+            node._weLoraALabel = loraACard;  // compat ref
 
-            const loraAContainer = makeEl("div", {
-                display: "flex", flexWrap: "wrap", gap: "4px", padding: "4px 0",
-            });
-            loraSec._body.appendChild(loraAContainer);
-            node._weLoraAContainer = loraAContainer;
-
-            // LoRA B label + container
-            const loraBLabel = makeEl("div", {
-                color: C.textMuted, fontSize: "10px", fontWeight: "bold",
-                padding: "4px 4px 0", letterSpacing: "0.5px",
-            }, "STACK B");
-            loraSec._body.appendChild(loraBLabel);
-            node._weLoraBLabel = loraBLabel;
-
-            const loraBContainer = makeEl("div", {
-                display: "flex", flexWrap: "wrap", gap: "4px", padding: "4px 0",
-            });
-            loraSec._body.appendChild(loraBContainer);
-            node._weLoraBContainer = loraBContainer;
+            // ── Stack B card ──────────────────────────────────────────
+            const loraBCard = createLoraStackContainer(
+                "LoRA Stack B",
+                () => {
+                    // Reset Strength B
+                    const d = node._weExtracted;
+                    const lorasB = d?.loras_b || [];
+                    for (const lora of lorasB) {
+                        const k = `b:${lora.name}`;
+                        if (node._weLoraState[k]) {
+                            node._weLoraState[k].model_strength = lora.model_strength ?? 1.0;
+                            node._weLoraState[k].clip_strength  = lora.clip_strength  ?? 1.0;
+                        }
+                    }
+                    updateLoras(node); syncHidden(node);
+                },
+                () => {
+                    // Toggle All B
+                    const d = node._weExtracted;
+                    const lorasB = d?.loras_b || [];
+                    const anyActive = lorasB.some(l => node._weLoraState[`b:${l.name}`]?.active !== false);
+                    for (const lora of lorasB) {
+                        const k = `b:${lora.name}`;
+                        if (!node._weLoraState[k]) node._weLoraState[k] = { active: true, model_strength: 1.0, clip_strength: 1.0 };
+                        node._weLoraState[k].active = !anyActive;
+                    }
+                    updateLoras(node); syncHidden(node);
+                },
+            );
+            loraSec._body.appendChild(loraBCard);
+            node._weLoraBContainer = loraBCard._tagsContainer;
+            node._weLoraBLabel = loraBCard;  // compat ref
 
             root.appendChild(loraSec);
-            // Keep combined reference for backward compat
-            node._weLoraContainer = loraAContainer;
+            node._weLoraContainer = loraACard._tagsContainer; // backward compat
 
             // ── VAE / CLIP section ───────────────────────────────────
             const vcSec = makeSection("VAE / CLIP", true, 56, () => { recalcHeight(); syncHidden(node); });
