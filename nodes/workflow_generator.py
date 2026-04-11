@@ -1288,12 +1288,18 @@ class WorkflowGenerator:
                             f"{model_name_b} — using single sampler"
                         )
 
-                    # Map steps_high/steps_low into sampler_params for _run_wan_sampler
+                    # Map steps_high/steps_low into sampler_params for _run_wan_sampler.
+                    # If steps_high/steps_low aren't explicitly set (normal case), split
+                    # the total steps evenly: high=ceil(n/2), low=floor(n/2).
+                    import math as _math
                     wan_params_a = dict(sampler_params)
                     wan_params_b = dict(sampler_params)
-                    if 'steps_high' in sampler_params:
-                        wan_params_a['steps'] = sampler_params['steps_high']
-                        wan_params_b['steps'] = sampler_params.get('steps_low', sampler_params['steps_high'])
+                    total_steps = sampler_params.get('steps', 6)
+                    steps_high = sampler_params.get('steps_high', _math.ceil(total_steps / 2))
+                    steps_low  = sampler_params.get('steps_low',  total_steps - steps_high)
+                    wan_params_a['steps'] = steps_high
+                    wan_params_b['steps'] = steps_low
+                    print(f"[WorkflowGenerator] WAN dual-sampler: total={total_steps}, high={steps_high}, low={steps_low}")
 
                     samples = _run_wan_sampler(
                         model_a, cond_pos, cond_neg, latent_dict, wan_params_a,
