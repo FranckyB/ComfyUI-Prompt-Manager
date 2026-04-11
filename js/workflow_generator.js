@@ -1311,11 +1311,17 @@ app.registerExtension({
                     reloadVae(),
                     reloadClip(),
                 ]);
-                // Auto-select first available model — never leave (none) selected
+                // Auto-select first available model visually so the dropdown
+                // isn't blank — but do NOT write to _weOverrides.model_a here.
+                // If called from updateUI, _setOriginal will set the correct
+                // model right after and syncHidden will capture it properly.
+                // If called from a manual family change, _weOverrides.model_a
+                // is already cleared above so syncHidden will pick up the
+                // dropdown value via _getValue().
                 const firstModel = node._weModelRow._sel.options[1]?.value || "";
                 if (firstModel) {
                     node._weModelRow._sel.value = firstModel;
-                    node._weOverrides.model_a = firstModel;
+                    delete node._weOverrides.model_a;
                 }
                 updateWanVisibility(node);
                 _syncS();

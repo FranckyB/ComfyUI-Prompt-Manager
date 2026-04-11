@@ -833,6 +833,19 @@ def enrich_with_availability(result):
     return result
 
 
+def _build_sampler_dict(sampler, family):
+    """Return sampler dict, splitting steps into steps_high/steps_low for wan_video families."""
+    import math as _math
+    d = {**sampler, 'seed_b': sampler.get('seed_b')}
+    if family in ('wan_video_i2v', 'wan_video_t2v'):
+        total = sampler.get('steps', 6)
+        sh = _math.ceil(total / 2)
+        sl = total - sh
+        d['steps_high'] = sh
+        d['steps_low']  = sl
+    return d
+
+
 def build_simplified_workflow_data(extracted, overrides=None, sampler_params=None):
     """
     Build the shared workflow_data dict that both WorkflowGenerator and PromptExtractor output.
@@ -880,7 +893,7 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
         "clip":            overrides.get('clip_names', extracted.get('clip', {}).get('names', [])),
         "clip_type":       clip_info.get('type', ''),
         "loader_type":     loader_type,
-        "sampler":         {**sampler, 'seed_b': sampler.get('seed_b')},
+        "sampler":         _build_sampler_dict(sampler, family),
         "resolution": {
             "width":      overrides.get('width',      extracted.get('resolution', {}).get('width',      512)),
             "height":     overrides.get('height',     extracted.get('resolution', {}).get('height',     512)),
