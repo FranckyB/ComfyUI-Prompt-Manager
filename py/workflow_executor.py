@@ -268,6 +268,17 @@ def patch_template(api, wmap, params):
             if field:
                 _set(api, nid, field, scheduler)
 
+    # ── Source image for i2v ─────────────────────────────────────────────────
+    if params.get("source_image_path") is not None:
+        nid, field = _m("wan_i2v_latent")
+        if nid is not None:
+            # wan_i2v_latent maps to the LoadImage or WanImageToVideo start_image.
+            # For LoadImage node (feeding start_image), set the image filename.
+            load_node_id = "97"  # LoadImage node in the i2v template
+            load_node = api.get(load_node_id)
+            if load_node and load_node.get("class_type") == "LoadImage":
+                load_node["inputs"]["image"] = params["source_image_path"]
+
     # ── LoRA stacks ───────────────────────────────────────────────────────────
     if params.get("lora_stack_a_text") is not None:
         nid, field = _m("lora_stack_a")
@@ -320,6 +331,12 @@ def execute_template(api, wmap, family_key, source_image=None):
 
     source_image: optional IMAGE tensor for i2v workflows.
     """
+    stem = FAMILY_WORKFLOW_STEMS.get(family_key, family_key)
+    tdir = _get_template_dir()
+    strategy = _family_to_strategy(family_key)
+    print(f"[WorkflowExecutor] Running template: {stem} (family: {family_key}, strategy: {strategy})")
+    print(f"[WorkflowExecutor] Template file: {os.path.join(tdir, stem + '_api.json')}")
+
     import torch
     import comfy.sd
     import comfy.utils

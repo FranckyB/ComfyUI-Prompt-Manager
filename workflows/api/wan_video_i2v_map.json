@@ -3,6 +3,10 @@
     "132",
     "start_image"
   ],
+  "latent_length": [
+    "132",
+    "length"
+  ],
   "vae": [
     "145",
     "vae_name"

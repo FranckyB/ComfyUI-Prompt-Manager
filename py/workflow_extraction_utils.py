@@ -391,12 +391,23 @@ def extract_resolution(prompt_data, workflow_data):
                 resolution['_height_from_node_ref'] = isinstance(h, list)
                 resolution['width']      = _scalar(w, resolution['width'],  'width')
                 resolution['height']     = _scalar(h, resolution['height'], 'height')
-                # batch_size in WanImageToVideo can equal 'length' — clamp to 1 if > 64
-                b_val = _scalar(b, resolution['batch_size'])
-                resolution['batch_size'] = b_val if b_val <= 64 else 1
-                if 'length' in inp:
-                    l = inp.get('length')
-                    resolution['length'] = _scalar(l, None) if l is not None else None
+                if ct in VIDEO_LATENT_TYPES:
+                    # For video latent nodes (WanImageToVideo, etc.), batch_size
+                    # is the frame count — store it as length, keep batch_size=1.
+                    b_val = _scalar(b, resolution['batch_size'])
+                    resolution['batch_size'] = 1
+                    if 'length' in inp:
+                        l = inp.get('length')
+                        resolution['length'] = _scalar(l, None) if l is not None else None
+                    elif b_val > 1:
+                        # batch_size field holds frame count
+                        resolution['length'] = b_val
+                else:
+                    b_val = _scalar(b, resolution['batch_size'])
+                    resolution['batch_size'] = b_val
+                    if 'length' in inp:
+                        l = inp.get('length')
+                        resolution['length'] = _scalar(l, None) if l is not None else None
                 return resolution
 
     if workflow_data and isinstance(workflow_data, dict):

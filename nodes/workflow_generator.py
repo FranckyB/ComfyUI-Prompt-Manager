@@ -1141,11 +1141,13 @@ class WorkflowGenerator:
 
                 # Standard steps or WAN Video dual-steps
                 if strategy == 'wan_video':
-                    sh = sampler_params.get('steps_high', sampler_params.get('steps', 4))
-                    sl = sampler_params.get('steps_low',  sampler_params.get('steps', 20))
+                    import math
+                    total_steps = sampler_params.get('steps', 4)
+                    sh = math.ceil(total_steps / 2)
+                    sl = total_steps - sh
                     patch_params['steps_high'] = sh
                     patch_params['steps_low']  = sl
-                    print(f"[WorkflowGenerator] WAN Video dual-steps: high={sh}, low={sl}")
+                    print(f"[WorkflowGenerator] WAN Video dual-steps: total={total_steps}, high={sh}, low={sl}")
                     # Dual seeds: seed_b falls back to seed if not set
                     if patch_params.get('seed_b') is None:
                         patch_params['seed_b'] = patch_params['seed']
@@ -1154,6 +1156,22 @@ class WorkflowGenerator:
 
                 if length is not None:
                     patch_params['length'] = int(length)
+
+                # Source image for i2v workflows
+                if source_image is not None and family_key == 'wan_video_i2v':
+                    try:
+                        import numpy as np
+                        from PIL import Image as PILImage
+                        input_dir = folder_paths.get_input_directory()
+                        img_array = source_image[0].cpu().numpy()
+                        img_array = (img_array * 255).clip(0, 255).astype(np.uint8)
+                        pil_img = PILImage.fromarray(img_array)
+                        temp_name = "video_wan2_2_14B_i2v_input_image.jpg"
+                        temp_path = os.path.join(input_dir, temp_name)
+                        pil_img.save(temp_path, quality=95)
+                        patch_params['source_image_path'] = temp_name
+                    except Exception as e:
+                        print(f"[WorkflowGenerator] Failed to save source image: {e}")
 
                 # Clip names from overrides or extracted
                 clip_info = dict(extracted['clip'])
