@@ -514,15 +514,24 @@ def execute_template(api, wmap, family_key, source_image=None):
     }
 
     if strategy == "wan_video":
+        # patch_template sets both nodes to steps=total, end_at_step=high, start_at_step=high.
+        # Read end_at_step from the high node and start_at_step from the low node to get
+        # the actual per-sampler step counts.
+        nid_h, _ = _m("ksampler_high_steps")
+        nid_l, _ = _m("ksampler_low_steps")
+        total_steps = int(_val("ksampler_high_steps") or 6)
+        steps_high = int(api.get(nid_h, {}).get("inputs", {}).get("end_at_step",
+                         total_steps // 2)) if nid_h else total_steps // 2
+        steps_low  = total_steps - steps_high
+        print(f"[WorkflowExecutor] WAN dual-sampler: total={total_steps}, high={steps_high}, low={steps_low}")
         sampler_params_b = {
-            "steps":       int(_val("ksampler_low_steps") or sampler_params["steps"]),
+            "steps":       steps_low,
             "cfg":         float(_val("ksampler_low_cfg")  or sampler_params["cfg"]),
             "sampler_name": _val("ksampler_low_sampler")  or sampler_params["sampler_name"],
             "scheduler":    _val("ksampler_low_scheduler") or sampler_params["scheduler"],
             "seed":        seed + 1,
         }
-        # For WAN Video, steps in our sampler_params are steps_high
-        sampler_params["steps"] = int(_val("ksampler_high_steps") or 4)
+        sampler_params["steps"] = steps_high
 
         # Encode prompts for model B
         tokens_pos_b = clip_b.tokenize(pos_prompt)

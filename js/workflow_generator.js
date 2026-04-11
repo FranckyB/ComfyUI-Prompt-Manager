@@ -966,13 +966,25 @@ function syncHidden(node) {
         if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
         if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
     } else {
-        // In workflow_data mode, remove any stale sampler/resolution/prompt overrides
-        // so Python always uses the values from the source workflow.
-        delete ov.steps; delete ov.cfg; delete ov.seed; delete ov.seed_b;
+        // In workflow_data mode, remove stale sampler/resolution/prompt overrides
+        // so Python uses values from the source workflow.
+        // KEEP steps_high, steps_low, seed, seed_b — user explicitly sets these
+        // even in wfOn mode (e.g. entering 2,2 for WAN dual steps).
+        delete ov.steps; delete ov.cfg;
         delete ov.sampler_name; delete ov.scheduler;
-        delete ov.steps_high; delete ov.steps_low;
         delete ov.width; delete ov.height; delete ov.batch_size; delete ov.length;
         delete ov.positive_prompt; delete ov.negative_prompt;
+        // Re-capture steps_high/steps_low and seed/seed_b from DOM so user edits stick
+        if (node._weSamplerRows) {
+            const r = node._weSamplerRows;
+            if (r.steps_high?._inp && r.steps_high.style.display !== "none")
+                ov.steps_high = parseInt(r.steps_high._inp.value) || 3;
+            if (r.steps_low?._inp && r.steps_low.style.display !== "none")
+                ov.steps_low = parseInt(r.steps_low._inp.value) || 3;
+            if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
+            if (r.seed_b?._inp && r.seed_b.style.display !== "none")
+                ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
+        }
     }
     if (node._weFamily) ov._family = node._weFamily;
 

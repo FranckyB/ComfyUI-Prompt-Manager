@@ -1171,12 +1171,18 @@ class WorkflowGenerator:
                 # Standard steps or WAN Video dual-steps
                 if strategy == 'wan_video':
                     import math
-                    total_steps = sampler_params.get('steps', 4)
-                    sh = math.ceil(total_steps / 2)
-                    sl = total_steps - sh
+                    # Use explicit steps_high/steps_low from overrides if set,
+                    # otherwise split total steps evenly.
+                    if 'steps_high' in sampler_params and 'steps_low' in sampler_params:
+                        sh = int(sampler_params['steps_high'])
+                        sl = int(sampler_params['steps_low'])
+                    else:
+                        total_steps = sampler_params.get('steps', 6)
+                        sh = math.ceil(total_steps / 2)
+                        sl = total_steps - sh
                     patch_params['steps_high'] = sh
                     patch_params['steps_low']  = sl
-                    print(f"[WorkflowGenerator] WAN Video dual-steps: total={total_steps}, high={sh}, low={sl}")
+                    print(f"[WorkflowGenerator] WAN Video dual-steps: high={sh}, low={sl}")
                     # Dual seeds: seed_b falls back to seed if not set
                     if patch_params.get('seed_b') is None:
                         patch_params['seed_b'] = patch_params['seed']
