@@ -1162,14 +1162,27 @@ class WorkflowGenerator:
                     try:
                         import numpy as np
                         from PIL import Image as PILImage
+                        import torch
                         input_dir = folder_paths.get_input_directory()
-                        img_array = source_image[0].cpu().numpy()
+                        # ComfyUI IMAGE tensors are float32 (B, H, W, C) in [0,1].
+                        # Squeeze out the batch dim to get (H, W, C).
+                        img_t = source_image
+                        if isinstance(img_t, torch.Tensor):
+                            while img_t.ndim > 3:
+                                img_t = img_t.squeeze(0)
+                            img_array = img_t.cpu().numpy()
+                        else:
+                            img_array = np.array(img_t)
+                            while img_array.ndim > 3:
+                                img_array = img_array[0]
                         img_array = (img_array * 255).clip(0, 255).astype(np.uint8)
+                        print(f"[WorkflowGenerator] Saving source image shape={img_array.shape} to input dir")
                         pil_img = PILImage.fromarray(img_array)
-                        temp_name = "video_wan2_2_14B_i2v_input_image.jpg"
+                        temp_name = "wg_i2v_source_image.png"
                         temp_path = os.path.join(input_dir, temp_name)
-                        pil_img.save(temp_path, quality=95)
+                        pil_img.save(temp_path)
                         patch_params['source_image_path'] = temp_name
+                        print(f"[WorkflowGenerator] Source image saved: {temp_path}")
                     except Exception as e:
                         print(f"[WorkflowGenerator] Failed to save source image: {e}")
 

@@ -1542,7 +1542,7 @@ app.registerExtension({
             const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
             if (wfToggle) {
                 const origWfCb = wfToggle.callback;
-                wfToggle.callback = function (value) {
+                wfToggle.callback = async function (value) {
                     if (origWfCb) origWfCb.apply(this, arguments);
                     if (value) {
                         // Try reading workflow_data from the connected source node's
@@ -1567,7 +1567,10 @@ app.registerExtension({
                             node._wePopulated = true;
                             node._weLoraState = {};
                             node._weOverrides = {};
-                            updateUI(node);
+                            // Await updateUI so family/_weFamily is set BEFORE
+                            // _syncS() writes override_data — otherwise family
+                            // snaps back to SDXL in the serialised overrides.
+                            await updateUI(node);
                         }
                         setFieldsFrozen(node, true);
                     } else {
