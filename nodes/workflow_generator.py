@@ -1050,8 +1050,32 @@ class WorkflowGenerator:
             # ── Load Model A ─────────────────────────────────────────────
             resolved_a, folder_a = resolve_model_name(model_name_a)
             if resolved_a is None:
-                gen_error = f"Model A not found: {model_name_a}"
-                raise FileNotFoundError(gen_error)
+                # Model not found — try first compatible model for this family
+                # so generation can still proceed. UI already shows it in red
+                # via model_a_found=False reported in ui_info above.
+                print(f"[WorkflowGenerator] Model A not found: {model_name_a!r} — looking for fallback in family {family_key!r}")
+                compat = get_compatible_families(family_key)
+                all_on_disk = []
+                for fn in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
+                    try:
+                        all_on_disk.extend(folder_paths.get_filename_list(fn))
+                    except Exception:
+                        pass
+                seen_fb = set()
+                fallback_candidates = []
+                for m in all_on_disk:
+                    if m not in seen_fb:
+                        seen_fb.add(m)
+                        if get_model_family(m) in compat:
+                            fallback_candidates.append(m)
+                if fallback_candidates:
+                    fallback_name = sorted(fallback_candidates)[0]
+                    print(f"[WorkflowGenerator] Using fallback model: {fallback_name}")
+                    resolved_a, folder_a = resolve_model_name(fallback_name)
+                    model_name_a = fallback_name  # use fallback for loading
+                else:
+                    gen_error = f"Model A not found and no fallback available for family {family_key}: {model_name_a}"
+                    raise FileNotFoundError(gen_error)
             full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
             _cache = WorkflowGenerator._class_model_cache
             _cache_key_a = (str(unique_id), full_path_a, family_key)
