@@ -6,6 +6,7 @@ __version__ = "1.23.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
+from .nodes.prompt_apply_lora import PromptApplyLora
 from .nodes.prompt_manager import PromptManager
 from .nodes.prompt_manager_advanced import PromptManagerAdvanced
 from .nodes.prompt_generator import PromptGenerator
@@ -15,6 +16,7 @@ from .nodes.prompt_model_loader import PromptModelLoader
 from .nodes.workflow_generator import WorkflowGenerator
 
 NODE_CLASS_MAPPINGS = {
+    "PromptApplyLora":       PromptApplyLora,
     "PromptManager":         PromptManager,
     "PromptManagerAdvanced": PromptManagerAdvanced,
     "PromptGenerator":       PromptGenerator,
@@ -25,6 +27,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "PromptApplyLora":       "Prompt Apply LoRA",
     "PromptManager":         "Prompt Manager",
     "PromptManagerAdvanced": "Prompt Manager Advanced",
     "PromptGenerator":       "Prompt Generator",
@@ -42,6 +45,6 @@ WEB_DIRECTORY = "./js"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
-print("[PromptManager] Nodes registered: PromptManager, PromptManagerAdvanced, "
+print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, "
       "PromptGenerator, PromptGenOptions, PromptExtractor, PromptModelLoader, "
       "WorkflowGenerator")
