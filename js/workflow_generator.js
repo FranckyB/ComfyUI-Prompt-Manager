@@ -906,25 +906,31 @@ function syncHidden(node) {
     };
     const wfOn = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
     const ov = { ...node._weOverrides };
-    if (node._weModelRow?._getValue) {
-        const v = node._weModelRow._getValue();
-        if (v) ov.model_a = v;
+    // When workflow_data is ON, all values come from the source workflow —
+    // do NOT capture model/VAE/CLIP/sampler/resolution/prompts from the DOM
+    // or they freeze at stale values and fight against updateUI.
+    if (!wfOn) {
+        if (node._weModelRow?._getValue) {
+            const v = node._weModelRow._getValue();
+            if (v) ov.model_a = v;
+        }
+        if (node._weModelBRow?._getValue) {
+            const v = node._weModelBRow._getValue();
+            if (v) ov.model_b = v;
+        }
+        if (node._weVaeRow?._getValue) {
+            const v = node._weVaeRow._getValue();
+            if (v) ov.vae = v;
+        }
+        if (node._weClipRow?._getValue) {
+            const v = node._weClipRow._getValue();
+            if (v) ov.clip_names = [v];
+        }
+    } else {
+        // wfOn=true: clear any stale model/VAE/CLIP overrides so wf_data wins
+        delete ov.model_a; delete ov.model_b;
+        delete ov.vae; delete ov.clip_names;
     }
-    if (node._weModelBRow?._getValue) {
-        const v = node._weModelBRow._getValue();
-        if (v) ov.model_b = v;
-    }
-    if (node._weVaeRow?._getValue) {
-        const v = node._weVaeRow._getValue();
-        if (v) ov.vae = v;
-    }
-    if (node._weClipRow?._getValue) {
-        const v = node._weClipRow._getValue();
-        if (v) ov.clip_names = [v];
-    }
-    // When workflow_data is driving the node, sampler/resolution/prompts come
-    // from the source — do NOT capture them as overrides or they will freeze
-    // at stale values and prevent the source from updating the UI.
     if (!wfOn) {
         if (node._weSamplerRows) {
             const r = node._weSamplerRows;
