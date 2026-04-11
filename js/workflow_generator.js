@@ -1631,18 +1631,14 @@ app.registerExtension({
                     node.properties = node.properties || {};
                     node.properties.we_extracted_cache = JSON.stringify(info);
 
-                    {
-                        node._wePopulated = true;
-                        node._weLoraState = {};
-                        node._weOverrides = {};
-                        if (node.properties) {
-                            delete node.properties.we_override_data;
-                            delete node.properties.we_lora_state;
-                        }
-                        updateUI(node);
-                    } else {
-                        updateLoras(node);
+                    node._wePopulated = true;
+                    node._weLoraState = {};
+                    node._weOverrides = {};
+                    if (node.properties) {
+                        delete node.properties.we_override_data;
+                        delete node.properties.we_lora_state;
                     }
+                    updateUI(node);
                 }
                 node._preUpdateApplied = true;
             });
