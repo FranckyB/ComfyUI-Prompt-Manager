@@ -1419,6 +1419,15 @@ app.registerExtension({
                         }
                         setFieldsFrozen(node, true);
                     } else {
+                        // LoRAs come from workflow_data — clear them when toggling off.
+                        // Users who want LoRAs in manual mode connect lora_stack inputs.
+                        if (node._weExtracted) {
+                            node._weExtracted.loras_a = [];
+                            node._weExtracted.loras_b = [];
+                            node._weExtracted.lora_availability = {};
+                        }
+                        node._weLoraState = {};
+                        updateLoras(node);
                         setFieldsFrozen(node, false);
                     }
                     _syncS();

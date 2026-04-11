@@ -1,9 +1,51 @@
 /**
  * PromptModelLoader Extension for ComfyUI
- * Displays model type and name info on the node, hides CLIP/VAE slots for non-checkpoint models.
+ * Displays model type and name info on the node.
+ * Dynamically shows/hides Model B outputs when two models are found.
+ * Hides CLIP/VAE slots for non-checkpoint models.
  */
 
 import { app } from "../../scripts/app.js";
+
+// --- Draw model info (shared between single and dual) ---
+const TYPE_COLORS = {
+    "Checkpoint": "#4CAF50",
+    "Diffusion": "#2196F3",
+    "GGUF": "#FF9800",
+    "NOT FOUND": "#F44336",
+    "Unknown": "#9E9E9E"
+};
+
+function drawModelRow(ctx, typeText, modelName, yOffset, label, widgetWidth) {
+    const padding = 8;
+    const badgeColor = TYPE_COLORS[typeText] || TYPE_COLORS["Unknown"];
+    const badgeLabel = label ? `${label} ${typeText}` : typeText;
+
+    // Badge pill
+    ctx.font = "bold 11px Arial";
+    const typeWidth = ctx.measureText(badgeLabel).width + 14;
+    ctx.fillStyle = badgeColor;
+    ctx.beginPath();
+    ctx.roundRect(padding, yOffset + 4, typeWidth, 16, 8);
+    ctx.fill();
+
+    // Badge text
+    ctx.fillStyle = "#FFFFFF";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(badgeLabel, padding + 7, yOffset + 12);
+
+    // Model name to the right of badge
+    ctx.font = "12px Arial";
+    ctx.fillStyle = typeText === "NOT FOUND" ? "#F44336" : "#CCCCCC";
+    const nameX = padding + typeWidth + 8;
+    const maxNameWidth = widgetWidth - nameX - padding;
+    let displayName = modelName || "";
+    while (ctx.measureText(displayName).width > maxNameWidth && displayName.length > 5) {
+        displayName = displayName.slice(0, -4) + "...";
+    }
+    ctx.fillText(displayName, nameX, yOffset + 12);
+}
 
 app.registerExtension({
     name: "PromptManager.ModelLoader",
@@ -19,24 +61,31 @@ app.registerExtension({
             const info = message?.model_info?.[0];
             if (!info) return;
 
-            this._applyModelInfo(info.model_type || "Unknown", info.model_name || "");
+            this._applyModelInfo(info);
         };
 
-        // Central method to apply model info (used by both onExecuted and onConfigure)
-        nodeType.prototype._applyModelInfo = function (modelType, modelName) {
-            const isCheckpoint = modelType === "Checkpoint";
+        // Central method to apply model info
+        nodeType.prototype._applyModelInfo = function (info) {
+            const typeA = info.model_type_a || "Unknown";
+            const nameA = info.model_name_a || "";
+            const hasB = !!info.has_model_b;
+            const typeB = info.model_type_b || "";
+            const nameB = info.model_name_b || "";
+            const isCheckpointA = typeA === "Checkpoint";
+            const isCheckpointB = typeB === "Checkpoint";
 
             // Store for display and serialization
-            this._modelType = modelType;
-            this._modelName = modelName;
+            this._modelInfo = info;
 
             // Update title
-            this.title = `Prompt Model Loader [${modelType}]`;
+            this.title = hasB
+                ? `Prompt Model Loader [${typeA} + ${typeB}]`
+                : `Prompt Model Loader [${typeA}]`;
 
-            // Show/hide CLIP and VAE outputs
-            this._updateOutputSlots(isCheckpoint);
+            // Update output slots
+            this._updateOutputSlots(hasB, isCheckpointA, isCheckpointB);
 
-            // Create info widget
+            // Create/update info widget
             this._ensureInfoWidget();
             this.setDirtyCanvas(true, true);
         };
@@ -45,11 +94,8 @@ app.registerExtension({
         const origOnSerialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (o) {
             origOnSerialize?.apply(this, arguments);
-            if (this._modelType && this._modelName) {
-                o._modelLoaderState = {
-                    modelType: this._modelType,
-                    modelName: this._modelName
-                };
+            if (this._modelInfo) {
+                o._modelLoaderState = this._modelInfo;
             }
         };
 
@@ -58,96 +104,97 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function (info) {
             origOnConfigure?.apply(this, arguments);
             const state = info?._modelLoaderState;
-            if (state && state.modelType && state.modelName) {
-                // Defer to next frame so the node is fully set up
+            if (state) {
                 requestAnimationFrame(() => {
-                    this._applyModelInfo(state.modelType, state.modelName);
+                    this._applyModelInfo(state);
                 });
             }
         };
 
         // Manage output slot visibility
-        nodeType.prototype._updateOutputSlots = function (isCheckpoint) {
+        // Full outputs: model_a(0), clip_a(1), vae_a(2), model_b(3), clip_b(4), vae_b(5)
+        nodeType.prototype._updateOutputSlots = function (hasB, isCheckpointA, isCheckpointB) {
             if (!this._originalOutputs) {
-                // Save original outputs on first run
                 this._originalOutputs = this.outputs.map(o => ({ ...o }));
             }
 
-            if (isCheckpoint) {
-                // Restore all 3 outputs
-                while (this.outputs.length < 3) {
-                    const orig = this._originalOutputs[this.outputs.length];
-                    this.addOutput(orig.name, orig.type);
-                }
-            } else {
-                // Remove CLIP (index 1) and VAE (index 2) if present
-                // Disconnect them first to avoid dangling links
-                for (let i = this.outputs.length - 1; i >= 1; i--) {
-                    if (this.outputs[i].links && this.outputs[i].links.length > 0) {
-                        for (const linkId of [...this.outputs[i].links]) {
-                            this.disconnectOutput(i);
-                        }
-                    }
-                    this.removeOutput(i);
+            // Build desired output list
+            const desired = [];
+
+            // Model A always present
+            desired.push(this._originalOutputs[0]); // model_a
+
+            // CLIP A / VAE A only for checkpoints
+            if (isCheckpointA) {
+                desired.push(this._originalOutputs[1]); // clip_a
+                desired.push(this._originalOutputs[2]); // vae_a
+            }
+
+            // Model B outputs only when two models found
+            if (hasB) {
+                desired.push(this._originalOutputs[3]); // model_b
+                if (isCheckpointB) {
+                    desired.push(this._originalOutputs[4]); // clip_b
+                    desired.push(this._originalOutputs[5]); // vae_b
                 }
             }
+
+            // Disconnect outputs that will be removed
+            for (let i = this.outputs.length - 1; i >= desired.length; i--) {
+                if (this.outputs[i]?.links?.length > 0) {
+                    for (const linkId of [...this.outputs[i].links]) {
+                        this.disconnectOutput(i);
+                    }
+                }
+                this.removeOutput(i);
+            }
+
+            // Add/update outputs to match desired
+            for (let i = 0; i < desired.length; i++) {
+                if (i < this.outputs.length) {
+                    this.outputs[i].name = desired[i].name;
+                    this.outputs[i].type = desired[i].type;
+                } else {
+                    this.addOutput(desired[i].name, desired[i].type);
+                }
+            }
+
             this.computeSize();
         };
 
         // Info widget helper
         nodeType.prototype._ensureInfoWidget = function () {
+            const info = this._modelInfo;
+            if (!info) return;
+
+            const hasB = !!info.has_model_b;
+            const widgetHeight = hasB ? 50 : 26;
+
             let widget = this.widgets?.find(w => w.name === "_model_info_display");
             if (!widget) {
                 widget = {
                     name: "_model_info_display",
                     type: "custom",
                     y: 0,
-                    computeSize: () => [0, 44],
+                    computeSize: () => [0, widgetHeight],
                     draw: function (ctx, node, widgetWidth, y) {
-                        if (!node._modelName) return;
-
-                        const padding = 8;
-
-                        // Type badge colors
-                        const typeColors = {
-                            "Checkpoint": "#4CAF50",
-                            "Diffusion": "#2196F3",
-                            "GGUF": "#FF9800",
-                            "NOT FOUND": "#F44336",
-                            "Unknown": "#9E9E9E"
-                        };
-                        const typeText = node._modelType || "Unknown";
-                        const badgeColor = typeColors[typeText] || typeColors["Unknown"];
-
-                        // Badge pill
-                        ctx.font = "bold 11px Arial";
-                        const typeWidth = ctx.measureText(typeText).width + 14;
-                        ctx.fillStyle = badgeColor;
-                        ctx.beginPath();
-                        ctx.roundRect(padding, y + 4, typeWidth, 16, 8);
-                        ctx.fill();
-
-                        // Badge text
-                        ctx.fillStyle = "#FFFFFF";
-                        ctx.textAlign = "left";
-                        ctx.textBaseline = "middle";
-                        ctx.fillText(typeText, padding + 7, y + 12);
-
-                        // Model name below badge
-                        ctx.font = "12px Arial";
-                        ctx.fillStyle = "#CCCCCC";
-                        const maxNameWidth = widgetWidth - padding * 2;
-                        let displayName = node._modelName;
-                        while (ctx.measureText(displayName).width > maxNameWidth && displayName.length > 5) {
-                            displayName = displayName.slice(0, -4) + "...";
+                        const info = node._modelInfo;
+                        if (!info) return;
+                        const hasB = !!info.has_model_b;
+                        if (hasB) {
+                            drawModelRow(ctx, info.model_type_a || "Unknown", info.model_name_a || "", y, "A:", widgetWidth);
+                            drawModelRow(ctx, info.model_type_b || "Unknown", info.model_name_b || "", y + 24, "B:", widgetWidth);
+                        } else {
+                            drawModelRow(ctx, info.model_type_a || "Unknown", info.model_name_a || "", y, "", widgetWidth);
                         }
-                        ctx.fillText(displayName, padding, y + 34);
                     }
                 };
                 if (!this.widgets) this.widgets = [];
                 this.widgets.push(widget);
-                this.computeSize();
             }
+            // Update height for single vs dual model
+            widget.computeSize = () => [0, widgetHeight];
+            this.computeSize();
         };
 
         // Reset display on clear/reconnect
@@ -156,12 +203,11 @@ app.registerExtension({
             origOnConnectionsChange?.apply(this, arguments);
             // Reset info when input connection changes
             if (arguments[1] === 0 && arguments[0] === 1) {
-                this._modelType = null;
-                this._modelName = null;
+                this._modelInfo = null;
                 this.title = "Prompt Model Loader";
                 // Restore all outputs
                 if (this._originalOutputs) {
-                    while (this.outputs.length < 3) {
+                    while (this.outputs.length < this._originalOutputs.length) {
                         const orig = this._originalOutputs[this.outputs.length];
                         this.addOutput(orig.name, orig.type);
                     }

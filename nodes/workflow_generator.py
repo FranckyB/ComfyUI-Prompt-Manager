@@ -676,13 +676,6 @@ class WorkflowGenerator:
 
         return {
             "required": {
-                "use_workflow_data": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
-                    "tooltip": "When on, populate all fields from connected workflow_data input. "
-                               "When off, use manual values (keeps last loaded values).",
-                }),
                 "use_lora_input": ("BOOLEAN", {
                     "default": False,
                     "label_on": "on",
@@ -690,16 +683,23 @@ class WorkflowGenerator:
                     "tooltip": "When on, use LoRA stacks from connected inputs. "
                                "When off, use only the LoRAs shown in the node UI.",
                 }),
+                "use_workflow_data": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "on",
+                    "label_off": "off",
+                    "tooltip": "When on, populate all fields from connected workflow_data input. "
+                               "When off, use manual values (keeps last loaded values).",
+                }),
             },
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
+                "lora_stack_a": ("LORA_STACK",),
+                "lora_stack_b": ("LORA_STACK",),
                 "workflow_data_input": ("WORKFLOW_DATA", {
                     "forceInput": True,
                     "lazy": True,
                     "tooltip": "Connect workflow_data output from PromptExtractor",
                 }),
-                "lora_stack_a": ("LORA_STACK",),
-                "lora_stack_b": ("LORA_STACK",),
                 # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
                 "lora_state":      ("STRING", {"default": "{}", "multiline": True}),

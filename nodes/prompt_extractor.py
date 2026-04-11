@@ -2965,8 +2965,8 @@ class PromptExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
-    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING", "STRING", "WORKFLOW_DATA")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "model_a", "model_b", "workflow_data")
+    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "WORKFLOW_DATA", "IMAGE")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "workflow_data", "image")
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display
 
@@ -3263,10 +3263,6 @@ class PromptExtractor:
             negative_prompt = " "
         if not workflow_data:
             workflow_data = " "
-        if not model_a:
-            model_a = " "
-        if not model_b:
-            model_b = " "
 
         # Embed extracted_data into workflow so it's saved in the PNG metadata.
         # Uses the same schema as workflow_data (build_simplified_workflow_data)
@@ -3326,7 +3322,7 @@ class PromptExtractor:
 
         return {
             "ui": {"images": preview_images},
-            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, model_a, model_b, workflow_data)
+            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, workflow_data, image_tensor)
         }
 
     def save_preview_images(self, images):
