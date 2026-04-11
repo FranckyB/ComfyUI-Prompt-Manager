@@ -110,59 +110,25 @@ function makeBtn(label, onclick, extraStyle) {
     return b;
 }
 
-// --- Section builder (collapsible) ---
+// --- Section builder (always expanded) ---
 function makeSection(title) {
     const wrap = makeEl("div", {
         borderRadius: "6px", overflow: "hidden", marginTop: "2px",
         backgroundColor: C.bgCard, flexShrink: "0",
     });
     const header = makeEl("div", {
-        display: "flex", alignItems: "center", justifyContent: "space-between",
+        display: "flex", alignItems: "center",
         padding: "4px 8px",
         fontSize: "11px", fontWeight: "600", color: "#aaa",
-        userSelect: "none", cursor: "pointer",
+        userSelect: "none",
         borderBottom: "1px solid rgba(255,255,255,0.1)",
     });
     const label = makeEl("span", {}, title);
-    const chevron = makeEl("span", {
-        fontSize: "10px", color: C.textMuted, transition: "transform 0.15s",
-        marginLeft: "4px", flexShrink: "0",
-    }, "\u25B6"); // ▶ collapsed
-    header.append(label, chevron);
-    const body = makeEl("div", {
-        padding: "4px 8px",
-        display: "none", // collapsed by default
-    });
-    // Toggle on header click.
-    // Use double-rAF so the browser has fully reflowed the section body
-    // before we measure scrollHeight — a direct call reads stale dimensions.
-    header.addEventListener("click", () => {
-        const isHidden = body.style.display === "none";
-        body.style.display = isHidden ? "" : "none";
-        chevron.textContent = isHidden ? "\u25BC" : "\u25B6"; // ▼ / ▶
-        if (wrap._node?._weRecalc)
-            requestAnimationFrame(() => requestAnimationFrame(() => wrap._node._weRecalc()));
-    });
+    header.append(label);
+    const body = makeEl("div", { padding: "4px 8px" });
     wrap._titleLabel = label;
-    wrap._chevron = chevron;
     wrap.append(header, body);
     wrap._body = body;
-    // Called once the node ref is available so the resize callback works
-    wrap._setNode = (n) => { wrap._node = n; };
-    // Programmatically expand/collapse (e.g. after loading saved state).
-    // Double-rAF for the same reason as the click handler above.
-    wrap._expand = () => {
-        body.style.display = "";
-        chevron.textContent = "\u25BC";
-        if (wrap._node?._weRecalc)
-            requestAnimationFrame(() => requestAnimationFrame(() => wrap._node._weRecalc()));
-    };
-    wrap._collapse = () => {
-        body.style.display = "none";
-        chevron.textContent = "\u25B6";
-        if (wrap._node?._weRecalc)
-            requestAnimationFrame(() => requestAnimationFrame(() => wrap._node._weRecalc()));
-    };
     return wrap;
 }
 
@@ -684,7 +650,6 @@ function updateUI(node) {
     updateWanVisibility(node);
 
     syncHidden(node);
-    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 
     // Async: check LoRA availability and update display
     checkLoraAvailability(node);
@@ -759,7 +724,6 @@ function updateWanVisibility(node) {
         node._weSamplerRows.steps.style.display = isWanVideo ? "none" : "flex";
     }
 
-    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 }
 
 // --- LoRA display ---
@@ -814,7 +778,6 @@ function updateLoras(node) {
         populateStack(containerB, lorasB, "b");
     }
 
-    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 }
 
 // --- Freeze / thaw all inputs ---
@@ -861,7 +824,6 @@ function _showError(node, errorMsg) {
 
     // Insert at the top of the root
     root.insertBefore(banner, root.firstChild);
-    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 }
 
 // --- Sync hidden widgets ---
@@ -1255,50 +1217,17 @@ app.registerExtension({
                     reloadVae(),
                     reloadClip(),
                 ]);
+                // Auto-select first available model — never leave (none) selected
+                const firstModel = node._weModelRow._sel.options[1]?.value || "";
+                if (firstModel) {
+                    node._weModelRow._sel.value = firstModel;
+                    node._weOverrides.model_a = firstModel;
+                }
                 updateWanVisibility(node);
                 _syncS();
             };
 
-            // -- 3. PROMPTS (positive open, negative closed) --
-            const posSec = makeSection("POSITIVE PROMPT");
-            node._weSections.positive = posSec;
-            const posBox = document.createElement("textarea");
-            posBox.placeholder = "Positive prompt";
-            posBox.rows = 5;
-            Object.assign(posBox.style, {
-                width: "100%", boxSizing: "border-box",
-                background: C.bgInput, color: C.text,
-                border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "none",
-                fontFamily: "inherit", lineHeight: "1.4",
-                maxHeight: "90px", overflow: "auto",
-            });
-            posBox.onchange = _syncS;
-            posBox.oninput = _syncS;
-            posSec._body.appendChild(posBox);
-            root.appendChild(posSec);
-            node._wePosBox = posBox;
-
-            const negSec = makeSection("NEGATIVE PROMPT");
-            node._weSections.negative = negSec;
-            const negBox = document.createElement("textarea");
-            negBox.placeholder = "Negative prompt";
-            negBox.rows = 5;
-            Object.assign(negBox.style, {
-                width: "100%", boxSizing: "border-box",
-                background: C.bgInput, color: C.text,
-                border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "none",
-                fontFamily: "inherit", lineHeight: "1.4",
-                maxHeight: "90px", overflow: "auto",
-            });
-            negBox.onchange = _syncS;
-            negBox.oninput = _syncS;
-            negSec._body.appendChild(negBox);
-            root.appendChild(negSec);
-            node._weNegBox = negBox;
-
-            // -- 4. SAMPLER section --
+            // -- 3. SAMPLER section --
             const sampSec = makeSection("SAMPLER");
             node._weSections.sampler = sampSec;
 
@@ -1336,6 +1265,45 @@ app.registerExtension({
 
             root.appendChild(sampSec);
             node._weSamplerRows = sampRows;
+
+            // -- 4. PROMPTS (positive open, negative closed) --
+            const posSec = makeSection("POSITIVE PROMPT");
+            node._weSections.positive = posSec;
+            const posBox = document.createElement("textarea");
+            posBox.placeholder = "Positive prompt";
+            posBox.rows = 5;
+            Object.assign(posBox.style, {
+                width: "100%", boxSizing: "border-box",
+                background: C.bgInput, color: C.text,
+                border: `1px solid ${C.border}`, borderRadius: "4px",
+                fontSize: "12px", padding: "6px", resize: "none",
+                fontFamily: "inherit", lineHeight: "1.4",
+                maxHeight: "90px", overflow: "auto",
+            });
+            posBox.onchange = _syncS;
+            posBox.oninput = _syncS;
+            posSec._body.appendChild(posBox);
+            root.appendChild(posSec);
+            node._wePosBox = posBox;
+
+            const negSec = makeSection("NEGATIVE PROMPT");
+            node._weSections.negative = negSec;
+            const negBox = document.createElement("textarea");
+            negBox.placeholder = "Negative prompt";
+            negBox.rows = 5;
+            Object.assign(negBox.style, {
+                width: "100%", boxSizing: "border-box",
+                background: C.bgInput, color: C.text,
+                border: `1px solid ${C.border}`, borderRadius: "4px",
+                fontSize: "12px", padding: "6px", resize: "none",
+                fontFamily: "inherit", lineHeight: "1.4",
+                maxHeight: "90px", overflow: "auto",
+            });
+            negBox.onchange = _syncS;
+            negBox.oninput = _syncS;
+            negSec._body.appendChild(negBox);
+            root.appendChild(negSec);
+            node._weNegBox = negBox;
 
             // -- 5. LORAS section --
             const loraSec = makeSection("LORAS");
@@ -1408,58 +1376,19 @@ app.registerExtension({
 
             root.appendChild(loraSec);
 
-            // -- Sizing constants --
-            // NATIVE_H accounts for the node title bar + native toggle widgets
-            // that sit above our DOM widget (use_workflow_data, use_lora_input).
-            // LiteGraph title bar ~30px + two toggle widgets ~28px each = ~86px.
-            // Use 110 to give a small breathing margin at the bottom.
-            const NATIVE_H = 110;
             const MIN_W = 470;
-            const MIN_H = 300;
 
-            // -- Register the DOM widget --
+            // -- Register the DOM widget using the modern ComfyUI getHeight API.
+            // getHeight() tells the framework exactly how tall the DOM area is;
+            // it auto-grows the node to fit without any manual setSize calls.
+            // This avoids the grey gap caused by the old computeSize+setSize
+            // pattern (see ComfyUI_frontend issue #7942).
             const domW = node.addDOMWidget("we_ui", "div", root, {
-                hideOnZoom: false, serialize: false,
+                hideOnZoom: false,
+                serialize: false,
+                getHeight: () => root.scrollHeight || 400,
+                getMinHeight: () => 300,
             });
-
-            // PMA pattern: computeSize measures the real DOM every time
-            // LiteGraph asks.  No manual height tracking needed.
-            domW.computeSize = function (nodeWidth) {
-                const h = root.scrollHeight || 800;
-                return [nodeWidth, h];
-            };
-
-            // _resizeNode: trigger LiteGraph to re-query computeSize, then
-            // clamp the node to the content minimum so it never stays too
-            // small or too large.
-            function _resizeNode() {
-                const domH = root.scrollHeight || 800;
-                const needed = domH + NATIVE_H;
-                if (node.size) {
-                    const w = Math.max(MIN_W, node.size[0]);
-                    const h = Math.max(needed, MIN_H);
-                    // Only setSize if it actually changed
-                    if (node.size[0] !== w || node.size[1] !== h) {
-                        node.setSize([w, h]);
-                    }
-                }
-                app.graph.setDirtyCanvas(true, true);
-            }
-            node._weRecalc = _resizeNode;
-            // Wire up _setNode on all sections now that node._weRecalc exists
-            for (const sec of Object.values(node._weSections)) {
-                if (sec._setNode) sec._setNode(node);
-            }
-            requestAnimationFrame(() => requestAnimationFrame(() => _resizeNode()));
-
-            // Enforce minimum size when user drags to resize
-            const origOnResize = node.onResize;
-            node.onResize = function (size) {
-                const domH = root.scrollHeight || 800;
-                size[0] = Math.max(MIN_W, size[0]);
-                size[1] = Math.max(domH + NATIVE_H, MIN_H, size[1]);
-                if (origOnResize) return origOnResize.apply(this, arguments);
-            };
 
             // -- Only hide data widgets, keep toggle switches visible --
             // IMPORTANT: override_data and lora_state must keep their original
@@ -1478,7 +1407,13 @@ app.registerExtension({
                 if (w.element) w.element.style.display = "none";
             }
 
-            node.setSize([MIN_W, (root.scrollHeight || 400) + NATIVE_H]);
+            // Enforce minimum width when user drags to resize.
+            const origOnResize = node.onResize;
+            node.onResize = function (size) {
+                size[0] = Math.max(MIN_W, size[0]);
+                if (origOnResize) return origOnResize.apply(this, arguments);
+            };
+
             applyZoomScaling(root);
 
             // -- Handle use_workflow_data toggle --
@@ -1802,7 +1737,6 @@ app.registerExtension({
                 setFieldsFrozen(node, true);
             }
 
-            if (node._weRecalc) node._weRecalc();
             node.setDirtyCanvas(true, true);
         };
     },
