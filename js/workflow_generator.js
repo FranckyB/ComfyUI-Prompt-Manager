@@ -1072,7 +1072,10 @@ app.registerExtension({
             // ============================================================
             const root = makeEl("div", {
                 display: "flex", flexDirection: "column", gap: "4px",
-                padding: "6px", marginTop: "-10px",
+                // paddingBottom: 38px reserves space for the ComfyUI selection
+                // toolbox that appears at the bottom of the node when selected,
+                // preventing it from overlapping the last section.
+                padding: "6px 6px 38px 6px", marginTop: "-10px",
                 width: "100%", boxSizing: "border-box",
                 fontFamily: "Inter, system-ui, -apple-system, sans-serif",
                 overflow: "hidden",
