@@ -1403,6 +1403,9 @@ app.registerExtension({
 
             const MIN_W = 470;
             const MIN_H = 300;
+            // Height of everything above the DOM widget: title bar ~30px +
+            // two native toggle widgets ~28px each + small margin = 90px.
+            const NATIVE_H = 90;
 
             // -- Register the DOM widget.
             // Use computeSize directly on the widget — the same pattern used by
@@ -1438,18 +1441,22 @@ app.registerExtension({
             }
 
             // Enforce minimum size when user drags to resize.
-            // Min height is content height so the node can't be dragged smaller
-            // than the visible UI — but the user CAN make it larger.
+            // Prevents dragging the node smaller than its content.
             const origOnResize = node.onResize;
             node.onResize = function (size) {
-                const contentH = root.scrollHeight || MIN_H;
+                const contentH = (root.scrollHeight || MIN_H) + NATIVE_H;
                 size[0] = Math.max(MIN_W, size[0]);
                 size[1] = Math.max(contentH, MIN_H, size[1]);
                 if (origOnResize) return origOnResize.apply(this, arguments);
             };
 
-            // Set initial size to fit content.
-            node.setSize([MIN_W, (root.scrollHeight || MIN_H)]);
+            // Set initial size — deferred so the DOM has been painted and
+            // scrollHeight reflects real content height.
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const contentH = (root.scrollHeight || MIN_H) + NATIVE_H;
+                node.setSize([MIN_W, Math.max(contentH, MIN_H)]);
+                app.graph.setDirtyCanvas(true, true);
+            }));
 
             applyZoomScaling(root);
 
