@@ -359,6 +359,10 @@ def extract_resolution(prompt_data, workflow_data):
                 w = inp.get('width',      resolution['width'])
                 h = inp.get('height',     resolution['height'])
                 b = inp.get('batch_size', resolution['batch_size'])
+                # Track whether width/height came from node-refs (runtime values)
+                # so execute() knows it can use source_image dims as a better fallback.
+                resolution['_width_from_node_ref']  = isinstance(w, list)
+                resolution['_height_from_node_ref'] = isinstance(h, list)
                 resolution['width']      = _scalar(w, resolution['width'],  'width')
                 resolution['height']     = _scalar(h, resolution['height'], 'height')
                 # batch_size in WanImageToVideo can equal 'length' — clamp to 1 if > 64
