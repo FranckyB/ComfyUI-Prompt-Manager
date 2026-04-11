@@ -28,7 +28,7 @@ NOISE_TYPES     = ['RandomNoise', 'DisableNoise']
 VAE_LOADER_TYPES  = ['VAELoader', 'VAELoaderConsistencyDecoder']
 CLIP_LOADER_TYPES = ['CLIPLoader', 'DualCLIPLoader', 'TripleCLIPLoader']
 LATENT_TYPES      = ['EmptyLatentImage', 'EmptyFlux2LatentImage', 'EmptySD3LatentImage']
-VIDEO_LATENT_TYPES = ['WanVideoLatentImage', 'WanImageToVideo']
+VIDEO_LATENT_TYPES = ['WanVideoLatentImage', 'WanImageToVideo', 'EmptyHunyuanLatentVideo']
 
 CHECKPOINT_TYPES = ('CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderNF4')
 
@@ -332,11 +332,41 @@ def extract_resolution(prompt_data, workflow_data):
             inp = node_data.get('inputs', {})
 
             if ct in LATENT_TYPES + VIDEO_LATENT_TYPES:
-                resolution['width']      = inp.get('width',      resolution['width'])
-                resolution['height']     = inp.get('height',     resolution['height'])
-                resolution['batch_size'] = inp.get('batch_size', resolution['batch_size'])
+                def _scalar(val, fallback, field_name=None):
+                    """Resolve node-ref lists to scalar by looking up the
+                    referenced node in prompt_data, or return fallback."""
+                    if isinstance(val, list):
+                        # Node reference: [node_id, output_index]
+                        ref_id = str(val[0])
+                        ref_node = prompt_data.get(ref_id, {})
+                        ref_inp = ref_node.get('inputs', {})
+                        # PrimitiveInt / ImageResizeKJv2 / similar
+                        if 'value' in ref_inp:
+                            return int(ref_inp['value'])
+                        # ImageResizeKJv2: width is output slot 1, height slot 2
+                        if field_name == 'width' and 'width' in ref_inp:
+                            v = ref_inp['width']
+                            return int(v) if not isinstance(v, list) else fallback
+                        if field_name == 'height' and 'height' in ref_inp:
+                            v = ref_inp['height']
+                            return int(v) if not isinstance(v, list) else fallback
+                        return fallback
+                    try:
+                        return int(val)
+                    except (TypeError, ValueError):
+                        return fallback
+
+                w = inp.get('width',      resolution['width'])
+                h = inp.get('height',     resolution['height'])
+                b = inp.get('batch_size', resolution['batch_size'])
+                resolution['width']      = _scalar(w, resolution['width'],  'width')
+                resolution['height']     = _scalar(h, resolution['height'], 'height')
+                # batch_size in WanImageToVideo can equal 'length' — clamp to 1 if > 64
+                b_val = _scalar(b, resolution['batch_size'])
+                resolution['batch_size'] = b_val if b_val <= 64 else 1
                 if 'length' in inp:
-                    resolution['length'] = inp.get('length')
+                    l = inp.get('length')
+                    resolution['length'] = _scalar(l, None) if l is not None else None
                 return resolution
 
     if workflow_data and isinstance(workflow_data, dict):

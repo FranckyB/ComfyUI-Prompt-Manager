@@ -1047,12 +1047,21 @@ class WorkflowGenerator:
 
             # ── Resolution ───────────────────────────────────────────────
             res    = extracted['resolution']
-            width  = int(overrides.get('width', res['width']))
-            height = int(overrides.get('height', res['height']))
+            def _to_int(v, default):
+                """Safely coerce v to int — guards against node-ref lists
+                that may slip through extract_resolution edge cases."""
+                if isinstance(v, list):
+                    return int(default)
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return int(default)
+            width  = _to_int(overrides.get('width',  res['width']),  512)
+            height = _to_int(overrides.get('height', res['height']), 512)
             length = overrides.get('length', res.get('length'))
             batch  = (
-                int(length) if length is not None
-                else int(overrides.get('batch_size', res.get('batch_size', 1)))
+                _to_int(length, 1) if length is not None
+                else _to_int(overrides.get('batch_size', res.get('batch_size', 1)), 1)
             )
 
             # ── Template-driven path (preferred) ─────────────────────────
