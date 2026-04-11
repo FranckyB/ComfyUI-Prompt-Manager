@@ -270,14 +270,13 @@ def patch_template(api, wmap, params):
 
     # ── Source image for i2v ─────────────────────────────────────────────────
     if params.get("source_image_path") is not None:
-        nid, field = _m("wan_i2v_latent")
-        if nid is not None:
-            # wan_i2v_latent maps to the LoadImage or WanImageToVideo start_image.
-            # For LoadImage node (feeding start_image), set the image filename.
-            load_node_id = "97"  # LoadImage node in the i2v template
-            load_node = api.get(load_node_id)
-            if load_node and load_node.get("class_type") == "LoadImage":
-                load_node["inputs"]["image"] = params["source_image_path"]
+        # wan_i2v_image maps directly to the LoadImage node's 'image' input
+        nid, field = _m("wan_i2v_image")
+        if nid is not None and field:
+            _set(api, nid, field, params["source_image_path"])
+            print(f"[patch_template] Set LoadImage node {nid}.{field} = {params['source_image_path']}")
+        else:
+            print("[patch_template] wan_i2v_image not in map — source image NOT patched")
 
     # ── LoRA stacks ───────────────────────────────────────────────────────────
     if params.get("lora_stack_a_text") is not None:

@@ -114,5 +114,9 @@
   "negative_prompt": [
     "140",
     "text"
+  ],
+  "wan_i2v_image": [
+    "97",
+    "image"
   ]
 }
