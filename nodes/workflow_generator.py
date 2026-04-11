@@ -558,6 +558,8 @@ def _load_clip(clip_info, overrides, existing_clip=None):
         clip_type = comfy.sd.CLIPType.FLUX
     elif t and 'sd3' in t:
         clip_type = comfy.sd.CLIPType.SD3
+    elif t and 'wan' in t:
+        clip_type = comfy.sd.CLIPType.WAN  # umt5-xxl encoder (vocab 256384)
     else:
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
 
@@ -847,7 +849,9 @@ class WorkflowGenerator:
                 family_key = 'flux1'
             elif 'sd3' in clip_type:
                 family_key = 'sd3'
-            # wan/other: fall through to sdxl default — better than wrong family
+            elif 'wan' in clip_type:
+                family_key = 'wan_video_t2v'  # closest generic WAN family
+            # other: fall through to sdxl default — better than wrong family
         if not family_key:
             family_key = "sdxl"
         strategy = get_family_sampler_strategy(family_key)
