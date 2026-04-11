@@ -1014,42 +1014,6 @@ class WorkflowGenerator:
                 print(f"[WorkflowGenerator] Using cached model: {resolved_a}")
             model_a, clip_a, vae_a = self._model_cache[_cache_key_a]
 
-            # ── Load VAE ─────────────────────────────────────────────────
-            vae = _load_vae(vae_name, existing_vae=vae_a)
-            if vae is None:
-                gen_error = f"No VAE available (model={model_name_a}, vae={vae_name})"
-                raise FileNotFoundError(gen_error)
-
-            # ── Load CLIP ────────────────────────────────────────────────
-            clip_info = dict(extracted['clip'])
-            if not clip_info.get('type') and family_key:
-                from ..py.workflow_families import MODEL_FAMILIES
-                family_clip_type = MODEL_FAMILIES.get(
-                    family_key, {}
-                ).get('clip_type', '')
-                if family_clip_type:
-                    clip_info['type'] = family_clip_type
-            clip = _load_clip(clip_info, overrides, existing_clip=clip_a)
-            if clip is None:
-                gen_error = "No CLIP available for text encoding"
-                raise FileNotFoundError(gen_error)
-
-            # ── Apply LoRAs (Stack A → model A) ─────────────────────────
-            has_both_stacks = (
-                bool(extracted['loras_a']) and bool(extracted['loras_b'])
-            )
-            stack_key_a = "a" if has_both_stacks else ""
-            model_a, clip = _apply_loras(
-                model_a, clip, extracted['loras_a'],
-                lora_overrides, stack_key=stack_key_a,
-            )
-
-            # ── Encode prompts ───────────────────────────────────────────
-            tokens_pos = clip.tokenize(positive_prompt)
-            cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
-            tokens_neg = clip.tokenize(negative_prompt)
-            cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
-
             # ── Resolution ───────────────────────────────────────────────
             res    = extracted['resolution']
             width  = int(overrides.get('width', res['width']))
@@ -1063,6 +1027,10 @@ class WorkflowGenerator:
             # ── Template-driven path (preferred) ─────────────────────────
             # Try to execute via workflow template. Falls back to hardcoded
             # samplers if no template exists for this family.
+            # NOTE: VAE and CLIP loading is intentionally deferred to
+            # execute_template (template path) or the hardcoded block below.
+            # This avoids crashing when (Default) is selected on diffusion
+            # model families that have no bundled VAE/CLIP in the checkpoint.
             api_template, wmap = load_template(family_key)
 
             if api_template is not None:
@@ -1126,7 +1094,50 @@ class WorkflowGenerator:
 
             else:
                 # ── Fallback: hardcoded sampler paths ────────────────────
+                # For the hardcoded path we need VAE + CLIP loaded in Python.
+                # Diffusion-model families (flux1, flux2, wan, ltxv, zimage)
+                # return vae_a=None / clip_a=None from _load_model_from_path.
+                # When (Default) is selected and no bundled VAE exists we must
+                # not crash — instead surface a friendly error so the user can
+                # pick a specific VAE/CLIP from the dropdown.
                 print(f"[WorkflowGenerator] Hardcoded sampler fallback: {strategy}")
+
+                vae = _load_vae(vae_name, existing_vae=vae_a)
+                if vae is None:
+                    gen_error = (
+                        f"No VAE available — please select a specific VAE "
+                        f"(model={model_name_a}, vae={vae_name!r}). "
+                        f"(Default) requires a VAE bundled in the checkpoint, "
+                        f"which diffusion-model families do not provide."
+                    )
+                    raise FileNotFoundError(gen_error)
+
+                clip_info = dict(extracted['clip'])
+                if not clip_info.get('type') and family_key:
+                    from ..py.workflow_families import MODEL_FAMILIES
+                    family_clip_type = MODEL_FAMILIES.get(
+                        family_key, {}
+                    ).get('clip_type', '')
+                    if family_clip_type:
+                        clip_info['type'] = family_clip_type
+                clip = _load_clip(clip_info, overrides, existing_clip=clip_a)
+                if clip is None:
+                    gen_error = "No CLIP available for text encoding"
+                    raise FileNotFoundError(gen_error)
+
+                has_both_stacks = (
+                    bool(extracted['loras_a']) and bool(extracted['loras_b'])
+                )
+                stack_key_a = "a" if has_both_stacks else ""
+                model_a, clip = _apply_loras(
+                    model_a, clip, extracted['loras_a'],
+                    lora_overrides, stack_key=stack_key_a,
+                )
+
+                tokens_pos = clip.tokenize(positive_prompt)
+                cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+                tokens_neg = clip.tokenize(negative_prompt)
+                cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
 
                 print(f"[WorkflowGenerator] Latent: {width}x{height}, batch={batch}")
                 latent_tensor = torch.zeros(

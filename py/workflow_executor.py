@@ -372,11 +372,18 @@ def execute_template(api, wmap, family_key, source_image=None):
             full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
             model_b, clip_b_raw, _ = _load_model_from_path(resolved_b, folder_b, full_path_b)
 
-    # VAE
+    # VAE — read from the (already-patched) template.
+    # If the user chose (Default), patch_template left the original template value
+    # intact, so _val("vae") returns the template's filename (e.g.
+    # "flux2-vae.safetensors"), which is what we load.  Only crashes if the file
+    # is genuinely missing from disk.
     vae_name = _val("vae")
     vae = _load_vae(vae_name, existing_vae=vae_a)
     if vae is None:
-        raise FileNotFoundError(f"[WorkflowExecutor] No VAE available")
+        raise FileNotFoundError(
+            f"[WorkflowExecutor] VAE not found on disk: {vae_name!r}. "
+            f"Make sure the file exists in your ComfyUI/models/vae/ folder."
+        )
 
     # CLIP — determine type from template CLIPLoader node
     clip_type_str = ""
