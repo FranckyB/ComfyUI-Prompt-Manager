@@ -971,16 +971,31 @@ class WorkflowGenerator:
                         wf_node['extracted_data'] = extracted_data
                         break
 
+        # ── Push UI info to JS immediately (before generation) ─────────────
+        # This makes the node feel responsive: LoRAs, model info, prompts
+        # all appear while the model is still loading / sampling.
+        try:
+            server.PromptServer.instance.send_sync(
+                "workflow-generator-pre-update",
+                {"node_id": str(unique_id), "info": ui_info},
+            )
+        except Exception:
+            pass  # Non-critical — JS will still get data from onExecuted
+
         # ── Load, sample, decode ──────────────────────────────────────────
-        # Wrapped in try/except so the UI is always populated even if
-        # generation fails (e.g. model not found on disk).
+        # The UI is always populated (ui_info built above).  If generation
+        # fails the error is surfaced visibly on the node so the user can
+        # adjust settings and re-queue.
+        gen_error = None
+        decoded = None
+        out_latent = None
+
         try:
             # ── Load Model A ─────────────────────────────────────────────
             resolved_a, folder_a = resolve_model_name(model_name_a)
             if resolved_a is None:
-                raise RuntimeError(
-                    f"[WorkflowGenerator] Model not found: {model_name_a}"
-                )
+                gen_error = f"Model A not found: {model_name_a}"
+                raise FileNotFoundError(gen_error)
             full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
             _cache_key_a = (full_path_a, family_key)
             if _cache_key_a not in self._model_cache:
@@ -995,10 +1010,8 @@ class WorkflowGenerator:
             # ── Load VAE ─────────────────────────────────────────────────
             vae = _load_vae(vae_name, existing_vae=vae_a)
             if vae is None:
-                raise RuntimeError(
-                    f"[WorkflowGenerator] No VAE available. "
-                    f"Model={model_name_a}, VAE={vae_name}"
-                )
+                gen_error = f"No VAE available (model={model_name_a}, vae={vae_name})"
+                raise FileNotFoundError(gen_error)
 
             # ── Load CLIP ────────────────────────────────────────────────
             clip_info = dict(extracted['clip'])
@@ -1011,9 +1024,8 @@ class WorkflowGenerator:
                     clip_info['type'] = family_clip_type
             clip = _load_clip(clip_info, overrides, existing_clip=clip_a)
             if clip is None:
-                raise RuntimeError(
-                    "[WorkflowGenerator] No CLIP available for text encoding"
-                )
+                gen_error = "No CLIP available for text encoding"
+                raise FileNotFoundError(gen_error)
 
             # ── Apply LoRAs (Stack A → model A) ─────────────────────────
             has_both_stacks = (
@@ -1125,15 +1137,24 @@ class WorkflowGenerator:
             print("[WorkflowGenerator] Decoding latent…")
             decoded = vae.decode(samples)
 
-        except Exception as gen_err:
-            # Generation failed (model not found, VAE missing, etc.)
-            # Return placeholder outputs so the UI still populates and the
-            # user can fix settings and re-queue.
-            print(f"[WorkflowGenerator] Generation failed: {gen_err}")
+        except FileNotFoundError:
+            # Model/VAE/CLIP not found — gen_error already set above.
+            # Return populated node so user can fix the setting.
+            print(f"[WorkflowGenerator] {gen_error}")
+        except Exception as e:
+            # Unexpected generation failure — capture for display, log full trace.
+            gen_error = str(e)
+            print(f"[WorkflowGenerator] Generation failed: {gen_error}")
             traceback.print_exc()
-            ui_info['error'] = str(gen_err)
+
+        # Fallback outputs when generation didn't complete
+        if decoded is None:
             decoded = torch.zeros(1, 64, 64, 3)
+        if out_latent is None:
             out_latent = {"samples": torch.zeros(1, 4, 8, 8)}
+
+        if gen_error:
+            ui_info['error'] = gen_error
 
         return {
             "ui":     {"workflow_info": [ui_info]},

@@ -111,34 +111,24 @@ function makeBtn(label, onclick, extraStyle) {
 }
 
 // --- Section builder ---
-function makeSection(title, collapsed, bodyHeight, onToggle) {
+function makeSection(title) {
     const wrap = makeEl("div", {
         borderRadius: "6px", overflow: "hidden", marginTop: "2px",
-        backgroundColor: C.bgCard,
+        backgroundColor: C.bgCard, flexShrink: "0",
     });
     const header = makeEl("div", {
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "4px 8px", cursor: "pointer",
+        padding: "4px 8px",
         fontSize: "11px", fontWeight: "600", color: "#aaa",
         userSelect: "none",
         borderBottom: "1px solid rgba(255,255,255,0.1)",
     });
-    const arrow = makeEl("span", { transition: "transform .2s" }, collapsed ? "\u25B6" : "\u25BC");
     const label = makeEl("span", {}, title);
-    header.append(arrow, label);
+    header.append(label);
     const body = makeEl("div", {
-        padding: "4px 8px", display: collapsed ? "none" : "block",
+        padding: "4px 8px",
     });
-    wrap._collapsed = !!collapsed;
-    wrap._bodyH = bodyHeight || 0;
     wrap._titleLabel = label;
-    header.onclick = () => {
-        const open = body.style.display !== "none";
-        body.style.display = open ? "none" : "block";
-        arrow.textContent = open ? "\u25B6" : "\u25BC";
-        wrap._collapsed = open;
-        if (onToggle) onToggle();
-    };
     wrap.append(header, body);
     wrap._body = body;
     return wrap;
@@ -658,7 +648,7 @@ function updateUI(node) {
     updateWanVisibility(node);
 
     syncHidden(node);
-    if (node._weRecalc) setTimeout(() => node._weRecalc(), 50);
+    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 
     // Async: check LoRA availability and update display
     checkLoraAvailability(node);
@@ -718,7 +708,7 @@ function updateWanVisibility(node) {
         node._weResRows.frames.style.display = isWan ? "flex" : "none";
     }
 
-    if (node._weRecalc) setTimeout(() => node._weRecalc(), 10);
+    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 }
 
 // --- LoRA display ---
@@ -773,7 +763,7 @@ function updateLoras(node) {
         populateStack(containerB, lorasB, "b");
     }
 
-    if (node._weRecalc) setTimeout(() => node._weRecalc(), 10);
+    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 }
 
 // --- Freeze / thaw all inputs ---
@@ -788,6 +778,39 @@ function setFieldsFrozen(node, frozen) {
             sec._body.style.pointerEvents = pointer;
         }
     }
+}
+
+// --- Error banner on node ---
+function _showError(node, errorMsg) {
+    const root = node._weRoot;
+    if (!root) return;
+
+    // Remove existing banner
+    const existing = root.querySelector(".we-error-banner");
+    if (existing) existing.remove();
+
+    if (!errorMsg) return;
+
+    const banner = makeEl("div", {
+        padding: "8px 12px",
+        backgroundColor: "rgba(220, 53, 69, 0.15)",
+        border: "1px solid rgba(220, 53, 69, 0.6)",
+        borderRadius: "6px",
+        color: "#f88",
+        fontSize: "12px",
+        lineHeight: "1.4",
+        marginBottom: "4px",
+        wordBreak: "break-word",
+    });
+    banner.className = "we-error-banner";
+
+    const icon = makeEl("span", { marginRight: "6px", fontSize: "13px" }, "\u26A0\uFE0F");
+    const text = makeEl("span", {}, errorMsg);
+    banner.append(icon, text);
+
+    // Insert at the top of the root
+    root.insertBefore(banner, root.firstChild);
+    if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
 }
 
 // --- Sync hidden widgets ---
@@ -833,15 +856,6 @@ function syncHidden(node) {
     if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
     if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
     if (node._weFamily) ov._family = node._weFamily;
-
-    // Section collapse states
-    if (node._weSections) {
-        const ss = {};
-        for (const [key, sec] of Object.entries(node._weSections)) {
-            ss[key] = !!sec._collapsed;
-        }
-        ov._section_states = ss;
-    }
 
     // Control after generate
     if (node._weControlMode) {
@@ -942,21 +956,6 @@ function applyOverrides(node, ovJson, lsJson) {
         updateLoras(node);
     }
 
-    // Restore section collapse states
-    if (ov._section_states && node._weSections) {
-        for (const [key, collapsed] of Object.entries(ov._section_states)) {
-            const sec = node._weSections[key];
-            if (!sec) continue;
-            if (collapsed !== sec._collapsed) {
-                sec._body.style.display = collapsed ? "none" : "block";
-                const arrow = sec.querySelector("span");
-                if (arrow) arrow.textContent = collapsed ? "\u25B6" : "\u25BC";
-                sec._collapsed = collapsed;
-            }
-        }
-        if (node._weRecalc) node._weRecalc();
-    }
-
     updateWanVisibility(node);
     syncHidden(node);
 }
@@ -1035,7 +1034,7 @@ app.registerExtension({
             node._weRoot = root;
 
             // -- 1. RESOLUTION section (open) --
-            const resSec = makeSection("RESOLUTION", false, 100, () => { recalcHeight(); _syncS(); });
+            const resSec = makeSection("RESOLUTION");
             node._weSections.resolution = resSec;
             const resRows = {
                 width:  makeInput("Width",  "number", 768, { min: 64, max: 8192, step: 8 }, _syncS),
@@ -1049,7 +1048,7 @@ app.registerExtension({
             node._weResRows = resRows;
 
             // -- 2. MODEL section (open, with VAE/CLIP) --
-            const modelSec = makeSection("MODEL", false, 120, () => { recalcHeight(); _syncS(); });
+            const modelSec = makeSection("MODEL");
             node._weSections.model = modelSec;
 
             // Family type row
@@ -1196,7 +1195,7 @@ app.registerExtension({
             };
 
             // -- 3. PROMPTS (positive open, negative closed) --
-            const posSec = makeSection("POSITIVE PROMPT", false, 110, () => { recalcHeight(); _syncS(); });
+            const posSec = makeSection("POSITIVE PROMPT");
             node._weSections.positive = posSec;
             const posBox = document.createElement("textarea");
             posBox.placeholder = "Positive prompt";
@@ -1215,7 +1214,7 @@ app.registerExtension({
             root.appendChild(posSec);
             node._wePosBox = posBox;
 
-            const negSec = makeSection("NEGATIVE PROMPT", true, 110, () => { recalcHeight(); _syncS(); });
+            const negSec = makeSection("NEGATIVE PROMPT");
             node._weSections.negative = negSec;
             const negBox = document.createElement("textarea");
             negBox.placeholder = "Negative prompt";
@@ -1234,8 +1233,8 @@ app.registerExtension({
             root.appendChild(negSec);
             node._weNegBox = negBox;
 
-            // -- 4. SAMPLER section (collapsed) --
-            const sampSec = makeSection("SAMPLER", true, 180, () => { recalcHeight(); _syncS(); });
+            // -- 4. SAMPLER section --
+            const sampSec = makeSection("SAMPLER");
             node._weSections.sampler = sampSec;
             const sampRows = {
                 steps:     makeInput("Steps",     "number", 20,       { min: 1, max: 200, step: 1 }, _syncS),
@@ -1255,8 +1254,8 @@ app.registerExtension({
             root.appendChild(sampSec);
             node._weSamplerRows = sampRows;
 
-            // -- 5. LORAS section (collapsed) --
-            const loraSec = makeSection("LORAS", true, 140, () => { recalcHeight(); _syncS(); });
+            // -- 5. LORAS section --
+            const loraSec = makeSection("LORAS");
             node._weSections.loras = loraSec;
 
             // Stack A card
@@ -1326,44 +1325,51 @@ app.registerExtension({
 
             root.appendChild(loraSec);
 
-            // -- Height recalculation --
-            // Native widgets above DOM: use_workflow_data(26) + use_lora_input(26)
+            // -- Sizing constants --
+            // NATIVE_H accounts for the node title bar + native toggle widgets
+            // that sit above our DOM widget (use_workflow_data, use_lora_input).
             const NATIVE_H = 80;
-            const HEADER_H = 26;
-            const PADDING = 20;
-            const allSections = [resSec, modelSec, posSec, negSec, sampSec, loraSec];
-            let _domH = 400;
-
-            function recalcHeight() {
-                let h = PADDING;
-                for (const sec of allSections) {
-                    h += HEADER_H;
-                    if (!sec._collapsed) {
-                        const measured = sec._body.scrollHeight;
-                        h += Math.min(measured > 4 ? measured + 6 : sec._bodyH, 600);
-                    }
-                }
-                if (h === _domH) return;
-                _domH = h;
-                if (node.size) {
-                    node.setSize([node.size[0], _domH + NATIVE_H]);
-                    node.setDirtyCanvas(true, true);
-                }
-            }
-            node._weRecalc = recalcHeight;
-            requestAnimationFrame(() => requestAnimationFrame(() => recalcHeight()));
+            const MIN_W = 465;
+            const MIN_H = 300;
 
             // -- Register the DOM widget --
             const domW = node.addDOMWidget("we_ui", "div", root, {
                 hideOnZoom: false, serialize: false,
             });
+
+            // PMA pattern: computeSize measures the real DOM every time
+            // LiteGraph asks.  No manual height tracking needed.
             domW.computeSize = function (nodeWidth) {
-                return [nodeWidth, _domH];
+                const h = root.scrollHeight || 800;
+                return [nodeWidth, h];
             };
 
-            const _origComputeSize = node.computeSize;
-            node.computeSize = function () {
-                return [node.size[0] || 450, Math.max(node.size[1] || 0, _domH + NATIVE_H)];
+            // _resizeNode: trigger LiteGraph to re-query computeSize, then
+            // clamp the node to the content minimum so it never stays too
+            // small or too large.
+            function _resizeNode() {
+                const domH = root.scrollHeight || 800;
+                const needed = domH + NATIVE_H;
+                if (node.size) {
+                    const w = Math.max(MIN_W, node.size[0]);
+                    const h = Math.max(needed, MIN_H);
+                    // Only setSize if it actually changed
+                    if (node.size[0] !== w || node.size[1] !== h) {
+                        node.setSize([w, h]);
+                    }
+                }
+                app.graph.setDirtyCanvas(true, true);
+            }
+            node._weRecalc = _resizeNode;
+            requestAnimationFrame(() => requestAnimationFrame(() => _resizeNode()));
+
+            // Enforce minimum size when user drags to resize
+            const origOnResize = node.onResize;
+            node.onResize = function (size) {
+                const domH = root.scrollHeight || 800;
+                size[0] = Math.max(MIN_W, size[0]);
+                size[1] = Math.max(domH + NATIVE_H, MIN_H, size[1]);
+                if (origOnResize) return origOnResize.apply(this, arguments);
             };
 
             // -- Only hide data widgets, keep toggle switches visible --
@@ -1383,7 +1389,7 @@ app.registerExtension({
                 if (w.element) w.element.style.display = "none";
             }
 
-            node.setSize([450, _domH + NATIVE_H]);
+            node.setSize([MIN_W, (root.scrollHeight || 400) + NATIVE_H]);
             applyZoomScaling(root);
 
             // -- Handle use_workflow_data toggle --
@@ -1440,8 +1446,18 @@ app.registerExtension({
                 const origLoraCb = loraToggle.callback;
                 loraToggle.callback = function (value) {
                     if (origLoraCb) origLoraCb.apply(this, arguments);
-                    // When toggled on, display lora stacks from connected inputs
-                    // (the Python execute() merges them; JS just shows current state)
+                    if (!value && node._weExtracted) {
+                        // Toggled OFF — clear LoRAs that came from connected inputs
+                        // (unless use_workflow_data is ON, which is the other LoRA source)
+                        const wfOn = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
+                        if (!wfOn) {
+                            node._weExtracted.loras_a = [];
+                            node._weExtracted.loras_b = [];
+                            node._weExtracted.lora_availability = {};
+                            node._weLoraState = {};
+                            updateLoras(node);
+                        }
+                    }
                     _syncS();
                 };
             }
@@ -1463,6 +1479,65 @@ app.registerExtension({
                 _syncS();
             };
 
+            // -- Pre-generation UI update (via send_sync from Python) --
+            // Fires before model loading / sampling so UI feels instant.
+            api.addEventListener("workflow-generator-pre-update", (event) => {
+                if (String(event.detail?.node_id) !== String(node.id)) return;
+                const info = event.detail?.info?.extracted;
+                if (!info) return;
+
+                // Clear any previous error banner
+                _showError(node, null);
+
+                const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
+
+                if (!wfToggle?.value && node._wePopulated) {
+                    // Manual mode — update LoRA display from lora_input if enabled
+                    if (node._weExtracted) {
+                        const loraToggle = node.widgets?.find(w => w.name === "use_lora_input");
+                        if (loraToggle?.value) {
+                            const oldNames = [...(node._weExtracted.loras_a || []), ...(node._weExtracted.loras_b || [])]
+                                .map(l => l.name).sort().join(",");
+                            node._weExtracted.loras_a = info.loras_a || [];
+                            node._weExtracted.loras_b = info.loras_b || [];
+                            const newNames = [...node._weExtracted.loras_a, ...node._weExtracted.loras_b]
+                                .map(l => l.name).sort().join(",");
+                            if (oldNames !== newNames) node._weLoraState = {};
+                        }
+                        if (info.lora_availability) node._weExtracted.lora_availability = info.lora_availability;
+                        if (info.model_a_found !== undefined) node._weExtracted.model_a_found = info.model_a_found;
+                        if (info.model_b_found !== undefined) node._weExtracted.model_b_found = info.model_b_found;
+                        if (info.vae_found !== undefined) node._weExtracted.vae_found = info.vae_found;
+                        node.properties = node.properties || {};
+                        node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
+                        updateLoras(node);
+                    }
+                } else {
+                    // use_workflow_data ON or first-time — full UI population
+                    const prev = node._weExtracted;
+                    const sourceChanged = !prev
+                        || prev.model_a !== info.model_a
+                        || prev.positive_prompt !== info.positive_prompt
+                        || prev.negative_prompt !== info.negative_prompt
+                        || prev.model_family !== info.model_family
+                        || JSON.stringify(prev.resolution) !== JSON.stringify(info.resolution)
+                        || JSON.stringify(prev.sampler) !== JSON.stringify(info.sampler);
+
+                    node._weExtracted = info;
+                    node.properties = node.properties || {};
+                    node.properties.we_extracted_cache = JSON.stringify(info);
+
+                    if (sourceChanged) {
+                        node._wePopulated = true;
+                        node._weLoraState = {};
+                        updateUI(node);
+                    } else {
+                        updateLoras(node);
+                    }
+                }
+                node._preUpdateApplied = true;
+            });
+
             // -- If not restoring from workflow, try initial load --
             if (!node._configuredFromWorkflow) {
                 // No extraction needed on fresh node -- just defaults
@@ -1476,15 +1551,29 @@ app.registerExtension({
         nodeType.prototype.onExecuted = function (message) {
             origOnExecuted?.apply(this, arguments);
 
-            const info = message?.workflow_info?.[0]?.extracted;
-            if (info) {
+            // Handle generation errors — show/clear error banner
+            const wfInfo = message?.workflow_info?.[0];
+            const genError = wfInfo?.error;
+            _showError(this, genError || null);
+
+            // UI population is handled by pre-update listener (fires before
+            // generation).  Only run here as a fallback if send_sync failed.
+            const info = wfInfo?.extracted;
+            if (info && !this._preUpdateApplied) {
                 const wfToggle = this.widgets?.find(w => w.name === "use_workflow_data");
 
                 if (!wfToggle?.value && this._wePopulated) {
-                    // Manual mode (use_workflow_data OFF) with existing data:
-                    // Python returned empty defaults — do NOT overwrite _weExtracted.
-                    // Just update availability flags from the execution result.
                     if (this._weExtracted) {
+                        const loraToggle = this.widgets?.find(w => w.name === "use_lora_input");
+                        if (loraToggle?.value) {
+                            const oldNames = [...(this._weExtracted.loras_a || []), ...(this._weExtracted.loras_b || [])]
+                                .map(l => l.name).sort().join(",");
+                            this._weExtracted.loras_a = info.loras_a || [];
+                            this._weExtracted.loras_b = info.loras_b || [];
+                            const newNames = [...this._weExtracted.loras_a, ...this._weExtracted.loras_b]
+                                .map(l => l.name).sort().join(",");
+                            if (oldNames !== newNames) this._weLoraState = {};
+                        }
                         if (info.lora_availability) this._weExtracted.lora_availability = info.lora_availability;
                         if (info.model_a_found !== undefined) this._weExtracted.model_a_found = info.model_a_found;
                         if (info.model_b_found !== undefined) this._weExtracted.model_b_found = info.model_b_found;
@@ -1494,7 +1583,6 @@ app.registerExtension({
                         updateLoras(this);
                     }
                 } else {
-                    // use_workflow_data ON or first-time population
                     const prev = this._weExtracted;
                     const sourceChanged = !prev
                         || prev.model_a !== info.model_a
@@ -1505,21 +1593,20 @@ app.registerExtension({
                         || JSON.stringify(prev.sampler) !== JSON.stringify(info.sampler);
 
                     this._weExtracted = info;
-                    // Cache for tab-switch survival
                     this.properties = this.properties || {};
                     this.properties.we_extracted_cache = JSON.stringify(info);
 
                     if (sourceChanged) {
-                        // New or changed source data — populate all fields
                         this._wePopulated = true;
                         this._weLoraState = {};
                         updateUI(this);
                     } else {
-                        // Same source — preserve user overrides, just refresh lora display
                         updateLoras(this);
                     }
                 }
             }
+            // Reset flag for next execution
+            this._preUpdateApplied = false;
 
             // Advance seed per control mode
             if (this._onExecutedSeed) this._onExecutedSeed();
