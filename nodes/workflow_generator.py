@@ -613,8 +613,14 @@ class WorkflowGenerator:
     Outputs: IMAGE, LATENT, WORKFLOW_DATA (string).
     """
 
+    # Class-level cache so models persist across executions.
+    # ComfyUI creates a new node instance on every queue run, so instance-level
+    # caches are always empty.  Keyed by (unique_id, full_path, family_key) so
+    # each canvas node has its own cache slot and model changes are detected.
+    _class_model_cache: dict = {}
+
     def __init__(self):
-        self._model_cache = {}  # key: (full_path_a, family_key) -> (model, clip, vae)
+        pass  # cache lives at class level — see _class_model_cache
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1016,15 +1022,16 @@ class WorkflowGenerator:
                 gen_error = f"Model A not found: {model_name_a}"
                 raise FileNotFoundError(gen_error)
             full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
-            _cache_key_a = (full_path_a, family_key)
-            if _cache_key_a not in self._model_cache:
+            _cache = WorkflowGenerator._class_model_cache
+            _cache_key_a = (str(unique_id), full_path_a, family_key)
+            if _cache_key_a not in _cache:
                 print(f"[WorkflowGenerator] Loading model (not cached): {resolved_a}")
-                self._model_cache[_cache_key_a] = _load_model_from_path(
+                _cache[_cache_key_a] = _load_model_from_path(
                     resolved_a, folder_a, full_path_a
                 )
             else:
                 print(f"[WorkflowGenerator] Using cached model: {resolved_a}")
-            model_a, clip_a, vae_a = self._model_cache[_cache_key_a]
+            model_a, clip_a, vae_a = _cache[_cache_key_a]
 
             # ── Resolution ───────────────────────────────────────────────
             res    = extracted['resolution']
@@ -1179,15 +1186,15 @@ class WorkflowGenerator:
                     model_b_obj = clip_b = None
                     if resolved_b:
                         full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
-                        _cache_key_b = (full_path_b, family_key)
-                        if _cache_key_b not in self._model_cache:
+                        _cache_key_b = (str(unique_id), full_path_b, family_key + "_b")
+                        if _cache_key_b not in _cache:
                             print(f"[WorkflowGenerator] Loading model B: {resolved_b}")
-                            self._model_cache[_cache_key_b] = _load_model_from_path(
+                            _cache[_cache_key_b] = _load_model_from_path(
                                 resolved_b, folder_b, full_path_b
                             )
                         else:
                             print(f"[WorkflowGenerator] Using cached model B: {resolved_b}")
-                        model_b_obj, clip_b_raw, _ = self._model_cache[_cache_key_b]
+                        model_b_obj, clip_b_raw, _ = _cache[_cache_key_b]
 
                         clip_b = clip_b_raw or clip
                         stack_key_b = "b" if has_both_stacks else ""
