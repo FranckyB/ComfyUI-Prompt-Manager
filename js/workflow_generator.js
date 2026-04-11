@@ -617,7 +617,7 @@ async function updateUI(node) {
     // family before setting values — otherwise _setOriginal can't find the
     // option in the list and the selection falls back to (Default).
     if (familyChanged && node._onFamilyChanged) {
-        await node._onFamilyChanged(newFamily, { skipAutoSelect: true });
+        await node._onFamilyChanged(newFamily);
     }
 
     // Model A
@@ -1247,8 +1247,7 @@ app.registerExtension({
             };
 
             // Family change handler — also stored on node so updateUI can call it
-            // skipAutoSelect: when true, don't auto-pick first model (updateUI sets it)
-            const onFamilyChanged = async (familyKey, { skipAutoSelect = false } = {}) => {
+            const onFamilyChanged = async (familyKey) => {
                 node._weFamily = familyKey;
                 // Reset VAE/CLIP overrides — new family means old selections are invalid
                 delete node._weOverrides.vae;
@@ -1283,13 +1282,10 @@ app.registerExtension({
                     reloadClip(),
                 ]);
                 // Auto-select first available model — never leave (none) selected
-                // (skipped when called from updateUI, which sets the correct model itself)
-                if (!skipAutoSelect) {
-                    const firstModel = node._weModelRow._sel.options[1]?.value || "";
-                    if (firstModel) {
-                        node._weModelRow._sel.value = firstModel;
-                        node._weOverrides.model_a = firstModel;
-                    }
+                const firstModel = node._weModelRow._sel.options[1]?.value || "";
+                if (firstModel) {
+                    node._weModelRow._sel.value = firstModel;
+                    node._weOverrides.model_a = firstModel;
                 }
                 updateWanVisibility(node);
                 _syncS();
