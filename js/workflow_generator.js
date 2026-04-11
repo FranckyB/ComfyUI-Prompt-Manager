@@ -684,8 +684,12 @@ async function updateUI(node) {
         if (rows.seed?._setOriginal) rows.seed._setOriginal(s.seed ?? 0);
         if (rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed ?? 0);
         // WAN Video dual steps
-        if (rows.steps_high?._setOriginal) rows.steps_high._setOriginal(s.steps_high ?? 4);
-        if (rows.steps_low?._setOriginal)  rows.steps_low._setOriginal(s.steps_low  ?? 20);
+        // Fall back to splitting s.steps evenly if steps_high/steps_low not in wf_data
+        const _total = s.steps || 6;
+        const _sh = s.steps_high ?? Math.ceil(_total / 2);
+        const _sl = s.steps_low  ?? (_total - Math.ceil(_total / 2));
+        if (rows.steps_high?._setOriginal) rows.steps_high._setOriginal(_sh);
+        if (rows.steps_low?._setOriginal)  rows.steps_low._setOriginal(_sl);
     }
 
     // Resolution
@@ -944,10 +948,10 @@ function syncHidden(node) {
             if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
             // WAN Video dual steps
             if (r.steps_high?._inp && r.steps_high.style.display !== "none") {
-                ov.steps_high = parseInt(r.steps_high._inp.value) || 4;
+                ov.steps_high = parseInt(r.steps_high._inp.value) || 3;
             }
             if (r.steps_low?._inp && r.steps_low.style.display !== "none") {
-                ov.steps_low = parseInt(r.steps_low._inp.value) || 20;
+                ov.steps_low = parseInt(r.steps_low._inp.value) || 3;
             }
         }
         if (node._weResRows) {
@@ -1339,8 +1343,8 @@ app.registerExtension({
             // Standard steps (hidden when WAN Video)
             const stepsRow     = makeInput("Steps",      "number", 20,  { min: 1, max: 200, step: 1 }, _syncS);
             // WAN Video dual steps (hidden by default)
-            const stepsHighRow = makeInput("Steps (High)", "number", 4,  { min: 1, max: 200, step: 1 }, _syncS);
-            const stepsLowRow  = makeInput("Steps (Low)",  "number", 20, { min: 1, max: 200, step: 1 }, _syncS);
+            const stepsHighRow = makeInput("Steps (High)", "number", 3,  { min: 1, max: 200, step: 1 }, _syncS);
+            const stepsLowRow  = makeInput("Steps (Low)",  "number", 3, { min: 1, max: 200, step: 1 }, _syncS);
             stepsHighRow.style.display = "none";
             stepsLowRow.style.display  = "none";
 
