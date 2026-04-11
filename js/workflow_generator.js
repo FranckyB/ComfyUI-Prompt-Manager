@@ -111,24 +111,49 @@ function makeBtn(label, onclick, extraStyle) {
 }
 
 // --- Section builder (always expanded) ---
-function makeSection(title) {
+function makeSection(title, startOpen = true) {
     const wrap = makeEl("div", {
         borderRadius: "6px", overflow: "hidden", marginTop: "2px",
         backgroundColor: C.bgCard, flexShrink: "0",
     });
     const header = makeEl("div", {
-        display: "flex", alignItems: "center",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "4px 8px",
         fontSize: "11px", fontWeight: "600", color: "#aaa",
-        userSelect: "none",
+        userSelect: "none", cursor: "pointer",
         borderBottom: "1px solid rgba(255,255,255,0.1)",
     });
     const label = makeEl("span", {}, title);
-    header.append(label);
-    const body = makeEl("div", { padding: "4px 8px" });
+    const chevron = makeEl("span", {
+        fontSize: "10px", color: C.textMuted, transition: "transform 0.15s",
+        marginLeft: "4px", flexShrink: "0",
+    }, startOpen ? "\u25BC" : "\u25B6");
+    header.append(label, chevron);
+    const body = makeEl("div", {
+        padding: "4px 8px",
+        display: startOpen ? "" : "none",
+    });
+    // Toggle body on header click — dirty canvas so computeSize is re-queried.
+    header.addEventListener("click", () => {
+        const opening = body.style.display === "none";
+        body.style.display = opening ? "" : "none";
+        chevron.textContent = opening ? "\u25BC" : "\u25B6";
+        app.graph.setDirtyCanvas(true, true);
+    });
     wrap._titleLabel = label;
+    wrap._chevron = chevron;
     wrap.append(header, body);
     wrap._body = body;
+    wrap._expand = () => {
+        body.style.display = "";
+        chevron.textContent = "\u25BC";
+        app.graph.setDirtyCanvas(true, true);
+    };
+    wrap._collapse = () => {
+        body.style.display = "none";
+        chevron.textContent = "\u25B6";
+        app.graph.setDirtyCanvas(true, true);
+    };
     return wrap;
 }
 
@@ -1377,18 +1402,23 @@ app.registerExtension({
             root.appendChild(loraSec);
 
             const MIN_W = 470;
+            const MIN_H = 300;
 
-            // -- Register the DOM widget using the modern ComfyUI getHeight API.
-            // getHeight() tells the framework exactly how tall the DOM area is;
-            // it auto-grows the node to fit without any manual setSize calls.
-            // This avoids the grey gap caused by the old computeSize+setSize
-            // pattern (see ComfyUI_frontend issue #7942).
+            // -- Register the DOM widget.
+            // Use computeSize directly on the widget — the same pattern used by
+            // prompt_manager_advanced.js (which has no grey-gap or resize issues).
+            // LiteGraph re-queries widget.computeSize on every canvas redraw, so
+            // calling app.graph.setDirtyCanvas(true, true) is all that is needed
+            // to make the node grow/shrink when sections open or close.
+            // No setSize(), no getHeight/getMinHeight, no _weRecalc loop needed.
             const domW = node.addDOMWidget("we_ui", "div", root, {
                 hideOnZoom: false,
                 serialize: false,
-                getHeight: () => root.scrollHeight || 400,
-                getMinHeight: () => 300,
             });
+            domW.computeSize = function (width) {
+                const h = root.scrollHeight || MIN_H;
+                return [width, h];
+            };
 
             // -- Only hide data widgets, keep toggle switches visible --
             // IMPORTANT: override_data and lora_state must keep their original
@@ -1407,12 +1437,19 @@ app.registerExtension({
                 if (w.element) w.element.style.display = "none";
             }
 
-            // Enforce minimum width when user drags to resize.
+            // Enforce minimum size when user drags to resize.
+            // Min height is content height so the node can't be dragged smaller
+            // than the visible UI — but the user CAN make it larger.
             const origOnResize = node.onResize;
             node.onResize = function (size) {
+                const contentH = root.scrollHeight || MIN_H;
                 size[0] = Math.max(MIN_W, size[0]);
+                size[1] = Math.max(contentH, MIN_H, size[1]);
                 if (origOnResize) return origOnResize.apply(this, arguments);
             };
+
+            // Set initial size to fit content.
+            node.setSize([MIN_W, (root.scrollHeight || MIN_H)]);
 
             applyZoomScaling(root);
 
