@@ -1071,6 +1071,7 @@ class WorkflowGenerator:
                     'vae':               vae_name or '',
                     'width':             width,
                     'height':            height,
+                    'batch_size':        batch,
                     'seed':              sampler_params.get('seed', 0),
                     'cfg':               sampler_params.get('cfg', 5.0),
                     'sampler_name':      sampler_params.get('sampler_name', 'euler'),
