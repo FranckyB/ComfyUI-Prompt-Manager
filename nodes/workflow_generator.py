@@ -666,13 +666,13 @@ class WorkflowGenerator:
                 # ── Connectable inputs ────────────────────────────────
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
-                "source_image": ("IMAGE", {
-                    "tooltip": "Input image for WAN Video i2v (image-to-video) generation.",
-                }),
                 "workflow_data_input": ("WORKFLOW_DATA", {
                     "forceInput": True,
                     "lazy": True,
                     "tooltip": "Connect workflow_data output from PromptExtractor",
+                }),
+                "source_image": ("IMAGE", {
+                    "tooltip": "Input image for WAN Video i2v (image-to-video) generation.",
                 }),
                 # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
