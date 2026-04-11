@@ -176,10 +176,11 @@ MODEL_FAMILIES = {
 # Compatibility groups — checkpoint families that can share each other's models.
 # VAE/CLIP are NOT grouped (they differ per family) — model weights only.
 MODEL_COMPAT_GROUPS = [
-    {"sdxl"},                          # SDXL-arch — all merged into one now
-    {"flux1"},                         # Flux1 variants — all merged into one now
-    {"zimage"},                        # Z-Image — all merged
-    {"flux2"},                         # Flux2 — all merged
+    {"sdxl"},                                      # SDXL-arch — all merged into one now
+    {"flux1"},                                     # Flux1 variants — all merged into one now
+    {"zimage"},                                    # Z-Image — all merged
+    {"flux2"},                                     # Flux2 — all merged
+    {"wan_image", "wan_video_t2v"},                # WAN Image shares T2V model files
 ]
 
 # Sampling strategy keys (referenced by workflow_generator.py)
