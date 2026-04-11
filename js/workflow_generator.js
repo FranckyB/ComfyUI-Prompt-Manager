@@ -594,21 +594,30 @@ function makeSeparator() {
 // ============================================================
 // --- Update UI from workflow_data / extracted data ---
 // ============================================================
-function updateUI(node) {
+async function updateUI(node) {
     const d = node._weExtracted;
     if (!d) return;
 
-    // Family
+    // Family — must be set FIRST and dropdowns reloaded before setting
+    // model/VAE/CLIP values, otherwise the wrong family's options are shown.
+    const newFamily = d.model_family || d.family || null;
+    const familyChanged = newFamily && newFamily !== node._weFamily;
     if (node._weFamilySel) {
         const sel = node._weFamilySel;
-        const family = d.model_family || d.family || null;
-        node._weFamily = family;
-        if (family && ![...sel.options].some(o => o.value === family)) {
+        if (newFamily && ![...sel.options].some(o => o.value === newFamily)) {
             const o = document.createElement("option");
-            o.value = family; o.textContent = d.model_family_label || family;
+            o.value = newFamily; o.textContent = d.model_family_label || newFamily;
             sel.appendChild(o);
         }
-        sel.value = family || "sdxl";
+        sel.value = newFamily || "sdxl";
+        node._weFamily = newFamily;
+    }
+
+    // If family changed, reload model/VAE/CLIP dropdown lists for the new
+    // family before setting values — otherwise _setOriginal can't find the
+    // option in the list and the selection falls back to (Default).
+    if (familyChanged && node._onFamilyChanged) {
+        await node._onFamilyChanged(newFamily, { skipAutoSelect: true });
     }
 
     // Model A
@@ -1237,8 +1246,9 @@ app.registerExtension({
                 }
             };
 
-            // Family change handler
-            const onFamilyChanged = async (familyKey) => {
+            // Family change handler — also stored on node so updateUI can call it
+            // skipAutoSelect: when true, don't auto-pick first model (updateUI sets it)
+            const onFamilyChanged = async (familyKey, { skipAutoSelect = false } = {}) => {
                 node._weFamily = familyKey;
                 // Reset VAE/CLIP overrides — new family means old selections are invalid
                 delete node._weOverrides.vae;
@@ -1273,14 +1283,19 @@ app.registerExtension({
                     reloadClip(),
                 ]);
                 // Auto-select first available model — never leave (none) selected
-                const firstModel = node._weModelRow._sel.options[1]?.value || "";
-                if (firstModel) {
-                    node._weModelRow._sel.value = firstModel;
-                    node._weOverrides.model_a = firstModel;
+                // (skipped when called from updateUI, which sets the correct model itself)
+                if (!skipAutoSelect) {
+                    const firstModel = node._weModelRow._sel.options[1]?.value || "";
+                    if (firstModel) {
+                        node._weModelRow._sel.value = firstModel;
+                        node._weOverrides.model_a = firstModel;
+                    }
                 }
                 updateWanVisibility(node);
                 _syncS();
             };
+            // Expose so updateUI can trigger family reload from workflow_data
+            node._onFamilyChanged = onFamilyChanged;
 
             // -- 3. SAMPLER section --
             const sampSec = makeSection("SAMPLER");
