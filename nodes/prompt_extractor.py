@@ -1168,6 +1168,12 @@ def traverse_to_find_text(node_id, input_slot, node_map, link_map, visited=None,
                         node_map, link_map, visited, max_depth - 1
                     )
 
+    # PromptExtractor / WorkflowGenerator — text outputs are computed at runtime,
+    # NOT stored in widgets_values (which contain file selector, toggles, etc.).
+    # Without this guard the generic fallback below picks up the image filename.
+    if node_type in ['PromptExtractor', 'WorkflowGenerator']:
+        return ""
+
     # Generic: if node has a text/string output, check widgets
     for val in widgets_values:
         if isinstance(val, str) and len(val) > 20:
@@ -1904,6 +1910,10 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # Initialize lora_chains early so embedded data extraction can append to it
     lora_chains = []
 
+    # Collect embedded data candidates from PromptExtractor/WorkflowGenerator nodes
+    # (resolved after the loop — WorkflowGenerator takes priority if both are present)
+    _embedded_candidates = []
+
     # Iterate through all nodes (workflow format) - including subgraphs
     all_workflow_nodes = []
     if workflow_data:
@@ -1990,55 +2000,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                             positive_prompts.append(val.strip())
                             break
 
-            # PromptExtractor nodes — read back embedded extracted_data
-            elif node_type == 'PromptExtractor':
+            # PromptExtractor / WorkflowGenerator nodes — collect embedded extracted_data.
+            # If both are present, WorkflowGenerator takes priority (it generated the image).
+            # Collected here; applied after the loop so we can determine priority.
+            elif node_type in ('PromptExtractor', 'WorkflowGenerator'):
                 ext_data = node.get('extracted_data')
                 if ext_data and isinstance(ext_data, dict):
-                    ext_pos = ext_data.get('positive_prompt', '').strip()
-                    ext_neg = ext_data.get('negative_prompt', '').strip()
-                    if ext_pos:
-                        positive_prompts.append(ext_pos)
-                    if ext_neg:
-                        negative_prompts.append(ext_neg)
-
-                    # Extract LoRAs from embedded data
-                    for stack_label, key in [('A', 'loras_a'), ('B', 'loras_b')]:
-                        ext_loras = ext_data.get(key, [])
-                        if not ext_loras:
-                            continue
-                        chain_loras_list = []
-                        for lora_item in ext_loras:
-                            if not isinstance(lora_item, dict):
-                                continue
-                            lora_name = lora_item.get('name', '')
-                            if not lora_name or is_lora_blacklisted(lora_name):
-                                continue
-                            strength = float(lora_item.get('strength', 1.0))
-                            clip_strength = float(lora_item.get('clip_strength', strength))
-                            chain_loras_list.append({
-                                'name': lora_name,
-                                'path': lora_item.get('path', lora_name),
-                                'model_strength': strength,
-                                'clip_strength': clip_strength,
-                                'active': True
-                            })
-                        if chain_loras_list:
-                            print(f"[PromptExtractor] PromptExtractor embedded data stack {stack_label}: {len(chain_loras_list)} LoRAs")
-                            lora_chains.append({
-                                'titles': [title or 'PromptExtractor'],
-                                'loras': chain_loras_list,
-                                'terminal_title': title or 'PromptExtractor',
-                                'source_id': node_id,
-                                '_pm_stack': stack_label
-                            })
-
-                    # Extract model info
-                    ext_model_a = ext_data.get('model_a', '').strip()
-                    ext_model_b = ext_data.get('model_b', '').strip()
-                    if ext_model_a:
-                        _pe_extracted_models.append(('a', ext_model_a, title or 'PromptExtractor'))
-                    if ext_model_b:
-                        _pe_extracted_models.append(('b', ext_model_b, title or 'PromptExtractor'))
+                    _embedded_candidates.append((node_type, node_id, title, ext_data))
 
             # PrimitiveStringMultiline - direct prompt text (only add if connected to something)
             elif node_type == 'PrimitiveStringMultiline':
@@ -2054,6 +2022,72 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         else:
                             positive_prompts.append(val.strip())
                         break
+
+    # ========================================
+    # RESOLVE EMBEDDED DATA (PromptExtractor vs WorkflowGenerator)
+    # ========================================
+    # If both node types are present, use only WorkflowGenerator’s data
+    # (it actually generated the image; PromptExtractor merely forwarded).
+    if _embedded_candidates:
+        has_wg = any(nt == 'WorkflowGenerator' for nt, *_ in _embedded_candidates)
+        chosen = [
+            c for c in _embedded_candidates
+            if not has_wg or c[0] == 'WorkflowGenerator'
+        ]
+        if has_wg and len(_embedded_candidates) > len(chosen):
+            print("[PromptExtractor] Both PromptExtractor and WorkflowGenerator found "
+                  "— preferring WorkflowGenerator embedded data")
+
+        for node_type, node_id, title, ext_data in chosen:
+            ext_pos = ext_data.get('positive_prompt', '').strip()
+            ext_neg = ext_data.get('negative_prompt', '').strip()
+            if ext_pos:
+                positive_prompts.append(ext_pos)
+            if ext_neg:
+                negative_prompts.append(ext_neg)
+
+            # Extract LoRAs from embedded data (with active/available state)
+            for stack_label, key in [('A', 'loras_a'), ('B', 'loras_b')]:
+                ext_loras = ext_data.get(key, [])
+                if not ext_loras:
+                    continue
+                chain_loras_list = []
+                for lora_item in ext_loras:
+                    if not isinstance(lora_item, dict):
+                        continue
+                    lora_name = lora_item.get('name', '')
+                    if not lora_name or is_lora_blacklisted(lora_name):
+                        continue
+                    strength = float(lora_item.get('strength', lora_item.get('model_strength', 1.0)))
+                    clip_strength = float(lora_item.get('clip_strength', strength))
+                    chain_loras_list.append({
+                        'name': lora_name,
+                        'path': lora_item.get('path', lora_name),
+                        'model_strength': strength,
+                        'clip_strength': clip_strength,
+                        'active': lora_item.get('active', True),
+                        'available': lora_item.get('available', True),
+                    })
+                if chain_loras_list:
+                    active_count = sum(1 for lr in chain_loras_list if lr.get('active', True))
+                    avail_count = sum(1 for lr in chain_loras_list if lr.get('available', True))
+                    print(f"[PromptExtractor] {node_type} embedded data stack {stack_label}: "
+                          f"{len(chain_loras_list)} LoRAs ({active_count} active, {avail_count} available)")
+                    lora_chains.append({
+                        'titles': [title or node_type],
+                        'loras': chain_loras_list,
+                        'terminal_title': title or node_type,
+                        'source_id': node_id,
+                        '_pm_stack': stack_label
+                    })
+
+            # Extract model info
+            ext_model_a = ext_data.get('model_a', '').strip()
+            ext_model_b = ext_data.get('model_b', '').strip()
+            if ext_model_a:
+                _pe_extracted_models.append(('a', ext_model_a, title or node_type))
+            if ext_model_b:
+                _pe_extracted_models.append(('b', ext_model_b, title or node_type))
 
     # ========================================
     # UNIFIED LORA CHAIN EXTRACTION
@@ -3108,6 +3142,17 @@ class PromptExtractor:
                         overrides={'_source': 'PromptExtractor'},
                         sampler_params=_sampler,
                     )
+                    # Add model / VAE availability so WorkflowGenerator can show red
+                    from ..py.workflow_extraction_utils import resolve_model_name, resolve_vae_name
+                    if model_a:
+                        _res_a, _ = resolve_model_name(model_a)
+                        _simplified['model_a_found'] = _res_a is not None
+                    if model_b:
+                        _res_b, _ = resolve_model_name(model_b)
+                        _simplified['model_b_found'] = _res_b is not None
+                    _vae_name = _vae.get('name', '') if isinstance(_vae, dict) else (_vae or '')
+                    if _vae_name and not _vae_name.startswith('('):
+                        _simplified['vae_found'] = resolve_vae_name(_vae_name) is not None
                     workflow_data = json.dumps(_simplified, indent=2)
                     print(f"[PromptExtractor] Output structured workflow_data ({len(workflow_data)} chars)")
                 except Exception as e:
@@ -3223,8 +3268,9 @@ class PromptExtractor:
         if not model_b:
             model_b = " "
 
-        # Embed extracted data into workflow so it's saved in the PNG metadata
-        # This allows re-extraction from images generated using PromptExtractor
+        # Embed extracted_data into workflow so it's saved in the PNG metadata.
+        # Uses the same schema as workflow_data (build_simplified_workflow_data)
+        # with LoRA entries enriched with active/available state.
         if extra_pnginfo is not None and unique_id is not None:
             # Handle extra_pnginfo whether it's a dict or a list wrapper
             pnginfo = extra_pnginfo
@@ -3237,23 +3283,40 @@ class PromptExtractor:
             else:
                 workflow = {}
 
-            loras_a_data = []
-            for lora_path, strength, clip_strength in final_lora_stack_a:
-                lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                loras_a_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
-            loras_b_data = []
-            for lora_path, strength, clip_strength in final_lora_stack_b:
-                lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                loras_b_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
+            # Build enriched LoRA lists with active + available state
+            def _enrich_lora_stack(stack_tuples):
+                enriched = []
+                for lora_path, strength, clip_strength in stack_tuples:
+                    lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+                    _, found = resolve_lora_path(lora_name)
+                    enriched.append({
+                        'name': lora_name,
+                        'path': lora_path,
+                        'strength': strength,
+                        'clip_strength': clip_strength,
+                        'active': True,
+                        'available': found,
+                    })
+                return enriched
 
-            extracted_data = {
-                'positive_prompt': positive_prompt.strip(),
-                'negative_prompt': negative_prompt.strip(),
-                'loras_a': loras_a_data,
-                'loras_b': loras_b_data,
-                'model_a': model_a.strip(),
-                'model_b': model_b.strip(),
-            }
+            loras_a_enriched = _enrich_lora_stack(final_lora_stack_a)
+            loras_b_enriched = _enrich_lora_stack(final_lora_stack_b)
+
+            # Reuse the already-built _simplified workflow_data dict if available,
+            # otherwise build a minimal one.
+            try:
+                extracted_data = json.loads(workflow_data) if isinstance(workflow_data, str) and workflow_data.strip() else {}
+            except (json.JSONDecodeError, TypeError):
+                extracted_data = {}
+
+            # Overwrite LoRA lists with enriched versions
+            extracted_data['loras_a'] = loras_a_enriched
+            extracted_data['loras_b'] = loras_b_enriched
+            # Ensure core fields are present (even if workflow_data build failed)
+            extracted_data.setdefault('positive_prompt', positive_prompt.strip())
+            extracted_data.setdefault('negative_prompt', negative_prompt.strip())
+            extracted_data.setdefault('model_a', model_a.strip())
+            extracted_data.setdefault('model_b', model_b.strip())
 
             wf_nodes = workflow.get('nodes', []) if isinstance(workflow, dict) else []
             for wf_node in wf_nodes:

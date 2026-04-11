@@ -974,7 +974,10 @@ function parseWorkflowData(jsonStr) {
             loras_b: d.loras_b || [],
             model_a: d.model_a || "",
             model_b: d.model_b || "",
+            model_a_found: d.model_a_found,
+            model_b_found: d.model_b_found,
             vae: { name: d.vae || "", source: "workflow_data" },
+            vae_found: d.vae_found,
             clip: {
                 names: Array.isArray(d.clip) ? d.clip : (d.clip ? [d.clip] : []),
                 type: "", source: "workflow_data",
@@ -1364,11 +1367,17 @@ app.registerExtension({
             };
 
             // -- Only hide data widgets, keep toggle switches visible --
+            // IMPORTANT: override_data and lora_state must keep their original
+            // STRING type so ComfyUI's graphToPrompt includes them in execution.
+            // "converted-widget" type causes ComfyUI to skip the widget value.
             const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input"]);
+            const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
                 w.computeSize = () => [0, -4];
-                w.type = "converted-widget";
+                if (!KEEP_TYPE.has(w.name)) {
+                    w.type = "converted-widget";
+                }
                 w.hidden = true;
                 w.draw = function () {};
                 if (w.element) w.element.style.display = "none";
@@ -1403,6 +1412,7 @@ app.registerExtension({
                         }
                         if (parsed) {
                             node._weExtracted = parsed;
+                            node._wePopulated = true;
                             node._weLoraState = {};
                             node._weOverrides = {};
                             updateUI(node);
@@ -1457,17 +1467,49 @@ app.registerExtension({
         nodeType.prototype.onExecuted = function (message) {
             origOnExecuted?.apply(this, arguments);
 
-            // Read extracted data sent back by Python execute()
-            // Do NOT call updateUI() — that resets user overrides.
-            // Just update the baseline cache for tab-switch survival.
             const info = message?.workflow_info?.[0]?.extracted;
             if (info) {
-                this._weExtracted = info;
-                // Cache for tab-switch survival
-                this.properties = this.properties || {};
-                this.properties.we_extracted_cache = JSON.stringify(info);
-                // Update LoRA availability display (red/blue) without resetting state
-                updateLoras(this);
+                const wfToggle = this.widgets?.find(w => w.name === "use_workflow_data");
+
+                if (!wfToggle?.value && this._wePopulated) {
+                    // Manual mode (use_workflow_data OFF) with existing data:
+                    // Python returned empty defaults — do NOT overwrite _weExtracted.
+                    // Just update availability flags from the execution result.
+                    if (this._weExtracted) {
+                        if (info.lora_availability) this._weExtracted.lora_availability = info.lora_availability;
+                        if (info.model_a_found !== undefined) this._weExtracted.model_a_found = info.model_a_found;
+                        if (info.model_b_found !== undefined) this._weExtracted.model_b_found = info.model_b_found;
+                        if (info.vae_found !== undefined) this._weExtracted.vae_found = info.vae_found;
+                        this.properties = this.properties || {};
+                        this.properties.we_extracted_cache = JSON.stringify(this._weExtracted);
+                        updateLoras(this);
+                    }
+                } else {
+                    // use_workflow_data ON or first-time population
+                    const prev = this._weExtracted;
+                    const sourceChanged = !prev
+                        || prev.model_a !== info.model_a
+                        || prev.positive_prompt !== info.positive_prompt
+                        || prev.negative_prompt !== info.negative_prompt
+                        || prev.model_family !== info.model_family
+                        || JSON.stringify(prev.resolution) !== JSON.stringify(info.resolution)
+                        || JSON.stringify(prev.sampler) !== JSON.stringify(info.sampler);
+
+                    this._weExtracted = info;
+                    // Cache for tab-switch survival
+                    this.properties = this.properties || {};
+                    this.properties.we_extracted_cache = JSON.stringify(info);
+
+                    if (sourceChanged) {
+                        // New or changed source data — populate all fields
+                        this._wePopulated = true;
+                        this._weLoraState = {};
+                        updateUI(this);
+                    } else {
+                        // Same source — preserve user overrides, just refresh lora display
+                        updateLoras(this);
+                    }
+                }
             }
 
             // Advance seed per control mode
@@ -1481,13 +1523,16 @@ app.registerExtension({
             const node = this;
             node._configuredFromWorkflow = true;
 
-            // Re-hide data widgets
+            // Re-hide data widgets (same logic as onNodeCreated)
             const domW = node.widgets?.find(w => w.name === "we_ui");
             const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input"]);
+            const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
                 w.computeSize = () => [0, -4];
-                w.type = "converted-widget";
+                if (!KEEP_TYPE.has(w.name)) {
+                    w.type = "converted-widget";
+                }
                 w.hidden = true;
                 w.draw = function () {};
                 if (w.element) w.element.style.display = "none";
@@ -1505,6 +1550,7 @@ app.registerExtension({
 
             if (hasCache) {
                 node._weExtracted = cached;
+                node._wePopulated = true;
                 node._weLoraState = {};
                 node._weOverrides = {};
                 updateUI(node);
