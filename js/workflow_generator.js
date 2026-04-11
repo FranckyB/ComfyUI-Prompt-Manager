@@ -857,6 +857,7 @@ function syncHidden(node) {
         const w = node.widgets?.find(x => x.name === name);
         if (w) w.value = val;
     };
+    const wfOn = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
     const ov = { ...node._weOverrides };
     if (node._weModelRow?._getValue) {
         const v = node._weModelRow._getValue();
@@ -874,32 +875,45 @@ function syncHidden(node) {
         const v = node._weClipRow._getValue();
         if (v) ov.clip_names = [v];
     }
-    if (node._weSamplerRows) {
-        const r = node._weSamplerRows;
-        if (r.steps?._inp) ov.steps = parseInt(r.steps._inp.value) || 20;
-        if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
-        if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
-        if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
-        if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
-        // WAN Video dual steps
-        if (r.steps_high?._inp && r.steps_high.style.display !== "none") {
-            ov.steps_high = parseInt(r.steps_high._inp.value) || 4;
+    // When workflow_data is driving the node, sampler/resolution/prompts come
+    // from the source — do NOT capture them as overrides or they will freeze
+    // at stale values and prevent the source from updating the UI.
+    if (!wfOn) {
+        if (node._weSamplerRows) {
+            const r = node._weSamplerRows;
+            if (r.steps?._inp) ov.steps = parseInt(r.steps._inp.value) || 20;
+            if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
+            if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
+            if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
+            if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
+            // WAN Video dual steps
+            if (r.steps_high?._inp && r.steps_high.style.display !== "none") {
+                ov.steps_high = parseInt(r.steps_high._inp.value) || 4;
+            }
+            if (r.steps_low?._inp && r.steps_low.style.display !== "none") {
+                ov.steps_low = parseInt(r.steps_low._inp.value) || 20;
+            }
         }
-        if (r.steps_low?._inp && r.steps_low.style.display !== "none") {
-            ov.steps_low = parseInt(r.steps_low._inp.value) || 20;
+        if (node._weResRows) {
+            const r = node._weResRows;
+            if (r.width?._inp) ov.width = parseInt(r.width._inp.value) || 768;
+            if (r.height?._inp) ov.height = parseInt(r.height._inp.value) || 1280;
+            if (r.batch?._inp) ov.batch_size = parseInt(r.batch._inp.value) || 1;
+            if (r.frames?._inp && r.frames.style.display !== "none") {
+                ov.length = parseInt(r.frames._inp.value) || 81;
+            }
         }
+        if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
+        if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
+    } else {
+        // In workflow_data mode, remove any stale sampler/resolution/prompt overrides
+        // so Python always uses the values from the source workflow.
+        delete ov.steps; delete ov.cfg; delete ov.seed;
+        delete ov.sampler_name; delete ov.scheduler;
+        delete ov.steps_high; delete ov.steps_low;
+        delete ov.width; delete ov.height; delete ov.batch_size; delete ov.length;
+        delete ov.positive_prompt; delete ov.negative_prompt;
     }
-    if (node._weResRows) {
-        const r = node._weResRows;
-        if (r.width?._inp) ov.width = parseInt(r.width._inp.value) || 768;
-        if (r.height?._inp) ov.height = parseInt(r.height._inp.value) || 1280;
-        if (r.batch?._inp) ov.batch_size = parseInt(r.batch._inp.value) || 1;
-        if (r.frames?._inp && r.frames.style.display !== "none") {
-            ov.length = parseInt(r.frames._inp.value) || 81;
-        }
-    }
-    if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
-    if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
     if (node._weFamily) ov._family = node._weFamily;
 
     // Control after generate
@@ -1609,22 +1623,15 @@ app.registerExtension({
                         updateLoras(node);
                     }
                 } else {
-                    // ── use_workflow_data ON — full UI population from source ──
-                    const prev = node._weExtracted;
-                    const sourceChanged = !prev
-                        || prev.model_a !== info.model_a
-                        || prev.positive_prompt !== info.positive_prompt
-                        || prev.negative_prompt !== info.negative_prompt
-                        || prev.model_family !== info.model_family
-                        || JSON.stringify(prev.resolution) !== JSON.stringify(info.resolution)
-                        || JSON.stringify(prev.sampler) !== JSON.stringify(info.sampler);
-
+                    // ── use_workflow_data ON — always reflect the source ──────
+                    // syncHidden no longer captures sampler/resolution/prompts
+                    // in this mode, so overrides never freeze them. Always call
+                    // updateUI so the UI stays in sync with the source workflow.
                     node._weExtracted = info;
                     node.properties = node.properties || {};
                     node.properties.we_extracted_cache = JSON.stringify(info);
 
-                    if (sourceChanged) {
-                        // New source — clear old overrides so fresh data shows
+                    {
                         node._wePopulated = true;
                         node._weLoraState = {};
                         node._weOverrides = {};
@@ -1702,32 +1709,19 @@ app.registerExtension({
                         updateLoras(this);
                     }
                 } else {
-                    // use_workflow_data ON — full UI population from source
-                    const prev = this._weExtracted;
-                    const sourceChanged = !prev
-                        || prev.model_a !== info.model_a
-                        || prev.positive_prompt !== info.positive_prompt
-                        || prev.negative_prompt !== info.negative_prompt
-                        || prev.model_family !== info.model_family
-                        || JSON.stringify(prev.resolution) !== JSON.stringify(info.resolution)
-                        || JSON.stringify(prev.sampler) !== JSON.stringify(info.sampler);
-
+                    // use_workflow_data ON — always reflect the source
                     this._weExtracted = info;
                     this.properties = this.properties || {};
                     this.properties.we_extracted_cache = JSON.stringify(info);
 
-                    if (sourceChanged) {
-                        this._wePopulated = true;
-                        this._weLoraState = {};
-                        this._weOverrides = {};
-                        if (this.properties) {
-                            delete this.properties.we_override_data;
-                            delete this.properties.we_lora_state;
-                        }
-                        updateUI(this);
-                    } else {
-                        updateLoras(this);
+                    this._wePopulated = true;
+                    this._weLoraState = {};
+                    this._weOverrides = {};
+                    if (this.properties) {
+                        delete this.properties.we_override_data;
+                        delete this.properties.we_lora_state;
                     }
+                    updateUI(this);
                 }
             }
             // Reset flag for next execution
@@ -1769,17 +1763,21 @@ app.registerExtension({
             try { cached = JSON.parse(savedCache || "{}"); } catch { cached = null; }
             const hasCache = cached && Object.keys(cached).length > 0;
 
+            // Restore freeze state based on use_workflow_data toggle
+            const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
+
             if (hasCache) {
                 node._weExtracted = cached;
                 node._wePopulated = true;
                 node._weLoraState = {};
                 node._weOverrides = {};
                 updateUI(node);
-                applyOverrides(node, savedOv, savedLs);
+                // Only restore overrides in manual mode — in workflow_data mode
+                // prompts/sampler/resolution come from the source on next run.
+                if (!wfToggle?.value) {
+                    applyOverrides(node, savedOv, savedLs);
+                }
             }
-
-            // Restore freeze state based on use_workflow_data toggle
-            const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
             if (wfToggle?.value) {
                 setFieldsFrozen(node, true);
             }
