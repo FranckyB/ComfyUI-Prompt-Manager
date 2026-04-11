@@ -770,6 +770,8 @@ class WorkflowGenerator:
                     'height': wf_res.get('height', 1280),
                     'batch_size': wf_res.get('batch_size', 1),
                     'length': wf_res.get('length'),
+                    '_width_from_node_ref':  wf_res.get('_width_from_node_ref',  False),
+                    '_height_from_node_ref': wf_res.get('_height_from_node_ref', False),
                 },
                 'is_video': wf_res.get('length') is not None,
                 'model_family': wf_data.get('family', ''),
@@ -830,7 +832,18 @@ class WorkflowGenerator:
         sampler_params['denoise'] = 1.0
         for key in ['steps', 'cfg', 'seed', 'sampler_name', 'scheduler']:
             if key in overrides:
-                sampler_params[key] = overrides[key]
+                val = overrides[key]
+                # Guard: overrides could carry a stale list from a corrupt
+                # override_data blob — coerce numeric fields to scalar.
+                if key in ('steps', 'seed') and isinstance(val, list):
+                    val = 0
+                elif key == 'cfg' and isinstance(val, list):
+                    val = 5.0
+                sampler_params[key] = val
+        # Also ensure extracted sampler seed/steps are never lists
+        for key, default in (('seed', 0), ('steps', 20), ('cfg', 5.0)):
+            if isinstance(sampler_params.get(key), list):
+                sampler_params[key] = default
         # WAN Video step overrides (steps_high / steps_low)
         if 'steps_high' in overrides:
             sampler_params['steps_high'] = int(overrides['steps_high'])

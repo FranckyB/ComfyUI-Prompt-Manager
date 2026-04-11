@@ -849,5 +849,9 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
             "height":     overrides.get('height',     extracted.get('resolution', {}).get('height',     512)),
             "batch_size": overrides.get('batch_size', extracted.get('resolution', {}).get('batch_size', 1)),
             "length":     overrides.get('length',     extracted.get('resolution', {}).get('length',     None)),
+            # Propagate node-ref flags so WorkflowGenerator knows to use
+            # source_image dimensions rather than the stale template values.
+            "_width_from_node_ref":  extracted.get('resolution', {}).get('_width_from_node_ref',  False),
+            "_height_from_node_ref": extracted.get('resolution', {}).get('_height_from_node_ref', False),
         },
     }
