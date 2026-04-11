@@ -559,7 +559,11 @@ def _load_clip(clip_info, overrides, existing_clip=None):
     elif t and 'sd3' in t:
         clip_type = comfy.sd.CLIPType.SD3
     elif t and 'wan' in t:
-        clip_type = comfy.sd.CLIPType.WAN  # umt5-xxl encoder (vocab 256384)
+        clip_type = comfy.sd.CLIPType.WAN        # umt5-xxl encoder (vocab 256384)
+    elif t and 'qwen_image' in t:
+        clip_type = comfy.sd.CLIPType.QWEN_IMAGE  # Qwen2.5-VL image encoder
+    elif t and 'lumina2' in t:
+        clip_type = comfy.sd.CLIPType.LUMINA2     # z-image / Lumina2 encoder
     else:
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
 
@@ -851,6 +855,10 @@ class WorkflowGenerator:
                 family_key = 'sd3'
             elif 'wan' in clip_type:
                 family_key = 'wan_video_t2v'  # closest generic WAN family
+            elif 'qwen_image' in clip_type:
+                family_key = 'qwen_image'
+            elif 'lumina2' in clip_type:
+                family_key = 'zimage'
             # other: fall through to sdxl default — better than wrong family
         if not family_key:
             family_key = "sdxl"
