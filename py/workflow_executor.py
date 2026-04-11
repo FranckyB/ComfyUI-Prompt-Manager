@@ -304,7 +304,8 @@ def loras_to_text(lora_list, lora_overrides=None, stack_key=""):
 
 # ── In-process node execution ─────────────────────────────────────────────────
 
-def execute_template(api, wmap, family_key, source_image=None):
+def execute_template(api, wmap, family_key, source_image=None,
+                     cached_model_a=None, cached_model_b=None):
     """
     Execute a patched API-format workflow in-process.
 
@@ -315,7 +316,9 @@ def execute_template(api, wmap, family_key, source_image=None):
     Returns (IMAGE tensor, LATENT dict) on success.
     Raises on failure.
 
-    source_image: optional IMAGE tensor for i2v workflows.
+    source_image:    optional IMAGE tensor for i2v workflows.
+    cached_model_a:  optional (model, clip, vae) tuple from caller's cache.
+    cached_model_b:  optional (model, clip, vae) tuple from caller's cache.
     """
     import torch
     import comfy.sd
@@ -353,24 +356,32 @@ def execute_template(api, wmap, family_key, source_image=None):
     )
     from .workflow_extraction_utils import resolve_model_name, resolve_vae_name, resolve_clip_names
 
-    # Model A
-    model_a_name = _val("model_a") or _val("checkpoint")
-    if not model_a_name:
-        raise ValueError("[WorkflowExecutor] No model_a / checkpoint in template")
-    resolved_a, folder_a = resolve_model_name(model_a_name)
-    if resolved_a is None:
-        raise FileNotFoundError(f"[WorkflowExecutor] Model A not found: {model_a_name}")
-    full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
-    model_a, clip_a, vae_a = _load_model_from_path(resolved_a, folder_a, full_path_a)
+    # Model A — use cached if available, otherwise load from disk
+    if cached_model_a is not None:
+        model_a, clip_a, vae_a = cached_model_a
+        print("[WorkflowExecutor] Using cached model A")
+    else:
+        model_a_name = _val("model_a") or _val("checkpoint")
+        if not model_a_name:
+            raise ValueError("[WorkflowExecutor] No model_a / checkpoint in template")
+        resolved_a, folder_a = resolve_model_name(model_a_name)
+        if resolved_a is None:
+            raise FileNotFoundError(f"[WorkflowExecutor] Model A not found: {model_a_name}")
+        full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
+        model_a, clip_a, vae_a = _load_model_from_path(resolved_a, folder_a, full_path_a)
 
-    # Model B (WAN Video only)
+    # Model B (WAN Video only) — use cached if available
     model_b = clip_b_raw = None
     model_b_name = _val("model_b")
     if model_b_name:
-        resolved_b, folder_b = resolve_model_name(model_b_name)
-        if resolved_b:
-            full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
-            model_b, clip_b_raw, _ = _load_model_from_path(resolved_b, folder_b, full_path_b)
+        if cached_model_b is not None:
+            model_b, clip_b_raw, _ = cached_model_b
+            print("[WorkflowExecutor] Using cached model B")
+        else:
+            resolved_b, folder_b = resolve_model_name(model_b_name)
+            if resolved_b:
+                full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
+                model_b, clip_b_raw, _ = _load_model_from_path(resolved_b, folder_b, full_path_b)
 
     # VAE — read from the (already-patched) template.
     # If the user chose (Default), patch_template left the original template value

@@ -1092,10 +1092,28 @@ class WorkflowGenerator:
 
                 patch_template(api, wmap, patch_params)
 
+                # Cache model B for the template path (if needed)
+                cached_b = None
+                if model_name_b:
+                    resolved_b, folder_b = resolve_model_name(model_name_b)
+                    if resolved_b:
+                        full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
+                        _cache_key_b = (full_path_b, family_key)
+                        if _cache_key_b not in self._model_cache:
+                            print(f"[WorkflowGenerator] Loading model B (not cached): {resolved_b}")
+                            self._model_cache[_cache_key_b] = _load_model_from_path(
+                                resolved_b, folder_b, full_path_b
+                            )
+                        else:
+                            print(f"[WorkflowGenerator] Using cached model B: {resolved_b}")
+                        cached_b = self._model_cache[_cache_key_b]
+
                 print(f"[WorkflowGenerator] Template execution: family={family_key}")
                 decoded, out_latent = execute_template(
                     api, wmap, family_key,
                     source_image=source_image,
+                    cached_model_a=(model_a, clip_a, vae_a),
+                    cached_model_b=cached_b,
                 )
 
             else:
