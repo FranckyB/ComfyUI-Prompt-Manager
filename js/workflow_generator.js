@@ -601,9 +601,37 @@ async function updateUI(node) {
     // Family — must be set FIRST and dropdowns reloaded before setting
     // model/VAE/CLIP values, otherwise the wrong family's options are shown.
     const newFamily = d.model_family || d.family || null;
+    console.log("[updateUI] incoming family:", newFamily, "current:", node._weFamily);
     const familyChanged = newFamily && newFamily !== node._weFamily;
     if (node._weFamilySel) {
         const sel = node._weFamilySel;
+        // Pre-load the full families list if not yet done — this normally
+        // happens lazily on focus, but we need it populated before we can
+        // set sel.value to a non-SDXL family key.
+        if (!sel._familiesLoaded) {
+            try {
+                const r = await fetch("/workflow-extractor/list-families");
+                const fd = await r.json();
+                const families = fd.families || {};
+                const curVal = sel.value;
+                sel.innerHTML = "";
+                const keys = Object.keys(families).sort((a, b) => {
+                    if (a === "sdxl") return -1;
+                    if (b === "sdxl") return 1;
+                    return families[a].localeCompare(families[b]);
+                });
+                for (const key of keys) {
+                    const o = document.createElement("option");
+                    o.value = key; o.textContent = families[key];
+                    sel.appendChild(o);
+                }
+                sel.value = curVal;
+                sel._familiesLoaded = true;
+            } catch (e) {
+                console.warn("[updateUI] Could not pre-load families list:", e);
+            }
+        }
+        // If the target family still isn't in the list (server gap), add it.
         if (newFamily && ![...sel.options].some(o => o.value === newFamily)) {
             const o = document.createElement("option");
             o.value = newFamily; o.textContent = d.model_family_label || newFamily;
@@ -611,6 +639,7 @@ async function updateUI(node) {
         }
         sel.value = newFamily || "sdxl";
         node._weFamily = newFamily;
+        console.log("[updateUI] familySel set to:", sel.value, "options:", [...sel.options].map(o => o.value));
     }
 
     // If family changed, reload model/VAE/CLIP dropdown lists for the new
@@ -1147,8 +1176,9 @@ app.registerExtension({
             Object.assign(familySel.style, { ...INPUT_STYLE, color: C.accent, fontWeight: "bold" });
             let _familiesLoaded = false;
             familySel.onfocus = async () => {
-                if (_familiesLoaded) return;
+                if (_familiesLoaded || familySel._familiesLoaded) return;
                 _familiesLoaded = true;
+                familySel._familiesLoaded = true;
                 try {
                     const r = await fetch("/workflow-extractor/list-families");
                     const d = await r.json();
