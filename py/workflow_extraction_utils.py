@@ -785,6 +785,15 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
     family      = extracted.get('model_family', '')
     family_strat = extracted.get('model_family_label', '')
 
+    clip_info = extracted.get('clip', {})
+    clip_source = clip_info.get('source', '')
+    if clip_source == 'checkpoint':
+        loader_type = 'checkpoint'
+    elif clip_source in ('separate', 'workflow_data'):
+        loader_type = 'unet'
+    else:
+        loader_type = ''
+
     return {
         "_version":        1,
         "_source":         overrides.get('_source', 'PromptExtractor'),
@@ -798,6 +807,8 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
         "loras_b":         extracted.get('loras_b', []),
         "vae":             overrides.get('vae',  extracted.get('vae', {}).get('name', '')),
         "clip":            overrides.get('clip_names', extracted.get('clip', {}).get('names', [])),
+        "clip_type":       clip_info.get('type', ''),
+        "loader_type":     loader_type,
         "sampler":         sampler,
         "resolution": {
             "width":      overrides.get('width',      extracted.get('resolution', {}).get('width',      512)),

@@ -742,7 +742,7 @@ class WorkflowGenerator:
                 'clip':    {
                     'names': wf_data.get('clip', []) if isinstance(wf_data.get('clip'), list)
                              else ([wf_data['clip']] if wf_data.get('clip') else []),
-                    'type': '', 'source': 'workflow_data',
+                    'type': wf_data.get('clip_type', ''), 'source': 'workflow_data',
                 },
                 'sampler': {
                     'steps': wf_sampler.get('steps', 20),
@@ -830,6 +830,18 @@ class WorkflowGenerator:
         if not family_key:
             resolved_ref, _ = resolve_model_name(model_name_a)
             family_key = get_model_family(resolved_ref or model_name_a)
+        if not family_key and wf_data:
+            clip_type = wf_data.get('clip_type', '').lower()
+            loader_type = wf_data.get('loader_type', '')
+            if loader_type == 'checkpoint':
+                family_key = 'sdxl'
+            elif 'flux2' in clip_type:
+                family_key = 'flux2'
+            elif 'flux' in clip_type:
+                family_key = 'flux1'
+            elif 'sd3' in clip_type:
+                family_key = 'sd3'
+            # wan/other: fall through to sdxl default — better than wrong family
         if not family_key:
             family_key = "sdxl"
         strategy = get_family_sampler_strategy(family_key)
