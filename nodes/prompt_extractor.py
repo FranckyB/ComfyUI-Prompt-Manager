@@ -175,8 +175,10 @@ def parse_a1111_parameters(parameters_text):
 
         steps = _a1111_val('Steps')
         if steps:
-            try: result['steps'] = int(steps)
-            except ValueError: pass
+            try:
+                result['steps'] = int(steps)
+            except ValueError:
+                pass
 
         sampler = _a1111_val('Sampler')
         if sampler:
@@ -188,13 +190,17 @@ def parse_a1111_parameters(parameters_text):
 
         cfg = _a1111_val('CFG scale')
         if cfg:
-            try: result['cfg'] = float(cfg)
-            except ValueError: pass
+            try: 
+                result['cfg'] = float(cfg)
+            except ValueError:
+                pass
 
         seed = _a1111_val('Seed')
         if seed:
-            try: result['seed'] = int(seed)
-            except ValueError: pass
+            try:
+                result['seed'] = int(seed)
+            except ValueError:
+                pass
 
         size = _a1111_val('Size')
         if size:
@@ -205,8 +211,10 @@ def parse_a1111_parameters(parameters_text):
 
         denoise = _a1111_val('Denoising strength')
         if denoise:
-            try: result['denoise'] = float(denoise)
-            except ValueError: pass
+            try:
+                result['denoise'] = float(denoise)
+            except ValueError:
+                pass
 
     return result
 
@@ -913,7 +921,7 @@ def get_cached_video_frame(relative_path, frame_position):
             if path_key in _video_frames_cache:
                 print(f"[PromptExtractor] Frame cached successfully for: {relative_path}")
             else:
-                print(f"[PromptExtractor] Timeout waiting for JS frame extraction, trying PyAV...")
+                print("[PromptExtractor] Timeout waiting for JS frame extraction, trying PyAV...")
                 return None
 
         except Exception as e:
@@ -3297,10 +3305,10 @@ class PromptExtractor:
                     workflow_data = json.dumps(_simplified, indent=2)
                     print(f"[PromptExtractor] Output structured workflow_data ({len(workflow_data)} chars)")
 
-
                 except Exception as e:
                     print(f"[PromptExtractor] Error building structured workflow_data: {e}")
-                    import traceback; traceback.print_exc()
+                    import traceback
+                    traceback.print_exc()
                     workflow_data = ""
             else:
                 workflow_data = ""

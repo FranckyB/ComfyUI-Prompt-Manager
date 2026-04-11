@@ -157,8 +157,7 @@ async def api_video_frame(request):
         if not filename:
             return server.web.Response(status=400)
 
-        base_dir  = folder_paths.get_output_directory() if source == 'output' \
-                    else folder_paths.get_input_directory()
+        base_dir  = folder_paths.get_output_directory() if source == 'output' else folder_paths.get_input_directory()
         file_path = os.path.join(base_dir, filename.replace('/', os.sep))
 
         real_base = os.path.realpath(base_dir)
@@ -219,8 +218,10 @@ async def api_video_frame(request):
         except Exception:
             pass
         finally:
-            try: os.unlink(tmp.name)
-            except: pass
+            try:
+                os.unlink(tmp.name)
+            except:
+                pass
 
         return server.web.Response(status=500)
     except Exception as e:
@@ -244,8 +245,7 @@ async def api_list_files(request):
     """
     try:
         source = request.rel_url.query.get('source', 'input')
-        base_dir = folder_paths.get_output_directory() if source == 'output' \
-                   else folder_paths.get_input_directory()
+        base_dir = folder_paths.get_output_directory() if source == 'output' else folder_paths.get_input_directory()
         supported = {'.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi'}
         files = []
         if os.path.exists(base_dir):
@@ -316,8 +316,7 @@ def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
         from comfy_extras.nodes_model_advanced import ModelSamplingFlux
         width  = latent_dict.get('_width', 512)
         height = latent_dict.get('_height', 512)
-        (model,) = ModelSamplingFlux().patch(model, max_shift=guidance, base_shift=0.5,
-                                              width=width, height=height)
+        (model,) = ModelSamplingFlux().patch(model, max_shift=guidance, base_shift=0.5, width=width, height=height)
     except Exception:
         pass
 
@@ -590,8 +589,7 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
         print(f"[WorkflowGenerator] Applying LoRA: {lora_name} "
               f"(model={model_strength:.2f}, clip={clip_strength:.2f})")
         lora_data = comfy.utils.load_torch_file(lora_path, safe_load=True)
-        model, clip = comfy.sd.load_lora_for_models(model, clip, lora_data,
-                                                     model_strength, clip_strength)
+        model, clip = comfy.sd.load_lora_for_models(model, clip, lora_data, model_strength, clip_strength)
     return model, clip
 
 
