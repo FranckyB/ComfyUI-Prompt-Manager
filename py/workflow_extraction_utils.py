@@ -32,6 +32,43 @@ VIDEO_LATENT_TYPES = ['WanVideoLatentImage', 'WanImageToVideo']
 
 CHECKPOINT_TYPES = ('CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderNF4')
 
+# Node types that carry embedded extracted_data
+_EMBEDDED_NODE_TYPES = ('WorkflowGenerator', 'PromptExtractor')
+
+
+def _get_embedded_extracted_data(workflow_data):
+    """Return the best ``extracted_data`` dict from a WG or PE node, or *None*.
+
+    Prioritises WorkflowGenerator over PromptExtractor, and only returns
+    data that actually contains ``sampler`` or ``resolution`` keys.
+    """
+    if not workflow_data or not isinstance(workflow_data, dict):
+        return None
+
+    best = None
+    best_is_wg = False
+
+    for wf_node in workflow_data.get('nodes', []):
+        ntype = wf_node.get('type', '')
+        if ntype not in _EMBEDDED_NODE_TYPES:
+            continue
+        ed = wf_node.get('extracted_data')
+        if not ed or not isinstance(ed, dict):
+            continue
+        has_useful = bool(ed.get('sampler') or ed.get('resolution'))
+        if not has_useful:
+            continue
+        is_wg = ntype == 'WorkflowGenerator'
+        # Prefer WG; among same type, first wins
+        if best is None or (is_wg and not best_is_wg):
+            best = ed
+            best_is_wg = is_wg
+        if best_is_wg:
+            break  # WG is highest priority — stop early
+
+    return best
+
+
 # ─── Sampler extraction ───────────────────────────────────────────────────────
 
 def extract_sampler_params(prompt_data, workflow_data):
@@ -136,6 +173,19 @@ def extract_sampler_params(prompt_data, workflow_data):
                 except (ValueError, IndexError):
                     pass
 
+    # ── Fallback: embedded extracted_data from WG / PE nodes ──────────────
+    ed = _get_embedded_extracted_data(workflow_data)
+    if ed:
+        s = ed.get('sampler')
+        if s and isinstance(s, dict) and s.get('sampler_name'):
+            params['steps']        = s.get('steps', params['steps'])
+            params['cfg']          = s.get('cfg', params['cfg'])
+            params['seed']         = s.get('seed', params['seed'])
+            params['sampler_name'] = s.get('sampler_name', params['sampler_name'])
+            params['scheduler']    = s.get('scheduler', params['scheduler'])
+            params['denoise']      = s.get('denoise', params['denoise'])
+            params['guidance']     = s.get('guidance', params['guidance'])
+
     return params
 
 
@@ -178,6 +228,15 @@ def extract_vae_info(prompt_data, workflow_data):
             if ntype in CHECKPOINT_TYPES and widgets and not vae_info['name']:
                 vae_info['name']   = '(from checkpoint)'
                 vae_info['source'] = 'checkpoint'
+
+    # ── Fallback: embedded extracted_data from WG / PE nodes ──────────────
+    if not vae_info['name']:
+        ed = _get_embedded_extracted_data(workflow_data)
+        if ed:
+            vae = ed.get('vae', '')
+            if vae and isinstance(vae, str) and vae not in ('', '\u2014'):
+                vae_info['name']   = vae
+                vae_info['source'] = 'embedded'
 
     return vae_info
 
@@ -246,6 +305,16 @@ def extract_clip_info(prompt_data, workflow_data):
                 clip_info['names']  = ['(from checkpoint)']
                 clip_info['source'] = 'checkpoint'
 
+    # ── Fallback: embedded extracted_data from WG / PE nodes ──────────────
+    if not clip_info['names']:
+        ed = _get_embedded_extracted_data(workflow_data)
+        if ed:
+            clip = ed.get('clip', [])
+            names = clip if isinstance(clip, list) else ([clip] if clip else [])
+            if any(n for n in names):
+                clip_info['names']  = names
+                clip_info['source'] = 'embedded'
+
     return clip_info
 
 
@@ -296,6 +365,17 @@ def extract_resolution(prompt_data, workflow_data):
                 except (ValueError, IndexError):
                     pass
                 return resolution
+
+    # ── Fallback: embedded extracted_data from WG / PE nodes ──────────────
+    ed = _get_embedded_extracted_data(workflow_data)
+    if ed:
+        r = ed.get('resolution')
+        if r and isinstance(r, dict) and r.get('width'):
+            resolution['width']      = r.get('width', resolution['width'])
+            resolution['height']     = r.get('height', resolution['height'])
+            resolution['batch_size'] = r.get('batch_size', resolution['batch_size'])
+            if r.get('length') is not None:
+                resolution['length'] = r['length']
 
     return resolution
 
@@ -377,6 +457,128 @@ def resolve_clip_names(clip_names, clip_type=''):
     return paths
 
 
+# ─── Embedded generation data (WG / PE) ──────────────────────────────────────
+
+def _find_embedded_generation_data(workflow_data, prompt_data):
+    """
+    Look for sampler / resolution / model data embedded by WorkflowGenerator
+    or PromptExtractor.  Checks (in priority order):
+
+      1. WG node ``extracted_data`` (full dict with sampler + resolution)
+      2. WG node ``widgets_values`` containing the ``override_data`` JSON
+      3. WG ``override_data`` in the prompt API inputs
+      4. PE node ``extracted_data``
+
+    Returns a dict with ``sampler``, ``resolution``, ``vae``, ``clip``,
+    ``model_a``, ``model_b`` keys — or *None* if nothing was found.
+    """
+    out = {}
+
+    # --- Helper: merge extracted_data dict into *out* ---
+    def _apply_extracted(ed, source_label):
+        s = ed.get('sampler')
+        if s and isinstance(s, dict) and s.get('sampler_name'):
+            out['sampler'] = {
+                'steps':        s.get('steps', 20),
+                'cfg':          s.get('cfg', 7.0),
+                'seed':         s.get('seed', 0),
+                'sampler_name': s.get('sampler_name', 'euler'),
+                'scheduler':    s.get('scheduler', 'normal'),
+                'denoise':      s.get('denoise', 1.0),
+                'guidance':     s.get('guidance'),
+            }
+        r = ed.get('resolution')
+        if r and isinstance(r, dict) and r.get('width'):
+            out['resolution'] = {
+                'width':      r.get('width', 512),
+                'height':     r.get('height', 512),
+                'batch_size': r.get('batch_size', 1),
+                'length':     r.get('length'),
+            }
+        vae = ed.get('vae', '')
+        if vae and isinstance(vae, str) and vae not in ('', '\u2014'):
+            out['vae'] = {'name': vae, 'source': source_label}
+        clip = ed.get('clip', [])
+        if clip:
+            names = clip if isinstance(clip, list) else [clip]
+            if any(n for n in names):
+                out['clip'] = {'names': names, 'type': '', 'source': source_label}
+        if ed.get('model_a'):
+            out.setdefault('model_a', ed['model_a'])
+        if ed.get('model_b'):
+            out.setdefault('model_b', ed['model_b'])
+
+    # --- Helper: parse override_data JSON (flat keys) ---
+    def _apply_override_json(ov_str, source_label):
+        try:
+            ov = json.loads(ov_str) if ov_str else {}
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(ov, dict):
+            return
+        if ov.get('width') or ov.get('steps'):
+            if 'sampler' not in out and ov.get('sampler_name'):
+                out['sampler'] = {
+                    'steps':        ov.get('steps', 20),
+                    'cfg':          ov.get('cfg', 7.0),
+                    'seed':         ov.get('seed', 0),
+                    'sampler_name': ov.get('sampler_name', 'euler'),
+                    'scheduler':    ov.get('scheduler', 'normal'),
+                    'denoise':      1.0,
+                    'guidance':     None,
+                }
+            if 'resolution' not in out and ov.get('width'):
+                out['resolution'] = {
+                    'width':      ov.get('width', 512),
+                    'height':     ov.get('height', 512),
+                    'batch_size': ov.get('batch_size', 1),
+                    'length':     ov.get('length'),
+                }
+            if ov.get('model_a'):
+                out.setdefault('model_a', ov['model_a'])
+
+    # --- 1. Workflow nodes (extracted_data + widgets_values) ---
+    if workflow_data and isinstance(workflow_data, dict):
+        for wf_node in workflow_data.get('nodes', []):
+            ntype = wf_node.get('type', '')
+            if ntype == 'WorkflowGenerator':
+                # Priority 1: extracted_data
+                ed = wf_node.get('extracted_data')
+                if ed and isinstance(ed, dict):
+                    _apply_extracted(ed, 'WorkflowGenerator')
+                # Priority 2: override_data in widgets_values
+                if 'sampler' not in out or 'resolution' not in out:
+                    for v in (wf_node.get('widgets_values') or []):
+                        if isinstance(v, str) and len(v) > 5 and v.strip().startswith('{'):
+                            _apply_override_json(v, 'WorkflowGenerator')
+                            if 'sampler' in out and 'resolution' in out:
+                                break
+                if 'sampler' in out or 'resolution' in out:
+                    break  # WG found — done
+
+        # Priority 4: PromptExtractor extracted_data (only if WG wasn't found)
+        if 'sampler' not in out and 'resolution' not in out:
+            for wf_node in workflow_data.get('nodes', []):
+                if wf_node.get('type') == 'PromptExtractor':
+                    ed = wf_node.get('extracted_data')
+                    if ed and isinstance(ed, dict):
+                        _apply_extracted(ed, 'PromptExtractor')
+                        if 'sampler' in out or 'resolution' in out:
+                            break
+
+    # --- 3. Prompt API (WG override_data in inputs) ---
+    if ('sampler' not in out or 'resolution' not in out) and prompt_data and isinstance(prompt_data, dict):
+        for node_id, node_data in prompt_data.items():
+            if not isinstance(node_data, dict):
+                continue
+            if node_data.get('class_type') == 'WorkflowGenerator':
+                inp = node_data.get('inputs', {})
+                _apply_override_json(inp.get('override_data', ''), 'WorkflowGenerator')
+                break
+
+    return out if out else None
+
+
 # ─── Full extraction ──────────────────────────────────────────────────────────
 
 def extract_all_from_file(file_path, source_folder='input'):
@@ -456,50 +658,48 @@ def extract_all_from_file(file_path, source_folder='input'):
     result['clip']       = extract_clip_info(prompt_data, workflow_data)
     result['resolution'] = extract_resolution(prompt_data, workflow_data)
 
-    # ── WorkflowGenerator embedded data override ──────────────────────────
-    # When a WorkflowGenerator node generated the image, there are no
-    # standalone KSampler / EmptyLatentImage nodes — WG does everything
-    # internally. Its extracted_data contains the authoritative values.
-    if workflow_data and isinstance(workflow_data, dict):
-        for wf_node in workflow_data.get('nodes', []):
-            if wf_node.get('type') == 'WorkflowGenerator':
-                ed = wf_node.get('extracted_data')
-                if not ed or not isinstance(ed, dict):
-                    continue
-                ed_sampler = ed.get('sampler')
-                if ed_sampler and isinstance(ed_sampler, dict):
-                    result['sampler'] = {
-                        'steps':        ed_sampler.get('steps', result['sampler']['steps']),
-                        'cfg':          ed_sampler.get('cfg', result['sampler']['cfg']),
-                        'seed':         ed_sampler.get('seed', result['sampler']['seed']),
-                        'sampler_name': ed_sampler.get('sampler_name', result['sampler']['sampler_name']),
-                        'scheduler':    ed_sampler.get('scheduler', result['sampler']['scheduler']),
-                        'denoise':      ed_sampler.get('denoise', result['sampler']['denoise']),
-                        'guidance':     ed_sampler.get('guidance', result['sampler']['guidance']),
-                    }
-                ed_res = ed.get('resolution')
-                if ed_res and isinstance(ed_res, dict):
-                    result['resolution'] = {
-                        'width':      ed_res.get('width', result['resolution']['width']),
-                        'height':     ed_res.get('height', result['resolution']['height']),
-                        'batch_size': ed_res.get('batch_size', result['resolution']['batch_size']),
-                        'length':     ed_res.get('length', result['resolution']['length']),
-                    }
-                # VAE / CLIP from embedded data
-                ed_vae = ed.get('vae', '')
-                if ed_vae and isinstance(ed_vae, str) and ed_vae != '—':
-                    result['vae'] = {'name': ed_vae, 'source': 'WorkflowGenerator'}
-                ed_clip = ed.get('clip', [])
-                if ed_clip:
-                    names = ed_clip if isinstance(ed_clip, list) else [ed_clip]
-                    if any(n for n in names):
-                        result['clip'] = {'names': names, 'type': '', 'source': 'WorkflowGenerator'}
-                # Model from embedded data (if not already found)
-                if not result['model_a'] and ed.get('model_a'):
-                    result['model_a'] = ed['model_a']
-                if not result['model_b'] and ed.get('model_b'):
-                    result['model_b'] = ed['model_b']
-                break  # Only use the first WG node
+    # ── A1111 / Forge override ────────────────────────────────────────────
+    # When prompt_data is a parsed A1111 dict (has 'prompt' + 'loras' keys)
+    # the ComfyUI extraction functions won't find anything.  Apply the
+    # values that parse_a1111_parameters() already extracted.
+    if isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data:
+        _s = result['sampler']
+        if prompt_data.get('sampler_name'):
+            _s['sampler_name'] = prompt_data['sampler_name']
+        if prompt_data.get('scheduler'):
+            _s['scheduler'] = prompt_data['scheduler']
+        if prompt_data.get('steps'):
+            _s['steps'] = prompt_data['steps']
+        if prompt_data.get('cfg'):
+            _s['cfg'] = prompt_data['cfg']
+        if prompt_data.get('seed'):
+            _s['seed'] = prompt_data['seed']
+        if prompt_data.get('denoise') is not None:
+            _s['denoise'] = prompt_data['denoise']
+        _r = result['resolution']
+        if prompt_data.get('width') and prompt_data.get('height'):
+            _r['width'] = prompt_data['width']
+            _r['height'] = prompt_data['height']
+
+    # ── Embedded data override (WorkflowGenerator / PromptExtractor) ──────
+    # When a WorkflowGenerator generated the image there are no standalone
+    # KSampler / EmptyLatentImage nodes.  Look for authoritative values in:
+    #   1. extracted_data on the WG or PE node
+    #   2. widgets_values override_data JSON on the WG node
+    # Also check prompt API for WG override_data.
+    _embedded = _find_embedded_generation_data(workflow_data, prompt_data)
+    if _embedded:
+        for key in ('sampler', 'resolution'):
+            if key in _embedded and isinstance(_embedded[key], dict):
+                result[key] = _embedded[key]
+        if _embedded.get('vae'):
+            result['vae'] = _embedded['vae']
+        if _embedded.get('clip'):
+            result['clip'] = _embedded['clip']
+        if not result['model_a'] and _embedded.get('model_a'):
+            result['model_a'] = _embedded['model_a']
+        if not result['model_b'] and _embedded.get('model_b'):
+            result['model_b'] = _embedded['model_b']
 
     if result['resolution']['length'] is not None:
         result['is_video'] = True

@@ -25,6 +25,7 @@ _file_metadata_cache = {}
 # Cache for video frames extracted by JavaScript
 _video_frames_cache = {}
 
+
 # LoRA Blacklist - LoRAs containing these keywords will be excluded from extraction
 # Add keywords that identify non-style LoRAs (e.g., distillation, optimization LoRAs)
 LORA_BLACKLIST = [
@@ -46,6 +47,65 @@ def is_lora_blacklisted(lora_name):
             if keyword.lower() in lora_name_lower:
                 return True
     return False
+
+
+# ── A1111 → ComfyUI name mappings ─────────────────────────────────────────────
+# A1111 uses human-readable names (e.g. "DPM++ 2M SDE"); ComfyUI uses
+# k-diffusion internal names (e.g. "dpmpp_2m_sde").  Lookup is case-insensitive.
+_A1111_SAMPLER_MAP = {
+    "euler":                "euler",
+    "euler a":              "euler_ancestral",
+    "lms":                  "lms",
+    "heun":                 "heun",
+    "heun++":               "heunpp2",
+    "dpm2":                 "dpm_2",
+    "dpm2 a":               "dpm_2_ancestral",
+    "dpm fast":             "dpm_fast",
+    "dpm adaptive":         "dpm_adaptive",
+    "dpm++ sde":            "dpmpp_sde",
+    "dpm++ 2s a":           "dpmpp_2s_ancestral",
+    "dpm++ 2m":             "dpmpp_2m",
+    "dpm++ 2m sde":         "dpmpp_2m_sde",
+    "dpm++ 2m sde heun":    "dpmpp_2m_sde",   # no exact ComfyUI equivalent
+    "dpm++ 3m sde":         "dpmpp_3m_sde",
+    "ddim":                 "ddim",
+    "plms":                 "ipndm",           # closest equivalent
+    "ddpm":                 "ddpm",
+    "unipc":                "uni_pc",
+    "uni_pc":               "uni_pc",
+    "uni_pc_bh2":           "uni_pc_bh2",
+    "lcm":                  "lcm",
+    "deis":                 "deis",
+}
+
+_A1111_SCHEDULER_MAP = {
+    "karras":               "karras",
+    "exponential":          "exponential",
+    "sgm uniform":          "sgm_uniform",
+    "uniform":              "normal",
+    "normal":               "normal",
+    "simple":               "simple",
+    "ddim":                 "ddim_uniform",
+    "beta":                 "beta",
+    "polyexponential":      "exponential",     # closest available
+    "align your steps":     "normal",          # no ComfyUI equivalent
+    "kl optimal":           "normal",          # no ComfyUI equivalent
+    "automatic":            "normal",
+}
+
+
+def _map_a1111_sampler(name):
+    """Convert an A1111 sampler name to its ComfyUI equivalent."""
+    if not name:
+        return name
+    return _A1111_SAMPLER_MAP.get(name.lower().strip(), name)
+
+
+def _map_a1111_scheduler(name):
+    """Convert an A1111 scheduler / schedule-type to its ComfyUI equivalent."""
+    if not name:
+        return name
+    return _A1111_SCHEDULER_MAP.get(name.lower().strip(), name)
 
 
 def parse_a1111_parameters(parameters_text):
@@ -99,6 +159,54 @@ def parse_a1111_parameters(parameters_text):
     model_match = re.search(r'\bModel:\s*([^,\n]+)', parameters_text)
     if model_match:
         result['model'] = model_match.group(1).strip()
+
+    # ── Extract sampler / resolution / generation settings ────────────────
+    # A1111 format: "Steps: 20, Sampler: DPM++ 2M SDE, Schedule type: Karras,
+    #                CFG scale: 5, Seed: 2427658518, Size: 768x1152, ..."
+    settings_line = ''
+    steps_pos = parameters_text.find('Steps:')
+    if steps_pos >= 0:
+        settings_line = parameters_text[steps_pos:]
+
+    if settings_line:
+        def _a1111_val(key, text=settings_line):
+            m = re.search(r'\b' + re.escape(key) + r':\s*([^,\n]+)', text)
+            return m.group(1).strip() if m else None
+
+        steps = _a1111_val('Steps')
+        if steps:
+            try: result['steps'] = int(steps)
+            except ValueError: pass
+
+        sampler = _a1111_val('Sampler')
+        if sampler:
+            result['sampler_name'] = _map_a1111_sampler(sampler)
+
+        schedule = _a1111_val('Schedule type')
+        if schedule:
+            result['scheduler'] = _map_a1111_scheduler(schedule)
+
+        cfg = _a1111_val('CFG scale')
+        if cfg:
+            try: result['cfg'] = float(cfg)
+            except ValueError: pass
+
+        seed = _a1111_val('Seed')
+        if seed:
+            try: result['seed'] = int(seed)
+            except ValueError: pass
+
+        size = _a1111_val('Size')
+        if size:
+            m = re.match(r'(\d+)\s*x\s*(\d+)', size)
+            if m:
+                result['width'] = int(m.group(1))
+                result['height'] = int(m.group(2))
+
+        denoise = _a1111_val('Denoising strength')
+        if denoise:
+            try: result['denoise'] = float(denoise)
+            except ValueError: pass
 
     return result
 
@@ -375,7 +483,18 @@ def extract_metadata_from_png(file_path):
                 # Return both parsed parameters AND workflow data (workflow needed for JSON export)
                 if metadata.get('parsed_parameters'):
                     print("[PromptExtractor] Found parsed A1111 parameters")
-                    return metadata.get('parsed_parameters'), workflow_data
+                    parsed = metadata['parsed_parameters']
+                    # JS parser doesn't extract sampler/resolution — enrich
+                    # from the raw parameters text via the Python parser.
+                    raw_params = metadata.get('parameters', '')
+                    if raw_params and not parsed.get('sampler_name'):
+                        py_parsed = parse_a1111_parameters(raw_params)
+                        if py_parsed:
+                            for k in ('steps', 'sampler_name', 'scheduler', 'cfg',
+                                      'seed', 'width', 'height', 'denoise'):
+                                if k in py_parsed and k not in parsed:
+                                    parsed[k] = py_parsed[k]
+                    return parsed, workflow_data
 
                 return prompt_data, workflow_data
 
@@ -3112,11 +3231,33 @@ class PromptExtractor:
                     )
                     # Use raw workflow_data dict (before we overwrite the var below)
                     _raw_wf = workflow_data  # still a dict here
+                    _is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
+
                     _sampler  = extract_sampler_params(prompt_data, _raw_wf)
-                    _sampler['denoise'] = 1.0   # always 1.0 — not user-controllable
                     _vae      = extract_vae_info(prompt_data, _raw_wf)
                     _clip     = extract_clip_info(prompt_data, _raw_wf)
                     _res      = extract_resolution(prompt_data, _raw_wf)
+
+                    # A1111 images embed sampler/resolution in the parameters
+                    # string — the ComfyUI extraction functions won't find them.
+                    if _is_a1111:
+                        if prompt_data.get('sampler_name'):
+                            _sampler['sampler_name'] = prompt_data['sampler_name']
+                        if prompt_data.get('scheduler'):
+                            _sampler['scheduler'] = prompt_data['scheduler']
+                        if prompt_data.get('steps'):
+                            _sampler['steps'] = prompt_data['steps']
+                        if prompt_data.get('cfg'):
+                            _sampler['cfg'] = prompt_data['cfg']
+                        if prompt_data.get('seed'):
+                            _sampler['seed'] = prompt_data['seed']
+                        if prompt_data.get('denoise') is not None:
+                            _sampler['denoise'] = prompt_data['denoise']
+                        if prompt_data.get('width') and prompt_data.get('height'):
+                            _res['width'] = prompt_data['width']
+                            _res['height'] = prompt_data['height']
+
+                    _sampler['denoise'] = _sampler.get('denoise', 1.0)
 
                     # Resolve model family from model_a path
                     _raw_models_a = parsed.get('models_a', [])
@@ -3155,6 +3296,8 @@ class PromptExtractor:
                         _simplified['vae_found'] = resolve_vae_name(_vae_name) is not None
                     workflow_data = json.dumps(_simplified, indent=2)
                     print(f"[PromptExtractor] Output structured workflow_data ({len(workflow_data)} chars)")
+
+
                 except Exception as e:
                     print(f"[PromptExtractor] Error building structured workflow_data: {e}")
                     import traceback; traceback.print_exc()

@@ -39,8 +39,6 @@ from ..py.workflow_extraction_utils import (
     resolve_model_name,
     resolve_vae_name,
     resolve_clip_names,
-    extract_all_from_file,
-    enrich_with_availability,
     build_simplified_workflow_data,
 )
 
@@ -78,37 +76,6 @@ SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS
 
 
 # ─── API endpoints ──────────────────────────────────────────────────────────
-
-@server.PromptServer.instance.routes.post("/workflow-extractor/extract")
-async def api_extract(request):
-    """Extract all parameters from a file and return to JS for UI display."""
-    try:
-        data     = await request.json()
-        filename = data.get('filename', '')
-        source   = data.get('source', 'input')
-
-        if not filename:
-            return server.web.json_response({"error": "No filename"}, status=400)
-
-        base_dir = folder_paths.get_output_directory() if source == 'output' \
-                   else folder_paths.get_input_directory()
-        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
-
-        real_base = os.path.realpath(base_dir)
-        real_path = os.path.realpath(file_path)
-        if not real_path.startswith(real_base):
-            return server.web.json_response({"error": "Invalid path"}, status=403)
-        if not os.path.exists(file_path):
-            return server.web.json_response({"error": "File not found"}, status=404)
-
-        result = extract_all_from_file(file_path, source)
-        enrich_with_availability(result)
-        return server.web.json_response(result)
-    except Exception as e:
-        print(f"[WorkflowGenerator] API error: {e}")
-        traceback.print_exc()
-        return server.web.json_response({"error": str(e)}, status=500)
-
 
 @server.PromptServer.instance.routes.get("/workflow-extractor/list-models")
 async def api_list_models(request):
@@ -1141,22 +1108,11 @@ class WorkflowGenerator:
 
         except FileNotFoundError:
             # Model/VAE/CLIP not found — gen_error already set above.
-            # Return populated node so user can fix the setting.
-            print(f"[WorkflowGenerator] {gen_error}")
+            # send_sync already fired so JS UI has the extracted data.
+            raise
         except Exception as e:
-            # Unexpected generation failure — capture for display, log full trace.
-            gen_error = str(e)
-            print(f"[WorkflowGenerator] Generation failed: {gen_error}")
-            traceback.print_exc()
-
-        # Fallback outputs when generation didn't complete
-        if decoded is None:
-            decoded = torch.zeros(1, 64, 64, 3)
-        if out_latent is None:
-            out_latent = {"samples": torch.zeros(1, 4, 8, 8)}
-
-        if gen_error:
-            ui_info['error'] = gen_error
+            # send_sync already fired so JS UI has the extracted data.
+            raise
 
         return {
             "ui":     {"workflow_info": [ui_info]},

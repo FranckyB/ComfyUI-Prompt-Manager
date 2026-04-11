@@ -937,7 +937,6 @@ app.registerExtension({
                 node._loadedFramePosition = null;
                 // Track source folder for URL type
                 node._sourceFolder = 'input';
-
                 // Find the frame_position widget (slider) early so we can reference it
                 const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
 

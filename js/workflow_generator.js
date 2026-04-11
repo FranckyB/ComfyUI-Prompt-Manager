@@ -567,111 +567,6 @@ function makeSeparator() {
 }
 
 
-// ============================================================
-// --- Pull data from connected source (Update button) ---
-// ============================================================
-
-/**
- * Find a widget value on a LiteGraph node by name.
- */
-function _getWidgetValue(lgNode, name) {
-    const w = lgNode?.widgets?.find(w => w.name === name);
-    return w?.value;
-}
-
-/**
- * Traverse graph backwards from a given input slot to find the
- * source PromptExtractor node (skipping reroute nodes).
- */
-function _findSourcePE(node, inputName) {
-    const inp = node.inputs?.find(i => i.name === inputName);
-    if (!inp?.link) return null;
-    let linkInfo = node.graph?.links?.[inp.link];
-    if (!linkInfo) return null;
-    let srcNode = node.graph?.getNodeById(linkInfo.origin_id);
-    // Walk through Reroute nodes
-    while (srcNode && srcNode.type === "Reroute") {
-        const ri = srcNode.inputs?.[0];
-        if (!ri?.link) return null;
-        linkInfo = node.graph?.links?.[ri.link];
-        if (!linkInfo) return null;
-        srcNode = node.graph?.getNodeById(linkInfo.origin_id);
-    }
-    return srcNode;
-}
-
-/**
- * Pull data from connected inputs and update the UI.
- * Called by the "Update" button.
- *
- * Respects the toggle switches:
- *  - use_workflow_data ON  → extract from upstream PE's source file (full UI)
- *  - use_lora_input ON     → extract LoRAs from upstream PE's source file
- *  - Both OFF              → error
- *  - Both ON               → full extract covers everything
- *
- * Unconnected lora_stack slots are silently treated as empty.
- */
-async function _pullFromSource(node) {
-    const wfOn   = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
-    const loraOn = node.widgets?.find(w => w.name === "use_lora_input")?.value;
-
-    if (!wfOn && !loraOn) {
-        throw new Error("Enable use_workflow_data or use_lora_input first");
-    }
-
-    // Find the source PE — check workflow_data_input first, then lora stacks
-    let peNode = _findSourcePE(node, "workflow_data_input");
-    if (!peNode) peNode = _findSourcePE(node, "lora_stack_a");
-    if (!peNode) peNode = _findSourcePE(node, "lora_stack_b");
-    if (!peNode) {
-        throw new Error("No source node connected");
-    }
-
-    // Get source file info from the PE node
-    const imageVal = _getWidgetValue(peNode, "image");
-    const sourceFolder = _getWidgetValue(peNode, "source_folder") || "input";
-
-    if (!imageVal || imageVal === "(none)") {
-        throw new Error("Source node has no file selected");
-    }
-
-    // Call the extraction API
-    const resp = await fetch("/workflow-extractor/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: imageVal, source: sourceFolder }),
-    });
-    if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${resp.status}`);
-    }
-    const info = await resp.json();
-
-    _showError(node, null);
-
-    if (wfOn) {
-        // Full UI population from extracted data
-        node._weExtracted = info;
-        node._wePopulated = true;
-        node._weLoraState = {};
-        node.properties = node.properties || {};
-        node.properties.we_extracted_cache = JSON.stringify(info);
-        updateUI(node);
-    } else if (loraOn) {
-        // LoRA-only update — keep existing UI, just refresh LoRAs
-        if (!node._weExtracted) node._weExtracted = {};
-        node._weExtracted.loras_a = info.loras_a || [];
-        node._weExtracted.loras_b = info.loras_b || [];
-        node._weExtracted.lora_availability = info.lora_availability || {};
-        node._weLoraState = {};
-        node.properties = node.properties || {};
-        node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
-        updateLoras(node);
-        syncHidden(node);
-    }
-}
-
 
 // ============================================================
 // --- Update UI from workflow_data / extracted data ---
@@ -1139,36 +1034,6 @@ app.registerExtension({
             forwardWheelToCanvas(root);
             node._weRoot = root;
 
-            // -- UPDATE button (pull data from connected inputs) --
-            const updateBtn = makeEl("button", {
-                width: "100%", padding: "5px 0",
-                background: "linear-gradient(135deg, rgba(66,153,225,0.8), rgba(49,130,206,0.9))",
-                color: "white", fontWeight: "600", fontSize: "12px",
-                border: "1px solid rgba(122,188,243,0.4)", borderRadius: "5px",
-                cursor: "pointer", textAlign: "center",
-                fontFamily: "inherit", boxSizing: "border-box",
-                transition: "background 0.15s ease, opacity 0.15s ease",
-                flexShrink: "0",
-            }, "\u21BB  Update");
-            updateBtn.onmouseenter = () => { updateBtn.style.opacity = "0.85"; };
-            updateBtn.onmouseleave = () => { updateBtn.style.opacity = "1"; };
-            updateBtn.onclick = async () => {
-                updateBtn.disabled = true;
-                updateBtn.textContent = "\u23F3  Updating\u2026";
-                updateBtn.style.opacity = "0.6";
-                try {
-                    await _pullFromSource(node);
-                } catch (e) {
-                    console.error("[WorkflowGenerator] Update failed:", e);
-                    _showError(node, e.message || String(e));
-                }
-                updateBtn.disabled = false;
-                updateBtn.textContent = "\u21BB  Update";
-                updateBtn.style.opacity = "1";
-            };
-            root.appendChild(updateBtn);
-            node._weUpdateBtn = updateBtn;
-
             // -- 1. RESOLUTION section (open) --
             const resSec = makeSection("RESOLUTION");
             node._weSections.resolution = resSec;
@@ -1603,7 +1468,7 @@ app.registerExtension({
 
             // -- Seed control after generate --
             node._onExecutedSeed = function () {
-                const mode = node._weControlMode?._inp?.value || "randomize";
+                const mode = node._weControlMode?._inp?.value || "fixed";
                 const seedRow = node._weSamplerRows?.seed;
                 if (!seedRow?._inp) return;
                 const cur = parseInt(seedRow._inp.value) || 0;
@@ -1667,17 +1532,15 @@ app.registerExtension({
                     node.properties.we_extracted_cache = JSON.stringify(info);
 
                     if (sourceChanged) {
-                        // Save current user overrides before updateUI resets them
-                        syncHidden(node);
-                        const savedOv = node.properties?.we_override_data;
-                        const savedLs = node.properties?.we_lora_state;
-
+                        // New source — clear old overrides so fresh data shows
                         node._wePopulated = true;
                         node._weLoraState = {};
+                        node._weOverrides = {};
+                        if (node.properties) {
+                            delete node.properties.we_override_data;
+                            delete node.properties.we_lora_state;
+                        }
                         updateUI(node);
-
-                        // Restore user overrides on top of new baselines
-                        if (savedOv) applyOverrides(node, savedOv, savedLs);
                     } else {
                         updateLoras(node);
                     }
@@ -1744,17 +1607,15 @@ app.registerExtension({
                     this.properties.we_extracted_cache = JSON.stringify(info);
 
                     if (sourceChanged) {
-                        // Save current user overrides before updateUI resets them
-                        syncHidden(this);
-                        const savedOv = this.properties?.we_override_data;
-                        const savedLs = this.properties?.we_lora_state;
-
+                        // New source — clear old overrides so fresh data shows
                         this._wePopulated = true;
                         this._weLoraState = {};
+                        this._weOverrides = {};
+                        if (this.properties) {
+                            delete this.properties.we_override_data;
+                            delete this.properties.we_lora_state;
+                        }
                         updateUI(this);
-
-                        // Restore user overrides on top of new baselines
-                        if (savedOv) applyOverrides(this, savedOv, savedLs);
                     } else {
                         updateLoras(this);
                     }
