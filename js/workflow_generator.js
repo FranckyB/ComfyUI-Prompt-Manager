@@ -646,7 +646,7 @@ async function updateUI(node) {
     // family before setting values — otherwise _setOriginal can't find the
     // option in the list and the selection falls back to (Default).
     if (familyChanged && node._onFamilyChanged) {
-        await node._onFamilyChanged(newFamily);
+        await node._onFamilyChanged(newFamily, { fromUpdateUI: true });
     }
 
     // Model A
@@ -1276,8 +1276,10 @@ app.registerExtension({
                 }
             };
 
-            // Family change handler — also stored on node so updateUI can call it
-            const onFamilyChanged = async (familyKey) => {
+            // Family change handler — also stored on node so updateUI can call it.
+            // fromUpdateUI=true: skip auto-select & _syncS — updateUI will call
+            // _setOriginal and _syncS itself right after, with the correct values.
+            const onFamilyChanged = async (familyKey, { fromUpdateUI = false } = {}) => {
                 node._weFamily = familyKey;
                 // Reset VAE/CLIP overrides — new family means old selections are invalid
                 delete node._weOverrides.vae;
@@ -1293,7 +1295,6 @@ app.registerExtension({
                     try {
                         const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
                         const d = await r.json();
-                        // Always default to (Default) — template embeds the correct VAE
                         await reloadGroupedSelect(node._weVaeRow, async () => d.vaes || [], false, null);
                     } catch { await reloadGroupedSelect(node._weVaeRow, async () => [], false, null); }
                 };
@@ -1301,7 +1302,6 @@ app.registerExtension({
                     try {
                         const r = await fetch(`/workflow-extractor/list-clips?family=${fam}`);
                         const d = await r.json();
-                        // Always default to (Default) — template embeds the correct CLIP
                         await reloadGroupedSelect(node._weClipRow, async () => d.clips || [], false, null);
                     } catch { await reloadGroupedSelect(node._weClipRow, async () => [], false, null); }
                 };
@@ -1311,20 +1311,17 @@ app.registerExtension({
                     reloadVae(),
                     reloadClip(),
                 ]);
-                // Auto-select first available model visually so the dropdown
-                // isn't blank — but do NOT write to _weOverrides.model_a here.
-                // If called from updateUI, _setOriginal will set the correct
-                // model right after and syncHidden will capture it properly.
-                // If called from a manual family change, _weOverrides.model_a
-                // is already cleared above so syncHidden will pick up the
-                // dropdown value via _getValue().
-                const firstModel = node._weModelRow._sel.options[1]?.value || "";
-                if (firstModel) {
-                    node._weModelRow._sel.value = firstModel;
-                    delete node._weOverrides.model_a;
+                if (!fromUpdateUI) {
+                    // Manual family change — auto-select first model and sync.
+                    // updateUI calls _setOriginal itself so we skip this.
+                    const firstModel = node._weModelRow._sel.options[1]?.value || "";
+                    if (firstModel) {
+                        node._weModelRow._sel.value = firstModel;
+                        node._weOverrides.model_a = firstModel;
+                    }
+                    updateWanVisibility(node);
+                    _syncS();
                 }
-                updateWanVisibility(node);
-                _syncS();
             };
             // Expose so updateUI can trigger family reload from workflow_data
             node._onFamilyChanged = onFamilyChanged;
