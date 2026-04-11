@@ -1163,6 +1163,7 @@ class WorkflowGenerator:
                     patch_params['length'] = int(length)
 
                 # Source image for i2v workflows
+                print(f"[WorkflowGenerator] i2v source_image: {'tensor shape=' + str(source_image.shape) if source_image is not None else 'NOT CONNECTED (None)'}, family={family_key}")
                 if source_image is not None and family_key == 'wan_video_i2v':
                     try:
                         import numpy as np
