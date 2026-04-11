@@ -244,11 +244,14 @@ def patch_template(api, wmap, params):
         if nid_h:
             _set(api, nid_h, "steps", int(steps_high))
 
+    seed_b = params.get("seed_b")  # None means use same seed for both
     if seed is not None:
-        for mk in ["ksampler_high_seed", "ksampler_low_seed"]:
-            nid, field = _m(mk)
-            if field:
-                _set(api, nid, field, int(seed))
+        nid, field = _m("ksampler_high_seed")
+        if field:
+            _set(api, nid, field, int(seed))
+        nid, field = _m("ksampler_low_seed")
+        if field:
+            _set(api, nid, field, int(seed_b) if seed_b is not None else int(seed))
     if cfg is not None:
         for mk in ["ksampler_high_cfg", "ksampler_low_cfg"]:
             nid, field = _m(mk)

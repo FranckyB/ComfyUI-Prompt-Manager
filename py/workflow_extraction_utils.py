@@ -80,6 +80,7 @@ def extract_sampler_params(prompt_data, workflow_data):
         'steps': 20,
         'cfg': 7.0,
         'seed': 0,
+        'seed_b': None,   # WAN Video second-sampler seed (None = use same as seed)
         'sampler_name': 'euler',
         'scheduler': 'normal',
         'denoise': 1.0,
@@ -88,28 +89,53 @@ def extract_sampler_params(prompt_data, workflow_data):
 
     # ── API format ────────────────────────────────────────────────────────────
     if prompt_data and isinstance(prompt_data, dict):
+        # WAN Video uses two KSamplerAdvanced nodes (high + low pass).
+        # Collect all of them so we can expose both seeds.
+        ksampler_advanced_nodes = []
         for node_id, node_data in prompt_data.items():
             if not isinstance(node_data, dict):
                 continue
             ct = node_data.get('class_type', '')
             inp = node_data.get('inputs', {})
 
-            if ct in ('KSampler', 'KSamplerAdvanced'):
+            if ct == 'KSampler':
                 params['steps']        = inp.get('steps', params['steps'])
                 params['cfg']          = inp.get('cfg', params['cfg'])
-                params['seed']         = inp.get('seed', inp.get('noise_seed', params['seed']))
+                seed_val               = inp.get('seed', inp.get('noise_seed', params['seed']))
+                params['seed']         = seed_val if not isinstance(seed_val, list) else params['seed']
                 params['sampler_name'] = inp.get('sampler_name', params['sampler_name'])
                 params['scheduler']    = inp.get('scheduler', params['scheduler'])
                 params['denoise']      = inp.get('denoise', params['denoise'])
                 return params  # standard KSampler found — done
 
+            if ct == 'KSamplerAdvanced':
+                ksampler_advanced_nodes.append(inp)
+
             if ct == 'WanMoeKSamplerAdvanced':
                 params['steps']        = inp.get('steps', params['steps'])
                 params['cfg']          = inp.get('cfg', params['cfg'])
-                params['seed']         = inp.get('seed', inp.get('noise_seed', params['seed']))
+                seed_val               = inp.get('seed', inp.get('noise_seed', params['seed']))
+                params['seed']         = seed_val if not isinstance(seed_val, list) else params['seed']
                 params['sampler_name'] = inp.get('sampler_name', params['sampler_name'])
                 params['scheduler']    = inp.get('scheduler', params['scheduler'])
                 return params
+
+        # Handle KSamplerAdvanced — including WAN Video dual-sampler pattern
+        if ksampler_advanced_nodes:
+            first = ksampler_advanced_nodes[0]
+            params['steps']        = first.get('steps', params['steps'])
+            params['cfg']          = first.get('cfg', params['cfg'])
+            seed_val               = first.get('seed', first.get('noise_seed', params['seed']))
+            params['seed']         = seed_val if not isinstance(seed_val, list) else params['seed']
+            params['sampler_name'] = first.get('sampler_name', params['sampler_name'])
+            params['scheduler']    = first.get('scheduler', params['scheduler'])
+            params['denoise']      = first.get('denoise', params['denoise'])
+            if len(ksampler_advanced_nodes) >= 2:
+                # Second node = low-pass sampler — expose its seed as seed_b
+                second   = ksampler_advanced_nodes[1]
+                seed_b   = second.get('seed', second.get('noise_seed', params['seed']))
+                params['seed_b'] = seed_b if not isinstance(seed_b, list) else params['seed']
+            return params
 
         # Second pass for split-node pattern (SamplerCustomAdvanced)
         for node_id, node_data in prompt_data.items():
@@ -843,7 +869,7 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
         "clip":            overrides.get('clip_names', extracted.get('clip', {}).get('names', [])),
         "clip_type":       clip_info.get('type', ''),
         "loader_type":     loader_type,
-        "sampler":         sampler,
+        "sampler":         {**sampler, 'seed_b': sampler.get('seed_b')},
         "resolution": {
             "width":      overrides.get('width',      extracted.get('resolution', {}).get('width',      512)),
             "height":     overrides.get('height',     extracted.get('resolution', {}).get('height',     512)),

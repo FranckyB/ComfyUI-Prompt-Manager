@@ -644,6 +644,7 @@ function updateUI(node) {
         if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
         if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "simple");
         if (rows.seed?._setOriginal) rows.seed._setOriginal(s.seed ?? 0);
+        if (rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed ?? 0);
         // WAN Video dual steps
         if (rows.steps_high?._setOriginal) rows.steps_high._setOriginal(s.steps_high ?? 4);
         if (rows.steps_low?._setOriginal)  rows.steps_low._setOriginal(s.steps_low  ?? 20);
@@ -747,6 +748,14 @@ function updateWanVisibility(node) {
     // Standard Steps row: hide when WAN Video (replaced by high/low)
     if (node._weSamplerRows?.steps) {
         node._weSamplerRows.steps.style.display = isWanVideo ? "none" : "flex";
+    }
+    // Seed B: only for WAN Video; rename Seed label to Seed A when visible
+    if (node._weSamplerRows?.seed_b) {
+        node._weSamplerRows.seed_b.style.display = isWanVideo ? "flex" : "none";
+    }
+    if (node._weSamplerRows?.seed) {
+        const seedLabel = node._weSamplerRows.seed.querySelector("label, .we-label, span");
+        if (seedLabel) seedLabel.textContent = isWanVideo ? "Seed A" : "Seed";
     }
 
 }
@@ -884,6 +893,9 @@ function syncHidden(node) {
             if (r.steps?._inp) ov.steps = parseInt(r.steps._inp.value) || 20;
             if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
             if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
+            if (r.seed_b?._inp && r.seed_b.style.display !== "none") {
+                ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
+            }
             if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
             if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
             // WAN Video dual steps
@@ -908,7 +920,7 @@ function syncHidden(node) {
     } else {
         // In workflow_data mode, remove any stale sampler/resolution/prompt overrides
         // so Python always uses the values from the source workflow.
-        delete ov.steps; delete ov.cfg; delete ov.seed;
+        delete ov.steps; delete ov.cfg; delete ov.seed; delete ov.seed_b;
         delete ov.sampler_name; delete ov.scheduler;
         delete ov.steps_high; delete ov.steps_low;
         delete ov.width; delete ov.height; delete ov.batch_size; delete ov.length;
@@ -989,7 +1001,8 @@ function applyOverrides(node, ovJson, lsJson) {
         const rows = node._weSamplerRows;
         if (ov.steps != null) applyInput(rows.steps, ov.steps);
         if (ov.cfg != null) applyInput(rows.cfg, ov.cfg);
-        if (ov.seed != null) applyInput(rows.seed, ov.seed);
+        if (ov.seed   != null) applyInput(rows.seed,   ov.seed);
+        if (ov.seed_b != null) applyInput(rows.seed_b, ov.seed_b);
         if (ov.sampler_name) applyInput(rows.sampler, ov.sampler_name);
         if (ov.scheduler) applyInput(rows.scheduler, ov.scheduler);
         if (ov.steps_high != null) applyInput(rows.steps_high, ov.steps_high);
@@ -1281,6 +1294,11 @@ app.registerExtension({
             stepsHighRow.style.display = "none";
             stepsLowRow.style.display  = "none";
 
+            // WAN Video seed B (hidden by default; Seed renamed to Seed A when visible)
+            const seedRow  = makeInput("Seed",   "number", 0, { min: 0, step: 1 }, _syncS);
+            const seedBRow = makeInput("Seed B", "number", 0, { min: 0, step: 1 }, _syncS);
+            seedBRow.style.display = "none";
+
             const sampRows = {
                 steps:      stepsRow,
                 steps_high: stepsHighRow,
@@ -1288,16 +1306,18 @@ app.registerExtension({
                 cfg:        makeInput("CFG",       "number", 5.0,      { min: 0, max: 100, step: 0.5 }, _syncS),
                 sampler:    makeInput("Sampler",   "select", "euler",  { options: SAMPLERS }, _syncS),
                 scheduler:  makeInput("Scheduler", "select", "simple", { options: SCHEDULERS }, _syncS),
-                seed:       makeInput("Seed",      "number", 0,        { min: 0, step: 1 }, _syncS),
+                seed:       seedRow,
+                seed_b:     seedBRow,
             };
-            // Append in display order: steps, steps_high, steps_low, cfg, sampler, scheduler, seed
+            // Append in display order: steps, steps_high, steps_low, cfg, sampler, scheduler, seed, seed_b
             sampSec._body.appendChild(stepsRow);
             sampSec._body.appendChild(stepsHighRow);
             sampSec._body.appendChild(stepsLowRow);
             sampSec._body.appendChild(sampRows.cfg);
             sampSec._body.appendChild(sampRows.sampler);
             sampSec._body.appendChild(sampRows.scheduler);
-            sampSec._body.appendChild(sampRows.seed);
+            sampSec._body.appendChild(seedRow);
+            sampSec._body.appendChild(seedBRow);
 
             // Control after generate
             const controlRow = makeInput("Control after generate", "select", "randomize",
@@ -1550,16 +1570,19 @@ app.registerExtension({
             // -- Seed control after generate --
             node._onExecutedSeed = function () {
                 const mode = node._weControlMode?._inp?.value || "fixed";
-                const seedRow = node._weSamplerRows?.seed;
-                if (!seedRow?._inp) return;
-                const cur = parseInt(seedRow._inp.value) || 0;
-                if (mode === "randomize") {
-                    seedRow._inp.value = Math.floor(Math.random() * 2147483647);
-                } else if (mode === "increment") {
-                    seedRow._inp.value = cur + 1;
-                } else if (mode === "decrement") {
-                    seedRow._inp.value = Math.max(0, cur - 1);
-                }
+                const applyMode = (row) => {
+                    if (!row?._inp || row.style.display === "none") return;
+                    const cur = parseInt(row._inp.value) || 0;
+                    if (mode === "randomize") {
+                        row._inp.value = Math.floor(Math.random() * 2147483647);
+                    } else if (mode === "increment") {
+                        row._inp.value = cur + 1;
+                    } else if (mode === "decrement") {
+                        row._inp.value = Math.max(0, cur - 1);
+                    }
+                };
+                applyMode(node._weSamplerRows?.seed);
+                applyMode(node._weSamplerRows?.seed_b);
                 // "fixed" -- do nothing
                 _syncS();
             };

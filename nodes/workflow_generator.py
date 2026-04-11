@@ -760,6 +760,7 @@ class WorkflowGenerator:
                     'steps': wf_sampler.get('steps', 20),
                     'cfg': wf_sampler.get('cfg', 5.0),
                     'seed': wf_sampler.get('seed', 0),
+                    'seed_b': wf_sampler.get('seed_b'),  # None = same as seed
                     'sampler_name': wf_sampler.get('sampler_name', 'euler'),
                     'scheduler': wf_sampler.get('scheduler', 'simple'),
                     'denoise': 1.0,
@@ -830,18 +831,18 @@ class WorkflowGenerator:
 
         sampler_params = extracted['sampler'].copy()
         sampler_params['denoise'] = 1.0
-        for key in ['steps', 'cfg', 'seed', 'sampler_name', 'scheduler']:
+        for key in ['steps', 'cfg', 'seed', 'seed_b', 'sampler_name', 'scheduler']:
             if key in overrides:
                 val = overrides[key]
                 # Guard: overrides could carry a stale list from a corrupt
                 # override_data blob — coerce numeric fields to scalar.
-                if key in ('steps', 'seed') and isinstance(val, list):
+                if key in ('steps', 'seed', 'seed_b') and isinstance(val, list):
                     val = 0
                 elif key == 'cfg' and isinstance(val, list):
                     val = 5.0
                 sampler_params[key] = val
         # Also ensure extracted sampler seed/steps are never lists
-        for key, default in (('seed', 0), ('steps', 20), ('cfg', 5.0)):
+        for key, default in (('seed', 0), ('seed_b', None), ('steps', 20), ('cfg', 5.0)):
             if isinstance(sampler_params.get(key), list):
                 sampler_params[key] = default
         # WAN Video step overrides (steps_high / steps_low)
@@ -1123,6 +1124,7 @@ class WorkflowGenerator:
                     'height':            height,
                     'batch_size':        batch,
                     'seed':              sampler_params.get('seed', 0),
+                    'seed_b':            sampler_params.get('seed_b'),  # None = fallback to seed
                     'cfg':               sampler_params.get('cfg', 5.0),
                     'sampler_name':      sampler_params.get('sampler_name', 'euler'),
                     'scheduler':         sampler_params.get('scheduler', 'simple'),
@@ -1144,6 +1146,9 @@ class WorkflowGenerator:
                     patch_params['steps_high'] = sh
                     patch_params['steps_low']  = sl
                     print(f"[WorkflowGenerator] WAN Video dual-steps: high={sh}, low={sl}")
+                    # Dual seeds: seed_b falls back to seed if not set
+                    if patch_params.get('seed_b') is None:
+                        patch_params['seed_b'] = patch_params['seed']
                 else:
                     patch_params['steps'] = sampler_params.get('steps', 20)
 
