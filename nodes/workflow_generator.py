@@ -51,13 +51,13 @@ from .prompt_extractor import (
     extract_metadata_from_jpeg,
     extract_metadata_from_json,
     extract_metadata_from_video,
-    resolve_lora_path,
     build_node_map,
     build_link_map,
     extract_video_frame_av_to_tensor,
     get_cached_video_frame,
     get_placeholder_image_tensor,
 )
+from ..py.lora_utils import resolve_lora_path
 
 # ── Optional GGUF support ────────────────────────────────────────────────────
 try:
@@ -632,43 +632,77 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
 
 class WorkflowGenerator:
     """
-    Extract generation parameters from an image/video and regenerate,
-    OR generate from scratch using manually entered values (standalone mode).
-    Shows model, LoRAs, VAE, CLIP, sampler settings with override controls.
+    One-stop generation node: load model, apply LoRAs, sample, decode.
+
+    Can run standalone with manual settings, or accept workflow_data (from
+    PromptExtractor) and/or lora_stack inputs to pre-fill all parameters.
+
+    Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
     Supports family-aware sampling: Standard, Flux, Flux2, WAN dual-sampler.
     Outputs: IMAGE, LATENT, WORKFLOW_DATA (string).
     """
 
     def __init__(self):
-        # Cache loaded model/clip/vae by (full_path, family_key) to avoid
-        # reloading from disk on every generation when inputs are unchanged.
         self._model_cache = {}  # key: (full_path_a, family_key) -> (model, clip, vae)
 
     @classmethod
     def INPUT_TYPES(cls):
-        # Load only input directory files at startup (like PromptExtractor).
-        # JS will refresh the list dynamically when source_folder changes.
-        input_dir = folder_paths.get_input_directory()
-        supported = {'.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi'}
-        files = ["(none)"]
-        if os.path.exists(input_dir):
-            for root, dirs, filenames in os.walk(input_dir):
-                for fn in filenames:
-                    if os.path.splitext(fn)[1].lower() in supported:
-                        rel = os.path.relpath(os.path.join(root, fn), input_dir).replace('\\', '/')
-                        files.append(rel)
-        files[1:] = sorted(files[1:])
+        # Family labels sorted alphabetically with SDXL default
+        family_labels = get_all_family_labels()
+        family_keys = sorted(family_labels.keys(), key=lambda k: family_labels[k].lower())
+        # Move sdxl to front as default
+        if "sdxl" in family_keys:
+            family_keys.remove("sdxl")
+            family_keys.insert(0, "sdxl")
+
+        # Gather all models for initial model_a default
+        all_models = []
+        for fn in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
+            try:
+                all_models.extend(folder_paths.get_filename_list(fn))
+            except Exception:
+                continue
+        # Deduplicate
+        seen = set()
+        unique_models = []
+        for m in all_models:
+            if m not in seen:
+                seen.add(m)
+                unique_models.append(m)
+        # Filter to SDXL-compatible for default
+        sdxl_compat = get_compatible_families("sdxl")
+        sdxl_models = sorted([m for m in unique_models if get_model_family(m) in sdxl_compat])
+        first_model = sdxl_models[0] if sdxl_models else (sorted(unique_models)[0] if unique_models else "")
 
         return {
             "required": {
-                "source_folder": (["input", "output"], {"default": "input"}),
-                "image":         (files, {"default": "(none)"}),
+                "use_workflow_data": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "on",
+                    "label_off": "off",
+                    "tooltip": "When on, populate all fields from connected workflow_data input. "
+                               "When off, use manual values (keeps last loaded values).",
+                }),
+                "use_lora_input": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "on",
+                    "label_off": "off",
+                    "tooltip": "When on, use LoRA stacks from connected inputs. "
+                               "When off, use only the LoRAs shown in the node UI.",
+                }),
             },
             "optional": {
-                # Hidden state widgets — written by JS, read by Python
+                # ── Connectable inputs ────────────────────────────────
+                "workflow_data_input": ("WORKFLOW_DATA", {
+                    "forceInput": True,
+                    "lazy": True,
+                    "tooltip": "Connect workflow_data output from PromptExtractor",
+                }),
+                "lora_stack_a": ("LORA_STACK",),
+                "lora_stack_b": ("LORA_STACK",),
+                # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
                 "lora_state":      ("STRING", {"default": "{}", "multiline": True}),
-                "extracted_cache": ("STRING", {"default": "{}", "multiline": True}),
             },
             "hidden": {
                 "unique_id":     "UNIQUE_ID",
@@ -677,38 +711,84 @@ class WorkflowGenerator:
             },
         }
 
-    RETURN_TYPES  = ("IMAGE", "LATENT", "STRING")
+    RETURN_TYPES  = ("IMAGE", "LATENT", "WORKFLOW_DATA")
     RETURN_NAMES  = ("image", "latent", "workflow_data")
     FUNCTION      = "execute"
     CATEGORY      = "FBnodes"
     OUTPUT_NODE   = True
     DESCRIPTION   = (
-        "Extract ALL generation parameters from an image/video and regenerate, "
-        "or generate from scratch using manually entered values (standalone mode). "
-        "Shows model, LoRAs, VAE, CLIP, sampler settings with override controls. "
+        "One-stop generation node. Accepts workflow_data from PromptExtractor "
+        "and/or LoRA stacks, or works standalone with manual settings. "
         "Supports Standard, Flux, Flux2, and WAN dual-sampler strategies."
     )
 
-    def execute(self, source_folder="input", image="", override_data="{}",
-                lora_state="{}", extracted_cache="{}",
+    def check_lazy_status(self, use_workflow_data=False, use_lora_input=False,
+                          workflow_data_input=None, **kwargs):
+        """Tell ComfyUI which lazy inputs need evaluation this run."""
+        needed = []
+        if use_workflow_data and workflow_data_input is None:
+            needed.append('workflow_data_input')
+        return needed
+
+    def execute(self, use_workflow_data=False, use_lora_input=False,
+                workflow_data_input=None, lora_stack_a=None, lora_stack_b=None,
+                override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         """
         Main execution:
-          1. Extract parameters from file (or use defaults in standalone mode)
-          2. Apply overrides from JS UI
-          3. Load model (+ VAE + CLIP)
-          4. Apply LoRAs
-          5. Encode prompts
-          6. Create latent
-          7. Sample (family-aware strategy)
-          8. Decode
-          9. Return IMAGE, LATENT, WORKFLOW_DATA
+          1. Parse workflow_data or use defaults
+          2. Apply JS overrides
+          3. Merge lora inputs if enabled
+          4. Load model (+ VAE + CLIP)
+          5. Apply LoRAs
+          6. Encode prompts → Sample → Decode
+          7. Return IMAGE, LATENT, WORKFLOW_DATA
         """
-        # ── Standalone mode: no file selected ───────────────────────────
-        standalone = not image or image in ("", "(none)")
+        # ── Parse workflow_data input (if enabled and connected) ─────────
+        wf_data = None
+        if use_workflow_data and workflow_data_input:
+            try:
+                wf_data = json.loads(workflow_data_input)
+            except (json.JSONDecodeError, TypeError):
+                print("[WorkflowGenerator] Warning: could not parse workflow_data_input")
 
-        # ── Extract all parameters (or use blank defaults) ───────────────
-        if standalone:
+        # ── Build extracted dict from workflow_data or defaults ───────────
+        if wf_data:
+            wf_sampler = wf_data.get('sampler', {})
+            wf_res = wf_data.get('resolution', {})
+            extracted = {
+                'positive_prompt': wf_data.get('positive_prompt', ''),
+                'negative_prompt': wf_data.get('negative_prompt', ''),
+                'loras_a': wf_data.get('loras_a', []),
+                'loras_b': wf_data.get('loras_b', []),
+                'model_a': wf_data.get('model_a', ''),
+                'model_b': wf_data.get('model_b', ''),
+                'vae':     {'name': wf_data.get('vae', ''), 'source': 'workflow_data'},
+                'clip':    {
+                    'names': wf_data.get('clip', []) if isinstance(wf_data.get('clip'), list)
+                             else ([wf_data['clip']] if wf_data.get('clip') else []),
+                    'type': '', 'source': 'workflow_data',
+                },
+                'sampler': {
+                    'steps': wf_sampler.get('steps', 20),
+                    'cfg': wf_sampler.get('cfg', 5.0),
+                    'seed': wf_sampler.get('seed', 0),
+                    'sampler_name': wf_sampler.get('sampler_name', 'euler'),
+                    'scheduler': wf_sampler.get('scheduler', 'simple'),
+                    'denoise': 1.0,
+                    'guidance': wf_sampler.get('guidance'),
+                },
+                'resolution': {
+                    'width': wf_res.get('width', 768),
+                    'height': wf_res.get('height', 1280),
+                    'batch_size': wf_res.get('batch_size', 1),
+                    'length': wf_res.get('length'),
+                },
+                'is_video': wf_res.get('length') is not None,
+                'model_family': wf_data.get('family', ''),
+                'model_family_label': wf_data.get('family_strategy', ''),
+            }
+        else:
             extracted = {
                 'positive_prompt': '',
                 'negative_prompt': '',
@@ -716,25 +796,33 @@ class WorkflowGenerator:
                 'loras_b': [],
                 'model_a': '',
                 'model_b': '',
-                'vae':      {'name': '', 'source': 'unknown'},
-                'clip':     {'names': [], 'type': '', 'source': 'unknown'},
-                'sampler':  {
-                    'steps': 20, 'cfg': 7.0, 'seed': 0,
-                    'sampler_name': 'euler', 'scheduler': 'normal',
+                'vae':     {'name': '', 'source': 'unknown'},
+                'clip':    {'names': [], 'type': '', 'source': 'unknown'},
+                'sampler': {
+                    'steps': 20, 'cfg': 5.0, 'seed': 0,
+                    'sampler_name': 'euler', 'scheduler': 'simple',
                     'denoise': 1.0, 'guidance': None,
                 },
-                'resolution': {'width': 512, 'height': 512, 'batch_size': 1, 'length': None},
+                'resolution': {
+                    'width': 768, 'height': 1280, 'batch_size': 1, 'length': None,
+                },
                 'is_video': False,
             }
-        else:
-            base_dir  = folder_paths.get_output_directory() if source_folder == 'output' \
-                        else folder_paths.get_input_directory()
-            file_path = os.path.join(base_dir, image.replace('/', os.sep))
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"[WorkflowGenerator] File not found: {file_path}")
-            extracted = extract_all_from_file(file_path, source_folder)
 
-        # ── Parse overrides ──────────────────────────────────────────────
+        # ── Merge connected LoRA stacks if use_lora_input is enabled ─────
+        if use_lora_input:
+            if lora_stack_a:
+                extracted['loras_a'] = [
+                    {'name': name, 'model_strength': ms, 'clip_strength': cs}
+                    for name, ms, cs in lora_stack_a
+                ]
+            if lora_stack_b:
+                extracted['loras_b'] = [
+                    {'name': name, 'model_strength': ms, 'clip_strength': cs}
+                    for name, ms, cs in lora_stack_b
+                ]
+
+        # ── Parse overrides from JS ──────────────────────────────────────
         try:
             overrides = json.loads(override_data) if override_data else {}
         except json.JSONDecodeError:
@@ -752,31 +840,37 @@ class WorkflowGenerator:
         vae_name        = overrides.get('vae', extracted['vae']['name'])
 
         sampler_params = extracted['sampler'].copy()
-        # Denoise is always forced to 1.0 — not user-controllable
         sampler_params['denoise'] = 1.0
         for key in ['steps', 'cfg', 'seed', 'sampler_name', 'scheduler']:
             if key in overrides:
                 sampler_params[key] = overrides[key]
 
         # Family + strategy
-        family_key = overrides.get('_family') or None
+        family_key = overrides.get('_family') or extracted.get('model_family') or None
         if not family_key:
             resolved_ref, _ = resolve_model_name(model_name_a)
             family_key = get_model_family(resolved_ref or model_name_a)
+        if not family_key:
+            family_key = "sdxl"
         strategy = get_family_sampler_strategy(family_key)
 
         print(f"[WorkflowGenerator] Family: {get_family_label(family_key)} "
-              f"(strategy={strategy}), model_a={model_name_a}, model_b={model_name_b or '—'}")
+              f"(strategy={strategy}), model_a={model_name_a}, "
+              f"model_b={model_name_b or '—'}")
 
         # ── Load Model A ─────────────────────────────────────────────────
         resolved_a, folder_a = resolve_model_name(model_name_a)
         if resolved_a is None:
-            raise RuntimeError(f"[WorkflowGenerator] Model not found: {model_name_a}")
+            raise RuntimeError(
+                f"[WorkflowGenerator] Model not found: {model_name_a}"
+            )
         full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
         _cache_key_a = (full_path_a, family_key)
         if _cache_key_a not in self._model_cache:
             print(f"[WorkflowGenerator] Loading model (not cached): {resolved_a}")
-            self._model_cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a)
+            self._model_cache[_cache_key_a] = _load_model_from_path(
+                resolved_a, folder_a, full_path_a
+            )
         else:
             print(f"[WorkflowGenerator] Using cached model: {resolved_a}")
         model_a, clip_a, vae_a = self._model_cache[_cache_key_a]
@@ -785,27 +879,34 @@ class WorkflowGenerator:
         vae = _load_vae(vae_name, existing_vae=vae_a)
         if vae is None:
             raise RuntimeError(
-                f"[WorkflowGenerator] No VAE available. Model={model_name_a}, VAE={vae_name}"
+                f"[WorkflowGenerator] No VAE available. "
+                f"Model={model_name_a}, VAE={vae_name}"
             )
 
         # ── Load CLIP ────────────────────────────────────────────────────
-        # If the extracted workflow didn't capture a clip type, fall back to
-        # the family's known clip_type (e.g. "flux2" for Klein, ensuring
-        # CLIPType.FLUX2 / Qwen is used instead of CLIPType.FLUX / T5).
         clip_info = dict(extracted['clip'])
         if not clip_info.get('type') and family_key:
             from ..py.workflow_families import MODEL_FAMILIES
-            family_clip_type = MODEL_FAMILIES.get(family_key, {}).get('clip_type', '')
+            family_clip_type = MODEL_FAMILIES.get(
+                family_key, {}
+            ).get('clip_type', '')
             if family_clip_type:
                 clip_info['type'] = family_clip_type
         clip = _load_clip(clip_info, overrides, existing_clip=clip_a)
         if clip is None:
-            raise RuntimeError("[WorkflowGenerator] No CLIP available for text encoding")
+            raise RuntimeError(
+                "[WorkflowGenerator] No CLIP available for text encoding"
+            )
 
         # ── Apply LoRAs (Stack A → model A) ──────────────────────────────
-        has_both_stacks = bool(extracted['loras_a']) and bool(extracted['loras_b'])
-        stack_key_a     = "a" if has_both_stacks else ""
-        model_a, clip   = _apply_loras(model_a, clip, extracted['loras_a'], lora_overrides, stack_key=stack_key_a)
+        has_both_stacks = (
+            bool(extracted['loras_a']) and bool(extracted['loras_b'])
+        )
+        stack_key_a = "a" if has_both_stacks else ""
+        model_a, clip = _apply_loras(
+            model_a, clip, extracted['loras_a'],
+            lora_overrides, stack_key=stack_key_a,
+        )
 
         # ── Encode prompts ───────────────────────────────────────────────
         tokens_pos = clip.tokenize(positive_prompt)
@@ -815,10 +916,13 @@ class WorkflowGenerator:
 
         # ── Resolution ───────────────────────────────────────────────────
         res    = extracted['resolution']
-        width  = int(overrides.get('width',      res['width']))
-        height = int(overrides.get('height',     res['height']))
+        width  = int(overrides.get('width', res['width']))
+        height = int(overrides.get('height', res['height']))
         length = overrides.get('length', res.get('length'))
-        batch  = int(length) if length is not None else int(overrides.get('batch_size', res.get('batch_size', 1)))
+        batch  = (
+            int(length) if length is not None
+            else int(overrides.get('batch_size', res.get('batch_size', 1)))
+        )
 
         # ── Create latent ────────────────────────────────────────────────
         print(f"[WorkflowGenerator] Latent: {width}x{height}, batch={batch}")
@@ -833,40 +937,47 @@ class WorkflowGenerator:
             "_height": height,
         }
 
-        # ── Sample (family-aware) ─────────────────────────────────────────
+        # ── Sample (family-aware) ────────────────────────────────────────
         print(f"[WorkflowGenerator] Sampling strategy: {strategy}")
-        print(f"[WorkflowGenerator] steps={sampler_params['steps']}, "
-              f"cfg={sampler_params['cfg']}, seed={sampler_params['seed']}, "
-              f"sampler={sampler_params['sampler_name']}, scheduler={sampler_params['scheduler']}")
+        print(
+            f"[WorkflowGenerator] steps={sampler_params['steps']}, "
+            f"cfg={sampler_params['cfg']}, seed={sampler_params['seed']}, "
+            f"sampler={sampler_params['sampler_name']}, "
+            f"scheduler={sampler_params['scheduler']}"
+        )
 
         if strategy == "wan" and model_name_b:
-            # WAN dual-sampler: load model B and stack B
             resolved_b, folder_b = resolve_model_name(model_name_b)
             model_b_obj = clip_b = None
             if resolved_b:
                 full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
                 _cache_key_b = (full_path_b, family_key)
                 if _cache_key_b not in self._model_cache:
-                    print(f"[WorkflowGenerator] Loading model B (not cached): {resolved_b}")
-                    self._model_cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b)
+                    print(f"[WorkflowGenerator] Loading model B: {resolved_b}")
+                    self._model_cache[_cache_key_b] = _load_model_from_path(
+                        resolved_b, folder_b, full_path_b
+                    )
                 else:
                     print(f"[WorkflowGenerator] Using cached model B: {resolved_b}")
                 model_b_obj, clip_b_raw, _ = self._model_cache[_cache_key_b]
 
-                # Apply stack B LoRAs to model B
-                clip_b = clip_b_raw or clip  # Use checkpoint clip or fall back to A's clip
+                clip_b = clip_b_raw or clip
                 stack_key_b = "b" if has_both_stacks else ""
-                model_b_obj, clip_b = _apply_loras(model_b_obj, clip_b, extracted['loras_b'],
-                                                    lora_overrides, stack_key=stack_key_b)
+                model_b_obj, clip_b = _apply_loras(
+                    model_b_obj, clip_b, extracted['loras_b'],
+                    lora_overrides, stack_key=stack_key_b,
+                )
 
-                # Encode with clip B
                 tokens_pos_b = clip_b.tokenize(positive_prompt)
-                cond_pos_b   = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
+                cond_pos_b = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
                 tokens_neg_b = clip_b.tokenize(negative_prompt)
-                cond_neg_b   = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
+                cond_neg_b = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
             else:
                 model_b_obj = cond_pos_b = cond_neg_b = None
-                print(f"[WorkflowGenerator] WAN model B not found: {model_name_b} — using single sampler")
+                print(
+                    f"[WorkflowGenerator] WAN model B not found: "
+                    f"{model_name_b} — using single sampler"
+                )
 
             samples = _run_wan_sampler(
                 model_a, cond_pos, cond_neg, latent_dict, sampler_params,
@@ -876,14 +987,19 @@ class WorkflowGenerator:
             )
 
         elif strategy == "flux2":
-            samples = _run_flux2_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
+            samples = _run_flux2_sampler(
+                model_a, cond_pos, cond_neg, latent_dict, sampler_params
+            )
 
         elif strategy == "flux":
-            samples = _run_flux_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
+            samples = _run_flux_sampler(
+                model_a, cond_pos, cond_neg, latent_dict, sampler_params
+            )
 
         else:
-            # Standard KSampler — SD1.5, SDXL, Pony, Illustrious, SD3, etc.
-            samples = _run_standard_ksampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
+            samples = _run_standard_ksampler(
+                model_a, cond_pos, cond_neg, latent_dict, sampler_params
+            )
 
         # ── Build output latent ──────────────────────────────────────────
         out_latent = {"samples": samples}
@@ -895,27 +1011,38 @@ class WorkflowGenerator:
         # ── Build simplified workflow JSON ────────────────────────────────
         wf_overrides = dict(overrides)
         wf_overrides['_source'] = 'WorkflowGenerator'
-        extracted['model_family']       = family_key
+        extracted['model_family'] = family_key
         extracted['model_family_label'] = strategy
-        simplified_wf = build_simplified_workflow_data(extracted, wf_overrides, sampler_params)
+        simplified_wf = build_simplified_workflow_data(
+            extracted, wf_overrides, sampler_params
+        )
         workflow_data_str = json.dumps(simplified_wf, indent=2)
 
-        # ── Build UI info for JS ──────────────────────────────────────────
+        # ── Check LoRA availability for JS display ────────────────────────
+        lora_availability = {}
+        for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
+            lora_name = lora.get('name', '')
+            if lora_name and lora_name not in lora_availability:
+                _, found = resolve_lora_path(lora_name)
+                lora_availability[lora_name] = found
+
+        # ── Build UI info for JS ─────────────────────────────────────────
         ui_info = {
             'extracted': {
-                'positive_prompt':   extracted['positive_prompt'],
-                'negative_prompt':   extracted['negative_prompt'],
-                'model_a':           extracted['model_a'],
-                'model_b':           extracted['model_b'],
-                'loras_a':           extracted['loras_a'],
-                'loras_b':           extracted['loras_b'],
-                'vae':               extracted['vae'],
-                'clip':              extracted['clip'],
-                'sampler':           extracted['sampler'],
-                'resolution':        extracted['resolution'],
-                'is_video':          extracted.get('is_video', False),
-                'model_family':      family_key,
+                'positive_prompt':    extracted['positive_prompt'],
+                'negative_prompt':    extracted['negative_prompt'],
+                'model_a':            extracted['model_a'],
+                'model_b':            extracted['model_b'],
+                'loras_a':            extracted['loras_a'],
+                'loras_b':            extracted['loras_b'],
+                'vae':                extracted['vae'],
+                'clip':               extracted['clip'],
+                'sampler':            extracted['sampler'],
+                'resolution':         extracted['resolution'],
+                'is_video':           extracted.get('is_video', False),
+                'model_family':       family_key,
                 'model_family_label': get_family_label(family_key),
+                'lora_availability':  lora_availability,
             }
         }
 

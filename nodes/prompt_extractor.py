@@ -282,9 +282,11 @@ async def list_input_files(request):
         return server.web.json_response({"files": [], "error": str(e)}, status=500)
 
 
-def get_available_loras():
-    """Get all available LoRAs from ComfyUI's folder system"""
-    return folder_paths.get_filename_list("loras")
+# ── Shared LoRA utilities ─────────────────────────────────────────────────────
+from ..py.lora_utils import (
+    get_available_loras,
+    resolve_lora_path,
+)
 
 
 # Known model file extensions
@@ -345,33 +347,6 @@ def resolve_model_path(model_name):
     # Not found - return sanitized name so ComfyUI shows a clear error
     print(f"[PromptExtractor] Model not found: {model_name} (searched as '{sanitized_name}')")
     return sanitized_name, False
-
-
-def resolve_lora_path(lora_name):
-    """
-    Resolve a LoRA name to its full path using ComfyUI's folder system.
-    Returns (full_path, found) tuple.
-    """
-    lora_files = get_available_loras()
-
-    # Try exact match first (with extension)
-    for lora_file in lora_files:
-        if lora_file == lora_name:
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    # Try matching by name without extension
-    lora_name_lower = lora_name.lower()
-    for lora_file in lora_files:
-        file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
-        if file_name_no_ext.lower() == lora_name_lower:
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    # Try partial match (lora_name might be just the filename, lora_file might have subdirs)
-    for lora_file in lora_files:
-        if lora_name_lower in lora_file.lower():
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    return None, False
 
 
 def extract_metadata_from_png(file_path):
@@ -2956,7 +2931,7 @@ class PromptExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
-    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING", "STRING", "STRING")
+    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING", "STRING", "WORKFLOW_DATA")
     RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "model_a", "model_b", "workflow_data")
     FUNCTION = "extract"
     OUTPUT_NODE = True  # Enable preview display

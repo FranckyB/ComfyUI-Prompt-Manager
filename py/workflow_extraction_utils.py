@@ -402,8 +402,8 @@ def extract_all_from_file(file_path, source_folder='input'):
         extract_metadata_from_jpeg,
         extract_metadata_from_json,
         extract_metadata_from_video,
-        resolve_lora_path,
     )
+    from .lora_utils import resolve_lora_path
 
     result = {
         'positive_prompt': '',
@@ -468,7 +468,7 @@ def enrich_with_availability(result):
     to an extract_all_from_file() result dict in-place.
     Returns the same dict.
     """
-    from ..nodes.prompt_extractor import resolve_lora_path
+    from .lora_utils import resolve_lora_path
 
     # LoRA availability
     lora_availability = {}

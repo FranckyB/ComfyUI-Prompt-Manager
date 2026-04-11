@@ -22,7 +22,7 @@ import folder_paths
 MODEL_FAMILIES = {
     # ── Flux 2 / Klein ───────────────────────────────────────────────────────
     "flux2": {
-        "label":   "Flux 2 (Klein)",
+        "label":   "Flux 2",
         "folders": ["klein/", "flux2/"],
         "names":   ["flux2", "flux-2", "flux_2", "klein", "flux.2"],
         "vae":     ["flux2-vae", "flux2_vae", "ae.safetensors"],
@@ -37,7 +37,7 @@ MODEL_FAMILIES = {
     # ── Flux 1 (Dev + Schnell merged) ────────────────────────────────────────
     "flux1": {
         "label":   "Flux 1",
-        "folders": ["flux/"],
+        "folders": ["flux/", "flux1/"],
         "names":   ["flux-dev", "flux_dev", "fluxdev", "flux1-dev", "flux1_dev",
                     "flux-schnell", "flux_schnell", "fluxschnell", "flux1-schnell",
                     "flux1_schnell", "flux1-", "flux1_", "flux.1"],
@@ -108,7 +108,7 @@ MODEL_COMPAT_GROUPS = [
     {"sdxl"},          # SDXL-arch — all merged into one now
     {"flux1"},         # Flux1 variants — all merged into one now
     {"zimage"},        # Z-Image — all merged
-    {"flux2"},         # Flux2 Klein — all merged
+    {"flux2"},         # Flux2 — all merged
 ]
 
 # Sampling strategy keys (referenced by workflow_generator.py)

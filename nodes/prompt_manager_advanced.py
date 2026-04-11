@@ -69,136 +69,14 @@ def image_to_base64_thumbnail(image_tensor, max_size=200):
         return None
 
 
-def get_available_loras():
-    """Get all available LoRAs from ComfyUI's folder system"""
-    lora_files = folder_paths.get_filename_list("loras")
-    return lora_files
-
-
-def normalize_path_separators(path):
-    """Normalize path separators based on OS - for basename extraction only"""
-    if os.name == 'nt':  # Windows
-        return path.replace('/', '\\')
-    else:  # Linux/Mac
-        return path.replace('\\', '/')
-
-
-def strip_lora_extension(name):
-    """Remove only known LoRA file extensions, not arbitrary dots in names."""
-    lora_extensions = ['.safetensors', '.ckpt', '.pt', '.bin', '.pth']
-    name_lower = name.lower()
-    for ext in lora_extensions:
-        if name_lower.endswith(ext):
-            return name[:-len(ext)]
-    return name
-
-
-def fuzzy_match_lora(lora_name, lora_files):
-    """
-    Attempt to find a matching LoRA using fuzzy matching.
-    Handles renamed LoRAs by removing common WAN-related tokens.
-
-    Example: "DR34LAY_HIGH_V2" can match "DR34LAY_I2V_14B_HIGH_V2"
-
-    Returns (matched_file, True) if found, (None, False) otherwise.
-    """
-    import re
-
-    # Tokens to remove for fuzzy matching (case-insensitive)
-    # Order matters: remove longer tokens first to avoid partial matches
-    wan_tokens = ['wan_2_2', 'wan22', 'wan2.2', '20epoc', 'a14b', '14b', 'i2v', 't2v']
-
-    def normalize_name(name):
-        """
-        Remove WAN tokens from name, treating underscores and hyphens as separators.
-        Also removes content in parentheses (e.g., "MyLora (1)" becomes "MyLora").
-        Returns list of remaining non-empty parts in lowercase.
-        """
-        name_lower = name.lower()
-
-        # Remove anything in parentheses (e.g., " (1)", "(copy)", etc.)
-        name_lower = re.sub(r'\s*\([^)]*\)', '', name_lower)
-
-        # Replace each token with a placeholder to preserve boundaries
-        for token in wan_tokens:
-            # Use word boundary-aware replacement with _ or - as delimiter
-            # Replace [_-]token[_-], [_-]token, token[_-], or standalone token
-            pattern = rf'(?:^|[_-]){re.escape(token)}(?:[_-]|$)'
-            name_lower = re.sub(pattern, '_', name_lower)
-
-        # Split by underscore or hyphen and filter out empty strings
-        parts = [p for p in re.split(r'[_-]', name_lower) if p]
-        return parts
-
-    # Normalize the search name - use our extension stripper, not splitext
-    search_parts = normalize_name(strip_lora_extension(lora_name))
-    search_set = set(search_parts)
-
-    # If search_set is empty after normalization, we can't do fuzzy matching
-    if not search_set:
-        return None, False
-
-    candidates = []
-    for lora_file in lora_files:
-        file_name_no_ext = strip_lora_extension(os.path.basename(lora_file))
-        file_parts = normalize_name(file_name_no_ext)
-        file_set = set(file_parts)
-
-        # Check if all search parts are present in the file parts
-        if search_set.issubset(file_set):
-            # Calculate how well this matches (prefer closer matches)
-            extra_parts = len(file_set - search_set)
-            candidates.append((lora_file, file_name_no_ext, extra_parts))
-
-    if not candidates:
-        return None, False
-
-    # If only one match, return it
-    if len(candidates) == 1:
-        return candidates[0][0], True
-
-    # Multiple matches - prefer ones that match i2v/t2v from original if present
-    lora_name_lower = lora_name.lower()
-    has_i2v = 'i2v' in lora_name_lower
-    has_t2v = 't2v' in lora_name_lower
-
-    if has_i2v:
-        i2v_matches = [c for c in candidates if 'i2v' in c[1].lower()]
-        if i2v_matches:
-            candidates = i2v_matches
-    elif has_t2v:
-        t2v_matches = [c for c in candidates if 't2v' in c[1].lower()]
-        if t2v_matches:
-            candidates = t2v_matches
-
-    # Return the match with fewest extra parts (closest match)
-    candidates.sort(key=lambda x: x[2])
-    return candidates[0][0], True
-
-
-def get_lora_relative_path(lora_name):
-    """
-    Get the relative path for a LoRA that ComfyUI expects for loading.
-    Returns (relative_path, found) tuple.
-    Supports fuzzy matching for renamed LoRAs.
-    """
-    lora_files = get_available_loras()
-
-    lora_name_lower = lora_name.lower()
-
-    # Try exact match first
-    for lora_file in lora_files:
-        file_name_no_ext = strip_lora_extension(os.path.basename(lora_file))
-        if file_name_no_ext.lower() == lora_name_lower:
-            return lora_file, True
-
-    # Try fuzzy match for renamed LoRAs
-    fuzzy_match, found = fuzzy_match_lora(lora_name, lora_files)
-    if found:
-        return fuzzy_match, True
-
-    # Not found
-    return lora_name, False
+# ── Shared LoRA utilities ─────────────────────────────────────────────────────
+from ..py.lora_utils import (
+    get_available_loras,
+    normalize_path_separators,
+    strip_lora_extension,
+    fuzzy_match_lora,
+    get_lora_relative_path,
+)
 
 
 class PromptManagerAdvanced:
