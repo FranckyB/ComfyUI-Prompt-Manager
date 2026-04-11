@@ -1329,7 +1329,7 @@ app.registerExtension({
             // NATIVE_H accounts for the node title bar + native toggle widgets
             // that sit above our DOM widget (use_workflow_data, use_lora_input).
             const NATIVE_H = 80;
-            const MIN_W = 465;
+            const MIN_W = 470;
             const MIN_H = 300;
 
             // -- Register the DOM widget --
