@@ -456,6 +456,51 @@ def extract_all_from_file(file_path, source_folder='input'):
     result['clip']       = extract_clip_info(prompt_data, workflow_data)
     result['resolution'] = extract_resolution(prompt_data, workflow_data)
 
+    # ── WorkflowGenerator embedded data override ──────────────────────────
+    # When a WorkflowGenerator node generated the image, there are no
+    # standalone KSampler / EmptyLatentImage nodes — WG does everything
+    # internally. Its extracted_data contains the authoritative values.
+    if workflow_data and isinstance(workflow_data, dict):
+        for wf_node in workflow_data.get('nodes', []):
+            if wf_node.get('type') == 'WorkflowGenerator':
+                ed = wf_node.get('extracted_data')
+                if not ed or not isinstance(ed, dict):
+                    continue
+                ed_sampler = ed.get('sampler')
+                if ed_sampler and isinstance(ed_sampler, dict):
+                    result['sampler'] = {
+                        'steps':        ed_sampler.get('steps', result['sampler']['steps']),
+                        'cfg':          ed_sampler.get('cfg', result['sampler']['cfg']),
+                        'seed':         ed_sampler.get('seed', result['sampler']['seed']),
+                        'sampler_name': ed_sampler.get('sampler_name', result['sampler']['sampler_name']),
+                        'scheduler':    ed_sampler.get('scheduler', result['sampler']['scheduler']),
+                        'denoise':      ed_sampler.get('denoise', result['sampler']['denoise']),
+                        'guidance':     ed_sampler.get('guidance', result['sampler']['guidance']),
+                    }
+                ed_res = ed.get('resolution')
+                if ed_res and isinstance(ed_res, dict):
+                    result['resolution'] = {
+                        'width':      ed_res.get('width', result['resolution']['width']),
+                        'height':     ed_res.get('height', result['resolution']['height']),
+                        'batch_size': ed_res.get('batch_size', result['resolution']['batch_size']),
+                        'length':     ed_res.get('length', result['resolution']['length']),
+                    }
+                # VAE / CLIP from embedded data
+                ed_vae = ed.get('vae', '')
+                if ed_vae and isinstance(ed_vae, str) and ed_vae != '—':
+                    result['vae'] = {'name': ed_vae, 'source': 'WorkflowGenerator'}
+                ed_clip = ed.get('clip', [])
+                if ed_clip:
+                    names = ed_clip if isinstance(ed_clip, list) else [ed_clip]
+                    if any(n for n in names):
+                        result['clip'] = {'names': names, 'type': '', 'source': 'WorkflowGenerator'}
+                # Model from embedded data (if not already found)
+                if not result['model_a'] and ed.get('model_a'):
+                    result['model_a'] = ed['model_a']
+                if not result['model_b'] and ed.get('model_b'):
+                    result['model_b'] = ed['model_b']
+                break  # Only use the first WG node
+
     if result['resolution']['length'] is not None:
         result['is_video'] = True
 

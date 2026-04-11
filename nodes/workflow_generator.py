@@ -715,7 +715,7 @@ class WorkflowGenerator:
     RETURN_NAMES  = ("image", "latent", "workflow_data")
     FUNCTION      = "execute"
     CATEGORY      = "FBnodes"
-    OUTPUT_NODE   = True
+    OUTPUT_NODE   = False
     DESCRIPTION   = (
         "One-stop generation node. Accepts workflow_data from PromptExtractor "
         "and/or LoRA stacks, or works standalone with manual settings. "
@@ -866,9 +866,11 @@ class WorkflowGenerator:
         wf_overrides['_source'] = 'WorkflowGenerator'
         extracted['model_family'] = family_key
         extracted['model_family_label'] = strategy
+
         simplified_wf = build_simplified_workflow_data(
             extracted, wf_overrides, sampler_params
         )
+
         workflow_data_str = json.dumps(simplified_wf, indent=2)
 
         # ── Check LoRA availability for JS display ────────────────────────

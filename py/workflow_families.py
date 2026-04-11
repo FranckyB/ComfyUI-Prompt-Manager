@@ -81,6 +81,7 @@ MODEL_FAMILIES = {
         "vae":     ["sdxl_vae", "sdxl-vae"],
         "clip":    ["clip_l", "clip_g"],
         "sampler": "standard",
+        "checkpoint": True,
     },
     # ── SD 1.5 ───────────────────────────────────────────────────────────────
     "sd15": {
@@ -90,6 +91,7 @@ MODEL_FAMILIES = {
         "vae":     ["vae-ft-mse-840000"],
         "clip":    ["clip_l"],
         "sampler": "standard",
+        "checkpoint": True,
     },
     # ── Qwen Image ───────────────────────────────────────────────────────────
     "qwen_image": {
@@ -254,14 +256,15 @@ def list_compatible_vaes(family, return_recommended=False):
 
     matched = []
     recommended = None
+    is_checkpoint = spec.get("checkpoint", False)
     for v in all_vaes:
         v_lower = v.lower().replace("\\", "/")
         v_name = os.path.basename(v_lower)
         for pat in patterns:
             if pat in v_name or pat in v_lower:
                 matched.append(v)
-                if recommended is None:
-                    recommended = v  # first match = highest-priority recommendation
+                if recommended is None and not is_checkpoint:
+                    recommended = v
                 break
 
     if matched:
@@ -291,14 +294,15 @@ def list_compatible_clips(family, return_recommended=False):
 
     matched = []
     recommended = None
+    is_checkpoint = spec.get("checkpoint", False)
     for c in all_clips:
         c_lower = c.lower().replace("\\", "/")
         c_name = os.path.basename(c_lower)
         for pat in patterns:
             if pat in c_name or pat in c_lower:
                 matched.append(c)
-                if recommended is None:
-                    recommended = c  # first match = highest-priority recommendation
+                if recommended is None and not is_checkpoint:
+                    recommended = c
                 break
 
     if matched:
