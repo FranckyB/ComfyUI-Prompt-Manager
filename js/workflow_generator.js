@@ -1231,14 +1231,16 @@ app.registerExtension({
                     try {
                         const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
                         const d = await r.json();
-                        await reloadGroupedSelect(node._weVaeRow, async () => d.vaes || [], false, d.recommended || null);
+                        // Always default to (Default) — template embeds the correct VAE
+                        await reloadGroupedSelect(node._weVaeRow, async () => d.vaes || [], false, null);
                     } catch { await reloadGroupedSelect(node._weVaeRow, async () => [], false, null); }
                 };
                 const reloadClip = async () => {
                     try {
                         const r = await fetch(`/workflow-extractor/list-clips?family=${fam}`);
                         const d = await r.json();
-                        await reloadGroupedSelect(node._weClipRow, async () => d.clips || [], false, d.recommended || null);
+                        // Always default to (Default) — template embeds the correct CLIP
+                        await reloadGroupedSelect(node._weClipRow, async () => d.clips || [], false, null);
                     } catch { await reloadGroupedSelect(node._weClipRow, async () => [], false, null); }
                 };
                 await Promise.all([
@@ -1570,9 +1572,34 @@ app.registerExtension({
 
                 const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
 
-                if (!wfToggle?.value && node._wePopulated) {
-                    // Manual mode — update LoRA display from lora_input if enabled
-                    if (node._weExtracted) {
+                if (!wfToggle?.value) {
+                    // ── Manual mode (use_workflow_data OFF) ──────────────────
+                    // Python echoes effective values back.  We only update
+                    // availability/found flags and LoRA list — never reset
+                    // UI fields the user has already filled in.
+                    if (!node._weExtracted) {
+                        // Very first execution on a brand-new node: seed
+                        // _weExtracted with the effective info so subsequent
+                        // runs have something to compare against.
+                        node._weExtracted = info;
+                        node._wePopulated = true;
+                        node.properties = node.properties || {};
+                        node.properties.we_extracted_cache = JSON.stringify(info);
+                        // Do NOT call updateUI — user's typed values live in
+                        // _weOverrides / the DOM already; just sync family/visibility.
+                        if (info.model_family && node._weFamilySel) {
+                            const fam = info.model_family;
+                            if (![...node._weFamilySel.options].some(o => o.value === fam)) {
+                                const o = document.createElement("option");
+                                o.value = fam; o.textContent = info.model_family_label || fam;
+                                node._weFamilySel.appendChild(o);
+                            }
+                            node._weFamilySel.value = fam;
+                            node._weFamily = fam;
+                        }
+                        updateWanVisibility(node);
+                    } else {
+                        // Subsequent runs — keep UI as-is, only update metadata
                         const loraToggle = node.widgets?.find(w => w.name === "use_lora_input");
                         if (loraToggle?.value) {
                             const oldNames = [...(node._weExtracted.loras_a || []), ...(node._weExtracted.loras_b || [])]
@@ -1592,7 +1619,7 @@ app.registerExtension({
                         updateLoras(node);
                     }
                 } else {
-                    // use_workflow_data ON or first-time — full UI population
+                    // ── use_workflow_data ON — full UI population from source ──
                     const prev = node._weExtracted;
                     const sourceChanged = !prev
                         || prev.model_a !== info.model_a
@@ -1647,8 +1674,25 @@ app.registerExtension({
             if (info && !this._preUpdateApplied) {
                 const wfToggle = this.widgets?.find(w => w.name === "use_workflow_data");
 
-                if (!wfToggle?.value && this._wePopulated) {
-                    if (this._weExtracted) {
+                if (!wfToggle?.value) {
+                    // Manual mode — mirror the pre-update handler: never reset user fields
+                    if (!this._weExtracted) {
+                        this._weExtracted = info;
+                        this._wePopulated = true;
+                        this.properties = this.properties || {};
+                        this.properties.we_extracted_cache = JSON.stringify(info);
+                        if (info.model_family && this._weFamilySel) {
+                            const fam = info.model_family;
+                            if (![...this._weFamilySel.options].some(o => o.value === fam)) {
+                                const o = document.createElement("option");
+                                o.value = fam; o.textContent = info.model_family_label || fam;
+                                this._weFamilySel.appendChild(o);
+                            }
+                            this._weFamilySel.value = fam;
+                            this._weFamily = fam;
+                        }
+                        updateWanVisibility(this);
+                    } else {
                         const loraToggle = this.widgets?.find(w => w.name === "use_lora_input");
                         if (loraToggle?.value) {
                             const oldNames = [...(this._weExtracted.loras_a || []), ...(this._weExtracted.loras_b || [])]
@@ -1668,6 +1712,7 @@ app.registerExtension({
                         updateLoras(this);
                     }
                 } else {
+                    // use_workflow_data ON — full UI population from source
                     const prev = this._weExtracted;
                     const sourceChanged = !prev
                         || prev.model_a !== info.model_a
@@ -1682,7 +1727,6 @@ app.registerExtension({
                     this.properties.we_extracted_cache = JSON.stringify(info);
 
                     if (sourceChanged) {
-                        // New source — clear old overrides so fresh data shows
                         this._wePopulated = true;
                         this._weLoraState = {};
                         this._weOverrides = {};

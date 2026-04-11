@@ -878,21 +878,46 @@ class WorkflowGenerator:
             vae_found = resolve_vae_name(vae_name_str) is not None
 
         # ── Build UI info for JS (always, even if generation fails) ───────
+        # Echo back the *effective* values (overrides applied) so the JS
+        # pre-update handler sees what the user actually has set and does
+        # NOT mistakenly treat it as a source change that clears all fields.
+        effective_sampler = dict(extracted['sampler'])
+        for key in ['steps', 'cfg', 'seed', 'sampler_name', 'scheduler']:
+            if key in overrides:
+                effective_sampler[key] = overrides[key]
+        if 'steps_high' in overrides:
+            effective_sampler['steps_high'] = overrides['steps_high']
+        if 'steps_low' in overrides:
+            effective_sampler['steps_low'] = overrides['steps_low']
+
+        effective_resolution = dict(extracted['resolution'])
+        for key in ['width', 'height', 'batch_size', 'length']:
+            if key in overrides:
+                effective_resolution[key] = overrides[key]
+
+        effective_vae = extracted['vae']
+        if overrides.get('vae'):
+            effective_vae = {'name': overrides['vae'], 'source': 'override'}
+
+        effective_clip = extracted['clip']
+        if overrides.get('clip_names'):
+            effective_clip = {'names': overrides['clip_names'], 'type': '', 'source': 'override'}
+
         ui_info = {
             'extracted': {
-                'positive_prompt':    extracted['positive_prompt'],
-                'negative_prompt':    extracted['negative_prompt'],
-                'model_a':            extracted['model_a'],
-                'model_b':            extracted['model_b'],
+                'positive_prompt':    positive_prompt,
+                'negative_prompt':    negative_prompt,
+                'model_a':            model_name_a,
+                'model_b':            model_name_b,
                 'model_a_found':      model_a_found,
                 'model_b_found':      model_b_found,
                 'loras_a':            extracted['loras_a'],
                 'loras_b':            extracted['loras_b'],
-                'vae':                extracted['vae'],
+                'vae':                effective_vae,
                 'vae_found':          vae_found,
-                'clip':               extracted['clip'],
-                'sampler':            extracted['sampler'],
-                'resolution':         extracted['resolution'],
+                'clip':               effective_clip,
+                'sampler':            effective_sampler,
+                'resolution':         effective_resolution,
                 'is_video':           extracted.get('is_video', False),
                 'model_family':       family_key,
                 'model_family_label': get_family_label(family_key),
