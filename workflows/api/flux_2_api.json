@@ -1,0 +1,161 @@
+{
+  "84": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "85": {
+    "class_type": "Flux2Scheduler",
+    "inputs": {
+      "steps": 20,
+      "width": [
+        "91",
+        0
+      ],
+      "height": [
+        "92",
+        0
+      ]
+    }
+  },
+  "86": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": [
+        "99",
+        0
+      ],
+      "positive": [
+        "97",
+        0
+      ],
+      "negative": [
+        "90",
+        0
+      ],
+      "cfg": 5
+    }
+  },
+  "87": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "93",
+        0
+      ],
+      "guider": [
+        "86",
+        0
+      ],
+      "sampler": [
+        "84",
+        0
+      ],
+      "sigmas": [
+        "85",
+        0
+      ],
+      "latent_image": [
+        "89",
+        0
+      ]
+    }
+  },
+  "90": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "95",
+        0
+      ],
+      "text": ""
+    }
+  },
+  "91": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 1024
+    }
+  },
+  "92": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 1024
+    }
+  },
+  "93": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 0
+    }
+  },
+  "95": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    }
+  },
+  "96": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "97": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "95",
+        0
+      ],
+      "text": ""
+    }
+  },
+  "88": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "87",
+        0
+      ],
+      "vae": [
+        "96",
+        0
+      ]
+    }
+  },
+  "89": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "width": [
+        "91",
+        0
+      ],
+      "height": [
+        "92",
+        0
+      ],
+      "batch_size": 1024
+    }
+  },
+  "94": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux-2-klein-base-9b-fp8.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "99": {
+    "class_type": "PromptApplyLora",
+    "inputs": {
+      "model": [
+        "94",
+        0
+      ],
+      "lora_stack_text": ""
+    }
+  }
+}

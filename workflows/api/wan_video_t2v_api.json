@@ -1,0 +1,172 @@
+{
+  "145": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "146": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    }
+  },
+  "148": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "147": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "162": {
+    "class_type": "PromptApplyLora",
+    "inputs": {
+      "model": [
+        "148",
+        0
+      ],
+      "lora_stack_text": ""
+    }
+  },
+  "163": {
+    "class_type": "PromptApplyLora",
+    "inputs": {
+      "model": [
+        "147",
+        0
+      ],
+      "lora_stack_text": ""
+    }
+  },
+  "134": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "162",
+        0
+      ],
+      "shift": 5.000000000000001
+    }
+  },
+  "149": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "163",
+        0
+      ],
+      "shift": 5.000000000000001
+    }
+  },
+  "139": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": [
+        "134",
+        0
+      ],
+      "positive": [
+        "143",
+        0
+      ],
+      "negative": [
+        "140",
+        0
+      ],
+      "latent_image": [
+        "164",
+        0
+      ],
+      "add_noise": "enable",
+      "noise_seed": 0,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "end_at_step": 2,
+      "return_with_leftover_noise": "enable"
+    }
+  },
+  "137": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": [
+        "149",
+        0
+      ],
+      "positive": [
+        "143",
+        0
+      ],
+      "negative": [
+        "140",
+        0
+      ],
+      "latent_image": [
+        "139",
+        0
+      ],
+      "add_noise": "disable",
+      "noise_seed": 0,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 2,
+      "end_at_step": 100,
+      "return_with_leftover_noise": "disable"
+    }
+  },
+  "142": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "137",
+        0
+      ],
+      "vae": [
+        "145",
+        0
+      ]
+    }
+  },
+  "143": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "146",
+        0
+      ],
+      "text": ""
+    }
+  },
+  "164": {
+    "class_type": "EmptyHunyuanLatentVideo",
+    "inputs": {
+      "width": 640,
+      "height": 640,
+      "length": 81,
+      "batch_size": 1
+    }
+  },
+  "140": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "146",
+        0
+      ],
+      "text": ""
+    }
+  }
+}

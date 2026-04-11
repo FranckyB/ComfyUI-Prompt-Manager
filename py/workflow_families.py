@@ -54,15 +54,33 @@ MODEL_FAMILIES = {
         "clip":    ["qwen-4b-zimage", "qwen_3_4b", "qwen_3_8b", "t5xxl"],
         "sampler": "flux",
     },
-    # ── WAN 2.x (dual KSampler) ─────────────────────────────────────────────
-    "wan": {
-        "label":   "WAN 2.x",
-        "folders": ["wan2_2/", "wan2_1/", "wan/"],
-        "names":   ["wan2.2", "wan2.1", "wan2_2", "wan2_1", "wanvideo", "wan_t2v", "wan_i2v",
-                    "wan2.2_t2v", "wan2.2_i2v", "wan2.1_t2v"],
+    # ── WAN 2.x Image (single KSampler, text-to-image) ──────────────────────
+    "wan_image": {
+        "label":   "WAN Image",
+        "folders": [],
+        "names":   ["wan_image"],
         "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae"],
         "clip":    ["umt5_xxl"],
-        "sampler": "wan",
+        "sampler": "wan_image",
+    },
+    # ── WAN 2.x Video — Image-to-Video (dual KSampler + i2v latent) ──────────
+    "wan_video_i2v": {
+        "label":   "WAN Video (i2v)",
+        "folders": ["wan2_2/i2v/", "wan2_1/i2v/"],
+        "names":   ["wan2.2_i2v", "wan2.1_i2v", "wan_i2v", "i2v"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae"],
+        "clip":    ["umt5_xxl"],
+        "sampler": "wan_video",
+    },
+    # ── WAN 2.x Video — Text-to-Video (dual KSampler) ────────────────────────
+    "wan_video_t2v": {
+        "label":   "WAN Video (t2v)",
+        "folders": ["wan2_2/", "wan2_1/", "wan/"],
+        "names":   ["wan2.2", "wan2.1", "wan2_2", "wan2_1", "wanvideo", "wan_t2v",
+                    "wan2.2_t2v", "wan2.1_t2v"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae"],
+        "clip":    ["umt5_xxl"],
+        "sampler": "wan_video",
     },
     # ── LTX-Video ────────────────────────────────────────────────────────────
     "ltxv": {
@@ -116,10 +134,26 @@ MODEL_COMPAT_GROUPS = [
 # Sampling strategy keys (referenced by workflow_generator.py)
 # Each key maps to a specific sampling code path.
 SAMPLER_STRATEGIES = {
-    "standard": "standard",  # KSampler — SD1.5, SDXL, Qwen
-    "flux":     "flux",      # SamplerCustomAdvanced + BasicGuider (Flux1, Z-Image, LTX-Video)
-    "flux2":    "flux2",     # Flux2Scheduler + SamplerCustomAdvanced + CFGGuider (Klein/Flux2)
-    "wan":      "wan",       # Dual KSampler high/low (WAN 2.x)
+    "standard":  "standard",   # KSampler — SD1.5, SDXL, Qwen
+    "flux":      "flux",       # SamplerCustomAdvanced + BasicGuider (Flux1, Z-Image, LTX-Video)
+    "flux2":     "flux2",      # Flux2Scheduler + SamplerCustomAdvanced + CFGGuider (Klein/Flux2)
+    "wan_image": "wan_image",  # Single KSampler — WAN Image
+    "wan_video": "wan_video",  # Dual KSamplerAdvanced high/low (WAN Video i2v + t2v)
+}
+
+# Workflow template filenames (in workflows/api/) keyed by family.
+# Maps each family key to its _api.json and _map.json stem.
+FAMILY_WORKFLOW_STEMS = {
+    "sdxl":          "sdxl",
+    "sd15":          None,          # No template yet — falls back to hardcoded
+    "flux1":         "flux_1",
+    "flux2":         "flux_2",
+    "zimage":        "z_image",
+    "wan_image":     "wan_image",
+    "wan_video_i2v": "wan_video_i2v",
+    "wan_video_t2v": "wan_video_t2v",
+    "ltxv":          None,          # No template yet
+    "qwen_image":    "qwen_image",
 }
 
 

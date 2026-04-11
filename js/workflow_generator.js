@@ -110,7 +110,7 @@ function makeBtn(label, onclick, extraStyle) {
     return b;
 }
 
-// --- Section builder ---
+// --- Section builder (collapsible) ---
 function makeSection(title) {
     const wrap = makeEl("div", {
         borderRadius: "6px", overflow: "hidden", marginTop: "2px",
@@ -120,17 +120,43 @@ function makeSection(title) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "4px 8px",
         fontSize: "11px", fontWeight: "600", color: "#aaa",
-        userSelect: "none",
+        userSelect: "none", cursor: "pointer",
         borderBottom: "1px solid rgba(255,255,255,0.1)",
     });
     const label = makeEl("span", {}, title);
-    header.append(label);
+    const chevron = makeEl("span", {
+        fontSize: "10px", color: C.textMuted, transition: "transform 0.15s",
+        marginLeft: "4px", flexShrink: "0",
+    }, "\u25B6"); // ▶ collapsed
+    header.append(label, chevron);
     const body = makeEl("div", {
         padding: "4px 8px",
+        display: "none", // collapsed by default
+    });
+    // Toggle on header click
+    header.addEventListener("click", () => {
+        const isHidden = body.style.display === "none";
+        body.style.display = isHidden ? "" : "none";
+        chevron.textContent = isHidden ? "\u25BC" : "\u25B6"; // ▼ / ▶
+        if (wrap._node?._weRecalc) wrap._node._weRecalc();
     });
     wrap._titleLabel = label;
+    wrap._chevron = chevron;
     wrap.append(header, body);
     wrap._body = body;
+    // Called once the node ref is available so the resize callback works
+    wrap._setNode = (n) => { wrap._node = n; };
+    // Programmatically expand (e.g. after loading saved state)
+    wrap._expand = () => {
+        body.style.display = "";
+        chevron.textContent = "\u25BC";
+        if (wrap._node?._weRecalc) wrap._node._weRecalc();
+    };
+    wrap._collapse = () => {
+        body.style.display = "none";
+        chevron.textContent = "\u25B6";
+        if (wrap._node?._weRecalc) wrap._node._weRecalc();
+    };
     return wrap;
 }
 
@@ -621,6 +647,9 @@ function updateUI(node) {
         if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
         if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "simple");
         if (rows.seed?._setOriginal) rows.seed._setOriginal(s.seed ?? 0);
+        // WAN Video dual steps
+        if (rows.steps_high?._setOriginal) rows.steps_high._setOriginal(s.steps_high ?? 4);
+        if (rows.steps_low?._setOriginal)  rows.steps_low._setOriginal(s.steps_low  ?? 20);
     }
 
     // Resolution
@@ -685,28 +714,43 @@ async function checkLoraAvailability(node) {
 
 // --- WAN-specific visibility ---
 function updateWanVisibility(node) {
-    const isWan = (node._weFamily === "wan");
+    const family = node._weFamily;
+    const isWanVideo = (family === "wan_video_i2v" || family === "wan_video_t2v");
+    const isWan      = isWanVideo || (family === "wan_image");
 
-    // Model labels
+    // Model A label: "Model A" for any WAN, "Model" otherwise
     if (node._weModelRow?._label) {
         node._weModelRow._label.textContent = isWan ? "Model A" : "Model";
     }
-    // Model B row visibility
+    // Model B row: only for WAN Video
     if (node._weModelBRow) {
-        node._weModelBRow.style.display = isWan ? "flex" : "none";
+        node._weModelBRow.style.display = isWanVideo ? "flex" : "none";
     }
 
     // LoRA stack titles
     if (node._weLoraACard?._titleLabel) {
-        node._weLoraACard._titleLabel.textContent = isWan ? "LoRA Stack A" : "LoRA Stack";
+        node._weLoraACard._titleLabel.textContent = isWanVideo ? "LoRA Stack (High)" : "LoRA Stack";
     }
+    // LoRA Stack B: only for WAN Video
     if (node._weLoraB) {
-        node._weLoraB.style.display = isWan ? "flex" : "none";
+        node._weLoraB.style.display = isWanVideo ? "flex" : "none";
     }
 
-    // Frames row: show only for WAN
+    // Frames row: show for any WAN (image or video)
     if (node._weResRows?.frames) {
         node._weResRows.frames.style.display = isWan ? "flex" : "none";
+    }
+
+    // Steps High / Low rows: only for WAN Video
+    if (node._weSamplerRows?.steps_high) {
+        node._weSamplerRows.steps_high.style.display = isWanVideo ? "flex" : "none";
+    }
+    if (node._weSamplerRows?.steps_low) {
+        node._weSamplerRows.steps_low.style.display  = isWanVideo ? "flex" : "none";
+    }
+    // Standard Steps row: hide when WAN Video (replaced by high/low)
+    if (node._weSamplerRows?.steps) {
+        node._weSamplerRows.steps.style.display = isWanVideo ? "none" : "flex";
     }
 
     if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
@@ -844,6 +888,13 @@ function syncHidden(node) {
         if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
         if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
         if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
+        // WAN Video dual steps
+        if (r.steps_high?._inp && r.steps_high.style.display !== "none") {
+            ov.steps_high = parseInt(r.steps_high._inp.value) || 4;
+        }
+        if (r.steps_low?._inp && r.steps_low.style.display !== "none") {
+            ov.steps_low = parseInt(r.steps_low._inp.value) || 20;
+        }
     }
     if (node._weResRows) {
         const r = node._weResRows;
@@ -934,6 +985,8 @@ function applyOverrides(node, ovJson, lsJson) {
         if (ov.seed != null) applyInput(rows.seed, ov.seed);
         if (ov.sampler_name) applyInput(rows.sampler, ov.sampler_name);
         if (ov.scheduler) applyInput(rows.scheduler, ov.scheduler);
+        if (ov.steps_high != null) applyInput(rows.steps_high, ov.steps_high);
+        if (ov.steps_low  != null) applyInput(rows.steps_low,  ov.steps_low);
     }
 
     if (node._weResRows) {
@@ -1240,14 +1293,32 @@ app.registerExtension({
             // -- 4. SAMPLER section --
             const sampSec = makeSection("SAMPLER");
             node._weSections.sampler = sampSec;
+
+            // Standard steps (hidden when WAN Video)
+            const stepsRow     = makeInput("Steps",      "number", 20,  { min: 1, max: 200, step: 1 }, _syncS);
+            // WAN Video dual steps (hidden by default)
+            const stepsHighRow = makeInput("Steps (High)", "number", 4,  { min: 1, max: 200, step: 1 }, _syncS);
+            const stepsLowRow  = makeInput("Steps (Low)",  "number", 20, { min: 1, max: 200, step: 1 }, _syncS);
+            stepsHighRow.style.display = "none";
+            stepsLowRow.style.display  = "none";
+
             const sampRows = {
-                steps:     makeInput("Steps",     "number", 20,       { min: 1, max: 200, step: 1 }, _syncS),
-                cfg:       makeInput("CFG",       "number", 5.0,      { min: 0, max: 100, step: 0.5 }, _syncS),
-                sampler:   makeInput("Sampler",   "select", "euler",  { options: SAMPLERS }, _syncS),
-                scheduler: makeInput("Scheduler", "select", "simple", { options: SCHEDULERS }, _syncS),
-                seed:      makeInput("Seed",      "number", 0,        { min: 0, step: 1 }, _syncS),
+                steps:      stepsRow,
+                steps_high: stepsHighRow,
+                steps_low:  stepsLowRow,
+                cfg:        makeInput("CFG",       "number", 5.0,      { min: 0, max: 100, step: 0.5 }, _syncS),
+                sampler:    makeInput("Sampler",   "select", "euler",  { options: SAMPLERS }, _syncS),
+                scheduler:  makeInput("Scheduler", "select", "simple", { options: SCHEDULERS }, _syncS),
+                seed:       makeInput("Seed",      "number", 0,        { min: 0, step: 1 }, _syncS),
             };
-            for (const row of Object.values(sampRows)) sampSec._body.appendChild(row);
+            // Append in display order: steps, steps_high, steps_low, cfg, sampler, scheduler, seed
+            sampSec._body.appendChild(stepsRow);
+            sampSec._body.appendChild(stepsHighRow);
+            sampSec._body.appendChild(stepsLowRow);
+            sampSec._body.appendChild(sampRows.cfg);
+            sampSec._body.appendChild(sampRows.sampler);
+            sampSec._body.appendChild(sampRows.scheduler);
+            sampSec._body.appendChild(sampRows.seed);
 
             // Control after generate
             const controlRow = makeInput("Control after generate", "select", "randomize",
@@ -1365,6 +1436,10 @@ app.registerExtension({
                 app.graph.setDirtyCanvas(true, true);
             }
             node._weRecalc = _resizeNode;
+            // Wire up _setNode on all sections now that node._weRecalc exists
+            for (const sec of Object.values(node._weSections)) {
+                if (sec._setNode) sec._setNode(node);
+            }
             requestAnimationFrame(() => requestAnimationFrame(() => _resizeNode()));
 
             // Enforce minimum size when user drags to resize

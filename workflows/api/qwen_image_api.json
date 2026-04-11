@@ -1,0 +1,111 @@
+{
+  "77": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "78": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    }
+  },
+  "82": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "78",
+        0
+      ],
+      "text": ""
+    }
+  },
+  "83": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "78",
+        0
+      ],
+      "text": ""
+    }
+  },
+  "80": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "88",
+        0
+      ],
+      "shift": 3.1000000000000005
+    }
+  },
+  "88": {
+    "class_type": "PromptApplyLora",
+    "inputs": {
+      "model": [
+        "81",
+        0
+      ],
+      "lora_stack_text": ""
+    }
+  },
+  "81": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "Qwen\\qwen_image_2512_bf16.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "79": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "84": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "86",
+        0
+      ],
+      "vae": [
+        "77",
+        0
+      ]
+    }
+  },
+  "86": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "80",
+        0
+      ],
+      "positive": [
+        "82",
+        0
+      ],
+      "negative": [
+        "83",
+        0
+      ],
+      "latent_image": [
+        "79",
+        0
+      ],
+      "seed": 315089889102375,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1
+    }
+  }
+}

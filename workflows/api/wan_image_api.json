@@ -1,0 +1,101 @@
+{
+  "1034": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "1033": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp16.safetensors",
+      "type": "wan",
+      "device": "default"
+    }
+  },
+  "1037": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "Wan2_2\\T2V\\Enhanced\\wan22EnhancedNSFWCameraPrompt_t2vFP8LOW.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "1038": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "1033",
+        0
+      ],
+      "text": ""
+    }
+  },
+  "1039": {
+    "class_type": "PromptApplyLora",
+    "inputs": {
+      "model": [
+        "1037",
+        0
+      ],
+      "lora_stack_text": ""
+    }
+  },
+  "1047": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "1039",
+        0
+      ],
+      "positive": [
+        "1042",
+        0
+      ],
+      "negative": [
+        "1038",
+        0
+      ],
+      "latent_image": [
+        "1046",
+        0
+      ],
+      "seed": 0,
+      "steps": 10,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1
+    }
+  },
+  "1048": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "1047",
+        0
+      ],
+      "vae": [
+        "1034",
+        0
+      ]
+    }
+  },
+  "1046": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "1042": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "1033",
+        0
+      ],
+      "text": ""
+    }
+  }
+}

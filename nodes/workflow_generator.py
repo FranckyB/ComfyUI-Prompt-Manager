@@ -31,6 +31,12 @@ from ..py.workflow_families import (
     list_compatible_vaes,
     list_compatible_clips,
 )
+from ..py.workflow_executor import (
+    load_template,
+    patch_template,
+    loras_to_text,
+    execute_template,
+)
 from ..py.workflow_extraction_utils import (
     extract_sampler_params,
     extract_vae_info,
@@ -660,6 +666,9 @@ class WorkflowGenerator:
                 # ── Connectable inputs ────────────────────────────────
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
+                "source_image": ("IMAGE", {
+                    "tooltip": "Input image for WAN Video i2v (image-to-video) generation.",
+                }),
                 "workflow_data_input": ("WORKFLOW_DATA", {
                     "forceInput": True,
                     "lazy": True,
@@ -697,6 +706,7 @@ class WorkflowGenerator:
 
     def execute(self, use_workflow_data=False, use_lora_input=False,
                 workflow_data_input=None, lora_stack_a=None, lora_stack_b=None,
+                source_image=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         """
@@ -809,6 +819,11 @@ class WorkflowGenerator:
         for key in ['steps', 'cfg', 'seed', 'sampler_name', 'scheduler']:
             if key in overrides:
                 sampler_params[key] = overrides[key]
+        # WAN Video step overrides (steps_high / steps_low)
+        if 'steps_high' in overrides:
+            sampler_params['steps_high'] = int(overrides['steps_high'])
+        if 'steps_low' in overrides:
+            sampler_params['steps_low'] = int(overrides['steps_low'])
 
         # Family + strategy
         family_key = overrides.get('_family') or extracted.get('model_family') or None
@@ -1020,89 +1035,161 @@ class WorkflowGenerator:
                 else int(overrides.get('batch_size', res.get('batch_size', 1)))
             )
 
-            # ── Create latent ────────────────────────────────────────────
-            print(f"[WorkflowGenerator] Latent: {width}x{height}, batch={batch}")
-            latent_tensor = torch.zeros(
-                [batch, 4, height // 8, width // 8],
-                device=comfy.model_management.intermediate_device(),
-            )
-            latent_dict = {
-                "samples": latent_tensor,
-                "downscale_ratio_spacial": 8,
-                "_width":  width,
-                "_height": height,
-            }
+            # ── Template-driven path (preferred) ─────────────────────────
+            # Try to execute via workflow template. Falls back to hardcoded
+            # samplers if no template exists for this family.
+            api_template, wmap = load_template(family_key)
 
-            # ── Sample (family-aware) ────────────────────────────────────
-            print(f"[WorkflowGenerator] Sampling strategy: {strategy}")
-            print(
-                f"[WorkflowGenerator] steps={sampler_params['steps']}, "
-                f"cfg={sampler_params['cfg']}, seed={sampler_params['seed']}, "
-                f"sampler={sampler_params['sampler_name']}, "
-                f"scheduler={sampler_params['scheduler']}"
-            )
+            if api_template is not None:
+                import copy
+                api = copy.deepcopy(api_template)
 
-            if strategy == "wan" and model_name_b:
-                resolved_b, folder_b = resolve_model_name(model_name_b)
-                model_b_obj = clip_b = None
-                if resolved_b:
-                    full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
-                    _cache_key_b = (full_path_b, family_key)
-                    if _cache_key_b not in self._model_cache:
-                        print(f"[WorkflowGenerator] Loading model B: {resolved_b}")
-                        self._model_cache[_cache_key_b] = _load_model_from_path(
-                            resolved_b, folder_b, full_path_b
-                        )
-                    else:
-                        print(f"[WorkflowGenerator] Using cached model B: {resolved_b}")
-                    model_b_obj, clip_b_raw, _ = self._model_cache[_cache_key_b]
+                # Build params for patch_template
+                patch_params = {
+                    'positive_prompt':   positive_prompt,
+                    'negative_prompt':   negative_prompt,
+                    'model_a':           model_name_a,
+                    'model_b':           model_name_b or None,
+                    'vae':               vae_name or '',
+                    'width':             width,
+                    'height':            height,
+                    'seed':              sampler_params.get('seed', 0),
+                    'cfg':               sampler_params.get('cfg', 5.0),
+                    'sampler_name':      sampler_params.get('sampler_name', 'euler'),
+                    'scheduler':         sampler_params.get('scheduler', 'simple'),
+                    'denoise':           sampler_params.get('denoise', 1.0),
+                    'guidance':          sampler_params.get('guidance'),
+                    'lora_stack_a_text': loras_to_text(
+                        extracted['loras_a'], lora_overrides,
+                        'a' if has_both_stacks else ''
+                    ),
+                    'lora_stack_b_text': loras_to_text(
+                        extracted['loras_b'], lora_overrides, 'b'
+                    ),
+                }
 
-                    clip_b = clip_b_raw or clip
-                    stack_key_b = "b" if has_both_stacks else ""
-                    model_b_obj, clip_b = _apply_loras(
-                        model_b_obj, clip_b, extracted['loras_b'],
-                        lora_overrides, stack_key=stack_key_b,
-                    )
-
-                    tokens_pos_b = clip_b.tokenize(positive_prompt)
-                    cond_pos_b = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
-                    tokens_neg_b = clip_b.tokenize(negative_prompt)
-                    cond_neg_b = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
+                # Standard steps or WAN Video dual-steps
+                if strategy == 'wan_video':
+                    sh = sampler_params.get('steps_high', sampler_params.get('steps', 4))
+                    sl = sampler_params.get('steps_low',  sampler_params.get('steps', 20))
+                    patch_params['steps_high'] = sh
+                    patch_params['steps_low']  = sl
+                    print(f"[WorkflowGenerator] WAN Video dual-steps: high={sh}, low={sl}")
                 else:
-                    model_b_obj = cond_pos_b = cond_neg_b = None
-                    print(
-                        f"[WorkflowGenerator] WAN model B not found: "
-                        f"{model_name_b} — using single sampler"
-                    )
+                    patch_params['steps'] = sampler_params.get('steps', 20)
 
-                samples = _run_wan_sampler(
-                    model_a, cond_pos, cond_neg, latent_dict, sampler_params,
-                    model_b=model_b_obj,
-                    cond_pos_b=cond_pos_b,
-                    cond_neg_b=cond_neg_b,
-                )
+                if length is not None:
+                    patch_params['length'] = int(length)
 
-            elif strategy == "flux2":
-                samples = _run_flux2_sampler(
-                    model_a, cond_pos, cond_neg, latent_dict, sampler_params
-                )
+                # Clip names from overrides or extracted
+                clip_info = dict(extracted['clip'])
+                if overrides.get('clip_names'):
+                    patch_params['clip'] = overrides['clip_names'][0]
+                elif clip_info.get('names'):
+                    patch_params['clip'] = clip_info['names'][0]
+                    if len(clip_info['names']) > 1:
+                        patch_params['clip_1'] = clip_info['names'][0]
+                        patch_params['clip_2'] = clip_info['names'][1]
 
-            elif strategy == "flux":
-                samples = _run_flux_sampler(
-                    model_a, cond_pos, cond_neg, latent_dict, sampler_params
+                patch_template(api, wmap, patch_params)
+
+                print(f"[WorkflowGenerator] Template execution: family={family_key}")
+                decoded, out_latent = execute_template(
+                    api, wmap, family_key,
+                    source_image=source_image,
                 )
 
             else:
-                samples = _run_standard_ksampler(
-                    model_a, cond_pos, cond_neg, latent_dict, sampler_params
+                # ── Fallback: hardcoded sampler paths ────────────────────
+                print(f"[WorkflowGenerator] Hardcoded sampler fallback: {strategy}")
+
+                print(f"[WorkflowGenerator] Latent: {width}x{height}, batch={batch}")
+                latent_tensor = torch.zeros(
+                    [batch, 4, height // 8, width // 8],
+                    device=comfy.model_management.intermediate_device(),
+                )
+                latent_dict = {
+                    "samples": latent_tensor,
+                    "downscale_ratio_spacial": 8,
+                    "_width":  width,
+                    "_height": height,
+                }
+
+                print(f"[WorkflowGenerator] Sampling strategy: {strategy}")
+                print(
+                    f"[WorkflowGenerator] steps={sampler_params['steps']}, "
+                    f"cfg={sampler_params['cfg']}, seed={sampler_params['seed']}, "
+                    f"sampler={sampler_params['sampler_name']}, "
+                    f"scheduler={sampler_params['scheduler']}"
                 )
 
-            # ── Build output latent ──────────────────────────────────────
-            out_latent = {"samples": samples}
+                if strategy == "wan_video" and model_name_b:
+                    resolved_b, folder_b = resolve_model_name(model_name_b)
+                    model_b_obj = clip_b = None
+                    if resolved_b:
+                        full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
+                        _cache_key_b = (full_path_b, family_key)
+                        if _cache_key_b not in self._model_cache:
+                            print(f"[WorkflowGenerator] Loading model B: {resolved_b}")
+                            self._model_cache[_cache_key_b] = _load_model_from_path(
+                                resolved_b, folder_b, full_path_b
+                            )
+                        else:
+                            print(f"[WorkflowGenerator] Using cached model B: {resolved_b}")
+                        model_b_obj, clip_b_raw, _ = self._model_cache[_cache_key_b]
 
-            # ── Decode ───────────────────────────────────────────────────
-            print("[WorkflowGenerator] Decoding latent…")
-            decoded = vae.decode(samples)
+                        clip_b = clip_b_raw or clip
+                        stack_key_b = "b" if has_both_stacks else ""
+                        model_b_obj, clip_b = _apply_loras(
+                            model_b_obj, clip_b, extracted['loras_b'],
+                            lora_overrides, stack_key=stack_key_b,
+                        )
+
+                        tokens_pos_b = clip_b.tokenize(positive_prompt)
+                        cond_pos_b = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
+                        tokens_neg_b = clip_b.tokenize(negative_prompt)
+                        cond_neg_b = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
+                    else:
+                        model_b_obj = cond_pos_b = cond_neg_b = None
+                        print(
+                            f"[WorkflowGenerator] WAN model B not found: "
+                            f"{model_name_b} — using single sampler"
+                        )
+
+                    # Map steps_high/steps_low into sampler_params for _run_wan_sampler
+                    wan_params_a = dict(sampler_params)
+                    wan_params_b = dict(sampler_params)
+                    if 'steps_high' in sampler_params:
+                        wan_params_a['steps'] = sampler_params['steps_high']
+                        wan_params_b['steps'] = sampler_params.get('steps_low', sampler_params['steps_high'])
+
+                    samples = _run_wan_sampler(
+                        model_a, cond_pos, cond_neg, latent_dict, wan_params_a,
+                        model_b=model_b_obj,
+                        cond_pos_b=cond_pos_b,
+                        cond_neg_b=cond_neg_b,
+                        sampler_params_b=wan_params_b,
+                    )
+
+                elif strategy == "flux2":
+                    samples = _run_flux2_sampler(
+                        model_a, cond_pos, cond_neg, latent_dict, sampler_params
+                    )
+
+                elif strategy == "flux":
+                    samples = _run_flux_sampler(
+                        model_a, cond_pos, cond_neg, latent_dict, sampler_params
+                    )
+
+                else:
+                    samples = _run_standard_ksampler(
+                        model_a, cond_pos, cond_neg, latent_dict, sampler_params
+                    )
+
+                # ── Decode ───────────────────────────────────────────────────
+                print("[WorkflowGenerator] Decoding latent…")
+                decoded = vae.decode(samples)
+                out_latent = {"samples": samples}
 
         except FileNotFoundError:
             # Model/VAE/CLIP not found — gen_error already set above.
