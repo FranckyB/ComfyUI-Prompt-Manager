@@ -76,18 +76,6 @@ MODEL_FAMILIES = {
                          "clip_l", "clip_g", "gemma"],
         "sampler": "flux",
     },
-    # ── WAN 2.x Image (single KSampler, text-to-image) ──────────────────────
-    "wan_image": {
-        "label":   "WAN Image",
-        "folders": [],
-        "names":   ["wan_image"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
-                    "wan2.1-vae", "wan_2.1-vae"],
-        # WAN uses UMT5-XXL exclusively — NOT t5xxl, NOT clip_l/g.
-        "clip":         ["umt5_xxl", "umt5-xxl"],
-        "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
-        "sampler": "wan_image",
-    },
     # ── WAN 2.x Video — Image-to-Video (dual KSampler + i2v latent) ──────────
     "wan_video_i2v": {
         "label":   "WAN Video (i2v)",
@@ -100,6 +88,9 @@ MODEL_FAMILIES = {
         "sampler": "wan_video",
     },
     # ── WAN 2.x Video — Text-to-Video (dual KSampler) ────────────────────────
+    # DETECTION PRIORITY: must appear before wan_image — they share the same
+    # folders/names, so first-match wins.  Auto-detected T2V models land here;
+    # user selects wan_image explicitly from the family dropdown.
     "wan_video_t2v": {
         "label":   "WAN Video (t2v)",
         "folders": ["wan2_2/", "wan2_1/", "wan/"],
@@ -110,6 +101,23 @@ MODEL_FAMILIES = {
         "clip":         ["umt5_xxl", "umt5-xxl"],
         "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
         "sampler": "wan_video",
+    },
+    # ── WAN 2.x Image (single KSampler, text-to-image) ──────────────────────
+    # Same model files as WAN Video T2V — identical folders/names/vae/clip.
+    # Must appear AFTER wan_video_t2v so auto-detection resolves T2V models
+    # to wan_video_t2v.  User picks this family explicitly for still images.
+    # Sampler stays wan_image (single KSampler, no dual Steps rows).
+    "wan_image": {
+        "label":   "WAN Image",
+        "folders": ["wan2_2/", "wan2_1/", "wan/"],
+        "names":   ["wan2.2", "wan2.1", "wan2_2", "wan2_1", "wanvideo", "wan_t2v",
+                    "wan2.2_t2v", "wan2.1_t2v"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
+                    "wan2.1-vae", "wan_2.1-vae"],
+        # WAN uses UMT5-XXL exclusively — NOT t5xxl, NOT clip_l/g.
+        "clip":         ["umt5_xxl", "umt5-xxl"],
+        "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
+        "sampler": "wan_image",
     },
     # ── LTX-Video ────────────────────────────────────────────────────────────
     "ltxv": {
@@ -168,10 +176,10 @@ MODEL_FAMILIES = {
 # Compatibility groups — checkpoint families that can share each other's models.
 # VAE/CLIP are NOT grouped (they differ per family) — model weights only.
 MODEL_COMPAT_GROUPS = [
-    {"sdxl"},          # SDXL-arch — all merged into one now
-    {"flux1"},         # Flux1 variants — all merged into one now
-    {"zimage"},        # Z-Image — all merged
-    {"flux2"},         # Flux2 — all merged
+    {"sdxl"},                          # SDXL-arch — all merged into one now
+    {"flux1"},                         # Flux1 variants — all merged into one now
+    {"zimage"},                        # Z-Image — all merged
+    {"flux2"},                         # Flux2 — all merged
 ]
 
 # Sampling strategy keys (referenced by workflow_generator.py)
