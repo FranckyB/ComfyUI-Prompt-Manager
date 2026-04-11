@@ -133,12 +133,15 @@ function makeSection(title) {
         padding: "4px 8px",
         display: "none", // collapsed by default
     });
-    // Toggle on header click
+    // Toggle on header click.
+    // Use double-rAF so the browser has fully reflowed the section body
+    // before we measure scrollHeight — a direct call reads stale dimensions.
     header.addEventListener("click", () => {
         const isHidden = body.style.display === "none";
         body.style.display = isHidden ? "" : "none";
         chevron.textContent = isHidden ? "\u25BC" : "\u25B6"; // ▼ / ▶
-        if (wrap._node?._weRecalc) wrap._node._weRecalc();
+        if (wrap._node?._weRecalc)
+            requestAnimationFrame(() => requestAnimationFrame(() => wrap._node._weRecalc()));
     });
     wrap._titleLabel = label;
     wrap._chevron = chevron;
@@ -146,16 +149,19 @@ function makeSection(title) {
     wrap._body = body;
     // Called once the node ref is available so the resize callback works
     wrap._setNode = (n) => { wrap._node = n; };
-    // Programmatically expand (e.g. after loading saved state)
+    // Programmatically expand/collapse (e.g. after loading saved state).
+    // Double-rAF for the same reason as the click handler above.
     wrap._expand = () => {
         body.style.display = "";
         chevron.textContent = "\u25BC";
-        if (wrap._node?._weRecalc) wrap._node._weRecalc();
+        if (wrap._node?._weRecalc)
+            requestAnimationFrame(() => requestAnimationFrame(() => wrap._node._weRecalc()));
     };
     wrap._collapse = () => {
         body.style.display = "none";
         chevron.textContent = "\u25B6";
-        if (wrap._node?._weRecalc) wrap._node._weRecalc();
+        if (wrap._node?._weRecalc)
+            requestAnimationFrame(() => requestAnimationFrame(() => wrap._node._weRecalc()));
     };
     return wrap;
 }
@@ -1405,7 +1411,9 @@ app.registerExtension({
             // -- Sizing constants --
             // NATIVE_H accounts for the node title bar + native toggle widgets
             // that sit above our DOM widget (use_workflow_data, use_lora_input).
-            const NATIVE_H = 80;
+            // LiteGraph title bar ~30px + two toggle widgets ~28px each = ~86px.
+            // Use 110 to give a small breathing margin at the bottom.
+            const NATIVE_H = 110;
             const MIN_W = 470;
             const MIN_H = 300;
 
