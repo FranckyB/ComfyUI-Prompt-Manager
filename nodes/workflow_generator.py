@@ -1033,6 +1033,12 @@ class WorkflowGenerator:
             # model families that have no bundled VAE/CLIP in the checkpoint.
             api_template, wmap = load_template(family_key)
 
+            # has_both_stacks is needed by both the template path (loras_to_text)
+            # and the hardcoded fallback path (_apply_loras), so define it here.
+            has_both_stacks = (
+                bool(extracted['loras_a']) and bool(extracted['loras_b'])
+            )
+
             if api_template is not None:
                 import copy
                 api = copy.deepcopy(api_template)
@@ -1125,9 +1131,6 @@ class WorkflowGenerator:
                     gen_error = "No CLIP available for text encoding"
                     raise FileNotFoundError(gen_error)
 
-                has_both_stacks = (
-                    bool(extracted['loras_a']) and bool(extracted['loras_b'])
-                )
                 stack_key_a = "a" if has_both_stacks else ""
                 model_a, clip = _apply_loras(
                     model_a, clip, extracted['loras_a'],
