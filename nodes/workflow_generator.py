@@ -852,7 +852,12 @@ class WorkflowGenerator:
             sampler_params['steps_low'] = int(overrides['steps_low'])
 
         # Family + strategy
-        family_key = overrides.get('_family') or extracted.get('model_family') or None
+        # wf_data['family'] is authoritative when workflow_data is driving the node
+        # — it must take priority over the stale '_family' the JS serialised into
+        # override_data (which may still say 'sdxl' if the async updateUI hadn't
+        # finished before syncHidden ran).
+        wf_family = wf_data.get('family', '') if wf_data else ''
+        family_key = wf_family or overrides.get('_family') or extracted.get('model_family') or None
         if not family_key:
             resolved_ref, _ = resolve_model_name(model_name_a)
             family_key = get_model_family(resolved_ref or model_name_a)
