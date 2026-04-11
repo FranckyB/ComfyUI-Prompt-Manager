@@ -114,3 +114,76 @@ The Prompt Manager Advanced node uses this exact pattern:
 ## Do NOT use visibilitychange
 
 The `visibilitychange` event is NOT needed. PM Advanced doesn't use it. ComfyUI's own lifecycle (onNodeCreated → onConfigure) handles everything. Adding `visibilitychange` listeners causes extra work that fights against the restore flow.
+
+## DOM Widget Sizing — Critical Rules
+
+When a node uses `addDOMWidget` with a container holding sections/content, sizing is the #1 source of bugs. Follow these rules:
+
+### The Problem: Flex Shrinking
+
+LiteGraph constrains widget containers to the node's current height. If your root container uses `display: flex; flex-direction: column`, child elements will **shrink to fit** inside the constrained container. Then `scrollHeight` / `offsetHeight` report the *compressed* height, `computeSize` returns that small value to LiteGraph, and the node collapses to nothing in a feedback loop.
+
+### The Fix: `flexShrink: "0"` on all children
+
+Every direct child of the root flex container (sections, cards, etc.) must have `flexShrink: "0"`. This prevents compression, forces overflow, and makes `scrollHeight` report the **true** content height.
+
+```js
+// In makeSection():
+const wrap = makeEl("div", {
+    borderRadius: "6px", overflow: "hidden", marginTop: "2px",
+    backgroundColor: C.bgCard, flexShrink: "0",  // ← CRITICAL
+});
+```
+
+### computeSize must use scrollHeight, not offsetHeight
+
+- `offsetHeight` — reports the *clipped* height (what the parent container allows)
+- `scrollHeight` — reports the full *intrinsic* content height (what the content actually needs)
+
+```js
+domW.computeSize = function (nodeWidth) {
+    const h = root.scrollHeight || 800;
+    return [nodeWidth, h];
+};
+```
+
+### Use requestAnimationFrame, not setTimeout
+
+After DOM mutations (adding LoRA tags, showing/hiding rows), call `_resizeNode` via `requestAnimationFrame` — not `setTimeout`. RAF guarantees the browser has reflowed the DOM, so `scrollHeight` is accurate.
+
+```js
+if (node._weRecalc) requestAnimationFrame(() => node._weRecalc());
+```
+
+### Reference: PMA's approach
+
+PMA avoids this problem entirely by using **multiple separate DOM widgets** (one per section), each with their own `computeSize`. LiteGraph sums them naturally. WG uses a single DOM widget with a flex container, so the `flexShrink: "0"` + `scrollHeight` approach is required instead.
+
+### _resizeNode pattern
+
+```js
+function _resizeNode() {
+    const domH = root.scrollHeight || 800;
+    const needed = domH + NATIVE_H;
+    if (node.size) {
+        const w = Math.max(MIN_W, node.size[0]);
+        const h = Math.max(needed, MIN_H);
+        if (node.size[0] !== w || node.size[1] !== h) {
+            node.setSize([w, h]);
+        }
+    }
+    app.graph.setDirtyCanvas(true, true);
+}
+```
+
+### onResize for enforcing minimums
+
+```js
+const origOnResize = node.onResize;
+node.onResize = function (size) {
+    const domH = root.scrollHeight || 800;
+    size[0] = Math.max(MIN_W, size[0]);
+    size[1] = Math.max(domH + NATIVE_H, MIN_H, size[1]);
+    if (origOnResize) return origOnResize.apply(this, arguments);
+};
+```
