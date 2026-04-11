@@ -4,14 +4,21 @@ Model family definitions and compatibility helpers for ComfyUI Prompt Manager.
 Shared by workflow_generator, workflow_generator, workflow_manager, and workflow_extraction_utils.
 
 Each family dict specifies:
-  "label"   — human-readable name shown in UI dropdowns
-  "folders" — lowercase path prefixes (matched against relative model path)
-  "names"   — lowercase substrings matched against filename only
-  "vae"     — VAE filename substrings compatible with this family
-  "clip"    — CLIP/text-encoder filename substrings compatible with this family
-  "sampler" — internal sampling strategy key (see SAMPLER_STRATEGIES below)
+  "label"        — human-readable name shown in UI dropdowns
+  "folders"      — lowercase path prefixes (matched against relative model path)
+  "names"        — lowercase substrings matched against filename only
+  "vae"          — VAE filename substrings compatible with this family
+  "vae_exact"    — VAE exact basenames (full filename match, e.g. "ae.safetensors")
+  "clip"         — CLIP/text-encoder filename substrings compatible with this family
+  "clip_exact"   — CLIP exact basenames (full filename match)
+  "clip_exclude" — substrings that DISQUALIFY a CLIP match (applied after include patterns)
+  "sampler"      — internal sampling strategy key (see SAMPLER_STRATEGIES below)
 
-Matching: folder prefixes first, then name patterns. First match wins.
+Matching rules:
+  VAE:  vae_exact checked first (full basename), then vae substring patterns.
+  CLIP: clip_exclude applied first — any match disqualifies the file.
+        Then clip_exact checked (full basename), then clip substring patterns.
+  Folder prefixes checked before name patterns. First match wins for family detection.
 To add a new family: add a dict entry and handle its "sampler" key in workflow_generator.
 """
 import os
@@ -25,12 +32,14 @@ MODEL_FAMILIES = {
         "label":   "Flux 2",
         "folders": ["klein/", "flux2/"],
         "names":   ["flux2", "flux-2", "flux_2", "klein", "flux.2"],
-        "vae":     ["flux2-vae", "flux2_vae", "ae.safetensors"],
-        # Klein uses Qwen text encoders (NOT T5/CLIP-L/Mistral):
+        # Flux2/Klein uses its own VAE — NOT ae.safetensors
+        "vae":     ["flux2-vae", "flux2_vae"],
+        # Klein uses Qwen text encoders (NOT T5/CLIP-L):
         #   4B model → qwen_3_4b.safetensors
         #   9B model → qwen_3_8b_fp8mixed.safetensors
         # CLIPLoader type must be "flux2" so CLIPType.FLUX2 is used.
-        "clip":    ["qwen_3_4b", "qwen_3_8b", "qwen_3"],
+        "clip":         ["qwen_3_4b", "qwen_3_8b", "qwen_3"],
+        "clip_exclude": ["qwen_2.5", "qwen_2_5", "t5xxl", "umt5", "clip_l", "clip_g", "gemma"],
         "clip_type": "flux2",
         "sampler": "flux2",
     },
@@ -41,8 +50,14 @@ MODEL_FAMILIES = {
         "names":   ["flux-dev", "flux_dev", "fluxdev", "flux1-dev", "flux1_dev",
                     "flux-schnell", "flux_schnell", "fluxschnell", "flux1-schnell",
                     "flux1_schnell", "flux1-", "flux1_", "flux.1"],
-        "vae":     ["ae.safetensors", "ultrafluxvae"],
-        "clip":    ["t5xxl", "clip_l"],
+        # ae.safetensors is the canonical Flux1 VAE — exact match required to
+        # avoid catching "mae.safetensors" or other short-named files.
+        "vae":       ["ultrafluxvae"],
+        "vae_exact": ["ae.safetensors"],
+        # Flux1 uses T5-XXL + CLIP-L dual encoders.
+        # umt5_xxl also contains "t5xxl" as substring — exclude it explicitly.
+        "clip":         ["t5xxl", "clip_l"],
+        "clip_exclude": ["umt5", "clip_g", "qwen", "gemma"],
         "sampler": "flux",
     },
     # ── Z-Image (Base + Turbo merged) ────────────────────────────────────────
@@ -50,8 +65,15 @@ MODEL_FAMILIES = {
         "label":   "Z-Image",
         "folders": ["zib/", "zit/", "zimage/"],
         "names":   ["z_image", "z-image", "zimage", "blitz"],
-        "vae":     ["zimageturbo_vae", "ae.safetensors"],
-        "clip":    ["qwen-4b-zimage", "qwen_3_4b", "qwen_3_8b", "t5xxl"],
+        # Z-Image shares ae.safetensors with Flux1 for its base VAE.
+        "vae":       ["zimageturbo_vae"],
+        "vae_exact": ["ae.safetensors"],
+        # Z-Image uses Qwen 3 4B as its text encoder (not the larger 8B,
+        # not T5, not CLIP-L). The 4B file is typically named
+        # "qwen-4b-zimage.safetensors" or "qwen_3_4b.safetensors".
+        "clip":         ["qwen-4b-zimage", "qwen_3_4b"],
+        "clip_exclude": ["qwen_3_8b", "qwen_2.5", "qwen_2_5", "t5xxl", "umt5",
+                         "clip_l", "clip_g", "gemma"],
         "sampler": "flux",
     },
     # ── WAN 2.x Image (single KSampler, text-to-image) ──────────────────────
@@ -59,8 +81,11 @@ MODEL_FAMILIES = {
         "label":   "WAN Image",
         "folders": [],
         "names":   ["wan_image"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae"],
-        "clip":    ["umt5_xxl"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
+                    "wan2.1-vae", "wan_2.1-vae"],
+        # WAN uses UMT5-XXL exclusively — NOT t5xxl, NOT clip_l/g.
+        "clip":         ["umt5_xxl", "umt5-xxl"],
+        "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
         "sampler": "wan_image",
     },
     # ── WAN 2.x Video — Image-to-Video (dual KSampler + i2v latent) ──────────
@@ -68,8 +93,10 @@ MODEL_FAMILIES = {
         "label":   "WAN Video (i2v)",
         "folders": ["wan2_2/i2v/", "wan2_1/i2v/"],
         "names":   ["wan2.2_i2v", "wan2.1_i2v", "wan_i2v", "i2v"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae"],
-        "clip":    ["umt5_xxl"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
+                    "wan2.1-vae", "wan_2.1-vae"],
+        "clip":         ["umt5_xxl", "umt5-xxl"],
+        "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
         "sampler": "wan_video",
     },
     # ── WAN 2.x Video — Text-to-Video (dual KSampler) ────────────────────────
@@ -78,8 +105,10 @@ MODEL_FAMILIES = {
         "folders": ["wan2_2/", "wan2_1/", "wan/"],
         "names":   ["wan2.2", "wan2.1", "wan2_2", "wan2_1", "wanvideo", "wan_t2v",
                     "wan2.2_t2v", "wan2.1_t2v"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae"],
-        "clip":    ["umt5_xxl"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
+                    "wan2.1-vae", "wan_2.1-vae"],
+        "clip":         ["umt5_xxl", "umt5-xxl"],
+        "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
         "sampler": "wan_video",
     },
     # ── LTX-Video ────────────────────────────────────────────────────────────
@@ -87,8 +116,14 @@ MODEL_FAMILIES = {
         "label":   "LTX-Video",
         "folders": ["ltx/"],
         "names":   ["ltxv", "ltx-video", "ltx-2", "ltx2"],
-        "vae":     ["ltx23_video_vae", "taeltx"],
-        "clip":    ["t5xxl", "ltx-2", "gemma_3"],
+        # LTX has its own VAE — NOT ae.safetensors, NOT SDXL/SD VAE.
+        # taeltx* are TAE-based approximation VAEs for LTX.
+        "vae":     ["ltx23_video_vae", "ltxv_vae", "ltx_vae", "taeltx"],
+        # LTX-Video uses T5-XXL only (same encoder family as Flux1 but
+        # NOT the dual CLIP-L+T5 combo — single T5 only).
+        # umt5_xxl contains "t5xxl" → must exclude it.
+        "clip":         ["t5xxl"],
+        "clip_exclude": ["umt5", "clip_l", "clip_g", "qwen", "gemma"],
         "sampler": "flux",
     },
     # ── SDXL (+ Pony, Illustrious, Turbo merged) ────────────────────────────
@@ -96,8 +131,12 @@ MODEL_FAMILIES = {
         "label":   "SDXL",
         "folders": ["illustrious/", "pony/", "sdxl/"],
         "names":   ["sdxl", "illustrious", "noob", "pony"],
-        "vae":     ["sdxl_vae", "sdxl-vae"],
-        "clip":    ["clip_l", "clip_g"],
+        # SDXL uses its own finely-tuned VAE (sdxl_vae / sdxl-vae) or the
+        # widely-used vae-ft-mse-840000 (originally SD1.5 but SDXL-compatible).
+        "vae":     ["sdxl_vae", "sdxl-vae", "vae-ft-mse"],
+        # SDXL uses dual text encoders: CLIP-L + CLIP-G.
+        "clip":         ["clip_l", "clip_g"],
+        "clip_exclude": ["t5xxl", "umt5", "qwen", "gemma"],
         "sampler": "standard",
         "checkpoint": True,
     },
@@ -106,8 +145,11 @@ MODEL_FAMILIES = {
         "label":   "SD 1.5",
         "folders": [],
         "names":   ["sd-1", "sd_1", "sd1", "v1-5", "v1_5", "v1.5", "dreamshaper", "realistic"],
-        "vae":     ["vae-ft-mse-840000"],
-        "clip":    ["clip_l"],
+        # SD1.5 canonical VAE: vae-ft-mse-840000 or vae-ft-ema-560000.
+        "vae":     ["vae-ft-mse-840000", "vae-ft-ema-560000", "orangemix", "blessed2"],
+        # SD1.5 uses a single CLIP-L encoder only (NOT CLIP-G like SDXL).
+        "clip":         ["clip_l"],
+        "clip_exclude": ["clip_g", "t5xxl", "umt5", "qwen", "gemma"],
         "sampler": "standard",
         "checkpoint": True,
     },
@@ -117,7 +159,8 @@ MODEL_FAMILIES = {
         "folders": ["qwen/"],
         "names":   ["qwen_image"],
         "vae":     ["qwen_image_vae"],
-        "clip":    ["qwen_2.5_vl"],
+        "clip":         ["qwen_2.5_vl", "qwen_2_5_vl"],
+        "clip_exclude": ["qwen_3", "t5xxl", "umt5", "clip_l", "clip_g", "gemma"],
         "sampler": "standard",
     },
 }
@@ -264,6 +307,11 @@ def list_all_models():
 def list_compatible_vaes(family, return_recommended=False):
     """Return sorted list of VAE files compatible with the given family.
     If return_recommended=True, returns (list, recommended_str_or_None).
+
+    Matching order:
+      1. vae_exact  — full basename match (e.g. "ae.safetensors"), case-insensitive
+      2. vae        — substring match against basename or full relative path
+    Falls back to all VAEs when no patterns are defined or nothing matched.
     """
     def _ret(lst, rec):
         return (sorted(lst), rec) if return_recommended else sorted(lst)
@@ -275,9 +323,10 @@ def list_compatible_vaes(family, return_recommended=False):
             return _ret([], None)
 
     spec = MODEL_FAMILIES.get(family, {})
-    patterns = [p.lower() for p in spec.get("vae", [])]
+    exact_names = [e.lower() for e in spec.get("vae_exact", [])]
+    patterns    = [p.lower() for p in spec.get("vae", [])]
 
-    if not patterns:
+    if not exact_names and not patterns:
         try:
             return _ret(folder_paths.get_filename_list("vae"), None)
         except Exception:
@@ -291,9 +340,19 @@ def list_compatible_vaes(family, return_recommended=False):
     matched = []
     recommended = None
     is_checkpoint = spec.get("checkpoint", False)
+
     for v in all_vaes:
         v_lower = v.lower().replace("\\", "/")
-        v_name = os.path.basename(v_lower)
+        v_name  = os.path.basename(v_lower)
+
+        # 1. Exact basename match (e.g. "ae.safetensors")
+        if v_name in exact_names:
+            matched.append(v)
+            if recommended is None and not is_checkpoint:
+                recommended = v
+            continue
+
+        # 2. Substring patterns
         for pat in patterns:
             if pat in v_name or pat in v_lower:
                 matched.append(v)
@@ -309,6 +368,12 @@ def list_compatible_vaes(family, return_recommended=False):
 def list_compatible_clips(family, return_recommended=False):
     """Return sorted list of CLIP/text-encoder files compatible with the given family.
     If return_recommended=True, returns (list, recommended_str_or_None).
+
+    Matching order:
+      1. clip_exclude — if ANY exclude pattern is found in the basename/path, skip the file
+      2. clip_exact   — full basename match, case-insensitive
+      3. clip         — substring match against basename or full relative path
+    Falls back to all CLIPs when no patterns are defined or nothing matched.
     """
     def _ret(lst, rec):
         return (sorted(lst), rec) if return_recommended else sorted(lst)
@@ -318,9 +383,11 @@ def list_compatible_clips(family, return_recommended=False):
         return _ret(clips, None)
 
     spec = MODEL_FAMILIES.get(family, {})
-    patterns = [p.lower() for p in spec.get("clip", [])]
+    exclude_pats = [e.lower() for e in spec.get("clip_exclude", [])]
+    exact_names  = [e.lower() for e in spec.get("clip_exact", [])]
+    patterns     = [p.lower() for p in spec.get("clip", [])]
 
-    if not patterns:
+    if not exact_names and not patterns:
         clips = _gather_all_clips()
         return _ret(clips, None)
 
@@ -329,9 +396,23 @@ def list_compatible_clips(family, return_recommended=False):
     matched = []
     recommended = None
     is_checkpoint = spec.get("checkpoint", False)
+
     for c in all_clips:
         c_lower = c.lower().replace("\\", "/")
-        c_name = os.path.basename(c_lower)
+        c_name  = os.path.basename(c_lower)
+
+        # 1. Exclusion check — disqualify if any exclude pattern is present
+        if any(ex in c_name or ex in c_lower for ex in exclude_pats):
+            continue
+
+        # 2. Exact basename match
+        if c_name in exact_names:
+            matched.append(c)
+            if recommended is None and not is_checkpoint:
+                recommended = c
+            continue
+
+        # 3. Substring include patterns
         for pat in patterns:
             if pat in c_name or pat in c_lower:
                 matched.append(c)
