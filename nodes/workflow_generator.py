@@ -1237,7 +1237,6 @@ class WorkflowGenerator:
                 print(f"[WorkflowGenerator] Template execution: family={family_key}")
                 decoded, out_latent = execute_template(
                     api, wmap, family_key,
-                    source_image=source_image,
                 )
 
             else:

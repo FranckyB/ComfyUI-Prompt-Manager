@@ -317,7 +317,7 @@ def loras_to_text(lora_list, lora_overrides=None, stack_key=""):
 
 # ── In-process node execution ─────────────────────────────────────────────────
 
-def execute_template(api, wmap, family_key, source_image=None):
+def execute_template(api, wmap, family_key):
     """
     Execute a patched API-format workflow in-process.
 
@@ -328,7 +328,8 @@ def execute_template(api, wmap, family_key, source_image=None):
     Returns (IMAGE tensor, LATENT dict) on success.
     Raises on failure.
 
-    source_image: optional IMAGE tensor for i2v workflows.
+    For i2v workflows, the source image is loaded from the filename already
+    patched into the LoadImage node by patch_template — no tensor is passed in.
     """
     stem = FAMILY_WORKFLOW_STEMS.get(family_key, family_key)
     tdir = _get_template_dir()
@@ -466,11 +467,16 @@ def execute_template(api, wmap, family_key, source_image=None):
     # Detect strategy from family
     strategy = _family_to_strategy(family_key)
 
-    if strategy == "wan_video" and family_key == "wan_video_i2v" and source_image is not None:
-        # i2v: latent comes from WanImageToVideo node — we call it directly
-        latent_dict = _make_wan_i2v_latent(
-            source_image, vae, cond_pos, cond_neg, width, height,
-            int(_val("latent_length") or 81)
+    if strategy == "wan_video" and family_key == "wan_video_i2v":
+        # i2v: load source image from the patched LoadImage node, then run
+        # the template's node chain: LoadImage → ImageResizeKJv2 → WanImageToVideo
+        i2v_image_name = _val("wan_i2v_image")
+        if not i2v_image_name:
+            raise ValueError("[WorkflowExecutor] wan_video_i2v template has no source image "
+                             "— patch_template must set wan_i2v_image before calling execute_template")
+        latent_dict = _run_i2v_from_template(
+            api, wmap, i2v_image_name, vae, cond_pos, cond_neg,
+            width, height, int(_val("latent_length") or 81)
         )
         cond_pos, cond_neg = latent_dict.pop("_cond_pos"), latent_dict.pop("_cond_neg")
     else:
@@ -566,13 +572,44 @@ def _family_to_strategy(family_key):
     return spec.get("sampler", "standard")
 
 
-def _make_wan_i2v_latent(source_image, vae, cond_pos, cond_neg, width, height, length):
+def _run_i2v_from_template(api, wmap, image_name, vae, cond_pos, cond_neg,
+                           width, height, length):
     """
-    Call WanImageToVideo node to produce the i2v latent conditioning.
-    Returns a latent dict with _cond_pos and _cond_neg injected.
+    Replicate the i2v template's node chain in-process:
+      LoadImage (node 97) → ImageResizeKJv2 (node 161) → WanImageToVideo (node 132)
+
+    Reads all parameters from the already-patched API dict so the template
+    is the single source of truth.  Returns a latent dict with _cond_pos and
+    _cond_neg injected (consumed by the downstream sampler).
     """
     import torch
+    import numpy as np
     import comfy.model_management
+    from PIL import Image as PILImage
+
+    # ── LoadImage (replicates node 97) ────────────────────────────────────
+    # The image filename was patched into node 97 by patch_template.
+    input_dir = folder_paths.get_input_directory()
+    image_path = folder_paths.get_annotated_filepath(image_name)
+    if not os.path.isfile(image_path):
+        # Fallback: try input directory directly
+        image_path = os.path.join(input_dir, image_name)
+    if not os.path.isfile(image_path):
+        raise FileNotFoundError(
+            f"[WorkflowExecutor] i2v source image not found: {image_name} "
+            f"(looked in {input_dir})"
+        )
+    pil_img = PILImage.open(image_path).convert("RGB")
+    img_array = np.array(pil_img).astype(np.float32) / 255.0
+    source_image = torch.from_numpy(img_array).unsqueeze(0)  # (1, H, W, 3)
+    print(f"[WorkflowExecutor] Loaded i2v source image from template: "
+          f"{image_name} → shape {source_image.shape}")
+
+    # ── WanImageToVideo (replicates node 132) ─────────────────────────────
+    # In the template, node 132 receives:
+    #   start_image from LoadImage (97) — the original-resolution image
+    #   width/height from ImageResizeKJv2 (161) — the target dimensions
+    # WanImageToVideo internally handles resizing the start_image to width×height.
     try:
         from comfy_extras.nodes_wan import WanImageToVideo
         node = WanImageToVideo()
@@ -586,14 +623,13 @@ def _make_wan_i2v_latent(source_image, vae, cond_pos, cond_neg, width, height, l
             length=length,
             batch_size=1,
         )
-        # result = (positive, negative, latent)
         new_cond_pos, new_cond_neg, latent = result
         latent["_cond_pos"] = new_cond_pos
         latent["_cond_neg"] = new_cond_neg
         return latent
     except Exception as e:
         print(f"[WorkflowExecutor] WanImageToVideo failed ({e}), falling back to empty latent")
-        import comfy.model_management
+        traceback.print_exc()
         latent_tensor = torch.zeros(
             [length, 16, height // 8, width // 8],
             device=comfy.model_management.intermediate_device(),
