@@ -10,6 +10,10 @@ import folder_paths
 import comfy.sd
 import torch
 
+from ..py.workflow_families import (
+    get_model_family,
+)
+
 
 # ── Model extensions & helpers ───────────────────────────────────────
 MODEL_EXTENSIONS = ['.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.sft']
@@ -198,12 +202,13 @@ class WorkflowContext:
                 "workflow_data": ("WORKFLOW_DATA", {
                     "tooltip": "Workflow data to unpack. All fields are exposed as outputs.",
                 }),
+                "override_data": ("STRING", {"default": "{}", "multiline": True}),
             },
             "optional": {
-                "model_a":         ("MODEL",   {"tooltip": "Override Model A (skip loading from workflow_data)"}),
-                "model_b":         ("MODEL",   {"tooltip": "Override Model B (skip loading from workflow_data)"}),
-                "clip":            ("CLIP",    {"tooltip": "Override CLIP (skip loading from workflow_data)"}),
-                "vae":             ("VAE",     {"tooltip": "Override VAE (skip loading from workflow_data)"}),
+                "model_a":         ("MODEL",   {"tooltip": "Override Model A object (highest priority, skip loading)"}),
+                "model_b":         ("MODEL",   {"tooltip": "Override Model B object (highest priority, skip loading)"}),
+                "clip":            ("CLIP",    {"tooltip": "Override CLIP object (highest priority, skip loading)"}),
+                "vae":             ("VAE",     {"tooltip": "Override VAE object (highest priority, skip loading)"}),
                 "positive_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override positive prompt"}),
                 "negative_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override negative prompt"}),
                 "lora_stack_a":    ("LORA_STACK", {"tooltip": "Override LoRA stack A"}),
@@ -235,7 +240,6 @@ class WorkflowContext:
         "INT", "INT", "INT", "INT",
         "INT", "FLOAT", "INT", "INT",
         "STRING", "STRING", "FLOAT", "FLOAT",
-        "STRING",
     )
     RETURN_NAMES = (
         "workflow_data",
@@ -245,7 +249,6 @@ class WorkflowContext:
         "width", "height", "batch_size", "length",
         "steps", "cfg", "seed_a", "seed_b",
         "sampler_name", "scheduler", "denoise", "guidance",
-        "family",
     )
     FUNCTION = "unpack"
     CATEGORY = "Prompt Manager"
@@ -257,7 +260,8 @@ class WorkflowContext:
 
     # ------------------------------------------------------------------
 
-    def unpack(self, workflow_data, weight_dtype="default", **kwargs):
+    def unpack(self, workflow_data, override_data="{}",
+               weight_dtype="default", **kwargs):
         # Accept both dict and JSON string (backward compat)
         if isinstance(workflow_data, str):
             try:
@@ -270,6 +274,24 @@ class WorkflowContext:
             wf = {}
         sampler = dict(wf.get('sampler', {}))
         resolution = dict(wf.get('resolution', {}))
+
+        # ── Parse JS override_data blob ──────────────────────────────
+        try:
+            overrides = json.loads(override_data) if override_data else {}
+        except (json.JSONDecodeError, TypeError):
+            overrides = {}
+
+        # Apply dropdown overrides from JS → update workflow_data dict
+        if overrides.get('_family'):
+            wf['family'] = overrides['_family']
+        if overrides.get('model_a'):
+            wf['model_a'] = overrides['model_a']
+        if overrides.get('model_b'):
+            wf['model_b'] = overrides['model_b']
+        if overrides.get('vae'):
+            wf['vae'] = overrides['vae']
+        if overrides.get('clip_names'):
+            wf['clip'] = overrides['clip_names']
 
         # ── Apply top-level overrides ────────────────────────────────
         for key in ('positive_prompt', 'negative_prompt'):
@@ -301,7 +323,7 @@ class WorkflowContext:
         wf['sampler'] = sampler
 
         # ── Resolve models ───────────────────────────────────────────
-        # Priority: connected input > runtime object in dict > load from name
+        # Priority: connected MODEL/CLIP/VAE input > runtime object in dict > load from name
         model_a = kwargs.get('model_a')
         model_b = kwargs.get('model_b')
         clip = kwargs.get('clip')
@@ -317,20 +339,20 @@ class WorkflowContext:
         if vae is None:
             vae = wf.get('VAE')
 
-        # Last resort: load from model name strings
+        # Last resort: load from model name strings in workflow_data
         if model_a is None:
-            model_a_name = (wf.get('model_a') or "").strip()
-            if model_a_name:
-                _, model_a, clip_loaded, vae_loaded, _ = _load_single_model(model_a_name, weight_dtype)
+            ma_name = (wf.get('model_a') or "").strip()
+            if ma_name:
+                _, model_a, clip_loaded, vae_loaded, _ = _load_single_model(ma_name, weight_dtype)
                 if clip is None:
                     clip = clip_loaded
                 if vae is None:
                     vae = vae_loaded
 
         if model_b is None:
-            model_b_name = (wf.get('model_b') or "").strip()
-            if model_b_name:
-                _, model_b, _, _, _ = _load_single_model(model_b_name, weight_dtype)
+            mb_name = (wf.get('model_b') or "").strip()
+            if mb_name:
+                _, model_b, _, _, _ = _load_single_model(mb_name, weight_dtype)
 
         # Store runtime objects in dict so downstream Context nodes can reuse them
         wf['MODEL_A'] = model_a
@@ -368,5 +390,4 @@ class WorkflowContext:
             sampler.get('scheduler', 'normal'),
             sampler.get('denoise', 1.0),
             sampler.get('guidance', 0.0) or 0.0,
-            wf.get('family', ''),
         )

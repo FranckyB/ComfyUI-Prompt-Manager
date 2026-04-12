@@ -277,7 +277,7 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
 
     steps        = int(sampler_params['steps'])
     cfg          = float(sampler_params['cfg'])
-    seed         = int(sampler_params['seed_a'])
+    seed         = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
     sampler_name = sampler_params['sampler_name']
     scheduler    = sampler_params['scheduler']
     denoise      = float(sampler_params['denoise'])
@@ -312,7 +312,7 @@ def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     )
 
     steps        = int(sampler_params['steps'])
-    seed         = int(sampler_params['seed_a'])
+    seed         = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
     sampler_name = sampler_params['sampler_name']
     scheduler    = sampler_params.get('scheduler', 'simple')
     denoise      = float(sampler_params.get('denoise', 1.0))

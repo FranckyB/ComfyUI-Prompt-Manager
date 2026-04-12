@@ -241,7 +241,7 @@ class WorkflowRenderer:
                 "width": width,
                 "height": height,
                 "batch_size": batch,
-                "seed": sampler_params["seed_a"],
+                "seed": sampler_params.get("seed_a", sampler_params.get("seed", 0)),
                 "seed_b": seed_b,
                 "cfg": sampler_params["cfg"],
                 "sampler_name": sampler_params["sampler_name"],
