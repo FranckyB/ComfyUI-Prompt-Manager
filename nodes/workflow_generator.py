@@ -1109,6 +1109,12 @@ class WorkflowGenerator:
             if source_image is not None and hasattr(source_image, 'shape'):
                 src_h = source_image.shape[1]  # [B, H, W, C]
                 src_w = source_image.shape[2]
+                MAX_DIM = 1280
+                if max(src_w, src_h) > MAX_DIM:
+                    scale = MAX_DIM / max(src_w, src_h)
+                    src_w = int(round(src_w * scale)) // 16 * 16
+                    src_h = int(round(src_h * scale)) // 16 * 16
+                    print(f"[WorkflowGenerator] Source image {source_image.shape[2]}x{source_image.shape[1]} exceeds 1280px limit, clamping to {src_w}x{src_h}")
                 w_is_ref = res.get('_width_from_node_ref', False)
                 h_is_ref = res.get('_height_from_node_ref', False)
                 # Only override when the template used a node-ref (runtime value)
