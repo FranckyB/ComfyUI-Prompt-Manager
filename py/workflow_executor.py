@@ -612,18 +612,17 @@ def _run_i2v_from_template(api, wmap, image_name, vae, cond_pos, cond_neg,
     # WanImageToVideo internally handles resizing the start_image to width×height.
     try:
         from comfy_extras.nodes_wan import WanImageToVideo
-        node = WanImageToVideo()
-        result = node.encode(
+        result = WanImageToVideo.execute(
             positive=cond_pos,
             negative=cond_neg,
             vae=vae,
-            start_image=source_image,
             width=width,
             height=height,
             length=length,
             batch_size=1,
+            start_image=source_image,
         )
-        new_cond_pos, new_cond_neg, latent = result
+        new_cond_pos, new_cond_neg, latent = result[0], result[1], result[2]
         latent["_cond_pos"] = new_cond_pos
         latent["_cond_neg"] = new_cond_neg
         return latent
