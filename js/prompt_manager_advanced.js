@@ -2803,7 +2803,7 @@ function setupUseExternalToggleHandler(node) {
 
     // Apply initial state on load/reload
     const applyToggleState = (value) => {
-        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt_input");
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
         const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
 
         if (value && isLlmConnected) {
@@ -2850,7 +2850,7 @@ function setupUseExternalToggleHandler(node) {
     const originalCallback = useExternalWidget.callback;
     useExternalWidget.callback = function(value) {
         // Check if prompt_input is connected
-        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt_input");
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
         const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
 
         // Prevent turning on if nothing is connected

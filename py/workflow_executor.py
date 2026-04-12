@@ -1,5 +1,5 @@
 """
-workflow_executor.py — Template-driven execution engine for WorkflowGenerator.
+workflow_executor.py — Template-driven execution engine for WorkflowRenderer.
 
 Loads an API-format workflow JSON + companion map JSON, patches values from
 the node's override_data / extracted workflow, and executes the graph
@@ -7,7 +7,7 @@ in-process (model load → LoRA → sample → decode), returning (IMAGE, LATENT
 
 The template-based approach replaces the hardcoded Python graph-building
 used previously.  Families without a template fall back to the existing
-hardcoded paths in workflow_generator.py.
+hardcoded paths in workflow_builder.py / workflow_renderer.py.
 """
 
 import os
@@ -331,11 +331,11 @@ def execute_template(api, wmap, family_key, params):
     The template JSON + map are used as the source of truth for default
     values (model names, VAE, CLIP type, etc.).  The ``params`` dict
     carries the actual user-facing values already resolved by the caller
-    (workflow_generator.py) — we use those directly instead of reading
+    (workflow_builder.py / workflow_renderer.py) — we use those directly instead of reading
     them back from the patched JSON, which avoids the double-interpretation
     bugs that plagued the WAN video dual-sampler path.
 
-    params keys (from workflow_generator.py):
+    params keys (from workflow_builder.py / workflow_renderer.py):
         model_a, model_b, vae, clip, clip_1, clip_2,
         positive_prompt, negative_prompt,
         width, height, length, batch_size,
@@ -387,7 +387,7 @@ def execute_template(api, wmap, family_key, params):
         return transform(v) if transform else v
 
     # ── Step 1: Load models ───────────────────────────────────────────────────
-    from ..nodes.workflow_generator import (
+    from ..nodes.workflow_builder import (
         _load_model_from_path, _load_vae, _load_clip, _apply_loras,
     )
     from .workflow_extraction_utils import resolve_model_name
@@ -521,7 +521,7 @@ def execute_template(api, wmap, family_key, params):
 
     # ── Step 5: Sample ────────────────────────────────────────────────────────
     # Use params directly — no re-reading from patched JSON.
-    from ..nodes.workflow_generator import (
+    from ..nodes.workflow_builder import (
         _run_standard_ksampler, _run_flux_sampler, _run_flux2_sampler, _run_wan_sampler,
     )
 

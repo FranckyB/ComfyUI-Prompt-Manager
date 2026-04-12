@@ -135,7 +135,7 @@ class PromptManagerAdvanced:
                 }),
             },
             "optional": {
-                "prompt_input": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
+                "prompt": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
                 "lora_stack_a": ("LORA_STACK", {"tooltip": "First LoRA stack input (e.g., for base model)"}),
                 "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
@@ -163,7 +163,7 @@ class PromptManagerAdvanced:
         Returns a tuple of relevant values that should trigger re-execution when changed.
         """
         # Get optional inputs
-        prompt_input = kwargs.get('prompt_input', None)
+        prompt_input = kwargs.get('prompt', None)
         lora_stack_a = kwargs.get('lora_stack_a', None)
         lora_stack_b = kwargs.get('lora_stack_b', None)
         trigger_words = kwargs.get('trigger_words', None)
@@ -396,7 +396,7 @@ class PromptManagerAdvanced:
         return lora_path, False
 
     def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, swap_lora_outputs=False,
-                   prompt_input=None, lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
+                   prompt=None, lora_stack_a=None, lora_stack_b=None, trigger_words=None, thumbnail_image=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
 
@@ -424,7 +424,7 @@ class PromptManagerAdvanced:
         current_prompt_key = f"{category}|{name}"
         current_input_loras_a = [lora_path for lora_path, _, _ in lora_stack_a] if lora_stack_a else []
         current_input_loras_b = [lora_path for lora_path, _, _ in lora_stack_b] if lora_stack_b else []
-        current_prompt_input_text = prompt_input if prompt_input else ""
+        current_prompt_input_text = prompt if prompt else ""
         current_toggle_data_a = loras_a_toggle if loras_a_toggle else ""
         current_toggle_data_b = loras_b_toggle if loras_b_toggle else ""
 
@@ -463,8 +463,8 @@ class PromptManagerAdvanced:
 
         # Choose which text to use based on the toggle
         # When use_prompt_input is OFF, always use the internal text widget regardless of what's connected
-        if use_prompt_input and prompt_input:
-            output_text = prompt_input
+        if use_prompt_input and prompt:
+            output_text = prompt
         else:
             output_text = text if text else ""
 
@@ -565,7 +565,7 @@ class PromptManagerAdvanced:
                 "node_id": unique_id,
                 "prompt": output_text,
                 "use_prompt_input": use_prompt_input,
-                "prompt_input": prompt_input,
+                "prompt_input": prompt,
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
                 "input_loras_a": input_loras_a,  # Original input loras for change detection
@@ -591,7 +591,7 @@ class PromptManagerAdvanced:
         return (final_output, out_stack_a, out_stack_b)
 
     def check_lazy_status(self, category, name, use_prompt_input, text, use_lora_input=True, swap_lora_outputs=False,
-                          prompt_input=None, lora_stack_a=None, lora_stack_b=None, trigger_words=None,
+                          prompt=None, lora_stack_a=None, lora_stack_b=None, trigger_words=None,
                           thumbnail_image=None, unique_id=None, loras_a_toggle=None, loras_b_toggle=None,
                           trigger_words_toggle=None):
         """Tell ComfyUI which lazy inputs are needed based on current settings.
@@ -601,7 +601,7 @@ class PromptManagerAdvanced:
         """
         needed = []
         if use_prompt_input:
-            needed.append("prompt_input")
+            needed.append("prompt")
         return needed
 
     def _build_stack_from_toggle(self, toggle_data):

@@ -13,7 +13,8 @@ from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_extractor import PromptExtractor
 from .nodes.prompt_model_loader import PromptModelLoader
-from .nodes.workflow_generator import WorkflowGenerator
+from .nodes.workflow_builder import WorkflowBuilder
+from .nodes.workflow_renderer import WorkflowRenderer
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":       PromptApplyLora,
@@ -23,7 +24,8 @@ NODE_CLASS_MAPPINGS = {
     "PromptGenOptions":      PromptGenOptions,
     "PromptExtractor":       PromptExtractor,
     "PromptModelLoader":     PromptModelLoader,
-    "WorkflowGenerator":     WorkflowGenerator,
+    "WorkflowBuilder":       WorkflowBuilder,
+    "WorkflowGenerator":     WorkflowRenderer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -34,6 +36,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptGenOptions":      "Prompt Generator Options",
     "PromptExtractor":       "Prompt Extractor",
     "PromptModelLoader":     "Prompt Model Loader",
+    "WorkflowBuilder":       "Workflow Builder",
     "WorkflowGenerator":     "Workflow Generator",
 }
 
@@ -47,4 +50,4 @@ __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
 print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, "
       "PromptGenerator, PromptGenOptions, PromptExtractor, PromptModelLoader, "
-      "WorkflowGenerator")
+      "WorkflowBuilder, WorkflowGenerator")

@@ -1295,10 +1295,10 @@ def traverse_to_find_text(node_id, input_slot, node_map, link_map, visited=None,
                         node_map, link_map, visited, max_depth - 1
                     )
 
-    # PromptExtractor / WorkflowGenerator — text outputs are computed at runtime,
+    # PromptExtractor / WorkflowRenderer — text outputs are computed at runtime,
     # NOT stored in widgets_values (which contain file selector, toggles, etc.).
     # Without this guard the generic fallback below picks up the image filename.
-    if node_type in ['PromptExtractor', 'WorkflowGenerator']:
+    if node_type in ['PromptExtractor', 'WorkflowRenderer', 'WorkflowGenerator']:
         return ""
 
     # Generic: if node has a text/string output, check widgets
@@ -2037,8 +2037,8 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # Initialize lora_chains early so embedded data extraction can append to it
     lora_chains = []
 
-    # Collect embedded data candidates from PromptExtractor/WorkflowGenerator nodes
-    # (resolved after the loop — WorkflowGenerator takes priority if both are present)
+    # Collect embedded data candidates from PromptExtractor/WorkflowRenderer nodes
+    # (resolved after the loop — WorkflowRenderer takes priority if both are present)
     _embedded_candidates = []
 
     # Iterate through all nodes (workflow format) - including subgraphs
@@ -2127,10 +2127,10 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                             positive_prompts.append(val.strip())
                             break
 
-            # PromptExtractor / WorkflowGenerator nodes — collect embedded extracted_data.
-            # If both are present, WorkflowGenerator takes priority (it generated the image).
-            # Collected here; applied after the loop so we can determine priority.
-            elif node_type in ('PromptExtractor', 'WorkflowGenerator'):
+            # PromptExtractor / WorkflowRenderer nodes — collect embedded extracted_data.
+            # If both are present, WorkflowRenderer takes priority (it generated the image).
+            # Also accept legacy 'WorkflowGenerator' class_type from older images.
+            elif node_type in ('PromptExtractor', 'WorkflowRenderer', 'WorkflowGenerator'):
                 ext_data = node.get('extracted_data')
                 if ext_data and isinstance(ext_data, dict):
                     _embedded_candidates.append((node_type, node_id, title, ext_data))
@@ -2151,19 +2151,19 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         break
 
     # ========================================
-    # RESOLVE EMBEDDED DATA (PromptExtractor vs WorkflowGenerator)
+    # RESOLVE EMBEDDED DATA (PromptExtractor vs WorkflowRenderer)
     # ========================================
-    # If both node types are present, use only WorkflowGenerator’s data
+    # If both node types are present, use only WorkflowRenderer’s data
     # (it actually generated the image; PromptExtractor merely forwarded).
     if _embedded_candidates:
-        has_wg = any(nt == 'WorkflowGenerator' for nt, *_ in _embedded_candidates)
+        has_wg = any(nt in ('WorkflowRenderer', 'WorkflowGenerator') for nt, *_ in _embedded_candidates)
         chosen = [
             c for c in _embedded_candidates
-            if not has_wg or c[0] == 'WorkflowGenerator'
+            if not has_wg or c[0] in ('WorkflowRenderer', 'WorkflowGenerator')
         ]
         if has_wg and len(_embedded_candidates) > len(chosen):
-            print("[PromptExtractor] Both PromptExtractor and WorkflowGenerator found "
-                  "— preferring WorkflowGenerator embedded data")
+            print("[PromptExtractor] Both PromptExtractor and WorkflowRenderer found "
+                  "— preferring WorkflowRenderer embedded data")
 
         for node_type, node_id, title, ext_data in chosen:
             ext_pos = ext_data.get('positive_prompt', '').strip()
@@ -3223,7 +3223,7 @@ class PromptExtractor:
                     model_b = os.path.basename(raw_models_b[0].replace('\\', '/'))
                     print(f"[PromptExtractor] Model B: {model_b}")
 
-            # Build workflow_data in the same structured format as WorkflowGenerator
+            # Build workflow_data in the same structured format as WorkflowBuilder
             # so both nodes output identical workflow_data that can feed PromptManagerAdvanced.
             if prompt_data or workflow_data:
                 try:
@@ -3304,7 +3304,7 @@ class PromptExtractor:
                         overrides={'_source': 'PromptExtractor'},
                         sampler_params=_sampler,
                     )
-                    # Add model / VAE availability so WorkflowGenerator can show red
+                    # Add model / VAE availability so WorkflowBuilder can show red
                     from ..py.workflow_extraction_utils import resolve_model_name, resolve_vae_name
                     if model_a:
                         _res_a, _ = resolve_model_name(model_a)

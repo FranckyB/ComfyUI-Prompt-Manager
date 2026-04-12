@@ -1,7 +1,7 @@
 """
 Model family definitions and compatibility helpers for ComfyUI Prompt Manager.
 
-Shared by workflow_generator, workflow_generator, workflow_manager, and workflow_extraction_utils.
+Shared by workflow_builder, workflow_renderer, and workflow_extraction_utils.
 
 Each family dict specifies:
   "label"        — human-readable name shown in UI dropdowns
@@ -19,7 +19,7 @@ Matching rules:
   CLIP: clip_exclude applied first — any match disqualifies the file.
         Then clip_exact checked (full basename), then clip substring patterns.
   Folder prefixes checked before name patterns. First match wins for family detection.
-To add a new family: add a dict entry and handle its "sampler" key in workflow_generator.
+To add a new family: add a dict entry and handle its "sampler" key in workflow_builder.
 """
 import os
 import folder_paths
@@ -183,7 +183,7 @@ MODEL_COMPAT_GROUPS = [
     {"wan_image", "wan_video_t2v"},                # WAN Image shares T2V model files
 ]
 
-# Sampling strategy keys (referenced by workflow_generator.py)
+# Sampling strategy keys (referenced by workflow_builder.py / workflow_renderer.py)
 # Each key maps to a specific sampling code path.
 SAMPLER_STRATEGIES = {
     "standard":  "standard",   # KSampler — SD1.5, SDXL, Qwen

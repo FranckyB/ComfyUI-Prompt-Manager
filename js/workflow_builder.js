@@ -1,5 +1,5 @@
 /**
- * Workflow Generator - Full DOM-based UI
+ * Workflow Builder - Full DOM-based UI
  *
  * Layout order: Resolution -> Model/VAE/CLIP -> Prompts -> Sampler -> LoRAs
  * Accepts workflow_data input (from PromptExtractor) + optional lora_stack inputs.
@@ -768,7 +768,7 @@ async function checkLoraAvailability(node) {
             updateLoras(node);
         }
     } catch (e) {
-        console.warn("[WorkflowGenerator] Error checking LoRA availability:", e);
+        console.warn("[WorkflowBuilder] Error checking LoRA availability:", e);
     }
 }
 
@@ -1145,7 +1145,7 @@ function parseWorkflowData(jsonStr) {
             model_family_label: d.family_strategy || "",
         };
     } catch (e) {
-        console.warn("[WorkflowGenerator] Could not parse workflow_data:", e);
+        console.warn("[WorkflowBuilder] Could not parse workflow_data:", e);
         return null;
     }
 }
@@ -1155,10 +1155,10 @@ function parseWorkflowData(jsonStr) {
 // --- Main extension ---
 // ============================================================
 app.registerExtension({
-    name: "WorkflowGenerator",
+    name: "WorkflowBuilder",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "WorkflowGenerator") return;
+        if (nodeData.name !== "WorkflowBuilder") return;
 
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -1589,7 +1589,7 @@ app.registerExtension({
                         // Try reading workflow_data from the connected source node's
                         // properties cache (forceInput — no local widget exists).
                         let parsed = null;
-                        const wfInput = node.inputs?.find(i => i.name === "workflow_data_input");
+                        const wfInput = node.inputs?.find(i => i.name === "workflow_data");
                         if (wfInput?.link != null) {
                             const linkInfo = node.graph?.links?.[wfInput.link];
                             if (linkInfo) {

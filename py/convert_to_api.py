@@ -142,7 +142,7 @@ def build_map(api, family_hint):
     Build a semantic field map for the given API workflow.
     Returns a dict: { field_name: [node_id_str, input_key] | null }
 
-    The map is used by WorkflowGenerator to patch values before execution.
+    The map is used by WorkflowRenderer to patch values before execution.
     """
     m = {}
 

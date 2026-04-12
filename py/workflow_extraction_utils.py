@@ -1,7 +1,7 @@
 """
 Shared extraction helpers for ComfyUI Prompt Manager.
 
-Used by both WorkflowExtractor and WorkflowGenerator nodes.
+Used by both WorkflowExtractor and WorkflowBuilder / WorkflowRenderer nodes.
 Handles: sampler params, VAE info, CLIP info, resolution, model resolution,
 and the full extract_all_from_file() entry point.
 """
@@ -33,13 +33,14 @@ VIDEO_LATENT_TYPES = ['WanVideoLatentImage', 'WanImageToVideo', 'EmptyHunyuanLat
 CHECKPOINT_TYPES = ('CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderNF4')
 
 # Node types that carry embedded extracted_data
-_EMBEDDED_NODE_TYPES = ('WorkflowGenerator', 'PromptExtractor')
+# Keep 'WorkflowGenerator' for backward compat with images generated before rename.
+_EMBEDDED_NODE_TYPES = ('WorkflowRenderer', 'WorkflowGenerator', 'PromptExtractor')
 
 
 def _get_embedded_extracted_data(workflow_data):
-    """Return the best ``extracted_data`` dict from a WG or PE node, or *None*.
+    """Return the best ``extracted_data`` dict from a WR/WG or PE node, or *None*.
 
-    Prioritises WorkflowGenerator over PromptExtractor, and only returns
+    Prioritises WorkflowRenderer/WorkflowGenerator over PromptExtractor, and only returns
     data that actually contains ``sampler`` or ``resolution`` keys.
     """
     if not workflow_data or not isinstance(workflow_data, dict):
@@ -58,8 +59,8 @@ def _get_embedded_extracted_data(workflow_data):
         has_useful = bool(ed.get('sampler') or ed.get('resolution'))
         if not has_useful:
             continue
-        is_wg = ntype == 'WorkflowGenerator'
-        # Prefer WG; among same type, first wins
+        is_wg = ntype in ('WorkflowRenderer', 'WorkflowGenerator')
+        # Prefer WR/WG; among same type, first wins
         if best is None or (is_wg and not best_is_wg):
             best = ed
             best_is_wg = is_wg
@@ -532,12 +533,12 @@ def resolve_clip_names(clip_names, clip_type=''):
 
 def _find_embedded_generation_data(workflow_data, prompt_data):
     """
-    Look for sampler / resolution / model data embedded by WorkflowGenerator
-    or PromptExtractor.  Checks (in priority order):
+    Look for sampler / resolution / model data embedded by WorkflowRenderer
+    (or legacy WorkflowGenerator) or PromptExtractor.  Checks (in priority order):
 
-      1. WG node ``extracted_data`` (full dict with sampler + resolution)
-      2. WG node ``widgets_values`` containing the ``override_data`` JSON
-      3. WG ``override_data`` in the prompt API inputs
+      1. WR/WG node ``extracted_data`` (full dict with sampler + resolution)
+      2. WR/WG node ``widgets_values`` containing the ``override_data`` JSON
+      3. WR/WG ``override_data`` in the prompt API inputs
       4. PE node ``extracted_data``
 
     Returns a dict with ``sampler``, ``resolution``, ``vae``, ``clip``,
@@ -612,20 +613,20 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
     if workflow_data and isinstance(workflow_data, dict):
         for wf_node in workflow_data.get('nodes', []):
             ntype = wf_node.get('type', '')
-            if ntype == 'WorkflowGenerator':
+            if ntype in ('WorkflowRenderer', 'WorkflowGenerator'):
                 # Priority 1: extracted_data
                 ed = wf_node.get('extracted_data')
                 if ed and isinstance(ed, dict):
-                    _apply_extracted(ed, 'WorkflowGenerator')
+                    _apply_extracted(ed, ntype)
                 # Priority 2: override_data in widgets_values
                 if 'sampler' not in out or 'resolution' not in out:
                     for v in (wf_node.get('widgets_values') or []):
                         if isinstance(v, str) and len(v) > 5 and v.strip().startswith('{'):
-                            _apply_override_json(v, 'WorkflowGenerator')
+                            _apply_override_json(v, ntype)
                             if 'sampler' in out and 'resolution' in out:
                                 break
                 if 'sampler' in out or 'resolution' in out:
-                    break  # WG found — done
+                    break  # WR/WG found — done
 
         # Priority 4: PromptExtractor extracted_data (only if WG wasn't found)
         if 'sampler' not in out and 'resolution' not in out:
@@ -637,14 +638,14 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
                         if 'sampler' in out or 'resolution' in out:
                             break
 
-    # --- 3. Prompt API (WG override_data in inputs) ---
+    # --- 3. Prompt API (WR/WG override_data in inputs) ---
     if ('sampler' not in out or 'resolution' not in out) and prompt_data and isinstance(prompt_data, dict):
         for node_id, node_data in prompt_data.items():
             if not isinstance(node_data, dict):
                 continue
-            if node_data.get('class_type') == 'WorkflowGenerator':
+            if node_data.get('class_type') in ('WorkflowRenderer', 'WorkflowGenerator'):
                 inp = node_data.get('inputs', {})
-                _apply_override_json(inp.get('override_data', ''), 'WorkflowGenerator')
+                _apply_override_json(inp.get('override_data', ''), node_data['class_type'])
                 break
 
     return out if out else None
@@ -752,8 +753,8 @@ def extract_all_from_file(file_path, source_folder='input'):
             _r['width'] = prompt_data['width']
             _r['height'] = prompt_data['height']
 
-    # ── Embedded data override (WorkflowGenerator / PromptExtractor) ──────
-    # When a WorkflowGenerator generated the image there are no standalone
+    # ── Embedded data override (WorkflowRenderer / PromptExtractor) ──────
+    # When a WorkflowRenderer generated the image there are no standalone
     # KSampler / EmptyLatentImage nodes.  Look for authoritative values in:
     #   1. extracted_data on the WG or PE node
     #   2. widgets_values override_data JSON on the WG node
@@ -848,7 +849,7 @@ def _build_sampler_dict(sampler, family):
 
 def build_simplified_workflow_data(extracted, overrides=None, sampler_params=None):
     """
-    Build the shared workflow_data dict that both WorkflowGenerator and PromptExtractor output.
+    Build the shared workflow_data dict that both WorkflowBuilder and PromptExtractor output.
 
     Parameters
     ----------
@@ -899,7 +900,7 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
             "height":     overrides.get('height',     extracted.get('resolution', {}).get('height',     512)),
             "batch_size": overrides.get('batch_size', extracted.get('resolution', {}).get('batch_size', 1)),
             "length":     overrides.get('length',     extracted.get('resolution', {}).get('length',     None)),
-            # Propagate node-ref flags so WorkflowGenerator knows to use
+            # Propagate node-ref flags so WorkflowRenderer knows to use
             # source_image dimensions rather than the stale template values.
             "_width_from_node_ref":  extracted.get('resolution', {}).get('_width_from_node_ref',  False),
             "_height_from_node_ref": extracted.get('resolution', {}).get('_height_from_node_ref', False),

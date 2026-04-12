@@ -1,10 +1,11 @@
 """
-ComfyUI Workflow Extractor
-Extracts ALL generation parameters from an image/video and regenerates internally.
-Loads model, applies LoRAs, runs KSampler (family-aware), outputs IMAGE + LATENT + WORKFLOW_JSON.
+ComfyUI Workflow Builder
+Extracts ALL generation parameters from an image/video, provides a full UI
+for editing them, and outputs WORKFLOW_DATA (JSON) for the Workflow Renderer
+render node.
 
 Part of ComfyUI-Prompt-Manager — shares extraction logic with PromptExtractor.
-Family system and extraction helpers live in py/ for reuse by WorkflowGenerator.
+Family system and extraction helpers live in py/ for reuse.
 """
 import os
 import json
@@ -231,7 +232,7 @@ async def api_video_frame(request):
 
         return server.web.Response(status=500)
     except Exception as e:
-        print(f"[WorkflowGenerator] video-frame API error: {e}")
+        print(f"[WorkflowBuilder] video-frame API error: {e}")
         return server.web.Response(status=500)
 
 
@@ -491,17 +492,17 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path):
     model = clip = vae = None
 
     if is_gguf and GGUF_SUPPORT and _load_gguf_unet:
-        print(f"[WorkflowGenerator] Loading GGUF model: {resolved_path}")
+        print(f"[WorkflowBuilder] Loading GGUF model: {resolved_path}")
         model = _load_gguf_unet(full_model_path)
     elif is_checkpoint:
-        print(f"[WorkflowGenerator] Loading checkpoint: {resolved_path}")
+        print(f"[WorkflowBuilder] Loading checkpoint: {resolved_path}")
         out   = comfy.sd.load_checkpoint_guess_config(
             full_model_path, output_vae=True, output_clip=True,
             embedding_directory=folder_paths.get_folder_paths("embeddings"),
         )
         model, clip, vae = out[0], out[1], out[2]
     else:
-        print(f"[WorkflowGenerator] Loading diffusion model: {resolved_path}")
+        print(f"[WorkflowBuilder] Loading diffusion model: {resolved_path}")
         # ComfyUI's load_diffusion_model internally calls load_torch_file
         # which always uses weights_only=True in PyTorch >= 2.6. Some model
         # formats (e.g. Klein .pt/.bin) contain non-standard objects that
@@ -512,7 +513,7 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path):
             model = comfy.sd.load_diffusion_model(full_model_path)
         except Exception as e:
             if 'weights_only' in str(e).lower() or 'unpickling' in str(e).lower() or 'unsupported operand' in str(e).lower():
-                print(f"[WorkflowGenerator] weights_only load failed, retrying with weights_only=False: {e}")
+                print(f"[WorkflowBuilder] weights_only load failed, retrying with weights_only=False: {e}")
                 import torch
                 pl_sd = torch.load(full_model_path, map_location='cpu', weights_only=False)
                 sd = pl_sd.get('state_dict', pl_sd)
@@ -520,7 +521,7 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path):
                     model = comfy.sd.load_diffusion_model_state_dict(sd)
                 else:
                     raise RuntimeError(
-                        f"[WorkflowGenerator] Cannot load model '{resolved_path}': "
+                        f"[WorkflowBuilder] Cannot load model '{resolved_path}': "
                         f"weights_only=False is needed but load_diffusion_model_state_dict "
                         f"is not available in this ComfyUI version. Update ComfyUI."
                     ) from e
@@ -538,7 +539,7 @@ def _load_vae(vae_name, existing_vae=None):
     if vae_name and not vae_name.startswith('('):
         vae_path = resolve_vae_name(vae_name)
         if vae_path:
-            print(f"[WorkflowGenerator] Loading VAE: {vae_name}")
+            print(f"[WorkflowBuilder] Loading VAE: {vae_name}")
             sd, metadata = comfy.utils.load_torch_file(vae_path, return_metadata=True)
             v = comfy.sd.VAE(sd=sd, metadata=metadata)
             v.throw_exception_if_invalid()
@@ -583,7 +584,7 @@ def _load_clip(clip_info, overrides, existing_clip=None):
     else:
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
 
-    print(f"[WorkflowGenerator] Loading CLIP: {clip_names}")
+    print(f"[WorkflowBuilder] Loading CLIP: {clip_names}")
     return comfy.sd.load_clip(
         ckpt_paths=valid_paths,
         embedding_directory=folder_paths.get_folder_paths("embeddings"),
@@ -603,7 +604,7 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
         lora_st   = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
 
         if lora_st.get('active') is False:
-            print(f"[WorkflowGenerator] Skipping disabled LoRA: {lora_name}")
+            print(f"[WorkflowBuilder] Skipping disabled LoRA: {lora_name}")
             continue
 
         model_strength = float(lora_st.get('model_strength', lora.get('model_strength', 1.0)))
@@ -611,10 +612,10 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
 
         lora_path, found = resolve_lora_path(lora_name)
         if not found:
-            print(f"[WorkflowGenerator] LoRA not found, skipping: {lora_name}")
+            print(f"[WorkflowBuilder] LoRA not found, skipping: {lora_name}")
             continue
 
-        print(f"[WorkflowGenerator] Applying LoRA: {lora_name} "
+        print(f"[WorkflowBuilder] Applying LoRA: {lora_name} "
               f"(model={model_strength:.2f}, clip={clip_strength:.2f})")
         lora_data = comfy.utils.load_torch_file(lora_path, safe_load=True)
         model, clip = comfy.sd.load_lora_for_models(model, clip, lora_data, model_strength, clip_strength)
@@ -623,16 +624,15 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
 
 # ─── Main Node ──────────────────────────────────────────────────────────────
 
-class WorkflowGenerator:
+class WorkflowBuilder:
     """
-    One-stop generation node: load model, apply LoRAs, sample, decode.
+    Workflow Builder — UI and extraction node.
 
     Can run standalone with manual settings, or accept workflow_data (from
     PromptExtractor) and/or lora_stack inputs to pre-fill all parameters.
 
     Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
-    Supports family-aware sampling: Standard, Flux, Flux2, WAN dual-sampler.
-    Outputs: IMAGE, LATENT, WORKFLOW_DATA (string).
+    Outputs WORKFLOW_DATA (JSON string) for the Workflow Renderer render node.
     """
 
     # Class-level cache so models persist across executions.
@@ -675,6 +675,13 @@ class WorkflowGenerator:
 
         return {
             "required": {
+                "use_prompt_input": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "on",
+                    "label_off": "off",
+                    "tooltip": "When on, use the connected prompt input (overrides prompt from workflow_data). "
+                               "When off, use the prompt from workflow_data or manual entry.",
+                }),
                 "use_lora_input": ("BOOLEAN", {
                     "default": False,
                     "label_on": "on",
@@ -692,15 +699,16 @@ class WorkflowGenerator:
             },
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
+                "prompt_input": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Positive prompt text. Overrides prompt from workflow_data when use_prompt_input is on.",
+                }),
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
-                "workflow_data_input": ("WORKFLOW_DATA", {
+                "workflow_data": ("WORKFLOW_DATA", {
                     "forceInput": True,
                     "lazy": True,
                     "tooltip": "Connect workflow_data output from PromptExtractor",
-                }),
-                "source_image": ("IMAGE", {
-                    "tooltip": "Input image for WAN Video i2v (image-to-video) generation.",
                 }),
                 # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
@@ -713,28 +721,27 @@ class WorkflowGenerator:
             },
         }
 
-    RETURN_TYPES  = ("IMAGE", "LATENT", "WORKFLOW_DATA")
-    RETURN_NAMES  = ("image", "latent", "workflow_data")
+    RETURN_TYPES  = ("WORKFLOW_DATA",)
+    RETURN_NAMES  = ("workflow_data",)
     FUNCTION      = "execute"
     CATEGORY      = "FBnodes"
-    OUTPUT_NODE   = False
+    OUTPUT_NODE   = True
     DESCRIPTION   = (
-        "One-stop generation node. Accepts workflow_data from PromptExtractor "
-        "and/or LoRA stacks, or works standalone with manual settings. "
-        "Supports Standard, Flux, Flux2, and WAN dual-sampler strategies."
+        "Workflow Builder. Extracts parameters from images/workflows, provides "
+        "a full editing UI, and outputs workflow_data for the Workflow Renderer."
     )
 
     def check_lazy_status(self, use_workflow_data=False, use_lora_input=False,
-                          workflow_data_input=None, **kwargs):
+                          workflow_data=None, **kwargs):
         """Tell ComfyUI which lazy inputs need evaluation this run."""
         needed = []
-        if use_workflow_data and workflow_data_input is None:
-            needed.append('workflow_data_input')
+        if use_workflow_data and workflow_data is None:
+            needed.append('workflow_data')
         return needed
 
-    def execute(self, use_workflow_data=False, use_lora_input=False,
-                workflow_data_input=None, lora_stack_a=None, lora_stack_b=None,
-                source_image=None,
+    def execute(self, use_prompt_input=False, use_workflow_data=False, use_lora_input=False,
+                prompt_input=None, workflow_data=None,
+                lora_stack_a=None, lora_stack_b=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         """
@@ -742,18 +749,16 @@ class WorkflowGenerator:
           1. Parse workflow_data or use defaults
           2. Apply JS overrides
           3. Merge lora inputs if enabled
-          4. Load model (+ VAE + CLIP)
-          5. Apply LoRAs
-          6. Encode prompts → Sample → Decode
-          7. Return IMAGE, LATENT, WORKFLOW_DATA
+          4. Build workflow_data JSON
+          5. Return WORKFLOW_DATA
         """
         # ── Parse workflow_data input (if enabled and connected) ─────────
         wf_data = None
-        if use_workflow_data and workflow_data_input:
+        if use_workflow_data and workflow_data:
             try:
-                wf_data = json.loads(workflow_data_input)
+                wf_data = json.loads(workflow_data)
             except (json.JSONDecodeError, TypeError):
-                print("[WorkflowGenerator] Warning: could not parse workflow_data_input")
+                print("[WorkflowBuilder] Warning: could not parse workflow_data")
 
         # ── Build extracted dict from workflow_data or defaults ───────────
         if wf_data:
@@ -841,6 +846,10 @@ class WorkflowGenerator:
         # ── Apply overrides ──────────────────────────────────────────────
         positive_prompt = overrides.get('positive_prompt', extracted['positive_prompt'])
         negative_prompt = overrides.get('negative_prompt', extracted['negative_prompt'])
+
+        # ── Prompt input override (highest priority) ─────────────────────
+        if use_prompt_input and prompt_input is not None:
+            positive_prompt = prompt_input
         model_name_a    = overrides.get('model_a', extracted['model_a'])
         model_name_b    = overrides.get('model_b', extracted['model_b'])
         vae_name        = overrides.get('vae', extracted['vae']['name'])
@@ -899,7 +908,7 @@ class WorkflowGenerator:
             family_key = "sdxl"
         strategy = get_family_sampler_strategy(family_key)
 
-        print(f"[WorkflowGenerator] Family: {get_family_label(family_key)} "
+        print(f"[WorkflowBuilder] Family: {get_family_label(family_key)} "
               f"(strategy={strategy}), model_a={model_name_a}, "
               f"model_b={model_name_b or '—'}")
 
@@ -908,7 +917,7 @@ class WorkflowGenerator:
         # fails (e.g. model not found).  The user can then edit settings
         # and re-queue.
         wf_overrides = dict(overrides)
-        wf_overrides['_source'] = 'WorkflowGenerator'
+        wf_overrides['_source'] = 'WorkflowBuilder'
         extracted['model_family'] = family_key
         extracted['model_family_label'] = strategy
 
@@ -1054,358 +1063,7 @@ class WorkflowGenerator:
         except Exception:
             pass  # Non-critical — JS will still get data from onExecuted
 
-        # ── Load, sample, decode ──────────────────────────────────────────
-        # The UI is always populated (ui_info built above).  If generation
-        # fails the error is surfaced visibly on the node so the user can
-        # adjust settings and re-queue.
-        gen_error = None
-        decoded = None
-        out_latent = None
-
-        try:
-            # ── Load Model A ─────────────────────────────────────────────
-            resolved_a, folder_a = resolve_model_name(model_name_a)
-            if resolved_a is None:
-                # Model not found — try first compatible model for this family
-                # so generation can still proceed. UI already shows it in red
-                # via model_a_found=False reported in ui_info above.
-                print(f"[WorkflowGenerator] Model A not found: {model_name_a!r} — looking for fallback in family {family_key!r}")
-                compat = get_compatible_families(family_key)
-                all_on_disk = []
-                for fn in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
-                    try:
-                        all_on_disk.extend(folder_paths.get_filename_list(fn))
-                    except Exception:
-                        pass
-                seen_fb = set()
-                fallback_candidates = []
-                for m in all_on_disk:
-                    if m not in seen_fb:
-                        seen_fb.add(m)
-                        if get_model_family(m) in compat:
-                            fallback_candidates.append(m)
-                if fallback_candidates:
-                    fallback_name = sorted(fallback_candidates)[0]
-                    print(f"[WorkflowGenerator] Using fallback model: {fallback_name}")
-                    resolved_a, folder_a = resolve_model_name(fallback_name)
-                    model_name_a = fallback_name  # use fallback for loading
-                else:
-                    gen_error = f"Model A not found and no fallback available for family {family_key}: {model_name_a}"
-                    raise FileNotFoundError(gen_error)
-            full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
-            _cache = WorkflowGenerator._class_model_cache
-            _cache_key_a = (str(unique_id), full_path_a, family_key)
-            if _cache_key_a not in _cache:
-                print(f"[WorkflowGenerator] Loading model (not cached): {resolved_a}")
-                _cache[_cache_key_a] = _load_model_from_path(
-                    resolved_a, folder_a, full_path_a
-                )
-            else:
-                print(f"[WorkflowGenerator] Using cached model: {resolved_a}")
-            model_a, clip_a, vae_a = _cache[_cache_key_a]
-
-            # ── Resolution ───────────────────────────────────────────────
-            res    = extracted['resolution']
-            def _to_int(v, default):
-                """Safely coerce v to int — guards against node-ref lists
-                that may slip through extract_resolution edge cases."""
-                if isinstance(v, list):
-                    return int(default)
-                try:
-                    return int(v)
-                except (TypeError, ValueError):
-                    return int(default)
-            width  = _to_int(overrides.get('width',  res['width']),  512)
-            height = _to_int(overrides.get('height', res['height']), 512)
-            # Clamp resolution for i2v so the resize node stays within
-            # hardware limits; the source image itself is never touched.
-            if family_key == 'wan_video_i2v':
-                MAX_DIM = 1280
-                if max(width, height) > MAX_DIM:
-                    scale = MAX_DIM / max(width, height)
-                    width  = (round(width  * scale) // 16) * 16
-                    height = (round(height * scale) // 16) * 16
-                    print(f"[WorkflowGenerator] Resolution clamped to {width}x{height} (max 1280px per side)")
-            length = overrides.get('length', res.get('length'))
-            batch  = (
-                _to_int(length, 1) if length is not None
-                else _to_int(overrides.get('batch_size', res.get('batch_size', 1)), 1)
-            )
-
-            # ── Template-driven path (preferred) ─────────────────────────
-            # Try to execute via workflow template. Falls back to hardcoded
-            # samplers if no template exists for this family.
-            # NOTE: VAE and CLIP loading is intentionally deferred to
-            # execute_template (template path) or the hardcoded block below.
-            # This avoids crashing when (Default) is selected on diffusion
-            # model families that have no bundled VAE/CLIP in the checkpoint.
-            api_template, wmap = load_template(family_key)
-
-            # has_both_stacks is needed by both the template path (loras_to_text)
-            # and the hardcoded fallback path (_apply_loras), so define it here.
-            has_both_stacks = (
-                bool(extracted['loras_a']) and bool(extracted['loras_b'])
-            )
-
-            if api_template is not None:
-                import copy
-                api = copy.deepcopy(api_template)
-
-                # Build params for patch_template
-                patch_params = {
-                    'positive_prompt':   positive_prompt,
-                    'negative_prompt':   negative_prompt,
-                    'model_a':           model_name_a,
-                    'model_b':           model_name_b or None,
-                    'vae':               vae_name or '',
-                    'width':             width,
-                    'height':            height,
-                    'batch_size':        batch,
-                    'seed':              sampler_params.get('seed', 0),
-                    'seed_b':            sampler_params.get('seed_b'),  # None = fallback to seed
-                    'cfg':               sampler_params.get('cfg', 5.0),
-                    'sampler_name':      sampler_params.get('sampler_name', 'euler'),
-                    'scheduler':         sampler_params.get('scheduler', 'simple'),
-                    'denoise':           sampler_params.get('denoise', 1.0),
-                    'guidance':          sampler_params.get('guidance'),
-                    'lora_stack_a_text': loras_to_text(
-                        extracted['loras_a'], lora_overrides,
-                        'a' if has_both_stacks else ''
-                    ),
-                    'lora_stack_b_text': loras_to_text(
-                        extracted['loras_b'], lora_overrides, 'b'
-                    ),
-                }
-
-                # Standard steps or WAN Video dual-steps
-                if strategy == 'wan_video':
-                    import math
-                    # Use explicit steps_high/steps_low from overrides if set,
-                    # otherwise split total steps evenly.
-                    if 'steps_high' in sampler_params and 'steps_low' in sampler_params:
-                        sh = int(sampler_params['steps_high'])
-                        sl = int(sampler_params['steps_low'])
-                    else:
-                        total_steps = sampler_params.get('steps', 6)
-                        sh = math.ceil(total_steps / 2)
-                        sl = total_steps - sh
-                    patch_params['steps_high'] = sh
-                    patch_params['steps_low']  = sl
-                    print(f"[WorkflowGenerator] WAN Video dual-steps: high={sh}, low={sl}")
-                    # Dual seeds: seed_b falls back to seed if not set
-                    if patch_params.get('seed_b') is None:
-                        patch_params['seed_b'] = patch_params['seed']
-                else:
-                    patch_params['steps'] = sampler_params.get('steps', 20)
-
-                if length is not None:
-                    patch_params['length'] = int(length)
-
-                # Source image for i2v workflows
-                print(f"[WorkflowGenerator] i2v source_image: {'tensor shape=' + str(source_image.shape) if source_image is not None else 'NOT CONNECTED (None)'}, family={family_key}")
-                if source_image is not None and family_key == 'wan_video_i2v':
-                    try:
-                        import numpy as np
-                        from PIL import Image as PILImage
-                        import torch
-                        input_dir = folder_paths.get_input_directory()
-                        # ComfyUI IMAGE tensors are float32 (B, H, W, C) in [0,1].
-                        # Squeeze out the batch dim to get (H, W, C).
-                        img_t = source_image
-                        if isinstance(img_t, torch.Tensor):
-                            while img_t.ndim > 3:
-                                img_t = img_t.squeeze(0)
-                            img_array = img_t.cpu().numpy()
-                        else:
-                            img_array = np.array(img_t)
-                            while img_array.ndim > 3:
-                                img_array = img_array[0]
-                        img_array = (img_array * 255).clip(0, 255).astype(np.uint8)
-                        print(f"[WorkflowGenerator] Saving source image shape={img_array.shape} to input dir")
-                        pil_img = PILImage.fromarray(img_array)
-                        temp_name = "wg_i2v_source_image.png"
-                        temp_path = os.path.join(input_dir, temp_name)
-                        pil_img.save(temp_path)
-                        patch_params['source_image_path'] = temp_name
-                        print(f"[WorkflowGenerator] Source image saved: {temp_path}")
-                    except Exception as e:
-                        print(f"[WorkflowGenerator] Failed to save source image: {e}")
-
-                # Clip names from overrides or extracted
-                clip_info = dict(extracted['clip'])
-                if overrides.get('clip_names'):
-                    patch_params['clip'] = overrides['clip_names'][0]
-                elif clip_info.get('names'):
-                    patch_params['clip'] = clip_info['names'][0]
-                    if len(clip_info['names']) > 1:
-                        patch_params['clip_1'] = clip_info['names'][0]
-                        patch_params['clip_2'] = clip_info['names'][1]
-
-                patch_template(api, wmap, patch_params)
-
-                print(f"[WorkflowGenerator] Template execution: family={family_key}")
-                decoded, out_latent = execute_template(
-                    api, wmap, family_key, patch_params,
-                )
-
-            else:
-                # ── Fallback: hardcoded sampler paths ────────────────────
-                # For the hardcoded path we need VAE + CLIP loaded in Python.
-                # Diffusion-model families (flux1, flux2, wan, ltxv, zimage)
-                # return vae_a=None / clip_a=None from _load_model_from_path.
-                # When (Default) is selected and no bundled VAE exists we must
-                # not crash — instead surface a friendly error so the user can
-                # pick a specific VAE/CLIP from the dropdown.
-                print(f"[WorkflowGenerator] Hardcoded sampler fallback: {strategy}")
-
-                vae = _load_vae(vae_name, existing_vae=vae_a)
-                if vae is None:
-                    gen_error = (
-                        f"No VAE available — please select a specific VAE "
-                        f"(model={model_name_a}, vae={vae_name!r}). "
-                        f"(Default) requires a VAE bundled in the checkpoint, "
-                        f"which diffusion-model families do not provide."
-                    )
-                    raise FileNotFoundError(gen_error)
-
-                clip_info = dict(extracted['clip'])
-                if not clip_info.get('type') and family_key:
-                    from ..py.workflow_families import MODEL_FAMILIES
-                    family_clip_type = MODEL_FAMILIES.get(
-                        family_key, {}
-                    ).get('clip_type', '')
-                    if family_clip_type:
-                        clip_info['type'] = family_clip_type
-                clip = _load_clip(clip_info, overrides, existing_clip=clip_a)
-                if clip is None:
-                    gen_error = "No CLIP available for text encoding"
-                    raise FileNotFoundError(gen_error)
-
-                stack_key_a = "a" if has_both_stacks else ""
-                model_a, clip = _apply_loras(
-                    model_a, clip, extracted['loras_a'],
-                    lora_overrides, stack_key=stack_key_a,
-                )
-
-                tokens_pos = clip.tokenize(positive_prompt)
-                cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
-                tokens_neg = clip.tokenize(negative_prompt)
-                cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
-
-                print(f"[WorkflowGenerator] Latent: {width}x{height}, batch={batch}")
-                if strategy == "wan_video":
-                    # Video latent — 5D: [batch, 16, temporal, H//8, W//8]
-                    L = int(length or 81)
-                    temporal = ((L - 1) // 4) + 1
-                    latent_tensor = torch.zeros(
-                        [batch, 16, temporal, height // 8, width // 8],
-                        device=comfy.model_management.intermediate_device(),
-                    )
-                else:
-                    latent_tensor = torch.zeros(
-                        [batch, 4, height // 8, width // 8],
-                        device=comfy.model_management.intermediate_device(),
-                    )
-                latent_dict = {
-                    "samples": latent_tensor,
-                    "downscale_ratio_spacial": 8,
-                    "_width":  width,
-                    "_height": height,
-                }
-
-                print(f"[WorkflowGenerator] Sampling strategy: {strategy}")
-                print(
-                    f"[WorkflowGenerator] steps={sampler_params['steps']}, "
-                    f"cfg={sampler_params['cfg']}, seed={sampler_params['seed']}, "
-                    f"sampler={sampler_params['sampler_name']}, "
-                    f"scheduler={sampler_params['scheduler']}"
-                )
-
-                if strategy == "wan_video" and model_name_b:
-                    resolved_b, folder_b = resolve_model_name(model_name_b)
-                    model_b_obj = clip_b = None
-                    if resolved_b:
-                        full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
-                        _cache_key_b = (str(unique_id), full_path_b, family_key + "_b")
-                        if _cache_key_b not in _cache:
-                            print(f"[WorkflowGenerator] Loading model B: {resolved_b}")
-                            _cache[_cache_key_b] = _load_model_from_path(
-                                resolved_b, folder_b, full_path_b
-                            )
-                        else:
-                            print(f"[WorkflowGenerator] Using cached model B: {resolved_b}")
-                        model_b_obj, clip_b_raw, _ = _cache[_cache_key_b]
-
-                        clip_b = clip_b_raw or clip
-                        stack_key_b = "b" if has_both_stacks else ""
-                        model_b_obj, clip_b = _apply_loras(
-                            model_b_obj, clip_b, extracted['loras_b'],
-                            lora_overrides, stack_key=stack_key_b,
-                        )
-
-                        tokens_pos_b = clip_b.tokenize(positive_prompt)
-                        cond_pos_b = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
-                        tokens_neg_b = clip_b.tokenize(negative_prompt)
-                        cond_neg_b = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
-                    else:
-                        model_b_obj = cond_pos_b = cond_neg_b = None
-                        print(
-                            f"[WorkflowGenerator] WAN model B not found: "
-                            f"{model_name_b} — using single sampler"
-                        )
-
-                    # Map steps_high/steps_low into sampler_params for _run_wan_sampler.
-                    # If steps_high/steps_low aren't explicitly set (normal case), split
-                    # the total steps evenly: high=ceil(n/2), low=floor(n/2).
-                    import math as _math
-                    wan_params_a = dict(sampler_params)
-                    wan_params_b = dict(sampler_params)
-                    total_steps = sampler_params.get('steps', 6)
-                    steps_high = sampler_params.get('steps_high', _math.ceil(total_steps / 2))
-                    steps_low  = sampler_params.get('steps_low',  total_steps - steps_high)
-                    wan_params_a['steps'] = steps_high
-                    wan_params_b['steps'] = steps_low
-                    print(f"[WorkflowGenerator] WAN dual-sampler: total={total_steps}, high={steps_high}, low={steps_low}")
-
-                    samples = _run_wan_sampler(
-                        model_a, cond_pos, cond_neg, latent_dict, wan_params_a,
-                        model_b=model_b_obj,
-                        cond_pos_b=cond_pos_b,
-                        cond_neg_b=cond_neg_b,
-                        sampler_params_b=wan_params_b,
-                    )
-
-                elif strategy == "flux2":
-                    samples = _run_flux2_sampler(
-                        model_a, cond_pos, cond_neg, latent_dict, sampler_params
-                    )
-
-                elif strategy == "flux":
-                    samples = _run_flux_sampler(
-                        model_a, cond_pos, cond_neg, latent_dict, sampler_params
-                    )
-
-                else:
-                    samples = _run_standard_ksampler(
-                        model_a, cond_pos, cond_neg, latent_dict, sampler_params
-                    )
-
-                # ── Decode ───────────────────────────────────────────────────
-                print("[WorkflowGenerator] Decoding latent…")
-                decoded = vae.decode(samples)
-                if len(decoded.shape) == 5:          # video: (batch, frames, H, W, 3) → (B*F, H, W, 3)
-                    decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
-                out_latent = {"samples": samples}
-
-        except FileNotFoundError:
-            # Model/VAE/CLIP not found — gen_error already set above.
-            # send_sync already fired so JS UI has the extracted data.
-            raise
-        except Exception as e:
-            # send_sync already fired so JS UI has the extracted data.
-            raise
-
         return {
             "ui":     {"workflow_info": [ui_info]},
-            "result": (decoded, out_latent, workflow_data_str),
+            "result": (workflow_data_str,),
         }
