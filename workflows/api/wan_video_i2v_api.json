@@ -15,7 +15,7 @@
         0
       ],
       "start_image": [
-        "97",
+        "161",
         0
       ],
       "width": [
@@ -27,7 +27,7 @@
         2
       ],
       "length": 640,
-      "batch_size": 640
+      "batch_size": 1
     }
   },
   "145": {
@@ -213,6 +213,16 @@
         "145",
         0
       ]
+    }
+  },
+  "160": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "142",
+        0
+      ],
+      "filename_prefix": "ComfyUI"
     }
   }
 }
