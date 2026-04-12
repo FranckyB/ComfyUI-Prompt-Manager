@@ -110,6 +110,27 @@ function makeBtn(label, onclick, extraStyle) {
     return b;
 }
 
+// --- Snap node height to fit content after section toggle ---
+// Walks up from a section element to find the root (which stores _weNode),
+// then forces the node to exactly fit its DOM content.
+const _NATIVE_H = 90;   // title bar + toggle widgets above the DOM widget
+const _MIN_W = 470;
+const _MIN_H = 300;
+
+function _snapNodeHeight(sectionEl) {
+    // Find root — the section's direct parent is root
+    let root = sectionEl?.parentElement;
+    if (!root || !root._weNode) return;
+    const node = root._weNode;
+    // Wait one frame so the browser has reflowed after display:none toggle
+    requestAnimationFrame(() => {
+        const contentH = (root.scrollHeight || _MIN_H) + _NATIVE_H;
+        const targetH = Math.max(contentH, _MIN_H);
+        node.setSize([Math.max(node.size[0], _MIN_W), targetH]);
+        app.graph.setDirtyCanvas(true, true);
+    });
+}
+
 // --- Section builder (always expanded) ---
 function makeSection(title, startOpen = true) {
     const wrap = makeEl("div", {
@@ -133,12 +154,12 @@ function makeSection(title, startOpen = true) {
         padding: "4px 8px",
         display: startOpen ? "" : "none",
     });
-    // Toggle body on header click — dirty canvas so computeSize is re-queried.
+    // Toggle body on header click — snap node height to fit content.
     header.addEventListener("click", () => {
         const opening = body.style.display === "none";
         body.style.display = opening ? "" : "none";
         chevron.textContent = opening ? "\u25BC" : "\u25B6";
-        app.graph.setDirtyCanvas(true, true);
+        _snapNodeHeight(wrap);
     });
     wrap._titleLabel = label;
     wrap._chevron = chevron;
@@ -147,12 +168,12 @@ function makeSection(title, startOpen = true) {
     wrap._expand = () => {
         body.style.display = "";
         chevron.textContent = "\u25BC";
-        app.graph.setDirtyCanvas(true, true);
+        _snapNodeHeight(wrap);
     };
     wrap._collapse = () => {
         body.style.display = "none";
         chevron.textContent = "\u25B6";
-        app.graph.setDirtyCanvas(true, true);
+        _snapNodeHeight(wrap);
     };
     return wrap;
 }
@@ -1169,6 +1190,7 @@ app.registerExtension({
             });
             forwardWheelToCanvas(root);
             node._weRoot = root;
+            root._weNode = node;   // back-reference for _snapNodeHeight
 
             // -- 1. RESOLUTION section (open) --
             const resSec = makeSection("RESOLUTION");
@@ -1504,12 +1526,6 @@ app.registerExtension({
 
             root.appendChild(loraSec);
 
-            const MIN_W = 470;
-            const MIN_H = 300;
-            // Height of everything above the DOM widget: title bar ~30px +
-            // two native toggle widgets ~28px each + small margin = 90px.
-            const NATIVE_H = 90;
-
             // -- Register the DOM widget.
             // Use computeSize directly on the widget — the same pattern used by
             // prompt_manager_advanced.js (which has no grey-gap or resize issues).
@@ -1522,7 +1538,7 @@ app.registerExtension({
                 serialize: false,
             });
             domW.computeSize = function (width) {
-                const h = root.scrollHeight || MIN_H;
+                const h = root.scrollHeight || _MIN_H;
                 return [width, h];
             };
 
@@ -1547,17 +1563,17 @@ app.registerExtension({
             // Prevents dragging the node smaller than its content.
             const origOnResize = node.onResize;
             node.onResize = function (size) {
-                const contentH = (root.scrollHeight || MIN_H) + NATIVE_H;
-                size[0] = Math.max(MIN_W, size[0]);
-                size[1] = Math.max(contentH, MIN_H, size[1]);
+                const contentH = (root.scrollHeight || _MIN_H) + _NATIVE_H;
+                size[0] = Math.max(_MIN_W, size[0]);
+                size[1] = Math.max(contentH, _MIN_H, size[1]);
                 if (origOnResize) return origOnResize.apply(this, arguments);
             };
 
             // Set initial size — deferred so the DOM has been painted and
             // scrollHeight reflects real content height.
             requestAnimationFrame(() => requestAnimationFrame(() => {
-                const contentH = (root.scrollHeight || MIN_H) + NATIVE_H;
-                node.setSize([MIN_W, Math.max(contentH, MIN_H)]);
+                const contentH = (root.scrollHeight || _MIN_H) + _NATIVE_H;
+                node.setSize([_MIN_W, Math.max(contentH, _MIN_H)]);
                 app.graph.setDirtyCanvas(true, true);
             }));
 

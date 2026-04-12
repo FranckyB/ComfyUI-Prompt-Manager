@@ -1293,10 +1293,19 @@ class WorkflowGenerator:
                 cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
 
                 print(f"[WorkflowGenerator] Latent: {width}x{height}, batch={batch}")
-                latent_tensor = torch.zeros(
-                    [batch, 4, height // 8, width // 8],
-                    device=comfy.model_management.intermediate_device(),
-                )
+                if strategy == "wan_video":
+                    # Video latent — 5D: [batch, 16, temporal, H//8, W//8]
+                    L = int(length or 81)
+                    temporal = ((L - 1) // 4) + 1
+                    latent_tensor = torch.zeros(
+                        [batch, 16, temporal, height // 8, width // 8],
+                        device=comfy.model_management.intermediate_device(),
+                    )
+                else:
+                    latent_tensor = torch.zeros(
+                        [batch, 4, height // 8, width // 8],
+                        device=comfy.model_management.intermediate_device(),
+                    )
                 latent_dict = {
                     "samples": latent_tensor,
                     "downscale_ratio_spacial": 8,

@@ -500,9 +500,12 @@ def execute_template(api, wmap, family_key, params):
     else:
         batch = int(params.get("batch_size", 1))
         if length is not None:
-            # Video latent — channels=16 for WAN/Hunyuan
+            # Video latent — 5D: [batch, 16, temporal, H//8, W//8]
+            # Temporal dim uses the same formula as EmptyHunyuanLatentVideo.
+            L = int(length)
+            temporal = ((L - 1) // 4) + 1
             latent_tensor = torch.zeros(
-                [int(length), 16, height // 8, width // 8],
+                [batch, 16, temporal, height // 8, width // 8],
                 device=comfy.model_management.intermediate_device(),
             )
         else:
@@ -642,8 +645,9 @@ def _run_i2v_from_template(image_name, vae, cond_pos, cond_neg,
     except Exception as e:
         print(f"[WorkflowExecutor] WanImageToVideo failed ({e}), falling back to empty latent")
         traceback.print_exc()
+        temporal = ((length - 1) // 4) + 1
         latent_tensor = torch.zeros(
-            [length, 16, height // 8, width // 8],
+            [1, 16, temporal, height // 8, width // 8],
             device=comfy.model_management.intermediate_device(),
         )
         return {
