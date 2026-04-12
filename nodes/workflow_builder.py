@@ -277,7 +277,7 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
 
     steps        = int(sampler_params['steps'])
     cfg          = float(sampler_params['cfg'])
-    seed         = int(sampler_params['seed'])
+    seed         = int(sampler_params['seed_a'])
     sampler_name = sampler_params['sampler_name']
     scheduler    = sampler_params['scheduler']
     denoise      = float(sampler_params['denoise'])
@@ -312,7 +312,7 @@ def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     )
 
     steps        = int(sampler_params['steps'])
-    seed         = int(sampler_params['seed'])
+    seed         = int(sampler_params['seed_a'])
     sampler_name = sampler_params['sampler_name']
     scheduler    = sampler_params.get('scheduler', 'simple')
     denoise      = float(sampler_params.get('denoise', 1.0))
@@ -363,7 +363,7 @@ def _run_flux2_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
 
     steps        = int(sampler_params.get('steps', 20))
     cfg          = float(sampler_params.get('cfg', 1.0))
-    seed         = int(sampler_params.get('seed', 0))
+    seed         = int(sampler_params.get('seed_a', 0))
     sampler_name = sampler_params.get('sampler_name', 'euler')
     scheduler    = sampler_params.get('scheduler', 'beta')
     denoise      = float(sampler_params.get('denoise', 1.0))
@@ -433,8 +433,8 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
     total_steps  = steps_high + steps_low
     cfg_high     = float(sampler_params.get('cfg', 1.0))
     cfg_low      = float((sampler_params_b or sampler_params).get('cfg', cfg_high))
-    seed         = int(sampler_params.get('seed', 0))
-    seed_low     = int((sampler_params_b or sampler_params).get('seed', seed))
+    seed         = int(sampler_params.get('seed_a', 0))
+    seed_low     = int((sampler_params_b or sampler_params).get('seed_a', seed))
     sampler_name = sampler_params.get('sampler_name', 'euler')
     scheduler    = sampler_params.get('scheduler', 'simple')
 
@@ -728,7 +728,7 @@ class WorkflowBuilder:
     RETURN_TYPES  = ("WORKFLOW_DATA",)
     RETURN_NAMES  = ("workflow_data",)
     FUNCTION      = "execute"
-    CATEGORY      = "FBnodes"
+    CATEGORY      = "Prompt Manager"
     OUTPUT_NODE   = True
     DESCRIPTION   = (
         "Workflow Builder. Extracts parameters from images/workflows, provides "
@@ -784,8 +784,8 @@ class WorkflowBuilder:
                 'sampler': {
                     'steps': wf_sampler.get('steps', 20),
                     'cfg': wf_sampler.get('cfg', 5.0),
-                    'seed': wf_sampler.get('seed', 0),
-                    'seed_b': wf_sampler.get('seed_b'),  # None = same as seed
+                    'seed_a': wf_sampler.get('seed_a', wf_sampler.get('seed', 0)),
+                    'seed_b': wf_sampler.get('seed_b'),  # None = same as seed_a
                     'sampler_name': wf_sampler.get('sampler_name', 'euler'),
                     'scheduler': wf_sampler.get('scheduler', 'simple'),
                     'denoise': 1.0,
@@ -814,7 +814,7 @@ class WorkflowBuilder:
                 'vae':     {'name': '', 'source': 'unknown'},
                 'clip':    {'names': [], 'type': '', 'source': 'unknown'},
                 'sampler': {
-                    'steps': 20, 'cfg': 5.0, 'seed': 0,
+                    'steps': 20, 'cfg': 5.0, 'seed_a': 0,
                     'sampler_name': 'euler', 'scheduler': 'simple',
                     'denoise': 1.0, 'guidance': None,
                 },
@@ -863,18 +863,18 @@ class WorkflowBuilder:
 
         sampler_params = extracted['sampler'].copy()
         sampler_params['denoise'] = 1.0
-        for key in ['steps', 'cfg', 'seed', 'seed_b', 'sampler_name', 'scheduler']:
+        for key in ['steps', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
             if key in overrides:
                 val = overrides[key]
                 # Guard: overrides could carry a stale list from a corrupt
                 # override_data blob — coerce numeric fields to scalar.
-                if key in ('steps', 'seed', 'seed_b') and isinstance(val, list):
+                if key in ('steps', 'seed_a', 'seed_b') and isinstance(val, list):
                     val = 0
                 elif key == 'cfg' and isinstance(val, list):
                     val = 5.0
                 sampler_params[key] = val
         # Also ensure extracted sampler seed/steps are never lists
-        for key, default in (('seed', 0), ('seed_b', None), ('steps', 20), ('cfg', 5.0)):
+        for key, default in (('seed_a', 0), ('seed_b', None), ('steps', 20), ('cfg', 5.0)):
             if isinstance(sampler_params.get(key), list):
                 sampler_params[key] = default
         # WAN Video step overrides (steps_high / steps_low)
@@ -966,7 +966,7 @@ class WorkflowBuilder:
         # pre-update handler sees what the user actually has set and does
         # NOT mistakenly treat it as a source change that clears all fields.
         effective_sampler = dict(extracted['sampler'])
-        for key in ['steps', 'cfg', 'seed', 'sampler_name', 'scheduler']:
+        for key in ['steps', 'cfg', 'seed_a', 'sampler_name', 'scheduler']:
             if key in overrides:
                 effective_sampler[key] = overrides[key]
         if 'steps_high' in overrides:

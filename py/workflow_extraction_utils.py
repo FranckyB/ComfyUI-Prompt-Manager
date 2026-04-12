@@ -75,13 +75,13 @@ def _get_embedded_extracted_data(workflow_data):
 def extract_sampler_params(prompt_data, workflow_data):
     """
     Extract sampler parameters from KSampler nodes in API or workflow format.
-    Returns a dict with steps, cfg, seed, sampler_name, scheduler, denoise, guidance.
+    Returns a dict with steps, cfg, seed_a, sampler_name, scheduler, denoise, guidance.
     """
     params = {
         'steps': 20,
         'cfg': 7.0,
-        'seed': 0,
-        'seed_b': None,   # WAN Video second-sampler seed (None = use same as seed)
+        'seed_a': 0,
+        'seed_b': None,   # WAN Video second-sampler seed (None = use same as seed_a)
         'sampler_name': 'euler',
         'scheduler': 'normal',
         'denoise': 1.0,
@@ -102,8 +102,8 @@ def extract_sampler_params(prompt_data, workflow_data):
             if ct == 'KSampler':
                 params['steps']        = inp.get('steps', params['steps'])
                 params['cfg']          = inp.get('cfg', params['cfg'])
-                seed_val               = inp.get('seed', inp.get('noise_seed', params['seed']))
-                params['seed']         = seed_val if not isinstance(seed_val, list) else params['seed']
+                seed_val               = inp.get('seed', inp.get('noise_seed', params['seed_a']))
+                params['seed_a']       = seed_val if not isinstance(seed_val, list) else params['seed_a']
                 params['sampler_name'] = inp.get('sampler_name', params['sampler_name'])
                 params['scheduler']    = inp.get('scheduler', params['scheduler'])
                 params['denoise']      = inp.get('denoise', params['denoise'])
@@ -115,8 +115,8 @@ def extract_sampler_params(prompt_data, workflow_data):
             if ct == 'WanMoeKSamplerAdvanced':
                 params['steps']        = inp.get('steps', params['steps'])
                 params['cfg']          = inp.get('cfg', params['cfg'])
-                seed_val               = inp.get('seed', inp.get('noise_seed', params['seed']))
-                params['seed']         = seed_val if not isinstance(seed_val, list) else params['seed']
+                seed_val               = inp.get('seed', inp.get('noise_seed', params['seed_a']))
+                params['seed_a']       = seed_val if not isinstance(seed_val, list) else params['seed_a']
                 params['sampler_name'] = inp.get('sampler_name', params['sampler_name'])
                 params['scheduler']    = inp.get('scheduler', params['scheduler'])
                 return params
@@ -126,16 +126,16 @@ def extract_sampler_params(prompt_data, workflow_data):
             first = ksampler_advanced_nodes[0]
             params['steps']        = first.get('steps', params['steps'])
             params['cfg']          = first.get('cfg', params['cfg'])
-            seed_val               = first.get('seed', first.get('noise_seed', params['seed']))
-            params['seed']         = seed_val if not isinstance(seed_val, list) else params['seed']
+            seed_val               = first.get('seed', first.get('noise_seed', params['seed_a']))
+            params['seed_a']       = seed_val if not isinstance(seed_val, list) else params['seed_a']
             params['sampler_name'] = first.get('sampler_name', params['sampler_name'])
             params['scheduler']    = first.get('scheduler', params['scheduler'])
             params['denoise']      = first.get('denoise', params['denoise'])
             if len(ksampler_advanced_nodes) >= 2:
                 # Second node = low-pass sampler — expose its seed as seed_b
                 second   = ksampler_advanced_nodes[1]
-                seed_b   = second.get('seed', second.get('noise_seed', params['seed']))
-                params['seed_b'] = seed_b if not isinstance(seed_b, list) else params['seed']
+                seed_b   = second.get('seed', second.get('noise_seed', params['seed_a']))
+                params['seed_b'] = seed_b if not isinstance(seed_b, list) else params['seed_a']
             return params
 
         # Second pass for split-node pattern (SamplerCustomAdvanced)
@@ -156,7 +156,7 @@ def extract_sampler_params(prompt_data, workflow_data):
             elif ct == 'CFGGuider':
                 params['cfg'] = inp.get('cfg', params['cfg'])
             elif ct == 'RandomNoise':
-                params['seed'] = inp.get('noise_seed', params['seed'])
+                params['seed_a'] = inp.get('noise_seed', params['seed_a'])
 
     # ── Workflow (node graph) format fallback ─────────────────────────────────
     if workflow_data and isinstance(workflow_data, dict):
@@ -168,7 +168,7 @@ def extract_sampler_params(prompt_data, workflow_data):
 
             if ntype == 'KSampler' and len(widgets) >= 6:
                 try:
-                    params['seed']         = int(widgets[0])   if widgets[0] is not None else 0
+                    params['seed_a']       = int(widgets[0])   if widgets[0] is not None else 0
                     params['steps']        = int(widgets[2])   if widgets[2] is not None else 20
                     params['cfg']          = float(widgets[3]) if widgets[3] is not None else 7.0
                     params['sampler_name'] = str(widgets[4])   if widgets[4] else 'euler'
@@ -196,7 +196,7 @@ def extract_sampler_params(prompt_data, workflow_data):
                     pass
             elif ntype == 'RandomNoise' and widgets:
                 try:
-                    params['seed'] = int(widgets[0]) if widgets[0] is not None else 0
+                    params['seed_a'] = int(widgets[0]) if widgets[0] is not None else 0
                 except (ValueError, IndexError):
                     pass
 
@@ -207,7 +207,7 @@ def extract_sampler_params(prompt_data, workflow_data):
         if s and isinstance(s, dict) and s.get('sampler_name'):
             params['steps']        = s.get('steps', params['steps'])
             params['cfg']          = s.get('cfg', params['cfg'])
-            params['seed']         = s.get('seed', params['seed'])
+            params['seed_a']       = s.get('seed_a', s.get('seed', params['seed_a']))
             params['sampler_name'] = s.get('sampler_name', params['sampler_name'])
             params['scheduler']    = s.get('scheduler', params['scheduler'])
             params['denoise']      = s.get('denoise', params['denoise'])

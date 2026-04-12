@@ -69,7 +69,7 @@ class PromptApplyLora:
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("model",)
     FUNCTION = "apply_stack"
-    CATEGORY = "FBnodes"
+    CATEGORY = "Prompt Manager"
     DESCRIPTION = "Apply a LoRA stack to a model. Connect a LORA_STACK, paste one as text (list of [name, model_str, clip_str]), or list full file paths one per line. Full paths can reference any location on disk."
 
     def apply_stack(self, model, lora_stack=None, lora_stack_text=""):

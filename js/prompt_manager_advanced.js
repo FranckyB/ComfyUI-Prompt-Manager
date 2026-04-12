@@ -340,23 +340,39 @@ app.registerExtension({
                             }
                         }
 
-                        // Handle use_prompt_input toggle state for text widget
+                        // Handle use_prompt_input / use_workflow_data toggle state for text widget
                         const promptTextWidget = this.widgets.find(w => w.name === "text");
                         if (promptTextWidget) {
                             const useExternal = event.detail.use_prompt_input || false;
+                            const useWorkflow = event.detail.use_workflow_data || false;
                             const llmInput = event.detail.prompt_input || "";
+                            const wfData = event.detail.workflow_data || null;
+
+                            // Store workflow_data on node for saving
+                            this.lastWorkflowData = wfData;
 
                             if (useExternal && llmInput) {
-                                // When using external, display the LLM input text (grayed out)
+                                // Using external prompt — display the input text (grayed out)
                                 promptTextWidget.value = llmInput;
                                 promptTextWidget.disabled = true;
-                                // Keep scrolling enabled
                                 if (promptTextWidget.inputEl) {
                                     promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                    promptTextWidget.inputEl.readOnly = true;
+                                }
+                            } else if (useWorkflow && wfData && wfData.positive_prompt) {
+                                // Using workflow_data prompt — display it (grayed out)
+                                promptTextWidget.value = wfData.positive_prompt;
+                                promptTextWidget.disabled = true;
+                                if (promptTextWidget.inputEl) {
+                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                    promptTextWidget.inputEl.readOnly = true;
                                 }
                             } else {
-                                // When using internal, enable the widget
+                                // Using internal text — enable the widget
                                 promptTextWidget.disabled = false;
+                                if (promptTextWidget.inputEl) {
+                                    promptTextWidget.inputEl.readOnly = false;
+                                }
                             }
 
                             this.serialize_widgets = true;
@@ -373,6 +389,7 @@ app.registerExtension({
                 addTriggerWordsDisplay(node);
                 setupCategoryChangeHandler(node);
                 setupUseExternalToggleHandler(node);
+                setupUseWorkflowToggleHandler(node);
 
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
@@ -498,6 +515,7 @@ app.registerExtension({
                     addTriggerWordsDisplay(node);
                 }
                 setupUseExternalToggleHandler(node);
+                setupUseWorkflowToggleHandler(node);
 
                 // Load prompts data asynchronously (data only, widgets already added)
                 loadPrompts(node).then(async () => {
@@ -2806,6 +2824,12 @@ function setupUseExternalToggleHandler(node) {
         const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
         const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
 
+        // Also check use_workflow_data toggle
+        const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
+        const useWorkflow = useWorkflowWidget?.value && isWorkflowConnected;
+
         if (value && isLlmConnected) {
             // Using LLM and it's connected - disable text widget immediately
             textWidget.disabled = true;
@@ -2833,6 +2857,13 @@ function setupUseExternalToggleHandler(node) {
                         }
                     }
                 }
+            }
+        } else if (useWorkflow) {
+            // Using workflow_data — ghost the text widget
+            textWidget.disabled = true;
+            if (textWidget.inputEl) {
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.readOnly = true;
             }
         } else {
             // Using internal text - enable widget but keep current text (which may be LLM output)
@@ -2872,6 +2903,70 @@ function setupUseExternalToggleHandler(node) {
     };
 }
 
+function setupUseWorkflowToggleHandler(node) {
+    const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+    const textWidget = node.widgets?.find(w => w.name === "text");
+    if (!useWorkflowWidget || !textWidget) return;
+
+    // Re-use the existing applyToggleState from use_prompt_input handler
+    // by triggering a refresh through that widget's state
+    const refreshGhosting = () => {
+        const useExternalWidget = node.widgets?.find(w => w.name === "use_prompt_input");
+        if (!useExternalWidget) return;
+
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
+        const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
+        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
+
+        if (useExternalWidget.value && isLlmConnected) {
+            // use_prompt_input takes priority — keep ghosted
+            textWidget.disabled = true;
+            if (textWidget.inputEl) {
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.readOnly = true;
+            }
+        } else if (useWorkflowWidget.value && isWorkflowConnected) {
+            textWidget.disabled = true;
+            if (textWidget.inputEl) {
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.readOnly = true;
+            }
+        } else {
+            textWidget.disabled = false;
+            if (textWidget.inputEl) {
+                textWidget.inputEl.readOnly = false;
+            }
+        }
+    };
+
+    // Apply initial state
+    refreshGhosting();
+
+    const originalCallback = useWorkflowWidget.callback;
+    useWorkflowWidget.callback = function(value) {
+        // Prevent turning on if workflow_data is not connected
+        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const isConnected = workflowConnection && workflowConnection.link != null;
+
+        if (value && !isConnected) {
+            useWorkflowWidget.value = false;
+            node.serialize_widgets = true;
+            app.graph.setDirtyCanvas(true, true);
+            return;
+        }
+
+        if (originalCallback) {
+            originalCallback.apply(this, arguments);
+        }
+
+        refreshGhosting();
+
+        node.serialize_widgets = true;
+        app.graph.setDirtyCanvas(true, true);
+    };
+}
+
 async function loadPromptData(node, category, promptName) {
     const textWidget = node.widgets.find(w => w.name === "text");
 
@@ -2903,6 +2998,9 @@ async function loadPromptData(node, category, promptName) {
     if (textWidget) {
         textWidget.value = promptData.prompt || "";
     }
+
+    // Restore saved workflow_data if present
+    node.lastWorkflowData = promptData.workflow_data || null;
 
     // Load saved loras - preserve active state (default true for backward compatibility)
     const lorasA = (promptData.loras_a || []).map(lora => ({
@@ -3171,6 +3269,11 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
         // Include thumbnail if provided
         if (thumbnail) {
             requestBody.thumbnail = thumbnail;
+        }
+
+        // Include workflow_data if available on node
+        if (node.lastWorkflowData) {
+            requestBody.workflow_data = node.lastWorkflowData;
         }
 
         const response = await fetch("/prompt-manager-advanced/save-prompt", {

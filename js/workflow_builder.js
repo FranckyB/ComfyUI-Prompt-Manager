@@ -413,6 +413,10 @@ function makeInput(label, type, value, attrs, onChange) {
         if (attrs?.step) inp.step = attrs.step;
         if (attrs?.min !== undefined) inp.min = attrs.min;
         if (attrs?.max !== undefined) inp.max = attrs.max;
+        // Select all on click so user can immediately type a new value
+        if (type === "number") {
+            inp.addEventListener("focus", () => inp.select());
+        }
     }
     Object.assign(inp.style, { ...INPUT_STYLE });
     inp.onchange = () => {
@@ -429,6 +433,12 @@ function makeInput(label, type, value, attrs, onChange) {
     row._resetBtn = resetBtn;
     row._setOriginal = (v) => {
         _origVal = v;
+        // For selects, ensure the value exists as an option before setting it
+        if (type === "select" && v && ![...inp.options].some(o => o.value === v)) {
+            const o = document.createElement("option");
+            o.value = v; o.textContent = v;
+            inp.appendChild(o);
+        }
         inp.value = v;
         resetBtn.style.visibility = "hidden";
     };
@@ -588,8 +598,9 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
     return container;
 }
 
-// --- Samplers / Schedulers constants ---
-const SAMPLERS = [
+// --- Samplers / Schedulers ---
+// Defaults used until the live list arrives from ComfyUI.
+const _DEFAULT_SAMPLERS = [
     "euler","euler_cfg_pp","euler_ancestral","euler_ancestral_cfg_pp",
     "heun","heunpp2","dpm_2","dpm_2_ancestral","lms","dpm_fast",
     "dpm_adaptive","dpmpp_2s_ancestral","dpmpp_sde","dpmpp_sde_gpu",
@@ -597,10 +608,59 @@ const SAMPLERS = [
     "dpmpp_3m_sde_gpu","ddpm","lcm","ipndm","ipndm_v","deis","ddim",
     "uni_pc","uni_pc_bh2",
 ];
-const SCHEDULERS = [
+const _DEFAULT_SCHEDULERS = [
     "normal","karras","exponential","sgm_uniform","simple","ddim_uniform","beta",
 ];
+let SAMPLERS = [..._DEFAULT_SAMPLERS];
+let SCHEDULERS = [..._DEFAULT_SCHEDULERS];
+
+// Fetch the authoritative sampler/scheduler lists from the running ComfyUI
+// instance.  This picks up RES4LYF, ComfyUI-Extra-Samplers, etc.
+let _samplersFetched = false;
+async function _fetchSamplerSchedulerLists() {
+    if (_samplersFetched) return;
+    _samplersFetched = true;
+    try {
+        const resp = await api.fetchApi("/object_info/KSampler");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const ks = data?.KSampler?.input?.required;
+        if (ks?.sampler_name?.[0]?.length) SAMPLERS = ks.sampler_name[0];
+        if (ks?.scheduler?.[0]?.length) SCHEDULERS = ks.scheduler[0];
+    } catch { /* keep defaults */ }
+}
+
+// Update a <select> element's options list while preserving the current value.
+function _refreshSelectOptions(selectEl, options) {
+    if (!selectEl) return;
+    const cur = selectEl.value;
+    selectEl.innerHTML = "";
+    for (const opt of options) {
+        const o = document.createElement("option");
+        o.value = opt; o.textContent = opt;
+        selectEl.appendChild(o);
+    }
+    // Restore previous value if it still exists, otherwise keep first
+    if (options.includes(cur)) selectEl.value = cur;
+}
 const CONTROL_MODES = ["fixed", "increment", "decrement", "randomize"];
+
+// --- Per-family sampler defaults (applied on manual family switch) ---
+// Edit values here to change what each family starts with.
+const FAMILY_DEFAULTS = {
+    sdxl:          { steps: 20, cfg: 7.0,  sampler: "euler",         scheduler: "normal" },
+    sd15:          { steps: 20, cfg: 7.0,  sampler: "euler",         scheduler: "normal" },
+    flux1:         { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
+    flux2:         { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
+    zimage:        { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
+    ltxv:          { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
+    wan_image:     { steps: 30, cfg: 5.0,  sampler: "lcm",           scheduler: "simple" },
+    wan_video_t2v: { steps: 3,  cfg: 5.0,  sampler: "lcm",           scheduler: "simple",
+                     steps_high: 3, steps_low: 3 },
+    wan_video_i2v: { steps: 3,  cfg: 5.0,  sampler: "lcm",           scheduler: "simple",
+                     steps_high: 3, steps_low: 3 },
+    qwen_image:    { steps: 20, cfg: 5.0,  sampler: "euler",         scheduler: "simple" },
+};
 
 // --- Separator helper ---
 function makeSeparator() {
@@ -702,8 +762,8 @@ async function updateUI(node) {
         if (rows.cfg?._setOriginal) rows.cfg._setOriginal(s.cfg ?? 5.0);
         if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
         if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "simple");
-        if (rows.seed?._setOriginal) rows.seed._setOriginal(s.seed ?? 0);
-        if (rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed ?? 0);
+        if (rows.seed_a?._setOriginal) rows.seed_a._setOriginal(s.seed_a ?? s.seed ?? 0);
+        if (rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed_a ?? s.seed ?? 0);
         // WAN Video dual steps
         // Fall back to splitting s.steps evenly if steps_high/steps_low not in wf_data
         const _total = s.steps || 6;
@@ -812,13 +872,9 @@ function updateWanVisibility(node) {
     if (node._weSamplerRows?.steps) {
         node._weSamplerRows.steps.style.display = isWanVideo ? "none" : "flex";
     }
-    // Seed B: only for WAN Video; rename Seed label to Seed A when visible
+    // Seed B: only for WAN Video
     if (node._weSamplerRows?.seed_b) {
         node._weSamplerRows.seed_b.style.display = isWanVideo ? "flex" : "none";
-    }
-    if (node._weSamplerRows?.seed) {
-        const seedLabel = node._weSamplerRows.seed.querySelector("label, .we-label, span");
-        if (seedLabel) seedLabel.textContent = isWanVideo ? "Seed A" : "Seed";
     }
 
 }
@@ -887,8 +943,20 @@ function setFieldsFrozen(node, frozen) {
         if (sec._body) {
             sec._body.style.opacity = opacity;
             sec._body.style.pointerEvents = pointer;
+            // Skip prompt textareas — they handle their own ghosting
+            // to avoid double-opacity (0.6 * 0.5 = 0.3)
+            if (node._wePosBox && sec._body.contains(node._wePosBox)) {
+                node._wePosBox.style.opacity = "1";
+                node._wePosBox.style.pointerEvents = "auto";
+            }
+            if (node._weNegBox && sec._body.contains(node._weNegBox)) {
+                node._weNegBox.style.opacity = "1";
+                node._weNegBox.style.pointerEvents = "auto";
+            }
         }
     }
+    // Re-apply prompt ghosting so it uses its own single opacity
+    if (node._updatePromptGhosting) node._updatePromptGhosting();
 }
 
 // --- Error banner on node ---
@@ -961,7 +1029,7 @@ function syncHidden(node) {
             const r = node._weSamplerRows;
             if (r.steps?._inp) ov.steps = parseInt(r.steps._inp.value) || 20;
             if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
-            if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
+            if (r.seed_a?._inp) ov.seed_a = parseInt(r.seed_a._inp.value) || 0;
             if (r.seed_b?._inp && r.seed_b.style.display !== "none") {
                 ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
             }
@@ -989,20 +1057,20 @@ function syncHidden(node) {
     } else {
         // In workflow_data mode, remove stale sampler/resolution/prompt overrides
         // so Python uses values from the source workflow.
-        // KEEP steps_high, steps_low, seed, seed_b — user explicitly sets these
+        // KEEP steps_high, steps_low, seed_a, seed_b — user explicitly sets these
         // even in wfOn mode (e.g. entering 2,2 for WAN dual steps).
         delete ov.steps; delete ov.cfg;
         delete ov.sampler_name; delete ov.scheduler;
         delete ov.width; delete ov.height; delete ov.batch_size; delete ov.length;
         delete ov.positive_prompt; delete ov.negative_prompt;
-        // Re-capture steps_high/steps_low and seed/seed_b from DOM so user edits stick
+        // Re-capture steps_high/steps_low and seed_a/seed_b from DOM so user edits stick
         if (node._weSamplerRows) {
             const r = node._weSamplerRows;
             if (r.steps_high?._inp && r.steps_high.style.display !== "none")
                 ov.steps_high = parseInt(r.steps_high._inp.value) || 3;
             if (r.steps_low?._inp && r.steps_low.style.display !== "none")
                 ov.steps_low = parseInt(r.steps_low._inp.value) || 3;
-            if (r.seed?._inp) ov.seed = parseInt(r.seed._inp.value) || 0;
+            if (r.seed_a?._inp) ov.seed_a = parseInt(r.seed_a._inp.value) || 0;
             if (r.seed_b?._inp && r.seed_b.style.display !== "none")
                 ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
         }
@@ -1057,6 +1125,12 @@ function applyOverrides(node, ovJson, lsJson) {
         if (!row || ovVal == null) return;
         const inp = row._inp;
         if (!inp) return;
+        // For selects, ensure the value exists as an option
+        if (inp.tagName === "SELECT" && ![...inp.options].some(o => o.value === String(ovVal))) {
+            const o = document.createElement("option");
+            o.value = ovVal; o.textContent = ovVal;
+            inp.appendChild(o);
+        }
         inp.value = ovVal;
         if (row._resetBtn) row._resetBtn.style.visibility = "visible";
     };
@@ -1082,7 +1156,7 @@ function applyOverrides(node, ovJson, lsJson) {
         const rows = node._weSamplerRows;
         if (ov.steps != null) applyInput(rows.steps, ov.steps);
         if (ov.cfg != null) applyInput(rows.cfg, ov.cfg);
-        if (ov.seed   != null) applyInput(rows.seed,   ov.seed);
+        if (ov.seed_a != null) applyInput(rows.seed_a, ov.seed_a);
         if (ov.seed_b != null) applyInput(rows.seed_b, ov.seed_b);
         if (ov.sampler_name) applyInput(rows.sampler, ov.sampler_name);
         if (ov.scheduler) applyInput(rows.scheduler, ov.scheduler);
@@ -1137,7 +1211,7 @@ function parseWorkflowData(jsonStr) {
                 type: "", source: "workflow_data",
             },
             sampler: d.sampler || {
-                steps: 20, cfg: 5.0, seed: 0,
+                steps: 20, cfg: 5.0, seed_a: 0,
                 sampler_name: "euler", scheduler: "simple",
             },
             resolution: d.resolution || { width: 768, height: 1280, batch_size: 1, length: null },
@@ -1363,6 +1437,17 @@ app.registerExtension({
                         node._weModelRow._sel.value = firstModel;
                         node._weOverrides.model_a = firstModel;
                     }
+                    // Apply sensible sampler defaults for the new family
+                    const defs = FAMILY_DEFAULTS[familyKey];
+                    if (defs && node._weSamplerRows) {
+                        const rows = node._weSamplerRows;
+                        if (defs.steps != null      && rows.steps?._inp)      rows.steps._inp.value = defs.steps;
+                        if (defs.steps_high != null  && rows.steps_high?._inp) rows.steps_high._inp.value = defs.steps_high;
+                        if (defs.steps_low != null   && rows.steps_low?._inp)  rows.steps_low._inp.value = defs.steps_low;
+                        if (defs.cfg != null         && rows.cfg?._inp)        rows.cfg._inp.value = defs.cfg;
+                        if (defs.sampler             && rows.sampler?._inp)    rows.sampler._inp.value = defs.sampler;
+                        if (defs.scheduler           && rows.scheduler?._inp)  rows.scheduler._inp.value = defs.scheduler;
+                    }
                     updateWanVisibility(node);
                     _syncS();
                 }
@@ -1383,7 +1468,7 @@ app.registerExtension({
             stepsLowRow.style.display  = "none";
 
             // WAN Video seed B (hidden by default; Seed renamed to Seed A when visible)
-            const seedRow  = makeInput("Seed",   "number", 0, { min: 0, step: 1 }, _syncS);
+            const seedRow  = makeInput("Seed A", "number", 0, { min: 0, step: 1 }, _syncS);
             const seedBRow = makeInput("Seed B", "number", 0, { min: 0, step: 1 }, _syncS);
             seedBRow.style.display = "none";
 
@@ -1394,7 +1479,7 @@ app.registerExtension({
                 cfg:        makeInput("CFG",       "number", 5.0,      { min: 0, max: 100, step: 0.5 }, _syncS),
                 sampler:    makeInput("Sampler",   "select", "euler",  { options: SAMPLERS }, _syncS),
                 scheduler:  makeInput("Scheduler", "select", "simple", { options: SCHEDULERS }, _syncS),
-                seed:       seedRow,
+                seed_a:     seedRow,
                 seed_b:     seedBRow,
             };
             // Append in display order: steps, steps_high, steps_low, cfg, sampler, scheduler, seed, seed_b
@@ -1408,13 +1493,19 @@ app.registerExtension({
             sampSec._body.appendChild(seedBRow);
 
             // Control after generate
-            const controlRow = makeInput("Control after generate", "select", "randomize",
+            const controlRow = makeInput("Control after generate", "select", "fixed",
                 { options: CONTROL_MODES }, _syncS);
             sampSec._body.appendChild(controlRow);
             node._weControlMode = controlRow;
 
             root.appendChild(sampSec);
             node._weSamplerRows = sampRows;
+
+            // Fetch live sampler/scheduler lists and update dropdowns
+            _fetchSamplerSchedulerLists().then(() => {
+                _refreshSelectOptions(sampRows.sampler?._inp, SAMPLERS);
+                _refreshSelectOptions(sampRows.scheduler?._inp, SCHEDULERS);
+            });
 
             // -- 4. PROMPTS (positive open, negative closed) --
             const posSec = makeSection("POSITIVE PROMPT");
@@ -1432,6 +1523,7 @@ app.registerExtension({
             });
             posBox.onchange = _syncS;
             posBox.oninput = _syncS;
+            posBox.addEventListener("wheel", (e) => { e.stopPropagation(); }, { passive: true });
             posSec._body.appendChild(posBox);
             root.appendChild(posSec);
             node._wePosBox = posBox;
@@ -1441,6 +1533,7 @@ app.registerExtension({
             const negBox = document.createElement("textarea");
             negBox.placeholder = "Negative prompt";
             negBox.rows = 5;
+            negBox.addEventListener("wheel", (e) => { e.stopPropagation(); }, { passive: true });
             Object.assign(negBox.style, {
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
@@ -1636,22 +1729,26 @@ app.registerExtension({
             function _updatePromptGhosting() {
                 const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
                 const isOn = promptToggle?.value;
+                const wfOn = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
                 const posConn = node.inputs?.find(i => i.name === "positive_prompt");
                 const negConn = node.inputs?.find(i => i.name === "negative_prompt");
                 const posLinked = posConn && posConn.link != null;
                 const negLinked = negConn && negConn.link != null;
 
+                // Ghost = prompt input connected, OR workflow_data mode
+                // Either way: read-only, scrollable, single opacity level
+                const ghostPos = (isOn && posLinked) || wfOn;
+                const ghostNeg = (isOn && negLinked) || wfOn;
+
                 if (node._wePosBox) {
-                    const ghostPos = isOn && posLinked;
-                    node._wePosBox.disabled = ghostPos;
+                    node._wePosBox.readOnly = ghostPos;
                     node._wePosBox.style.opacity = ghostPos ? "0.5" : "1";
-                    node._wePosBox.style.pointerEvents = ghostPos ? "none" : "auto";
+                    node._wePosBox.style.pointerEvents = "auto";
                 }
                 if (node._weNegBox) {
-                    const ghostNeg = isOn && negLinked;
-                    node._weNegBox.disabled = ghostNeg;
+                    node._weNegBox.readOnly = ghostNeg;
                     node._weNegBox.style.opacity = ghostNeg ? "0.5" : "1";
-                    node._weNegBox.style.pointerEvents = ghostNeg ? "none" : "auto";
+                    node._weNegBox.style.pointerEvents = "auto";
                 }
             }
             node._updatePromptGhosting = _updatePromptGhosting;
@@ -1710,7 +1807,7 @@ app.registerExtension({
                         row._inp.value = Math.max(0, cur - 1);
                     }
                 };
-                applyMode(node._weSamplerRows?.seed);
+                applyMode(node._weSamplerRows?.seed_a);
                 applyMode(node._weSamplerRows?.seed_b);
                 // "fixed" -- do nothing
                 _syncS();
@@ -1778,10 +1875,10 @@ app.registerExtension({
                     // ── Show connected prompt values in ghosted textareas ────
                     const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
                     if (promptToggle?.value) {
-                        if (info.positive_prompt != null && node._wePosBox && node._wePosBox.disabled) {
+                        if (info.positive_prompt != null && node._wePosBox && node._wePosBox.readOnly) {
                             node._wePosBox.value = info.positive_prompt;
                         }
-                        if (info.negative_prompt != null && node._weNegBox && node._weNegBox.disabled) {
+                        if (info.negative_prompt != null && node._weNegBox && node._weNegBox.readOnly) {
                             node._weNegBox.value = info.negative_prompt;
                         }
                     }
@@ -1897,11 +1994,31 @@ app.registerExtension({
             const node = this;
             node._configuredFromWorkflow = true;
 
-            // ── Migration: remove stale "prompt_input" from old workflows ──
+            // ── Migration: remove stale inputs/outputs from old workflows ──
+            // LiteGraph restores slots from saved JSON; if INPUT_TYPES or
+            // RETURN_TYPES changed between versions, phantom slots persist.
+            const VALID_INPUTS = new Set([
+                "positive_prompt", "negative_prompt",
+                "lora_stack_a", "lora_stack_b", "workflow_data",
+            ]);
             if (node.inputs) {
-                const staleIdx = node.inputs.findIndex(i => i.name === "prompt_input");
-                if (staleIdx !== -1) {
-                    node.removeInput(staleIdx);
+                for (let i = node.inputs.length - 1; i >= 0; i--) {
+                    if (!VALID_INPUTS.has(node.inputs[i].name)) {
+                        node.removeInput(i);
+                    }
+                }
+            }
+            const VALID_OUTPUTS = [{ name: "workflow_data", type: "WORKFLOW_DATA" }];
+            if (node.outputs) {
+                const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
+                    VALID_OUTPUTS.every((v, i) => node.outputs[i]?.name === v.name && node.outputs[i]?.type === v.type);
+                if (!namesMatch) {
+                    const savedLinks = node.outputs.map(o => o.links ? [...o.links] : null);
+                    node.outputs.length = 0;
+                    for (let i = 0; i < VALID_OUTPUTS.length; i++) {
+                        node.addOutput(VALID_OUTPUTS[i].name, VALID_OUTPUTS[i].type);
+                        if (savedLinks[i]) node.outputs[i].links = savedLinks[i];
+                    }
                 }
             }
 

@@ -12,9 +12,9 @@ from .nodes.prompt_manager_advanced import PromptManagerAdvanced
 from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_extractor import PromptExtractor
-from .nodes.prompt_model_loader import PromptModelLoader
 from .nodes.workflow_builder import WorkflowBuilder
 from .nodes.workflow_renderer import WorkflowRenderer
+from .nodes.workflow_context import WorkflowContext
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":       PromptApplyLora,
@@ -23,9 +23,9 @@ NODE_CLASS_MAPPINGS = {
     "PromptGenerator":       PromptGenerator,
     "PromptGenOptions":      PromptGenOptions,
     "PromptExtractor":       PromptExtractor,
-    "PromptModelLoader":     PromptModelLoader,
     "WorkflowBuilder":       WorkflowBuilder,
-    "WorkflowRenderer":     WorkflowRenderer,
+    "WorkflowRenderer":      WorkflowRenderer,
+    "WorkflowContext":       WorkflowContext,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -34,10 +34,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced": "Prompt Manager Advanced",
     "PromptGenerator":       "Prompt Generator",
     "PromptGenOptions":      "Prompt Generator Options",
-    "PromptExtractor":       "Prompt Extractor",
-    "PromptModelLoader":     "Prompt Model Loader",
+    "PromptExtractor":       "Workflow Extractor",
     "WorkflowBuilder":       "Workflow Builder",
-    "WorkflowRenderer":     "Workflow Renderer",
+    "WorkflowRenderer":      "Workflow Renderer",
+    "WorkflowContext":       "Workflow Context",
 }
 
 # WORKFLOW_DICT is a custom ComfyUI type used to pass workflow configuration
@@ -48,6 +48,4 @@ WEB_DIRECTORY = "./js"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
-print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, "
-      "PromptGenerator, PromptGenOptions, PromptExtractor, PromptModelLoader, "
-      "WorkflowBuilder, WorkflowRenderer")
+print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, PromptGenerator, PromptGenOptions, PromptExtractor, WorkflowBuilder, WorkflowRenderer, WorkflowContext")

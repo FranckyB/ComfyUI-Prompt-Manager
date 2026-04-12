@@ -98,7 +98,7 @@ class WorkflowRenderer:
     RETURN_TYPES = ("IMAGE", "LATENT")
     RETURN_NAMES = ("image", "latent")
     FUNCTION = "execute"
-    CATEGORY = "FBnodes"
+    CATEGORY = "Prompt Manager"
     OUTPUT_NODE = False
     DESCRIPTION = (
         "Render-only node. Accepts workflow_data, loads models, samples, "
@@ -132,7 +132,7 @@ class WorkflowRenderer:
         sampler_params = {
             "steps": int(wf_sampler.get("steps", 20)),
             "cfg": float(wf_sampler.get("cfg", 5.0)),
-            "seed": int(wf_sampler.get("seed", 0)),
+            "seed_a": int(wf_sampler.get("seed_a", wf_sampler.get("seed", 0))),
             "sampler_name": wf_sampler.get("sampler_name", "euler"),
             "scheduler": wf_sampler.get("scheduler", "simple"),
             "denoise": 1.0,
@@ -236,7 +236,7 @@ class WorkflowRenderer:
                 "width": width,
                 "height": height,
                 "batch_size": batch,
-                "seed": sampler_params["seed"],
+                "seed": sampler_params["seed_a"],
                 "seed_b": seed_b,
                 "cfg": sampler_params["cfg"],
                 "sampler_name": sampler_params["sampler_name"],
