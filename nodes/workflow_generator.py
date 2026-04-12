@@ -1101,28 +1101,15 @@ class WorkflowGenerator:
                     return int(default)
             width  = _to_int(overrides.get('width',  res['width']),  512)
             height = _to_int(overrides.get('height', res['height']), 512)
-            # Last-resort fallback: if the template wires width/height to a
-            # runtime node-ref (e.g. ImageResizeKJv2 output in i2v), the static
-            # JSON value is just the resize target, not the actual output size.
-            # In that case — and when no UI override was set — read the real
-            # dimensions directly from the source_image tensor instead.
-            if source_image is not None and hasattr(source_image, 'shape'):
-                src_h = source_image.shape[1]  # [B, H, W, C]
-                src_w = source_image.shape[2]
+            # Clamp resolution for i2v so the resize node stays within
+            # hardware limits; the source image itself is never touched.
+            if family_key == 'wan_video_i2v':
                 MAX_DIM = 1280
-                if max(src_w, src_h) > MAX_DIM:
-                    scale = MAX_DIM / max(src_w, src_h)
-                    src_w = int(round(src_w * scale)) // 16 * 16
-                    src_h = int(round(src_h * scale)) // 16 * 16
-                    print(f"[WorkflowGenerator] Source image {source_image.shape[2]}x{source_image.shape[1]} exceeds 1280px limit, clamping to {src_w}x{src_h}")
-                w_is_ref = res.get('_width_from_node_ref', False)
-                h_is_ref = res.get('_height_from_node_ref', False)
-                # Only override when the template used a node-ref (runtime value)
-                # AND the user hasn't explicitly set width/height via the UI.
-                if w_is_ref and 'width' not in overrides:
-                    width  = src_w
-                if h_is_ref and 'height' not in overrides:
-                    height = src_h
+                if max(width, height) > MAX_DIM:
+                    scale = MAX_DIM / max(width, height)
+                    width  = (round(width  * scale) // 16) * 16
+                    height = (round(height * scale) // 16) * 16
+                    print(f"[WorkflowGenerator] Resolution clamped to {width}x{height} (max 1280px per side)")
             length = overrides.get('length', res.get('length'))
             batch  = (
                 _to_int(length, 1) if length is not None
