@@ -25,7 +25,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptExtractor":       PromptExtractor,
     "PromptModelLoader":     PromptModelLoader,
     "WorkflowBuilder":       WorkflowBuilder,
-    "WorkflowGenerator":     WorkflowRenderer,
+    "WorkflowRenderer":     WorkflowRenderer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -37,7 +37,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptExtractor":       "Prompt Extractor",
     "PromptModelLoader":     "Prompt Model Loader",
     "WorkflowBuilder":       "Workflow Builder",
-    "WorkflowGenerator":     "Workflow Generator",
+    "WorkflowRenderer":     "Workflow Renderer",
 }
 
 # WORKFLOW_DICT is a custom ComfyUI type used to pass workflow configuration
@@ -50,4 +50,4 @@ __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
 print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, "
       "PromptGenerator, PromptGenOptions, PromptExtractor, PromptModelLoader, "
-      "WorkflowBuilder, WorkflowGenerator")
+      "WorkflowBuilder, WorkflowRenderer")

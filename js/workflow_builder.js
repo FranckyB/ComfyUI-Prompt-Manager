@@ -1546,7 +1546,7 @@ app.registerExtension({
             // IMPORTANT: override_data and lora_state must keep their original
             // STRING type so ComfyUI's graphToPrompt includes them in execution.
             // "converted-widget" type causes ComfyUI to skip the widget value.
-            const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input"]);
+            const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input", "use_prompt_input"]);
             const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
@@ -1629,6 +1629,50 @@ app.registerExtension({
                     _syncS();
                 };
             }
+
+            // -- Handle use_prompt_input toggle --
+            // Ghost (disable) the positive/negative prompt textareas when
+            // use_prompt_input is ON and the corresponding input is connected.
+            function _updatePromptGhosting() {
+                const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
+                const isOn = promptToggle?.value;
+                const posConn = node.inputs?.find(i => i.name === "positive_prompt");
+                const negConn = node.inputs?.find(i => i.name === "negative_prompt");
+                const posLinked = posConn && posConn.link != null;
+                const negLinked = negConn && negConn.link != null;
+
+                if (node._wePosBox) {
+                    const ghostPos = isOn && posLinked;
+                    node._wePosBox.disabled = ghostPos;
+                    node._wePosBox.style.opacity = ghostPos ? "0.5" : "1";
+                    node._wePosBox.style.pointerEvents = ghostPos ? "none" : "auto";
+                }
+                if (node._weNegBox) {
+                    const ghostNeg = isOn && negLinked;
+                    node._weNegBox.disabled = ghostNeg;
+                    node._weNegBox.style.opacity = ghostNeg ? "0.5" : "1";
+                    node._weNegBox.style.pointerEvents = ghostNeg ? "none" : "auto";
+                }
+            }
+            node._updatePromptGhosting = _updatePromptGhosting;
+
+            const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
+            if (promptToggle) {
+                const origPromptCb = promptToggle.callback;
+                promptToggle.callback = function (value) {
+                    if (origPromptCb) origPromptCb.apply(this, arguments);
+                    _updatePromptGhosting();
+                    _syncS();
+                };
+            }
+            // Also update ghosting when connections change
+            const origConnInput = node.onConnectionsChange;
+            node.onConnectionsChange = function () {
+                if (origConnInput) origConnInput.apply(this, arguments);
+                _updatePromptGhosting();
+            };
+            // Apply initial ghosting state
+            _updatePromptGhosting();
 
             // -- Handle use_lora_input toggle --
             const loraToggle = node.widgets?.find(w => w.name === "use_lora_input");
@@ -1729,6 +1773,17 @@ app.registerExtension({
                         node.properties = node.properties || {};
                         node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
                         updateLoras(node);
+                    }
+
+                    // ── Show connected prompt values in ghosted textareas ────
+                    const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
+                    if (promptToggle?.value) {
+                        if (info.positive_prompt != null && node._wePosBox && node._wePosBox.disabled) {
+                            node._wePosBox.value = info.positive_prompt;
+                        }
+                        if (info.negative_prompt != null && node._weNegBox && node._weNegBox.disabled) {
+                            node._weNegBox.value = info.negative_prompt;
+                        }
                     }
                 } else {
                     // ── use_workflow_data ON — always reflect the source ──────
@@ -1842,9 +1897,17 @@ app.registerExtension({
             const node = this;
             node._configuredFromWorkflow = true;
 
+            // ── Migration: remove stale "prompt_input" from old workflows ──
+            if (node.inputs) {
+                const staleIdx = node.inputs.findIndex(i => i.name === "prompt_input");
+                if (staleIdx !== -1) {
+                    node.removeInput(staleIdx);
+                }
+            }
+
             // Re-hide data widgets (same logic as onNodeCreated)
             const domW = node.widgets?.find(w => w.name === "we_ui");
-            const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input"]);
+            const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input", "use_prompt_input"]);
             const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
@@ -1889,6 +1952,7 @@ app.registerExtension({
                         if (wfToggle?.value) {
                             setFieldsFrozen(node, true);
                         }
+                        if (node._updatePromptGhosting) node._updatePromptGhosting();
                         node.setDirtyCanvas(true, true);
                     });
                 } else {
@@ -1899,12 +1963,14 @@ app.registerExtension({
                     if (wfToggle?.value) {
                         setFieldsFrozen(node, true);
                     }
+                    if (node._updatePromptGhosting) node._updatePromptGhosting();
                     node.setDirtyCanvas(true, true);
                 }
             } else {
                 if (wfToggle?.value) {
                     setFieldsFrozen(node, true);
                 }
+                if (node._updatePromptGhosting) node._updatePromptGhosting();
                 node.setDirtyCanvas(true, true);
             }
         };

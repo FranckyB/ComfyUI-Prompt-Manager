@@ -699,9 +699,13 @@ class WorkflowBuilder:
             },
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
-                "prompt_input": ("STRING", {
+                "positive_prompt": ("STRING", {
                     "forceInput": True,
-                    "tooltip": "Positive prompt text. Overrides prompt from workflow_data when use_prompt_input is on.",
+                    "tooltip": "Positive prompt text. Overrides positive prompt from workflow_data when use_prompt_input is on.",
+                }),
+                "negative_prompt": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Negative prompt text. Overrides negative prompt from workflow_data when use_prompt_input is on.",
                 }),
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
@@ -740,7 +744,7 @@ class WorkflowBuilder:
         return needed
 
     def execute(self, use_prompt_input=False, use_workflow_data=False, use_lora_input=False,
-                prompt_input=None, workflow_data=None,
+                positive_prompt=None, negative_prompt=None, workflow_data=None,
                 lora_stack_a=None, lora_stack_b=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
@@ -844,12 +848,15 @@ class WorkflowBuilder:
             lora_overrides = {}
 
         # ── Apply overrides ──────────────────────────────────────────────
-        positive_prompt = overrides.get('positive_prompt', extracted['positive_prompt'])
-        negative_prompt = overrides.get('negative_prompt', extracted['negative_prompt'])
+        pos_text = overrides.get('positive_prompt', extracted['positive_prompt'])
+        neg_text = overrides.get('negative_prompt', extracted['negative_prompt'])
 
         # ── Prompt input override (highest priority) ─────────────────────
-        if use_prompt_input and prompt_input is not None:
-            positive_prompt = prompt_input
+        if use_prompt_input:
+            if positive_prompt is not None:
+                pos_text = positive_prompt
+            if negative_prompt is not None:
+                neg_text = negative_prompt
         model_name_a    = overrides.get('model_a', extracted['model_a'])
         model_name_b    = overrides.get('model_b', extracted['model_b'])
         vae_name        = overrides.get('vae', extracted['vae']['name'])
@@ -918,6 +925,9 @@ class WorkflowBuilder:
         # and re-queue.
         wf_overrides = dict(overrides)
         wf_overrides['_source'] = 'WorkflowBuilder'
+        # Inject prompt input overrides so build_simplified_workflow_data uses them
+        wf_overrides['positive_prompt'] = pos_text
+        wf_overrides['negative_prompt'] = neg_text
         extracted['model_family'] = family_key
         extracted['model_family_label'] = strategy
 
@@ -979,8 +989,8 @@ class WorkflowBuilder:
 
         ui_info = {
             'extracted': {
-                'positive_prompt':    positive_prompt,
-                'negative_prompt':    negative_prompt,
+                'positive_prompt':    pos_text,
+                'negative_prompt':    neg_text,
                 'model_a':            model_name_a,
                 'model_b':            model_name_b,
                 'model_a_found':      model_a_found,
