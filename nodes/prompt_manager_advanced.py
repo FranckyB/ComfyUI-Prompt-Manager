@@ -8,6 +8,7 @@ import base64
 from io import BytesIO
 import folder_paths
 import server
+from ..py.workflow_data_utils import strip_runtime_objects
 
 # Import numpy and PIL for image processing (available in ComfyUI environment)
 try:
@@ -597,7 +598,7 @@ class PromptManagerAdvanced:
                 "use_prompt_input": use_prompt_input,
                 "use_workflow_data": use_workflow_data,
                 "prompt_input": prompt,
-                "workflow_data": workflow_data if workflow_data else None,
+                "workflow_data": strip_runtime_objects(workflow_data) if isinstance(workflow_data, dict) else None,
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
                 "input_loras_a": input_loras_a,  # Original input loras for change detection
@@ -621,7 +622,15 @@ class PromptManagerAdvanced:
             out_stack_a, out_stack_b = out_stack_b, out_stack_a
 
         # Build workflow_data output — start from incoming or saved data, update with PMA state
-        out_workflow_data = dict(workflow_data) if isinstance(workflow_data, dict) else {}
+        if isinstance(workflow_data, dict):
+            out_workflow_data = dict(workflow_data)
+        elif isinstance(workflow_data, str) and workflow_data.strip():
+            try:
+                out_workflow_data = json.loads(workflow_data)
+            except (json.JSONDecodeError, TypeError):
+                out_workflow_data = {}
+        else:
+            out_workflow_data = {}
         out_workflow_data['positive_prompt'] = final_output
         out_workflow_data['loras_a'] = [
             {'name': name, 'model_strength': ms, 'clip_strength': cs}

@@ -107,10 +107,15 @@ class WorkflowRenderer:
 
     def execute(self, workflow_data, source_image=None, unique_id=None):
         # ── Parse workflow_data ───────────────────────────────────────────
-        try:
-            wf = json.loads(workflow_data)
-        except (json.JSONDecodeError, TypeError) as e:
-            raise ValueError(f"[WorkflowRenderer] Invalid workflow_data: {e}")
+        if isinstance(workflow_data, dict):
+            wf = workflow_data
+        elif isinstance(workflow_data, str):
+            try:
+                wf = json.loads(workflow_data)
+            except (json.JSONDecodeError, TypeError) as e:
+                raise ValueError(f"[WorkflowRenderer] Invalid workflow_data: {e}")
+        else:
+            raise ValueError(f"[WorkflowRenderer] Invalid workflow_data type: {type(workflow_data)}")
 
         wf_sampler = wf.get("sampler", {})
         wf_res = wf.get("resolution", {})

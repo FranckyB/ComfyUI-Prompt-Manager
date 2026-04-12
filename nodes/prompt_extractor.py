@@ -3315,16 +3315,16 @@ class PromptExtractor:
                     _vae_name = _vae.get('name', '') if isinstance(_vae, dict) else (_vae or '')
                     if _vae_name and not _vae_name.startswith('('):
                         _simplified['vae_found'] = resolve_vae_name(_vae_name) is not None
-                    workflow_data = json.dumps(_simplified, indent=2)
-                    print(f"[PromptExtractor] Output structured workflow_data ({len(workflow_data)} chars)")
+                    workflow_data = _simplified
+                    print(f"[PromptExtractor] Output structured workflow_data (dict, {len(workflow_data)} keys)")
 
                 except Exception as e:
                     print(f"[PromptExtractor] Error building structured workflow_data: {e}")
                     import traceback
                     traceback.print_exc()
-                    workflow_data = ""
+                    workflow_data = {}
             else:
-                workflow_data = ""
+                workflow_data = {}
 
             # Process loras only if use_lora_input_only is disabled (extract mode)
             if not use_lora_input_only:
@@ -3465,8 +3465,8 @@ class PromptExtractor:
             # Reuse the already-built _simplified workflow_data dict if available,
             # otherwise build a minimal one.
             try:
-                extracted_data = json.loads(workflow_data) if isinstance(workflow_data, str) and workflow_data.strip() else {}
-            except (json.JSONDecodeError, TypeError):
+                extracted_data = dict(workflow_data) if isinstance(workflow_data, dict) else {}
+            except Exception:
                 extracted_data = {}
 
             # Overwrite LoRA lists with enriched versions

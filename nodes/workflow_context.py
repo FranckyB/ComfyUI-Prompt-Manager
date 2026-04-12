@@ -186,6 +186,9 @@ class WorkflowContext:
     Connect optional inputs to override any field — the updated workflow_data
     is re-emitted so downstream nodes always see the latest values.
     Models are loaded and returned as MODEL / CLIP / VAE objects.
+    Runtime objects are stored in the dict under CAPS keys (MODEL_A, MODEL_B,
+    CLIP, VAE) so that chaining multiple WorkflowContext nodes avoids
+    redundant model loads.
     """
 
     @classmethod
@@ -197,6 +200,10 @@ class WorkflowContext:
                 }),
             },
             "optional": {
+                "model_a":         ("MODEL",   {"tooltip": "Override Model A (skip loading from workflow_data)"}),
+                "model_b":         ("MODEL",   {"tooltip": "Override Model B (skip loading from workflow_data)"}),
+                "clip":            ("CLIP",    {"tooltip": "Override CLIP (skip loading from workflow_data)"}),
+                "vae":             ("VAE",     {"tooltip": "Override VAE (skip loading from workflow_data)"}),
                 "positive_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override positive prompt"}),
                 "negative_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override negative prompt"}),
                 "lora_stack_a":    ("LORA_STACK", {"tooltip": "Override LoRA stack A"}),
@@ -251,7 +258,7 @@ class WorkflowContext:
     # ------------------------------------------------------------------
 
     def unpack(self, workflow_data, weight_dtype="default", **kwargs):
-        # Accept both dict and JSON string (Extractor outputs JSON string)
+        # Accept both dict and JSON string (backward compat)
         if isinstance(workflow_data, str):
             try:
                 wf = json.loads(workflow_data)
@@ -293,19 +300,43 @@ class WorkflowContext:
                 sampler[key] = kwargs[key]
         wf['sampler'] = sampler
 
-        # ── Load models ──────────────────────────────────────────────
-        model_a_name = (wf.get('model_a') or "").strip()
-        model_b_name = (wf.get('model_b') or "").strip()
+        # ── Resolve models ───────────────────────────────────────────
+        # Priority: connected input > runtime object in dict > load from name
+        model_a = kwargs.get('model_a')
+        model_b = kwargs.get('model_b')
+        clip = kwargs.get('clip')
+        vae = kwargs.get('vae')
 
-        if model_a_name:
-            _, model_a, clip, vae, _ = _load_single_model(model_a_name, weight_dtype)
-        else:
-            model_a = clip = vae = None
+        # Fall back to runtime objects already in the dict (from upstream Context)
+        if model_a is None:
+            model_a = wf.get('MODEL_A')
+        if model_b is None:
+            model_b = wf.get('MODEL_B')
+        if clip is None:
+            clip = wf.get('CLIP')
+        if vae is None:
+            vae = wf.get('VAE')
 
-        if model_b_name:
-            _, model_b, _, _, _ = _load_single_model(model_b_name, weight_dtype)
-        else:
-            model_b = None
+        # Last resort: load from model name strings
+        if model_a is None:
+            model_a_name = (wf.get('model_a') or "").strip()
+            if model_a_name:
+                _, model_a, clip_loaded, vae_loaded, _ = _load_single_model(model_a_name, weight_dtype)
+                if clip is None:
+                    clip = clip_loaded
+                if vae is None:
+                    vae = vae_loaded
+
+        if model_b is None:
+            model_b_name = (wf.get('model_b') or "").strip()
+            if model_b_name:
+                _, model_b, _, _, _ = _load_single_model(model_b_name, weight_dtype)
+
+        # Store runtime objects in dict so downstream Context nodes can reuse them
+        wf['MODEL_A'] = model_a
+        wf['MODEL_B'] = model_b
+        wf['CLIP'] = clip
+        wf['VAE'] = vae
 
         # ── Build lora stacks as tuples for LORA_STACK output ────────
         lora_stack_a = [
@@ -317,12 +348,9 @@ class WorkflowContext:
             for l in wf.get('loras_b', []) if isinstance(l, dict) and l.get('name')
         ]
 
-        # ── Re-serialize workflow_data as JSON string (WORKFLOW_DATA convention) ─
-        wf_out = json.dumps(wf, indent=2)
-
         # ── Extract all output values ────────────────────────────────
         return (
-            wf_out,
+            wf,
             model_a, model_b, clip, vae,
             wf.get('positive_prompt', ''),
             wf.get('negative_prompt', ''),

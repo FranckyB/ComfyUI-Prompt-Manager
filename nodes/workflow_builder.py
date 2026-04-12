@@ -759,10 +759,13 @@ class WorkflowBuilder:
         # ── Parse workflow_data input (if enabled and connected) ─────────
         wf_data = None
         if use_workflow_data and workflow_data:
-            try:
-                wf_data = json.loads(workflow_data)
-            except (json.JSONDecodeError, TypeError):
-                print("[WorkflowBuilder] Warning: could not parse workflow_data")
+            if isinstance(workflow_data, dict):
+                wf_data = workflow_data
+            elif isinstance(workflow_data, str):
+                try:
+                    wf_data = json.loads(workflow_data)
+                except (json.JSONDecodeError, TypeError):
+                    print("[WorkflowBuilder] Warning: could not parse workflow_data")
 
         # ── Build extracted dict from workflow_data or defaults ───────────
         if wf_data:
@@ -935,8 +938,6 @@ class WorkflowBuilder:
             extracted, wf_overrides, sampler_params
         )
 
-        workflow_data_str = json.dumps(simplified_wf, indent=2)
-
         # ── Check LoRA availability for JS display ────────────────────────
         lora_availability = {}
         for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
@@ -1075,5 +1076,5 @@ class WorkflowBuilder:
 
         return {
             "ui":     {"workflow_info": [ui_info]},
-            "result": (workflow_data_str,),
+            "result": (simplified_wf,),
         }
