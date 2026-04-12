@@ -391,9 +391,19 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
                      model_b=None, cond_pos_b=None, cond_neg_b=None,
                      sampler_params_b=None):
     """
-    WAN 2.x dual-sampler path.
-    model   / cond_pos   / cond_neg   = High (model A / stack A)
-    model_b / cond_pos_b / cond_neg_b = Low  (model B / stack B)
+    WAN 2.x dual-sampler path (mirrors KSamplerAdvanced tandem pattern).
+
+    model   / cond_pos   / cond_neg   = High-noise model (model A)
+    model_b / cond_pos_b / cond_neg_b = Low-noise model  (model B)
+
+    Both samplers share the SAME noise schedule derived from total_steps.
+    The high model runs steps 0 → steps_high, then the low model continues
+    from steps_high → total_steps.  This matches the ComfyUI workflow where
+    two KSamplerAdvanced nodes run in tandem with start_at_step / end_at_step.
+
+    sampler_params['steps']   = steps for the HIGH pass
+    sampler_params_b['steps'] = steps for the LOW pass
+    total_steps = steps_high + steps_low
 
     Falls back to single standard sampler if no model_b is provided.
     """
@@ -417,49 +427,55 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
     except Exception:
         pass
 
-    steps_high   = int(sampler_params.get('steps', 20))
-    cfg_high     = float(sampler_params.get('cfg', 6.0))
+    steps_high   = int(sampler_params.get('steps', 3))
+    steps_low    = int((sampler_params_b or sampler_params).get('steps', steps_high))
+    total_steps  = steps_high + steps_low
+    cfg_high     = float(sampler_params.get('cfg', 1.0))
+    cfg_low      = float((sampler_params_b or sampler_params).get('cfg', cfg_high))
     seed         = int(sampler_params.get('seed', 0))
-    sampler_name = sampler_params.get('sampler_name', 'uni_pc')
+    seed_low     = int((sampler_params_b or sampler_params).get('seed', seed))
+    sampler_name = sampler_params.get('sampler_name', 'euler')
     scheduler    = sampler_params.get('scheduler', 'simple')
 
-    steps_low    = int((sampler_params_b or sampler_params).get('steps', steps_high))
-    cfg_low      = float((sampler_params_b or sampler_params).get('cfg', cfg_high))
+    print(f"[_run_wan_sampler] total_steps={total_steps}, "
+          f"high=0→{steps_high}, low={steps_high}→{total_steps}, "
+          f"cfg_high={cfg_high}, cfg_low={cfg_low}")
 
     latent_image = comfy.sample.fix_empty_latent_channels(
         model, latent_dict["samples"],
         latent_dict.get("downscale_ratio_spacial", None)
     )
 
-    # High pass
-    noise = comfy.sample.prepare_noise(latent_image, seed)
-    callback = latent_preview.prepare_callback(model, steps_high)
     disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
 
+    # ── High pass: steps 0 → steps_high (add noise, keep leftover noise) ──
+    noise = comfy.sample.prepare_noise(latent_image, seed)
+    callback = latent_preview.prepare_callback(model, total_steps)
+
     samples_high = comfy.sample.sample(
-        model, noise, steps_high, cfg_high, sampler_name, scheduler,
+        model, noise, total_steps, cfg_high, sampler_name, scheduler,
         cond_pos, cond_neg, latent_image,
         denoise=1.0, disable_noise=False,
-        start_step=None, last_step=None,
+        start_step=0, last_step=steps_high,
         force_full_denoise=False, noise_mask=None,
         callback=callback, disable_pbar=disable_pbar, seed=seed,
     )
 
-    # Low pass (refine with model B)
+    # ── Low pass: steps steps_high → total (no new noise, full denoise) ───
     latent_low = comfy.sample.fix_empty_latent_channels(
         model_b, samples_high,
         latent_dict.get("downscale_ratio_spacial", None)
     )
-    noise_low    = comfy.sample.prepare_noise(latent_low, seed + 1)
-    callback_low = latent_preview.prepare_callback(model_b, steps_low)
+    noise_low = comfy.sample.prepare_noise(latent_low, seed_low)
+    callback_low = latent_preview.prepare_callback(model_b, total_steps)
 
     samples_final = comfy.sample.sample(
-        model_b, noise_low, steps_low, cfg_low, sampler_name, scheduler,
+        model_b, noise_low, total_steps, cfg_low, sampler_name, scheduler,
         cond_pos_b or cond_pos, cond_neg_b or cond_neg, latent_low,
-        denoise=0.7, disable_noise=False,
-        start_step=None, last_step=None,
+        denoise=1.0, disable_noise=True,
+        start_step=steps_high, last_step=total_steps,
         force_full_denoise=True, noise_mask=None,
-        callback=callback_low, disable_pbar=disable_pbar, seed=seed + 1,
+        callback=callback_low, disable_pbar=disable_pbar, seed=seed_low,
     )
     return samples_final
 
@@ -1229,7 +1245,7 @@ class WorkflowGenerator:
 
                 print(f"[WorkflowGenerator] Template execution: family={family_key}")
                 decoded, out_latent = execute_template(
-                    api, wmap, family_key,
+                    api, wmap, family_key, patch_params,
                 )
 
             else:
@@ -1368,6 +1384,8 @@ class WorkflowGenerator:
                 # ── Decode ───────────────────────────────────────────────────
                 print("[WorkflowGenerator] Decoding latent…")
                 decoded = vae.decode(samples)
+                if len(decoded.shape) == 5:          # video: (batch, frames, H, W, 3) → (B*F, H, W, 3)
+                    decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
                 out_latent = {"samples": samples}
 
         except FileNotFoundError:

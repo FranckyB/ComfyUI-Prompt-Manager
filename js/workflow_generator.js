@@ -1859,18 +1859,38 @@ app.registerExtension({
                 node._wePopulated = true;
                 node._weLoraState = {};
                 node._weOverrides = {};
-                updateUI(node);
-                // Only restore overrides in manual mode — in workflow_data mode
-                // prompts/sampler/resolution come from the source on next run.
-                if (!wfToggle?.value) {
-                    applyOverrides(node, savedOv, savedLs);
+                // updateUI is async (fetches family list & reloads dropdowns).
+                // Chain applyOverrides via .then() so overrides are restored
+                // AFTER dropdowns are populated — otherwise values can't be set.
+                // onConfigure itself stays synchronous (_configuredFromWorkflow
+                // is already set above).
+                const uiReady = updateUI(node);
+                if (uiReady && typeof uiReady.then === "function") {
+                    uiReady.then(() => {
+                        if (!wfToggle?.value) {
+                            applyOverrides(node, savedOv, savedLs);
+                        }
+                        if (wfToggle?.value) {
+                            setFieldsFrozen(node, true);
+                        }
+                        node.setDirtyCanvas(true, true);
+                    });
+                } else {
+                    // Fallback if updateUI is ever made sync again
+                    if (!wfToggle?.value) {
+                        applyOverrides(node, savedOv, savedLs);
+                    }
+                    if (wfToggle?.value) {
+                        setFieldsFrozen(node, true);
+                    }
+                    node.setDirtyCanvas(true, true);
                 }
+            } else {
+                if (wfToggle?.value) {
+                    setFieldsFrozen(node, true);
+                }
+                node.setDirtyCanvas(true, true);
             }
-            if (wfToggle?.value) {
-                setFieldsFrozen(node, true);
-            }
-
-            node.setDirtyCanvas(true, true);
         };
     },
 });

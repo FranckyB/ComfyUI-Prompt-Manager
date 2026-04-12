@@ -81,6 +81,13 @@ def patch_template(api, wmap, params):
     """
     Patch an API-format workflow dict in-place with the given params dict.
 
+    This keeps the JSON graph consistent with the user's actual values,
+    which is useful for debugging / logging.  execute_template() reads
+    params directly (not from the patched JSON) to avoid double-interpretation
+    bugs, but having a fully-patched JSON makes it possible to inspect
+    exactly what was sent (and would be needed if we ever switch to true
+    graph execution via ComfyUI's engine).
+
     params keys (all optional):
         positive_prompt   str
         negative_prompt   str
@@ -317,25 +324,33 @@ def loras_to_text(lora_list, lora_overrides=None, stack_key=""):
 
 # ── In-process node execution ─────────────────────────────────────────────────
 
-def execute_template(api, wmap, family_key):
+def execute_template(api, wmap, family_key, params):
     """
     Execute a patched API-format workflow in-process.
 
-    This imports and calls the ComfyUI node classes directly (same approach
-    as the existing hardcoded samplers), but driven by the template graph
-    rather than hardcoded Python.
+    The template JSON + map are used as the source of truth for default
+    values (model names, VAE, CLIP type, etc.).  The ``params`` dict
+    carries the actual user-facing values already resolved by the caller
+    (workflow_generator.py) — we use those directly instead of reading
+    them back from the patched JSON, which avoids the double-interpretation
+    bugs that plagued the WAN video dual-sampler path.
+
+    params keys (from workflow_generator.py):
+        model_a, model_b, vae, clip, clip_1, clip_2,
+        positive_prompt, negative_prompt,
+        width, height, length, batch_size,
+        seed, seed_b, steps, steps_high, steps_low,
+        cfg, sampler_name, scheduler, denoise, guidance,
+        lora_stack_a_text, lora_stack_b_text,
+        source_image_path  (i2v only)
 
     Returns (IMAGE tensor, LATENT dict) on success.
     Raises on failure.
-
-    For i2v workflows, the source image is loaded from the filename already
-    patched into the LoadImage node by patch_template — no tensor is passed in.
     """
     stem = FAMILY_WORKFLOW_STEMS.get(family_key, family_key)
-    tdir = _get_template_dir()
     strategy = _family_to_strategy(family_key)
-    print(f"[WorkflowExecutor] Running template: {stem} (family: {family_key}, strategy: {strategy})")
-    print(f"[WorkflowExecutor] Template file: {os.path.join(tdir, stem + '_api.json')}")
+    print(f"[WorkflowExecutor] Running template: {stem} "
+          f"(family: {family_key}, strategy: {strategy})")
 
     import torch
     import comfy.sd
@@ -345,8 +360,8 @@ def execute_template(api, wmap, family_key):
     import comfy.model_management
     import latent_preview
 
-    from .lora_utils import resolve_lora_path
-
+    # Helper: read a value from the patched template (used only for
+    # defaults that aren't in params, like CLIP type).
     def _m(key):
         v = wmap.get(key)
         if not v or not isinstance(v, list) or len(v) < 2:
@@ -359,45 +374,49 @@ def execute_template(api, wmap, family_key):
             return None
         return _get(api, nid, field)
 
-    def _ref(key):
-        """Get [src_node_id, src_slot] link reference for a map key."""
-        nid, field = _m(key)
-        if field is None:
-            return None
-        v = api.get(str(nid), {}).get("inputs", {}).get(field)
-        return v if isinstance(v, list) else None
+    # Convenience: get from params first, then fall back to template value.
+    def _p(param_key, *template_keys, transform=None, default=None):
+        v = params.get(param_key)
+        if v is None:
+            for tk in template_keys:
+                v = _val(tk)
+                if v is not None:
+                    break
+        if v is None:
+            return default
+        return transform(v) if transform else v
 
     # ── Step 1: Load models ───────────────────────────────────────────────────
     from ..nodes.workflow_generator import (
         _load_model_from_path, _load_vae, _load_clip, _apply_loras,
     )
-    from .workflow_extraction_utils import resolve_model_name, resolve_vae_name, resolve_clip_names
+    from .workflow_extraction_utils import resolve_model_name
 
     # Model A
-    model_a_name = _val("model_a") or _val("checkpoint")
+    model_a_name = _p("model_a", "model_a", "checkpoint")
     if not model_a_name:
-        raise ValueError("[WorkflowExecutor] No model_a / checkpoint in template")
+        raise ValueError("[WorkflowExecutor] No model_a / checkpoint specified")
     resolved_a, folder_a = resolve_model_name(model_a_name)
     if resolved_a is None:
         raise FileNotFoundError(f"[WorkflowExecutor] Model A not found: {model_a_name}")
     full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
     model_a, clip_a, vae_a = _load_model_from_path(resolved_a, folder_a, full_path_a)
 
-    # Model B (WAN Video only)
+    # Model B (WAN Video dual-model only)
     model_b = clip_b_raw = None
-    model_b_name = _val("model_b")
+    model_b_name = _p("model_b", "model_b")
     if model_b_name:
         resolved_b, folder_b = resolve_model_name(model_b_name)
         if resolved_b:
             full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
             model_b, clip_b_raw, _ = _load_model_from_path(resolved_b, folder_b, full_path_b)
 
-    # VAE — read from the (already-patched) template.
-    # If the user chose (Default), patch_template left the original template value
-    # intact, so _val("vae") returns the template's filename (e.g.
-    # "flux2-vae.safetensors"), which is what we load.  Only crashes if the file
-    # is genuinely missing from disk.
-    vae_name = _val("vae")
+    # VAE — params['vae'] is '' or '(Default)' when user wants the template
+    # default.  patch_template already left the template value intact in that
+    # case, so we read it from the template.
+    vae_name = params.get("vae", "")
+    if not vae_name or str(vae_name).startswith("("):
+        vae_name = _val("vae")
     vae = _load_vae(vae_name, existing_vae=vae_a)
     if vae is None:
         raise FileNotFoundError(
@@ -408,15 +427,14 @@ def execute_template(api, wmap, family_key):
     # CLIP — determine type from template CLIPLoader node
     clip_type_str = ""
     for nid, node in api.items():
-        if node["class_type"] in ("CLIPLoader", "DualCLIPLoader"):
+        if node.get("class_type") in ("CLIPLoader", "DualCLIPLoader"):
             clip_type_str = node["inputs"].get("type", "")
             break
 
-    # Build clip_info
     clip_names = []
-    c1 = _val("clip_1")
-    c2 = _val("clip_2")
-    c0 = _val("clip")
+    c1 = params.get("clip_1") or _val("clip_1")
+    c2 = params.get("clip_2") or _val("clip_2")
+    c0 = params.get("clip")   or _val("clip")
     if c1:
         clip_names.append(c1)
     if c2:
@@ -430,7 +448,6 @@ def execute_template(api, wmap, family_key):
         raise FileNotFoundError("[WorkflowExecutor] No CLIP available")
 
     # ── Step 2: Apply LoRAs ───────────────────────────────────────────────────
-    # lora_stack_text is already serialised JSON — parse it back to list
     def _parse_lora_text(text):
         if not text:
             return []
@@ -439,21 +456,21 @@ def execute_template(api, wmap, family_key):
         except Exception:
             return []
 
-    loras_a_text = _val("lora_stack_a") or ""
+    loras_a_text = params.get("lora_stack_a_text", "") or _val("lora_stack_a") or ""
     loras_a = [{"name": r[0], "model_strength": r[1], "clip_strength": r[2]}
                for r in _parse_lora_text(loras_a_text) if len(r) >= 3]
     model_a, clip = _apply_loras(model_a, clip, loras_a, {})
 
     clip_b = clip_b_raw or clip
     if model_b is not None:
-        loras_b_text = _val("lora_stack_b") or ""
+        loras_b_text = params.get("lora_stack_b_text", "") or _val("lora_stack_b") or ""
         loras_b = [{"name": r[0], "model_strength": r[1], "clip_strength": r[2]}
                    for r in _parse_lora_text(loras_b_text) if len(r) >= 3]
         model_b, clip_b = _apply_loras(model_b, clip_b, loras_b, {})
 
     # ── Step 3: Encode prompts ────────────────────────────────────────────────
-    pos_prompt = _val("positive_prompt") or ""
-    neg_prompt = _val("negative_prompt") or ""
+    pos_prompt = params.get("positive_prompt", "") or ""
+    neg_prompt = params.get("negative_prompt", "") or ""
 
     tokens_pos = clip.tokenize(pos_prompt)
     cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
@@ -461,29 +478,29 @@ def execute_template(api, wmap, family_key):
     cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
 
     # ── Step 4: Latent ────────────────────────────────────────────────────────
-    width  = int(_val("latent_width")  or _val("resize_width")  or 768)
-    height = int(_val("latent_height") or _val("resize_height") or 1280)
-
-    # Detect strategy from family
-    strategy = _family_to_strategy(family_key)
+    width  = int(params.get("width")  or _val("latent_width")  or _val("resize_width")  or 768)
+    height = int(params.get("height") or _val("latent_height") or _val("resize_height") or 1280)
+    length = params.get("length")
+    if length is None:
+        length = _val("latent_length")
 
     if strategy == "wan_video" and family_key == "wan_video_i2v":
-        # i2v: load source image from the patched LoadImage node, then run
-        # the template's node chain: LoadImage → ImageResizeKJv2 → WanImageToVideo
-        i2v_image_name = _val("wan_i2v_image")
+        # i2v: load source image, run WanImageToVideo in-process
+        i2v_image_name = params.get("source_image_path") or _val("wan_i2v_image")
         if not i2v_image_name:
-            raise ValueError("[WorkflowExecutor] wan_video_i2v template has no source image "
-                             "— patch_template must set wan_i2v_image before calling execute_template")
+            raise ValueError(
+                "[WorkflowExecutor] wan_video_i2v has no source image "
+                "— connect an image to the source_image input"
+            )
         latent_dict = _run_i2v_from_template(
-            api, wmap, i2v_image_name, vae, cond_pos, cond_neg,
-            width, height, int(_val("latent_length") or 81)
+            i2v_image_name, vae, cond_pos, cond_neg,
+            width, height, int(length or 81),
         )
         cond_pos, cond_neg = latent_dict.pop("_cond_pos"), latent_dict.pop("_cond_neg")
     else:
-        length = _val("latent_length")
-        batch  = 1
+        batch = int(params.get("batch_size", 1))
         if length is not None:
-            # Video latent — channels=16 for WAN
+            # Video latent — channels=16 for WAN/Hunyuan
             latent_tensor = torch.zeros(
                 [int(length), 16, height // 8, width // 8],
                 device=comfy.model_management.intermediate_device(),
@@ -500,67 +517,70 @@ def execute_template(api, wmap, family_key):
         }
 
     # ── Step 5: Sample ────────────────────────────────────────────────────────
+    # Use params directly — no re-reading from patched JSON.
     from ..nodes.workflow_generator import (
         _run_standard_ksampler, _run_flux_sampler, _run_flux2_sampler, _run_wan_sampler,
     )
 
-    seed = int(_val("ksampler_seed") or _val("flux_seed") or
-               _val("ksampler_high_seed") or 0)
-
+    seed = int(params.get("seed", 0))
     sampler_params = {
-        "seed":        seed,
-        "steps":       int(_val("ksampler_steps") or _val("flux_steps") or
-                           _val("flux2_steps") or _val("ksampler_high_steps") or 20),
-        "cfg":         float(_val("ksampler_cfg") or _val("flux2_cfg") or
-                             _val("ksampler_high_cfg") or 5.0),
-        "sampler_name": _val("ksampler_sampler") or _val("flux_sampler") or "euler",
-        "scheduler":    _val("ksampler_scheduler") or _val("flux_scheduler") or "simple",
-        "denoise":     float(_val("ksampler_denoise") or _val("flux_denoise") or 1.0),
-        "guidance":    float(_val("flux_guidance") or 3.5),
+        "seed":         seed,
+        "steps":        int(params.get("steps", 20)),
+        "cfg":          float(params.get("cfg", 5.0)),
+        "sampler_name": params.get("sampler_name", "euler"),
+        "scheduler":    params.get("scheduler", "simple"),
+        "denoise":      float(params.get("denoise", 1.0)),
+        "guidance":     float(params.get("guidance") or 3.5),
     }
 
     if strategy == "wan_video":
-        # patch_template sets both nodes to steps=total, end_at_step=high, start_at_step=high.
-        # Read end_at_step from the high node and start_at_step from the low node to get
-        # the actual per-sampler step counts.
-        nid_h, _ = _m("ksampler_high_steps")
-        nid_l, _ = _m("ksampler_low_steps")
-        total_steps = int(_val("ksampler_high_steps") or 6)
-        steps_high = int(api.get(nid_h, {}).get("inputs", {}).get("end_at_step",
-                         total_steps // 2)) if nid_h else total_steps // 2
-        steps_low  = total_steps - steps_high
-        print(f"[WorkflowExecutor] WAN dual-sampler: total={total_steps}, high={steps_high}, low={steps_low}")
-        sampler_params_b = {
-            "steps":       steps_low,
-            "cfg":         float(_val("ksampler_low_cfg")  or sampler_params["cfg"]),
-            "sampler_name": _val("ksampler_low_sampler")  or sampler_params["sampler_name"],
-            "scheduler":    _val("ksampler_low_scheduler") or sampler_params["scheduler"],
-            "seed":        seed + 1,
-        }
+        # steps_high / steps_low come directly from params — no reverse-
+        # engineering of KSamplerAdvanced start/end boundaries needed.
+        steps_high = int(params.get("steps_high", sampler_params["steps"]))
+        steps_low  = int(params.get("steps_low",  steps_high))
+        seed_b     = int(params.get("seed_b", seed + 1))
+        print(f"[WorkflowExecutor] WAN dual-sampler: high={steps_high}, low={steps_low}")
         sampler_params["steps"] = steps_high
+        sampler_params_b = {
+            "steps":        steps_low,
+            "cfg":          sampler_params["cfg"],
+            "sampler_name": sampler_params["sampler_name"],
+            "scheduler":    sampler_params["scheduler"],
+            "seed":         seed_b,
+        }
 
-        # Encode prompts for model B
-        tokens_pos_b = clip_b.tokenize(pos_prompt)
-        cond_pos_b   = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
-        tokens_neg_b = clip_b.tokenize(neg_prompt)
-        cond_neg_b   = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
+        # Conditioning for model B:
+        # - i2v: cond_pos/cond_neg already contain WanImageToVideo output
+        #   (source image encoded into conditioning). BOTH models must use
+        #   these — the original workflow connects WanImageToVideo output
+        #   to both KSamplerAdvanced nodes.
+        # - t2v: re-encode with clip_b since model B has its own text encoder.
+        if family_key == "wan_video_i2v":
+            cond_pos_b = cond_pos
+            cond_neg_b = cond_neg
+        else:
+            tokens_pos_b = clip_b.tokenize(pos_prompt)
+            cond_pos_b   = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
+            tokens_neg_b = clip_b.tokenize(neg_prompt)
+            cond_neg_b   = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
 
         samples = _run_wan_sampler(
             model_a, cond_pos, cond_neg, latent_dict, sampler_params,
             model_b=model_b, cond_pos_b=cond_pos_b, cond_neg_b=cond_neg_b,
             sampler_params_b=sampler_params_b,
         )
-    elif strategy == "wan_image":
-        samples = _run_standard_ksampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
     elif strategy == "flux2":
         samples = _run_flux2_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
     elif strategy == "flux":
         samples = _run_flux_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
     else:
+        # wan_image, sdxl, qwen, z_image, etc. — all use standard KSampler
         samples = _run_standard_ksampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
 
     # ── Step 6: Decode ────────────────────────────────────────────────────────
     decoded = vae.decode(samples)
+    if len(decoded.shape) == 5:          # video: (batch, frames, H, W, 3) → (B*F, H, W, 3)
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
     out_latent = {"samples": samples}
 
     return decoded, out_latent
@@ -572,27 +592,24 @@ def _family_to_strategy(family_key):
     return spec.get("sampler", "standard")
 
 
-def _run_i2v_from_template(api, wmap, image_name, vae, cond_pos, cond_neg,
+def _run_i2v_from_template(image_name, vae, cond_pos, cond_neg,
                            width, height, length):
     """
-    Replicate the i2v template's node chain in-process:
-      LoadImage (node 97) → ImageResizeKJv2 (node 161) → WanImageToVideo (node 132)
+    Run the WAN i2v pipeline in-process:
+      Load source image from disk → WanImageToVideo
 
-    Reads all parameters from the already-patched API dict so the template
-    is the single source of truth.  Returns a latent dict with _cond_pos and
-    _cond_neg injected (consumed by the downstream sampler).
+    Returns a latent dict with _cond_pos and _cond_neg injected
+    (consumed by the downstream dual-sampler).
     """
     import torch
     import numpy as np
     import comfy.model_management
     from PIL import Image as PILImage
 
-    # ── LoadImage (replicates node 97) ────────────────────────────────────
-    # The image filename was patched into node 97 by patch_template.
+    # ── Load source image ─────────────────────────────────────────────────
     input_dir = folder_paths.get_input_directory()
     image_path = folder_paths.get_annotated_filepath(image_name)
     if not os.path.isfile(image_path):
-        # Fallback: try input directory directly
         image_path = os.path.join(input_dir, image_name)
     if not os.path.isfile(image_path):
         raise FileNotFoundError(
@@ -602,14 +619,10 @@ def _run_i2v_from_template(api, wmap, image_name, vae, cond_pos, cond_neg,
     pil_img = PILImage.open(image_path).convert("RGB")
     img_array = np.array(pil_img).astype(np.float32) / 255.0
     source_image = torch.from_numpy(img_array).unsqueeze(0)  # (1, H, W, 3)
-    print(f"[WorkflowExecutor] Loaded i2v source image from template: "
+    print(f"[WorkflowExecutor] Loaded i2v source image: "
           f"{image_name} → shape {source_image.shape}")
 
-    # ── WanImageToVideo (replicates node 132) ─────────────────────────────
-    # In the template, node 132 receives:
-    #   start_image from LoadImage (97) — the original-resolution image
-    #   width/height from ImageResizeKJv2 (161) — the target dimensions
-    # WanImageToVideo internally handles resizing the start_image to width×height.
+    # ── WanImageToVideo ───────────────────────────────────────────────────
     try:
         from comfy_extras.nodes_wan import WanImageToVideo
         result = WanImageToVideo.execute(
