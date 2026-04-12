@@ -5,13 +5,19 @@
  * Accepts workflow_data input (from PromptExtractor) + optional lora_stack inputs.
  * "use_workflow_data" toggle: ON -> populate & freeze fields; OFF -> editable (keeps last values).
  * "use_lora_input" toggle: ON -> display connected lora stacks; OFF -> manual/extracted only.
- * Non-WAN families show single "Model" / "LoRA Stack" labels; WAN shows A/B.
- * WAN family shows Frames input in Resolution section.
+ * Non-WAN families show "Model A" / "Model B" / "LoRA Stack A" / "LoRA Stack B" labels.
+ * WAN family renames them to (High)/(Low) and shows Frames input in Resolution section.
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-// --- LoRA Manager preview tooltip (lazy-loaded) ---
+// Inject CSS to hide scrollbars on lora tag containers (webkit)
+if (!document.getElementById("we-lora-scroll-css")) {
+    const style = document.createElement("style");
+    style.id = "we-lora-scroll-css";
+    style.textContent = `.lora-tags-container::-webkit-scrollbar { display: none; }`;
+    document.head.appendChild(style);
+}
 let loraManagerPreviewTooltip = null;
 let loraManagerCheckDone = false;
 let loraManagerAvailable = false;
@@ -114,7 +120,7 @@ function makeBtn(label, onclick, extraStyle) {
 // Walks up from a section element to find the root (which stores _weNode),
 // then forces the node to exactly fit its DOM content.
 const _NATIVE_H = 90;   // title bar + toggle widgets above the DOM widget
-const _MIN_W = 470;
+const _MIN_W = 478;
 const _MIN_H = 300;
 
 function _snapNodeHeight(sectionEl) {
@@ -419,6 +425,8 @@ function makeInput(label, type, value, attrs, onChange) {
         }
     }
     Object.assign(inp.style, { ...INPUT_STYLE });
+    // Stop wheel propagation so scrolling over inputs doesn't zoom canvas
+    inp.addEventListener("wheel", (e) => { e.stopPropagation(); });
     inp.onchange = () => {
         resetBtn.style.visibility = String(inp.value) !== String(_origVal) ? "visible" : "hidden";
         if (onChange) onChange();
@@ -590,8 +598,13 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
     const tagsContainer = document.createElement("div");
     tagsContainer.className = "lora-tags-container";
     Object.assign(tagsContainer.style, {
-        display: "flex", flexWrap: "wrap", gap: "4px", minHeight: "30px",
+        display: "flex", flexWrap: "wrap", gap: "4px",
+        height: "100px", overflowY: "auto", scrollbarWidth: "none",
+        border: "1px solid rgba(255,255,255,0.1)", borderRadius: "4px",
+        padding: "4px",
     });
+    // Stop wheel propagation so scrolling lora list doesn't zoom canvas
+    tagsContainer.addEventListener("wheel", (e) => { e.stopPropagation(); });
     container.appendChild(tagsContainer);
     container._tagsContainer = tagsContainer;
     container._titleLabel = titleLabel;
@@ -838,22 +851,12 @@ function updateWanVisibility(node) {
     const isWanVideo = (family === "wan_video_i2v" || family === "wan_video_t2v");
     const isWan      = isWanVideo || (family === "wan_image");
 
-    // Model A label: "Model A" for any WAN, "Model" otherwise
-    if (node._weModelRow?._label) {
-        node._weModelRow._label.textContent = isWan ? "Model A" : "Model";
-    }
-    // Model B row: only for WAN Video
-    if (node._weModelBRow) {
-        node._weModelBRow.style.display = isWanVideo ? "flex" : "none";
-    }
-
     // LoRA stack titles
     if (node._weLoraACard?._titleLabel) {
-        node._weLoraACard._titleLabel.textContent = isWanVideo ? "LoRA Stack (High)" : "LoRA Stack";
+        node._weLoraACard._titleLabel.textContent = isWanVideo ? "LoRA Stack (High)" : "LoRA Stack A";
     }
-    // LoRA Stack B: only for WAN Video
-    if (node._weLoraB) {
-        node._weLoraB.style.display = isWanVideo ? "flex" : "none";
+    if (node._weLoraB?._titleLabel) {
+        node._weLoraB._titleLabel.textContent = isWanVideo ? "LoRA Stack (Low)" : "LoRA Stack B";
     }
 
     // Frames row: show for any WAN (image or video)
@@ -871,10 +874,6 @@ function updateWanVisibility(node) {
     // Standard Steps row: hide when WAN Video (replaced by high/low)
     if (node._weSamplerRows?.steps) {
         node._weSamplerRows.steps.style.display = isWanVideo ? "none" : "flex";
-    }
-    // Seed B: only for WAN Video
-    if (node._weSamplerRows?.seed_b) {
-        node._weSamplerRows.seed_b.style.display = isWanVideo ? "flex" : "none";
     }
 
 }
@@ -938,9 +937,11 @@ function setFieldsFrozen(node, frozen) {
     const opacity = frozen ? "0.6" : "1.0";
     const pointer = frozen ? "none" : "auto";
 
-    // Freeze all section bodies
-    for (const sec of Object.values(node._weSections || {})) {
+    // Freeze all section bodies except loras (always interactive)
+    for (const [name, sec] of Object.entries(node._weSections || {})) {
         if (sec._body) {
+            // LoRA section stays interactive so users can toggle/adjust strengths
+            if (name === "loras") continue;
             sec._body.style.opacity = opacity;
             sec._body.style.pointerEvents = pointer;
             // Skip prompt textareas — they handle their own ghosting
@@ -1254,14 +1255,15 @@ app.registerExtension({
             // ============================================================
             const root = makeEl("div", {
                 display: "flex", flexDirection: "column", gap: "4px",
-                // paddingBottom: 38px reserves space for the ComfyUI selection
-                // toolbox that appears at the bottom of the node when selected,
-                // preventing it from overlapping the last section.
-                padding: "6px 6px 38px 6px", marginTop: "-10px",
+                // paddingBottom: 12px small buffer at the bottom of the node.
+                padding: "6px 6px 12px 6px", marginTop: "-10px",
                 width: "100%", boxSizing: "border-box",
                 fontFamily: "Inter, system-ui, -apple-system, sans-serif",
                 overflow: "hidden",
             });
+            // Forward wheel to canvas for zoom — interactive elements
+            // (inputs, textareas, lora containers) stopPropagation so
+            // their events never reach this handler.
             forwardWheelToCanvas(root);
             node._weRoot = root;
             root._weNode = node;   // back-reference for _snapNodeHeight
@@ -1342,15 +1344,14 @@ app.registerExtension({
             };
 
             // Model A row
-            const modelRow = makeSelectRow("Model", "", fetchModels,
+            const modelRow = makeSelectRow("Model A", "", fetchModels,
                 (v) => { node._weOverrides.model_a = v; _syncS(); }, true);
             modelSec._body.appendChild(modelRow);
             node._weModelRow = modelRow;
 
-            // Model B row (hidden unless WAN)
+            // Model B row (always visible)
             const modelBRow = makeSelectRow("Model B", "", fetchModels,
                 (v) => { node._weOverrides.model_b = v; _syncS(); }, true);
-            modelBRow.style.display = "none";
             modelSec._body.appendChild(modelBRow);
             node._weModelBRow = modelBRow;
 
@@ -1467,10 +1468,9 @@ app.registerExtension({
             stepsHighRow.style.display = "none";
             stepsLowRow.style.display  = "none";
 
-            // WAN Video seed B (hidden by default; Seed renamed to Seed A when visible)
+            // WAN Video seed B (always visible)
             const seedRow  = makeInput("Seed A", "number", 0, { min: 0, step: 1 }, _syncS);
             const seedBRow = makeInput("Seed B", "number", 0, { min: 0, step: 1 }, _syncS);
-            seedBRow.style.display = "none";
 
             const sampRows = {
                 steps:      stepsRow,
@@ -1523,7 +1523,7 @@ app.registerExtension({
             });
             posBox.onchange = _syncS;
             posBox.oninput = _syncS;
-            posBox.addEventListener("wheel", (e) => { e.stopPropagation(); }, { passive: true });
+            posBox.addEventListener("wheel", (e) => { e.stopPropagation(); });
             posSec._body.appendChild(posBox);
             root.appendChild(posSec);
             node._wePosBox = posBox;
@@ -1533,7 +1533,6 @@ app.registerExtension({
             const negBox = document.createElement("textarea");
             negBox.placeholder = "Negative prompt";
             negBox.rows = 5;
-            negBox.addEventListener("wheel", (e) => { e.stopPropagation(); }, { passive: true });
             Object.assign(negBox.style, {
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
@@ -1544,6 +1543,7 @@ app.registerExtension({
             });
             negBox.onchange = _syncS;
             negBox.oninput = _syncS;
+            negBox.addEventListener("wheel", (e) => { e.stopPropagation(); });
             negSec._body.appendChild(negBox);
             root.appendChild(negSec);
             node._weNegBox = negBox;
@@ -1553,7 +1553,7 @@ app.registerExtension({
             node._weSections.loras = loraSec;
 
             // Stack A card
-            const loraACard = createLoraStackContainer("LoRA Stack",
+            const loraACard = createLoraStackContainer("LoRA Stack A",
                 () => {
                     const d = node._weExtracted;
                     const lorasA = d?.loras_a || [];
@@ -1612,7 +1612,7 @@ app.registerExtension({
                     updateLoras(node); _syncS();
                 },
             );
-            loraBCard.style.display = "none"; // hidden until WAN
+            loraBCard.style.display = "flex"; // always visible
             loraSec._body.appendChild(loraBCard);
             node._weLoraBContainer = loraBCard._tagsContainer;
             node._weLoraB = loraBCard;

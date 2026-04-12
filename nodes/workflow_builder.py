@@ -934,6 +934,25 @@ class WorkflowBuilder:
         extracted['model_family'] = family_key
         extracted['model_family_label'] = strategy
 
+        # ── Apply lora_overrides: remove toggled-off, update strengths ────
+        has_both = bool(extracted.get('loras_a')) and bool(extracted.get('loras_b'))
+        for stack_key, list_key in [('a', 'loras_a'), ('b', 'loras_b')]:
+            sk = stack_key if has_both else ''
+            filtered = []
+            for lora in extracted.get(list_key, []):
+                lora_name = lora.get('name', '')
+                state_key = f"{sk}:{lora_name}" if sk else lora_name
+                lora_st = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
+                if lora_st.get('active') is False:
+                    continue
+                updated = dict(lora)
+                if 'model_strength' in lora_st:
+                    updated['model_strength'] = float(lora_st['model_strength'])
+                if 'clip_strength' in lora_st:
+                    updated['clip_strength'] = float(lora_st['clip_strength'])
+                filtered.append(updated)
+            extracted[list_key] = filtered
+
         simplified_wf = build_simplified_workflow_data(
             extracted, wf_overrides, sampler_params
         )
