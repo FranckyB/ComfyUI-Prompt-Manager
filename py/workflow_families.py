@@ -58,8 +58,8 @@ MODEL_FAMILIES = {
         "vae_exact": ["ae.safetensors"],
         # Flux1 uses T5-XXL + CLIP-L dual encoders.
         # umt5_xxl also contains "t5xxl" as substring — exclude it explicitly.
-        "clip":         ["t5xxl", "clip_l"],
-        "clip_exclude": ["umt5", "clip_g", "qwen", "gemma"],
+        "clip":         ["t5xxl"],
+        "clip_exclude": ["umt5", "clip_l", "clip_g", "qwen", "gemma"],
         "clip_type": "flux",
         "clip_slots": 2,
         "sampler": "flux",

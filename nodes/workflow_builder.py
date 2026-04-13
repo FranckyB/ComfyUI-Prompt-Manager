@@ -58,19 +58,6 @@ from .prompt_extractor import (
 )
 from ..py.lora_utils import resolve_lora_path
 
-# ── Optional GGUF support ────────────────────────────────────────────────────
-try:
-    from comfyui_gguf.nodes import load_gguf_unet as _load_gguf_unet
-    GGUF_SUPPORT = True
-except (ImportError, ModuleNotFoundError, AttributeError):
-    try:
-        import gguf_connector
-        GGUF_SUPPORT = True
-    except (ImportError, ModuleNotFoundError):
-        GGUF_SUPPORT = False
-    if not GGUF_SUPPORT:
-        _load_gguf_unet = None
-
 # ── Sampler/scheduler lists ──────────────────────────────────────────────────
 SAMPLERS   = comfy.samplers.KSampler.SAMPLERS
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS
