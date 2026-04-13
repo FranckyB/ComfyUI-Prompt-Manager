@@ -25,7 +25,7 @@ from ..py.workflow_extraction_utils import (
     resolve_vae_name,
     resolve_clip_names,
 )
-from .workflow_builder import (
+from .workflow_renderer import (
     _render_zimage,
     _render_qwen_image,
     _render_flux1,
