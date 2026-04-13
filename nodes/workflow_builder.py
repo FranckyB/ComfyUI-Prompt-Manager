@@ -266,21 +266,32 @@ async def api_list_files(request):
 def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     """
     Standard KSampler path — used for SD1.5, SDXL, Pony, Illustrious, SD3, LTX, etc.
+    Returns:
+        LATENT dict (same shape as input, with "samples" replaced).
     """
+    import torch
     import latent_preview
 
-    steps        = int(sampler_params['steps'])
-    cfg          = float(sampler_params['cfg'])
-    seed         = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
+    if not isinstance(latent_dict, dict) or "samples" not in latent_dict:
+        raise TypeError("latent_dict must be a LATENT dict containing 'samples'.")
+
+    steps       = int(sampler_params['steps'])
+    cfg         = float(sampler_params['cfg'])
+    seed        = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
     sampler_name = sampler_params['sampler_name']
     scheduler    = sampler_params['scheduler']
     denoise      = float(sampler_params['denoise'])
 
     latent_image = comfy.sample.fix_empty_latent_channels(
-        model, latent_dict["samples"],
-        latent_dict.get("downscale_ratio_spacial", None)
+        model,
+        latent_dict["samples"],
+        latent_dict.get("downscale_ratio_spacial", None),
     )
-    noise    = comfy.sample.prepare_noise(latent_image, seed)
+
+    batch_inds = latent_dict["batch_index"] if "batch_index" in latent_dict else None
+    noise_mask = latent_dict["noise_mask"] if "noise_mask" in latent_dict else None
+
+    noise    = comfy.sample.prepare_noise(latent_image, seed, batch_inds)
     callback = latent_preview.prepare_callback(model, steps)
     disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
 
@@ -289,10 +300,13 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
         cond_pos, cond_neg, latent_image,
         denoise=denoise, disable_noise=False,
         start_step=None, last_step=None,
-        force_full_denoise=False, noise_mask=None,
+        force_full_denoise=False, noise_mask=noise_mask,
         callback=callback, disable_pbar=disable_pbar, seed=seed,
     )
-    return samples
+
+    out = latent_dict.copy()
+    out["samples"] = samples
+    return out
 
 
 def _render_zimage(model, clip, vae, pos_prompt, neg_prompt,
@@ -598,12 +612,9 @@ def _render_qwen_image(model, clip, vae, pos_prompt, neg_prompt,
                        width, height, batch, sampler_params,
                        loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
-    Qwen Image render — mirrors qwen_image.json:
-        UNETLoader → PromptApplyLora → ModelSamplingAuraFlow(shift=3.1) → KSampler
-        CLIPLoader(qwen_image) → CLIPTextEncode (pos / neg) ──────────↗
-        EmptySD3LatentImage (16ch) ────────────────────────────────────↗
-        VAELoader → VAEDecode ← KSampler
+    Qwen Image render — mirrors qwen_image.json.
     """
+    import torch
     from comfy_extras.nodes_model_advanced import ModelSamplingAuraFlow
 
     if loras_a:
@@ -622,27 +633,34 @@ def _render_qwen_image(model, clip, vae, pos_prompt, neg_prompt,
     }
 
     shift = float(sampler_params.get('guidance') or 3.1)
-    (model,) = ModelSamplingAuraFlow().patch(model, shift)
 
-    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    # Be forgiving about patch signature
+    msa = ModelSamplingAuraFlow()
+    try:
+        patched = msa.patch(model, shift)
+    except TypeError:
+        patched = msa.patch(model, shift=shift)
+    if isinstance(patched, tuple):
+        model = patched[0]
+    else:
+        model = patched
+
+    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
 
     print("[_render_qwen_image] Decoding latent…")
-    decoded = vae.decode(samples)
+    decoded = vae.decode(latent_out["samples"])
     if len(decoded.shape) == 5:
         decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
-    return decoded, {"samples": samples}
+    return decoded, latent_out
 
 
 def _render_flux1(model, clip, vae, pos_prompt, neg_prompt,
                   width, height, batch, sampler_params,
                   loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
-    Flux 1 render — mirrors flux_1.json:
-        DualCLIPLoader → CLIPTextEncode → FluxGuidance(guidance) → positive
-        CLIPTextEncode → ConditioningZeroOut → negative (zeroed out)
-        UNETLoader → PromptApplyLora → KSampler (cfg=1)
-        EmptySD3LatentImage (16ch) → KSampler → VAEDecode
+    Flux 1 render — mirrors flux_1.json.
     """
+    import torch
     import node_helpers
     from nodes import ConditioningZeroOut
 
@@ -668,26 +686,22 @@ def _render_flux1(model, clip, vae, pos_prompt, neg_prompt,
         ),
     }
 
-    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
 
     print("[_render_flux1] Decoding latent…")
-    decoded = vae.decode(samples)
+    decoded = vae.decode(latent_out["samples"])
     if len(decoded.shape) == 5:
         decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
-    return decoded, {"samples": samples}
+    return decoded, latent_out
 
 
 def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
                   width, height, batch, sampler_params,
                   loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
-    Flux 2 render — mirrors flux_2.json:
-        CLIPLoader(qwen/flux2) → CLIPTextEncode (pos / neg)
-        UNETLoader → PromptApplyLora → CFGGuider(model, pos, neg, cfg)
-        KSamplerSelect(sampler) + Flux2Scheduler(steps, w, h) + RandomNoise(seed)
-        → SamplerCustomAdvanced → VAEDecode
-        EmptyFlux2LatentImage (16ch)
+    Flux 2 render — mirrors flux_2.json.
     """
+    import torch
     from comfy_extras.nodes_custom_sampler import (
         CFGGuider, KSamplerSelect, BasicScheduler, SamplerCustomAdvanced, RandomNoise,
     )
@@ -700,7 +714,6 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
     tokens_neg = clip.tokenize(neg_prompt)
     cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
 
-    # Flux2 latent — 16 channels like SD3/Flux1
     latent = {
         "samples": torch.zeros(
             [batch, 16, height // 8, width // 8],
@@ -708,23 +721,39 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
         ),
     }
 
-    steps   = int(sampler_params.get('steps', 20))
-    cfg     = float(sampler_params.get('cfg', 5.0))
-    seed    = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
+    steps        = int(sampler_params.get('steps', 20))
+    cfg          = float(sampler_params.get('cfg', 5.0))
+    seed         = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
     sampler_name = sampler_params.get('sampler_name', 'euler')
     scheduler    = sampler_params.get('scheduler', 'beta')
     denoise      = float(sampler_params.get('denoise', 1.0))
 
-    # V3 API: classmethods return NodeOutput — extract .args[0]
-    guider    = CFGGuider.execute(model, cond_pos, cond_neg, cfg).args[0]
-    sampler   = KSamplerSelect.execute(sampler_name).args[0]
-    sigmas    = BasicScheduler.execute(model, scheduler, steps, denoise).args[0]
-    noise_obj = RandomNoise.execute(seed).args[0]
+    # Handle NodeOutput vs tuple vs direct return
+    def _first_arg(result):
+        if hasattr(result, "args"):
+            return result.args[0]
+        if isinstance(result, tuple):
+            return result[0]
+        return result
+
+    guider    = _first_arg(CFGGuider.execute(model, cond_pos, cond_neg, cfg))
+    sampler   = _first_arg(KSamplerSelect.execute(sampler_name))
+    sigmas    = _first_arg(BasicScheduler.execute(model, scheduler, steps, denoise))
+    noise_obj = _first_arg(RandomNoise.execute(seed))
 
     latent_image = comfy.sample.fix_empty_latent_channels(model, latent["samples"])
     latent_in = {"samples": latent_image}
+
     sca_result = SamplerCustomAdvanced.execute(noise_obj, guider, sampler, sigmas, latent_in)
-    out_denoised = sca_result.args[1]  # second output is denoised_output
+    if hasattr(sca_result, "args") and len(sca_result.args) > 1:
+        out_denoised = sca_result.args[1]  # denoised_output
+    elif isinstance(sca_result, tuple) and len(sca_result) > 1:
+        out_denoised = sca_result[1]
+    else:
+        raise TypeError(
+            f"SamplerCustomAdvanced returned unexpected value: {type(sca_result)}"
+        )
+
     samples = out_denoised["samples"]
 
     print("[_render_flux2] Decoding latent…")
@@ -738,11 +767,10 @@ def _render_sdxl(model, clip, vae, pos_prompt, neg_prompt,
                  width, height, batch, sampler_params,
                  loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
-    SDXL render — mirrors sdxl.json (also used for SD1.5):
-        CheckpointLoaderSimple → PromptApplyLora → KSampler
-        CLIPSetLastLayer(-2) → CLIPTextEncode (pos / neg) → KSampler
-        EmptyLatentImage (4ch) → KSampler → VAEDecode
+    SDXL render — mirrors sdxl.json (also used for SD1.5).
     """
+    import torch
+
     if loras_a:
         model, clip = _apply_loras(model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key)
 
@@ -762,13 +790,13 @@ def _render_sdxl(model, clip, vae, pos_prompt, neg_prompt,
         ),
     }
 
-    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
 
     print("[_render_sdxl] Decoding latent…")
-    decoded = vae.decode(samples)
+    decoded = vae.decode(latent_out["samples"])
     if len(decoded.shape) == 5:
         decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
-    return decoded, {"samples": samples}
+    return decoded, latent_out
 
 
 def _render_wan_image(model, clip, vae, pos_prompt, neg_prompt,
@@ -783,16 +811,20 @@ def _render_wan_image(model, clip, vae, pos_prompt, neg_prompt,
     Note: wan_image.json uses two CLIPTextEncode nodes with the same
     prompt text (one for positive, one for negative).
     """
+    import torch
+    import comfy
+
     if loras_a:
-        model, clip = _apply_loras(model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key)
+        model, clip = _apply_loras(
+            model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key
+        )
 
     tokens_pos = clip.tokenize(pos_prompt)
-    cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+    cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
     tokens_neg = clip.tokenize(neg_prompt)
-    cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
+    cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
 
-    # WAN is a video architecture — even for single images, use a 5D latent
-    # with temporal=1, matching EmptyHunyuanLatentVideo format.
+    # WAN is video-native; for single image generation use a 5D latent with T=1.
     latent = {
         "samples": torch.zeros(
             [batch, 16, 1, height // 8, width // 8],
@@ -801,16 +833,26 @@ def _render_wan_image(model, clip, vae, pos_prompt, neg_prompt,
         "downscale_ratio_spacial": 8,
     }
 
-    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
-    print(f"[_render_wan_image] samples shape={samples.shape}")
+    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    print(f"[_render_wan_image] samples shape={latent_out['samples'].shape}")
 
     print("[_render_wan_image] Decoding latent…")
-    decoded = vae.decode(samples)
+
+    # Prefer passing the latent tensor to the VAE API you are already using.
+    # If your local WAN VAE wrapper wants the whole latent dict instead, swap this line.
+    decoded = vae.decode(latent_out["samples"])
     print(f"[_render_wan_image] decoded shape={decoded.shape}")
+
     if len(decoded.shape) == 5:
-        # WAN VAE outputs [batch, frames, H, W, C] for video — flatten to [B*F, H, W, C]
-        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
-    return decoded, {"samples": samples}
+        # WAN video-style decode path, flatten [B, T, H, W, C] → [B*T, H, W, C]
+        decoded = decoded.reshape(
+            -1,
+            decoded.shape[-3],
+            decoded.shape[-2],
+            decoded.shape[-1],
+        )
+
+    return decoded, latent_out
 
 
 def _render_wan_video_t2v(model_a, model_b, clip, vae, pos_prompt, neg_prompt,
