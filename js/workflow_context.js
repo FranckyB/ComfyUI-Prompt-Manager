@@ -516,8 +516,8 @@ app.registerExtension({
                 return [width, 174];
             };
 
-            // ── Hide override_data + weight_dtype widgets ───────────
-            const HIDE_WIDGETS = new Set(["override_data", "weight_dtype"]);
+            // ── Hide override_data widget ────────────────────────
+            const HIDE_WIDGETS = new Set(["override_data"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW) continue;
                 if (HIDE_WIDGETS.has(w.name)) {

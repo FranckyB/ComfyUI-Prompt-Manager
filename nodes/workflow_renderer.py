@@ -6,18 +6,10 @@ loads models, samples, decodes, and outputs IMAGE + LATENT.
 
 No UI, no extraction — purely a render engine.
 """
-import os
 import json
 import math
-import traceback
-import numpy as np
 import torch
-from PIL import Image as PILImage
 import folder_paths
-import comfy.sd
-import comfy.utils
-import comfy.sample
-import comfy.samplers
 import comfy.model_management
 
 from ..py.workflow_families import (
@@ -26,42 +18,21 @@ from ..py.workflow_families import (
     get_family_sampler_strategy,
     get_compatible_families,
 )
-from ..py.workflow_executor import (
-    load_template,
-    patch_template,
-    loras_to_text,
-    execute_template,
-)
-from ..py.workflow_extraction_utils import (
-    resolve_model_name,
-    resolve_vae_name,
-    resolve_clip_names,
-)
-from ..py.lora_utils import resolve_lora_path
+from ..py.workflow_extraction_utils import resolve_model_name
 
-# ── Optional GGUF support ────────────────────────────────────────────────────
-try:
-    from comfyui_gguf.nodes import load_gguf_unet as _load_gguf_unet
-    GGUF_SUPPORT = True
-except (ImportError, ModuleNotFoundError, AttributeError):
-    try:
-        import gguf_connector
-        GGUF_SUPPORT = True
-    except (ImportError, ModuleNotFoundError):
-        GGUF_SUPPORT = False
-    if not GGUF_SUPPORT:
-        _load_gguf_unet = None
-
-# ── Re-use sampler functions from the builder module ─────────────────────────
+# ── Re-use render functions from the builder module ──────────────────────────
 from .workflow_builder import (
-    _run_standard_ksampler,
-    _run_flux_sampler,
-    _run_flux2_sampler,
-    _run_wan_sampler,
+    _render_zimage,
+    _render_qwen_image,
+    _render_flux1,
+    _render_flux2,
+    _render_sdxl,
+    _render_wan_image,
+    _render_wan_video_t2v,
+    _render_wan_video_i2v,
     _load_model_from_path,
     _load_vae,
     _load_clip,
-    _apply_loras,
 )
 
 
@@ -206,178 +177,82 @@ class WorkflowRenderer:
         else:
             print(f"[WorkflowRenderer] Using cached model: {resolved_a}")
         model_a, clip_a, vae_a = _cache[_cache_key_a]
-
-        # ── Template-driven path (preferred) ──────────────────────────────
-        api_template, wmap = load_template(family_key)
         has_both_stacks = bool(loras_a) and bool(loras_b)
 
-        if api_template is not None:
-            import copy
-            api = copy.deepcopy(api_template)
+        # ── Load VAE + CLIP ───────────────────────────────────────────────
+        vae = _load_vae(vae_name, existing_vae=vae_a)
+        if vae is None:
+            raise FileNotFoundError(
+                f"No VAE available (model={model_name_a}, vae={vae_name!r}). "
+                f"Select a specific VAE in the Workflow Builder."
+            )
 
-            # Build lora override dicts from active/strength in workflow_data
-            lora_overrides = {}
-            for lora in loras_a:
-                key = f"a:{lora['name']}" if has_both_stacks else lora["name"]
-                lora_overrides[key] = {
-                    "active": lora.get("active", True),
-                    "model_strength": lora.get("strength", lora.get("model_strength", 1.0)),
-                    "clip_strength": lora.get("clip_strength", 1.0),
-                }
-            for lora in loras_b:
-                key = f"b:{lora['name']}"
-                lora_overrides[key] = {
-                    "active": lora.get("active", True),
-                    "model_strength": lora.get("strength", lora.get("model_strength", 1.0)),
-                    "clip_strength": lora.get("clip_strength", 1.0),
-                }
+        clip_info = {"names": clip_names, "type": clip_type_str, "source": "workflow_data"}
+        clip = _load_clip(clip_info, {}, existing_clip=clip_a)
+        if clip is None:
+            raise FileNotFoundError("No CLIP available for text encoding")
 
-            patch_params = {
-                "positive_prompt": positive_prompt,
-                "negative_prompt": negative_prompt,
-                "model_a": model_name_a,
-                "model_b": model_name_b,
-                "vae": vae_name,
-                "width": width,
-                "height": height,
-                "batch_size": batch,
-                "seed": sampler_params.get("seed_a", sampler_params.get("seed", 0)),
-                "seed_b": seed_b,
-                "cfg": sampler_params["cfg"],
-                "sampler_name": sampler_params["sampler_name"],
-                "scheduler": sampler_params["scheduler"],
-                "denoise": 1.0,
-                "guidance": sampler_params.get("guidance"),
-                "lora_stack_a_text": loras_to_text(
-                    loras_a, lora_overrides, "a" if has_both_stacks else ""
-                ),
-                "lora_stack_b_text": loras_to_text(
-                    loras_b, lora_overrides, "b"
-                ),
+        # ── Build LoRA overrides ──────────────────────────────────────────
+        lora_overrides = {}
+        for lora in loras_a:
+            key = f"a:{lora['name']}" if has_both_stacks else lora["name"]
+            lora_overrides[key] = {
+                "active": lora.get("active", True),
+                "model_strength": lora.get("strength", lora.get("model_strength", 1.0)),
+                "clip_strength": lora.get("clip_strength", 1.0),
+            }
+        for lora in loras_b:
+            key = f"b:{lora['name']}"
+            lora_overrides[key] = {
+                "active": lora.get("active", True),
+                "model_strength": lora.get("strength", lora.get("model_strength", 1.0)),
+                "clip_strength": lora.get("clip_strength", 1.0),
             }
 
-            # Steps: WAN dual or standard
-            if strategy == "wan_video":
-                steps_high = wf_sampler.get("steps_high")
-                steps_low = wf_sampler.get("steps_low")
-                if steps_high is not None and steps_low is not None:
-                    sh = int(steps_high)
-                    sl = int(steps_low)
-                else:
-                    total = sampler_params["steps"]
-                    sh = math.ceil(total / 2)
-                    sl = total - sh
-                patch_params["steps_high"] = sh
-                patch_params["steps_low"] = sl
-                if patch_params.get("seed_b") is None:
-                    patch_params["seed_b"] = patch_params["seed"]
-                print(f"[WorkflowRenderer] WAN dual-steps: high={sh}, low={sl}")
-            else:
-                patch_params["steps"] = sampler_params["steps"]
+        stack_key_a = "a" if has_both_stacks else ""
+        stack_key_b = "b" if has_both_stacks else ""
 
-            if length is not None:
-                patch_params["length"] = int(length)
+        # ── Dispatch by family ────────────────────────────────────────────
+        render_args = dict(
+            model=model_a, clip=clip, vae=vae,
+            pos_prompt=positive_prompt, neg_prompt=negative_prompt,
+            width=width, height=height, batch=batch,
+            sampler_params=sampler_params,
+            loras_a=loras_a, lora_overrides=lora_overrides,
+            lora_stack_key=stack_key_a,
+        )
 
-            # Source image for i2v
-            if source_image is not None and family_key == "wan_video_i2v":
-                try:
-                    input_dir = folder_paths.get_input_directory()
-                    img_t = source_image
-                    if isinstance(img_t, torch.Tensor):
-                        while img_t.ndim > 3:
-                            img_t = img_t.squeeze(0)
-                        img_array = img_t.cpu().numpy()
-                    else:
-                        img_array = np.array(img_t)
-                        while img_array.ndim > 3:
-                            img_array = img_array[0]
-                    img_array = (img_array * 255).clip(0, 255).astype(np.uint8)
-                    pil_img = PILImage.fromarray(img_array)
-                    temp_name = "wg_i2v_source_image.png"
-                    temp_path = os.path.join(input_dir, temp_name)
-                    pil_img.save(temp_path)
-                    patch_params["source_image_path"] = temp_name
-                    print(f"[WorkflowRenderer] Source image saved: {temp_path}")
-                except Exception as e:
-                    print(f"[WorkflowRenderer] Failed to save source image: {e}")
+        # Unsupported families — error early with a clear message
+        unsupported = ("ltxv",)
+        if family_key in unsupported:
+            raise ValueError(
+                f"[WorkflowRenderer] Family '{family_key}' is not yet supported. "
+                f"Unsupported families: {', '.join(unsupported)}"
+            )
 
-            # CLIP names
-            if clip_names:
-                patch_params["clip"] = clip_names[0]
-                if len(clip_names) > 1:
-                    patch_params["clip_1"] = clip_names[0]
-                    patch_params["clip_2"] = clip_names[1]
+        if family_key == "zimage":
+            decoded, out_latent = _render_zimage(**render_args)
 
-            patch_template(api, wmap, patch_params)
+        elif family_key == "qwen_image":
+            decoded, out_latent = _render_qwen_image(**render_args)
 
-            print(f"[WorkflowRenderer] Template execution: family={family_key}")
-            decoded, out_latent = execute_template(api, wmap, family_key, patch_params)
+        elif family_key == "flux1":
+            decoded, out_latent = _render_flux1(**render_args)
 
-        else:
-            # ── Fallback: hardcoded sampler paths ─────────────────────────
-            print(f"[WorkflowRenderer] Hardcoded sampler fallback: {strategy}")
+        elif family_key == "flux2":
+            decoded, out_latent = _render_flux2(**render_args)
 
-            vae = _load_vae(vae_name, existing_vae=vae_a)
-            if vae is None:
-                raise FileNotFoundError(
-                    f"No VAE available (model={model_name_a}, vae={vae_name!r}). "
-                    f"Select a specific VAE in the Workflow Builder."
-                )
+        elif family_key in ("sdxl", "sd15"):
+            decoded, out_latent = _render_sdxl(**render_args)
 
-            clip_info = {"names": clip_names, "type": clip_type_str, "source": "workflow_data"}
-            clip = _load_clip(clip_info, {}, existing_clip=clip_a)
-            if clip is None:
-                raise FileNotFoundError("No CLIP available for text encoding")
+        elif family_key == "wan_image":
+            decoded, out_latent = _render_wan_image(**render_args)
 
-            # Build lora override dicts from active/strength in workflow_data
-            lora_overrides = {}
-            for lora in loras_a:
-                key = f"a:{lora['name']}" if has_both_stacks else lora["name"]
-                lora_overrides[key] = {
-                    "active": lora.get("active", True),
-                    "model_strength": lora.get("strength", lora.get("model_strength", 1.0)),
-                    "clip_strength": lora.get("clip_strength", 1.0),
-                }
-            for lora in loras_b:
-                key = f"b:{lora['name']}"
-                lora_overrides[key] = {
-                    "active": lora.get("active", True),
-                    "model_strength": lora.get("strength", lora.get("model_strength", 1.0)),
-                    "clip_strength": lora.get("clip_strength", 1.0),
-                }
-
-            stack_key_a = "a" if has_both_stacks else ""
-            model_a, clip = _apply_loras(model_a, clip, loras_a, lora_overrides, stack_key=stack_key_a)
-
-            tokens_pos = clip.tokenize(positive_prompt)
-            cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
-            tokens_neg = clip.tokenize(negative_prompt)
-            cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
-
-            # Latent creation
-            if strategy == "wan_video":
-                L = int(length or 81)
-                temporal = ((L - 1) // 4) + 1
-                latent_tensor = torch.zeros(
-                    [batch, 16, temporal, height // 8, width // 8],
-                    device=comfy.model_management.intermediate_device(),
-                )
-            else:
-                latent_tensor = torch.zeros(
-                    [batch, 4, height // 8, width // 8],
-                    device=comfy.model_management.intermediate_device(),
-                )
-            latent_dict = {
-                "samples": latent_tensor,
-                "downscale_ratio_spacial": 8,
-                "_width": width,
-                "_height": height,
-            }
-
-            # Model B for WAN dual-sampler
-            if strategy == "wan_video" and model_name_b:
+        elif family_key in ("wan_video_t2v", "wan_video_i2v"):
+            # Load Model B for dual-sampler
+            model_b_obj = None
+            if model_name_b:
                 resolved_b, folder_b = resolve_model_name(model_name_b)
-                model_b_obj = clip_b = None
                 if resolved_b:
                     full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
                     _cache_key_b = (str(unique_id), full_path_b, family_key + "_b")
@@ -386,44 +261,45 @@ class WorkflowRenderer:
                         _cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b)
                     else:
                         print(f"[WorkflowRenderer] Using cached model B: {resolved_b}")
-                    model_b_obj, clip_b_raw, _ = _cache[_cache_key_b]
-                    clip_b = clip_b_raw or clip
-                    stack_key_b = "b" if has_both_stacks else ""
-                    model_b_obj, clip_b = _apply_loras(
-                        model_b_obj, clip_b, loras_b, lora_overrides, stack_key=stack_key_b,
-                    )
-                    tokens_pos_b = clip_b.tokenize(positive_prompt)
-                    cond_pos_b = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
-                    tokens_neg_b = clip_b.tokenize(negative_prompt)
-                    cond_neg_b = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
-                else:
-                    model_b_obj = cond_pos_b = cond_neg_b = None
+                    model_b_obj, _, _ = _cache[_cache_key_b]
 
-                total_steps = sampler_params["steps"]
-                steps_high = int(wf_sampler.get("steps_high", math.ceil(total_steps / 2)))
-                steps_low = int(wf_sampler.get("steps_low", total_steps - steps_high))
+            # WAN dual-sampler step counts
+            total_steps = sampler_params["steps"]
+            steps_high = int(wf_sampler.get("steps_high", math.ceil(total_steps / 2)))
+            steps_low = int(wf_sampler.get("steps_low", total_steps - steps_high))
+            sampler_params["steps_high"] = steps_high
+            sampler_params["steps_low"] = steps_low
+            if seed_b is not None:
+                sampler_params["seed_b"] = int(seed_b)
 
-                wan_params_a = dict(sampler_params)
-                wan_params_b = dict(sampler_params)
-                wan_params_a["steps"] = steps_high
-                wan_params_b["steps"] = steps_low
+            L = int(length or 81)
 
-                samples = _run_wan_sampler(
-                    model_a, cond_pos, cond_neg, latent_dict, wan_params_a,
-                    model_b=model_b_obj, cond_pos_b=cond_pos_b, cond_neg_b=cond_neg_b,
-                    sampler_params_b=wan_params_b,
+            if family_key == "wan_video_i2v":
+                decoded, out_latent = _render_wan_video_i2v(
+                    model_a=model_a, model_b=model_b_obj, clip=clip, vae=vae,
+                    pos_prompt=positive_prompt, neg_prompt=negative_prompt,
+                    width=width, height=height, length=L,
+                    sampler_params=sampler_params,
+                    source_image=source_image,
+                    loras_a=loras_a, loras_b=loras_b,
+                    lora_overrides=lora_overrides,
+                    lora_stack_key_a=stack_key_a, lora_stack_key_b=stack_key_b,
                 )
-            elif strategy == "flux2":
-                samples = _run_flux2_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
-            elif strategy == "flux":
-                samples = _run_flux_sampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
             else:
-                samples = _run_standard_ksampler(model_a, cond_pos, cond_neg, latent_dict, sampler_params)
+                decoded, out_latent = _render_wan_video_t2v(
+                    model_a=model_a, model_b=model_b_obj, clip=clip, vae=vae,
+                    pos_prompt=positive_prompt, neg_prompt=negative_prompt,
+                    width=width, height=height, length=L,
+                    sampler_params=sampler_params,
+                    loras_a=loras_a, loras_b=loras_b,
+                    lora_overrides=lora_overrides,
+                    lora_stack_key_a=stack_key_a, lora_stack_key_b=stack_key_b,
+                )
 
-            print("[WorkflowRenderer] Decoding latent…")
-            decoded = vae.decode(samples)
-            if len(decoded.shape) == 5:
-                decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
-            out_latent = {"samples": samples}
+        else:
+            raise ValueError(
+                f"[WorkflowRenderer] Unsupported family '{family_key}'. "
+                f"No render function available."
+            )
 
         return (decoded, out_latent)

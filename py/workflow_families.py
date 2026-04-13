@@ -12,6 +12,8 @@ Each family dict specifies:
   "clip"         — CLIP/text-encoder filename substrings compatible with this family
   "clip_exact"   — CLIP exact basenames (full filename match)
   "clip_exclude" — substrings that DISQUALIFY a CLIP match (applied after include patterns)
+  "clip_type"    — CLIPType key passed to comfy.sd.load_clip (e.g. "flux", "wan")
+  "clip_slots"   — number of distinct CLIP files needed (default 1; flux1/sdxl need 2)
   "sampler"      — internal sampling strategy key (see SAMPLER_STRATEGIES below)
 
 Matching rules:
@@ -38,8 +40,8 @@ MODEL_FAMILIES = {
         #   4B model → qwen_3_4b.safetensors
         #   9B model → qwen_3_8b_fp8mixed.safetensors
         # CLIPLoader type must be "flux2" so CLIPType.FLUX2 is used.
-        "clip":         ["qwen_3_4b", "qwen_3_8b", "qwen_3"],
-        "clip_exclude": ["qwen_2.5", "qwen_2_5", "t5xxl", "umt5", "clip_l", "clip_g", "gemma"],
+        "clip":         ["qwen_3_8b"],
+        "clip_exclude": ["qwen_2.5", "qwen_2_5", "qwen_3_4b", "t5xxl", "umt5", "clip_l", "clip_g", "gemma"],
         "clip_type": "flux2",
         "sampler": "flux2",
     },
@@ -58,6 +60,8 @@ MODEL_FAMILIES = {
         # umt5_xxl also contains "t5xxl" as substring — exclude it explicitly.
         "clip":         ["t5xxl", "clip_l"],
         "clip_exclude": ["umt5", "clip_g", "qwen", "gemma"],
+        "clip_type": "flux",
+        "clip_slots": 2,
         "sampler": "flux",
     },
     # ── Z-Image (Base + Turbo merged) ────────────────────────────────────────
@@ -74,17 +78,18 @@ MODEL_FAMILIES = {
         "clip":         ["qwen-4b-zimage", "qwen_3_4b"],
         "clip_exclude": ["qwen_3_8b", "qwen_2.5", "qwen_2_5", "t5xxl", "umt5",
                          "clip_l", "clip_g", "gemma"],
-        "sampler": "flux",
+        "clip_type": "lumina2",
+        "sampler": "zimage",
     },
     # ── WAN 2.x Video — Image-to-Video (dual KSampler + i2v latent) ──────────
     "wan_video_i2v": {
         "label":   "WAN Video (i2v)",
         "folders": ["wan2_2/i2v/", "wan2_1/i2v/"],
         "names":   ["wan2.2_i2v", "wan2.1_i2v", "wan_i2v", "i2v"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
-                    "wan2.1-vae", "wan_2.1-vae"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.1-vae", "wan_2.1-vae"],
         "clip":         ["umt5_xxl", "umt5-xxl"],
         "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
+        "clip_type": "wan",
         "sampler": "wan_video",
     },
     # ── WAN 2.x Video — Text-to-Video (dual KSampler) ────────────────────────
@@ -96,10 +101,10 @@ MODEL_FAMILIES = {
         "folders": ["wan2_2/", "wan2_1/", "wan/"],
         "names":   ["wan2.2", "wan2.1", "wan2_2", "wan2_1", "wanvideo", "wan_t2v",
                     "wan2.2_t2v", "wan2.1_t2v"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
-                    "wan2.1-vae", "wan_2.1-vae"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.1-vae", "wan_2.1-vae"],
         "clip":         ["umt5_xxl", "umt5-xxl"],
         "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
+        "clip_type": "wan",
         "sampler": "wan_video",
     },
     # ── WAN 2.x Image (single KSampler, text-to-image) ──────────────────────
@@ -112,11 +117,11 @@ MODEL_FAMILIES = {
         "folders": ["wan2_2/", "wan2_1/", "wan/"],
         "names":   ["wan2.2", "wan2.1", "wan2_2", "wan2_1", "wanvideo", "wan_t2v",
                     "wan2.2_t2v", "wan2.1_t2v"],
-        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.2_vae", "wan_2.2_vae",
-                    "wan2.1-vae", "wan_2.1-vae"],
+        "vae":     ["wan_2.1_vae", "wan2.1_vae", "wan2.1-vae", "wan_2.1-vae"],
         # WAN uses UMT5-XXL exclusively — NOT t5xxl, NOT clip_l/g.
         "clip":         ["umt5_xxl", "umt5-xxl"],
         "clip_exclude": ["t5xxl", "clip_l", "clip_g", "qwen", "gemma"],
+        "clip_type": "wan",
         "sampler": "wan_image",
     },
     # ── LTX-Video ────────────────────────────────────────────────────────────
@@ -132,6 +137,7 @@ MODEL_FAMILIES = {
         # umt5_xxl contains "t5xxl" → must exclude it.
         "clip":         ["t5xxl"],
         "clip_exclude": ["umt5", "clip_l", "clip_g", "qwen", "gemma"],
+        "clip_type": "sd3",
         "sampler": "flux",
     },
     # ── SDXL (+ Pony, Illustrious, Turbo merged) ────────────────────────────
@@ -169,6 +175,7 @@ MODEL_FAMILIES = {
         "vae":     ["qwen_image_vae"],
         "clip":         ["qwen_2.5_vl", "qwen_2_5_vl"],
         "clip_exclude": ["qwen_3", "t5xxl", "umt5", "clip_l", "clip_g", "gemma"],
+        "clip_type": "qwen_image",
         "sampler": "standard",
     },
 }
@@ -187,8 +194,9 @@ MODEL_COMPAT_GROUPS = [
 # Each key maps to a specific sampling code path.
 SAMPLER_STRATEGIES = {
     "standard":  "standard",   # KSampler — SD1.5, SDXL, Qwen
-    "flux":      "flux",       # SamplerCustomAdvanced + BasicGuider (Flux1, Z-Image, LTX-Video)
-    "flux2":     "flux2",      # Flux2Scheduler + SamplerCustomAdvanced + CFGGuider (Klein/Flux2)
+    "flux":      "flux",       # SamplerCustomAdvanced + BasicGuider (Flux1, LTX-Video)
+    "flux2":     "flux2",      # SamplerCustomAdvanced + CFGGuider (Klein/Flux2)
+    "zimage":    "zimage",     # ModelSamplingAuraFlow + standard KSampler (Z-Image)
     "wan_image": "wan_image",  # Single KSampler — WAN Image
     "wan_video": "wan_video",  # Dual KSamplerAdvanced high/low (WAN Video i2v + t2v)
 }

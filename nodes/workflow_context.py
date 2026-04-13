@@ -1,198 +1,21 @@
 """
 ComfyUI Workflow Context — Unpack/repack workflow_data into individual outputs.
 Any connected optional input overrides the corresponding field before output.
-Loads actual MODEL / CLIP / VAE objects from model names in workflow_data.
-Analogous to rgthree's "Context Big" but for WORKFLOW_DATA.
+By default a pure data gateway (passes MODEL/CLIP/VAE through if connected).
+Enable 'load_models' to fall back to loading from workflow_data names when
+no model inputs are connected.
 """
 import json
-import os
-import folder_paths
-import comfy.sd
-import torch
 
-from ..py.workflow_families import (
-    get_model_family,
-)
-
-
-# ── Model extensions & helpers ───────────────────────────────────────
-MODEL_EXTENSIONS = ['.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.sft']
-
-
-def _get_gguf_module():
-    """Get the ComfyUI-GGUF module if the node is loaded, None otherwise."""
-    try:
-        import nodes as comfy_nodes
-        gguf_cls = comfy_nodes.NODE_CLASS_MAPPINGS.get("UnetLoaderGGUF")
-        if gguf_cls is None:
-            return None
-        import sys
-        mod = sys.modules.get(gguf_cls.__module__)
-        if mod is None:
-            return None
-        package = gguf_cls.__module__.rsplit('.', 1)[0]
-        ops_mod = sys.modules.get(f"{package}.ops")
-        loader_mod = sys.modules.get(f"{package}.loader")
-        if ops_mod and loader_mod:
-            return {
-                "GGMLOps": ops_mod.GGMLOps,
-                "gguf_sd_loader": loader_mod.gguf_sd_loader,
-                "GGUFModelPatcher": mod.GGUFModelPatcher,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def _load_gguf_unet(unet_path):
-    """Load a GGUF model using ComfyUI-GGUF's loader. Returns MODEL."""
-    import inspect
-
-    gguf = _get_gguf_module()
-    if gguf is None:
-        raise RuntimeError("[WorkflowContext] ComfyUI-GGUF module not available")
-
-    ops = gguf["GGMLOps"]()
-    sd, extra = gguf["gguf_sd_loader"](unet_path)
-
-    kwargs = {}
-    valid_params = inspect.signature(comfy.sd.load_diffusion_model_state_dict).parameters
-    if "metadata" in valid_params:
-        kwargs["metadata"] = extra.get("metadata", {})
-
-    model = comfy.sd.load_diffusion_model_state_dict(
-        sd, model_options={"custom_operations": ops}, **kwargs,
-    )
-    if model is None:
-        raise RuntimeError(f"[WorkflowContext] Could not detect model type of GGUF: {unet_path}")
-
-    model = gguf["GGUFModelPatcher"].clone(model)
-    model.patch_on_device = False
-    return model
-
-
-def _resolve_model_name(model_name):
-    """
-    Resolve a model name (basename, basename without extension, or relative path)
-    to the actual relative path in ComfyUI's folder system.
-    Returns (relative_path, folder_name) or (None, None) if not found.
-    """
-    if not model_name:
-        return None, None
-
-    model_name_clean = model_name.strip().replace('\\', '/')
-    name_base = os.path.basename(model_name_clean).lower()
-
-    name_no_ext = name_base
-    for ext in MODEL_EXTENSIONS:
-        if name_no_ext.endswith(ext):
-            name_no_ext = name_no_ext[:-len(ext)]
-            break
-
-    for folder_name in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
-        try:
-            file_list = folder_paths.get_filename_list(folder_name)
-        except Exception:
-            continue
-
-        for f in file_list:
-            f_normalized = f.replace('\\', '/')
-            if f_normalized == model_name_clean:
-                return f, folder_name
-
-            f_base = os.path.basename(f_normalized).lower()
-            if f_base == name_base:
-                return f, folder_name
-
-            f_no_ext = f_base
-            for ext in MODEL_EXTENSIONS:
-                if f_no_ext.endswith(ext):
-                    f_no_ext = f_no_ext[:-len(ext)]
-                    break
-            if f_no_ext == name_no_ext:
-                return f, folder_name
-
-    return None, None
-
-
-def _build_model_options(weight_dtype):
-    """Build model_options dict from weight_dtype selection."""
-    model_options = {}
-    if weight_dtype == "fp8_e4m3fn":
-        model_options["dtype"] = torch.float8_e4m3fn
-    elif weight_dtype == "fp8_e4m3fn_fast":
-        model_options["dtype"] = torch.float8_e4m3fn
-        model_options["fp8_optimizations"] = True
-    elif weight_dtype == "fp8_e5m2":
-        model_options["dtype"] = torch.float8_e5m2
-    return model_options
-
-
-def _load_single_model(model_path, weight_dtype="default"):
-    """
-    Load one model by name/path. Returns (model_type, model, clip, vae, display_name).
-    model_type is "Checkpoint", "Diffusion", "GGUF", or "NOT FOUND".
-    """
-    model_path = (model_path or "").strip()
-    if not model_path:
-        return "NOT FOUND", None, None, None, "(empty)"
-
-    display_name = os.path.basename(model_path.replace('\\', '/'))
-    resolved_path, resolved_folder = _resolve_model_name(model_path)
-
-    if resolved_path is None:
-        print(f"[WorkflowContext] Model not found: '{model_path}' — searched checkpoints, diffusion_models, unet, unet_gguf")
-        return "NOT FOUND", None, None, None, display_name
-
-    display_name = os.path.basename(resolved_path.replace('\\', '/'))
-    is_gguf = resolved_path.lower().endswith('.gguf')
-
-    # GGUF models
-    if is_gguf:
-        if _get_gguf_module() is None:
-            print(f"[WorkflowContext] GGUF model detected but ComfyUI-GGUF is not installed: {resolved_path}")
-            return "NOT FOUND", None, None, None, display_name
-        full_path = folder_paths.get_full_path(resolved_folder, resolved_path)
-        if full_path and os.path.isfile(full_path):
-            print(f"[WorkflowContext] Loading GGUF model: {resolved_path}")
-            model = _load_gguf_unet(full_path)
-            return "GGUF", model, None, None, display_name
-        return "NOT FOUND", None, None, None, display_name
-
-    # Checkpoint
-    if resolved_folder == 'checkpoints':
-        ckpt_path = folder_paths.get_full_path("checkpoints", resolved_path)
-        if ckpt_path and os.path.isfile(ckpt_path):
-            print(f"[WorkflowContext] Loading checkpoint: {resolved_path}")
-            out = comfy.sd.load_checkpoint_guess_config(
-                ckpt_path,
-                output_vae=True,
-                output_clip=True,
-                embedding_directory=folder_paths.get_folder_paths("embeddings"),
-            )
-            return "Checkpoint", out[0], out[1], out[2], display_name
-
-    # Diffusion / UNET
-    model_options = _build_model_options(weight_dtype)
-    full_path = folder_paths.get_full_path(resolved_folder, resolved_path)
-    if full_path and os.path.isfile(full_path):
-        print(f"[WorkflowContext] Loading diffusion/UNET model: {resolved_path}")
-        model = comfy.sd.load_diffusion_model(full_path, model_options=model_options)
-        return "Diffusion", model, None, None, display_name
-
-    print(f"[WorkflowContext] Model file not accessible: {resolved_path}")
-    return "NOT FOUND", None, None, None, display_name
+from .workflow_model_loader import _load_single_model
 
 
 class WorkflowContext:
     """
     Unpack workflow_data into individual typed outputs.
-    Connect optional inputs to override any field — the updated workflow_data
-    is re-emitted so downstream nodes always see the latest values.
-    Models are loaded and returned as MODEL / CLIP / VAE objects.
-    Runtime objects are stored in the dict under CAPS keys (MODEL_A, MODEL_B,
-    CLIP, VAE) so that chaining multiple WorkflowContext nodes avoids
-    redundant model loads.
+    By default a pure data gateway — passes MODEL/CLIP/VAE through if
+    connected. Enable 'load_models' to fall back to loading from
+    workflow_data names when no model inputs are connected.
     """
 
     @classmethod
@@ -205,10 +28,10 @@ class WorkflowContext:
                 "override_data": ("STRING", {"default": "{}", "multiline": True}),
             },
             "optional": {
-                "model_a":         ("MODEL",   {"tooltip": "Override Model A object (highest priority, skip loading)"}),
-                "model_b":         ("MODEL",   {"tooltip": "Override Model B object (highest priority, skip loading)"}),
-                "clip":            ("CLIP",    {"tooltip": "Override CLIP object (highest priority, skip loading)"}),
-                "vae":             ("VAE",     {"tooltip": "Override VAE object (highest priority, skip loading)"}),
+                "model_a":         ("MODEL",   {"tooltip": "Pass-through Model A (from WorkflowModelLoader or other source)"}),
+                "model_b":         ("MODEL",   {"tooltip": "Pass-through Model B (from WorkflowModelLoader or other source)"}),
+                "clip":            ("CLIP",    {"tooltip": "Pass-through CLIP (from WorkflowModelLoader or other source)"}),
+                "vae":             ("VAE",     {"tooltip": "Pass-through VAE (from WorkflowModelLoader or other source)"}),
                 "positive_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override positive prompt"}),
                 "negative_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override negative prompt"}),
                 "lora_stack_a":    ("LORA_STACK", {"tooltip": "Override LoRA stack A"}),
@@ -225,9 +48,13 @@ class WorkflowContext:
                 "scheduler":       ("STRING",  {"forceInput": True, "tooltip": "Override scheduler"}),
                 "denoise":         ("FLOAT",   {"forceInput": True, "tooltip": "Override denoise strength"}),
                 "guidance":        ("FLOAT",   {"forceInput": True, "tooltip": "Override guidance value"}),
+                "load_models": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "When enabled, load models from workflow_data names if no MODEL/CLIP/VAE inputs are connected."
+                }),
                 "weight_dtype": (["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"], {
                     "default": "default",
-                    "tooltip": "Weight precision for diffusion models. Ignored for checkpoints."
+                    "tooltip": "Weight precision for diffusion models (only used when load_models is enabled)."
                 }),
             },
         }
@@ -253,15 +80,16 @@ class WorkflowContext:
     FUNCTION = "unpack"
     CATEGORY = "Prompt Manager"
     DESCRIPTION = (
-        "Unpack workflow_data into individual outputs — loads models, unpacks prompts, "
-        "sampler settings, resolution, and LoRA stacks. "
-        "Connect any optional input to override that field before output."
+        "Unpack workflow_data into individual outputs — passes through MODEL/CLIP/VAE "
+        "from connected inputs, or loads them from workflow_data names when "
+        "'load_models' is enabled. Unpacks prompts, sampler settings, resolution, "
+        "and LoRA stacks."
     )
 
     # ------------------------------------------------------------------
 
     def unpack(self, workflow_data, override_data="{}",
-               weight_dtype="default", **kwargs):
+               load_models=False, weight_dtype="default", **kwargs):
         # Accept both dict and JSON string (backward compat)
         if isinstance(workflow_data, str):
             try:
@@ -322,43 +150,38 @@ class WorkflowContext:
                 sampler[key] = kwargs[key]
         wf['sampler'] = sampler
 
-        # ── Resolve models ───────────────────────────────────────────
-        # Priority: connected MODEL/CLIP/VAE input > runtime object in dict > load from name
+        # ── Pass-through MODEL / CLIP / VAE ──────────────────────────
+        # Whatever is connected gets forwarded. If load_models is enabled
+        # and nothing is connected, fall back to loading from name strings.
         model_a = kwargs.get('model_a')
         model_b = kwargs.get('model_b')
         clip = kwargs.get('clip')
         vae = kwargs.get('vae')
 
-        # Fall back to runtime objects already in the dict (from upstream Context)
-        if model_a is None:
-            model_a = wf.get('MODEL_A')
-        if model_b is None:
-            model_b = wf.get('MODEL_B')
-        if clip is None:
-            clip = wf.get('CLIP')
-        if vae is None:
-            vae = wf.get('VAE')
+        if load_models:
+            if model_a is None:
+                ma_name = (wf.get('model_a') or "").strip()
+                if ma_name:
+                    _, model_a, clip_loaded, vae_loaded, _ = _load_single_model(ma_name, weight_dtype)
+                    if clip is None:
+                        clip = clip_loaded
+                    if vae is None:
+                        vae = vae_loaded
 
-        # Last resort: load from model name strings in workflow_data
-        if model_a is None:
-            ma_name = (wf.get('model_a') or "").strip()
-            if ma_name:
-                _, model_a, clip_loaded, vae_loaded, _ = _load_single_model(ma_name, weight_dtype)
-                if clip is None:
-                    clip = clip_loaded
-                if vae is None:
-                    vae = vae_loaded
+            if model_b is None:
+                mb_name = (wf.get('model_b') or "").strip()
+                if mb_name:
+                    _, model_b, _, _, _ = _load_single_model(mb_name, weight_dtype)
 
-        if model_b is None:
-            mb_name = (wf.get('model_b') or "").strip()
-            if mb_name:
-                _, model_b, _, _, _ = _load_single_model(mb_name, weight_dtype)
-
-        # Store runtime objects in dict so downstream Context nodes can reuse them
-        wf['MODEL_A'] = model_a
-        wf['MODEL_B'] = model_b
-        wf['CLIP'] = clip
-        wf['VAE'] = vae
+        # Store in dict so downstream nodes see them
+        if model_a is not None:
+            wf['MODEL_A'] = model_a
+        if model_b is not None:
+            wf['MODEL_B'] = model_b
+        if clip is not None:
+            wf['CLIP'] = clip
+        if vae is not None:
+            wf['VAE'] = vae
 
         # ── Build lora stacks as tuples for LORA_STACK output ────────
         lora_stack_a = [

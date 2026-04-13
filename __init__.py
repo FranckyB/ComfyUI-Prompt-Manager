@@ -15,6 +15,8 @@ from .nodes.prompt_extractor import PromptExtractor
 from .nodes.workflow_builder import WorkflowBuilder
 from .nodes.workflow_renderer import WorkflowRenderer
 from .nodes.workflow_context import WorkflowContext
+from .nodes.workflow_model_loader import WorkflowModelLoader
+from .nodes.test_render import TestRenderFunctions
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":       PromptApplyLora,
@@ -26,6 +28,8 @@ NODE_CLASS_MAPPINGS = {
     "WorkflowBuilder":       WorkflowBuilder,
     "WorkflowRenderer":      WorkflowRenderer,
     "WorkflowContext":       WorkflowContext,
+    "WorkflowModelLoader":   WorkflowModelLoader,
+    "TestRenderFunctions":   TestRenderFunctions,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -38,6 +42,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WorkflowBuilder":       "Workflow Builder",
     "WorkflowRenderer":      "Workflow Renderer",
     "WorkflowContext":       "Workflow Context",
+    "WorkflowModelLoader":   "Workflow Model Loader",
+    "TestRenderFunctions":   "Test Render Functions",
 }
 
 # WORKFLOW_DICT is a custom ComfyUI type used to pass workflow configuration
@@ -48,4 +54,4 @@ WEB_DIRECTORY = "./js"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
-print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, PromptGenerator, PromptGenOptions, PromptExtractor, WorkflowBuilder, WorkflowRenderer, WorkflowContext")
+print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, PromptGenerator, PromptGenOptions, PromptExtractor, WorkflowBuilder, WorkflowRenderer, WorkflowContext, WorkflowModelLoader")

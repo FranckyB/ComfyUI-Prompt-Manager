@@ -868,7 +868,6 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
     })
 
     family      = extracted.get('model_family', '')
-    family_strat = extracted.get('model_family_label', '')
 
     clip_info = extracted.get('clip', {})
     clip_source = clip_info.get('source', '')
@@ -883,7 +882,6 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
         "_version":        1,
         "_source":         overrides.get('_source', 'PromptExtractor'),
         "family":          family,
-        "family_strategy": family_strat,
         "model_a":         overrides.get('model_a',   extracted.get('model_a', '')),
         "model_b":         overrides.get('model_b',   extracted.get('model_b', '')),
         "positive_prompt": overrides.get('positive_prompt', extracted.get('positive_prompt', '')),

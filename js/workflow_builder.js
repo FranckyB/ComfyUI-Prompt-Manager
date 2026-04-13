@@ -123,22 +123,9 @@ const _NATIVE_H = 90;   // title bar + toggle widgets above the DOM widget
 const _MIN_W = 478;
 const _MIN_H = 300;
 
-function _snapNodeHeight(sectionEl) {
-    // Find root — the section's direct parent is root
-    let root = sectionEl?.parentElement;
-    if (!root || !root._weNode) return;
-    const node = root._weNode;
-    // Wait one frame so the browser has reflowed after display:none toggle
-    requestAnimationFrame(() => {
-        const contentH = (root.scrollHeight || _MIN_H) + _NATIVE_H;
-        const targetH = Math.max(contentH, _MIN_H);
-        node.setSize([Math.max(node.size[0], _MIN_W), targetH]);
-        app.graph.setDirtyCanvas(true, true);
-    });
-}
 
-// --- Section builder (always expanded) ---
-function makeSection(title, startOpen = true) {
+// --- Section builder (always expanded, not collapsible) ---
+function makeSection(title) {
     const wrap = makeEl("div", {
         borderRadius: "6px", overflow: "hidden", marginTop: "2px",
         backgroundColor: C.bgCard, flexShrink: "0",
@@ -147,40 +134,17 @@ function makeSection(title, startOpen = true) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "4px 8px",
         fontSize: "11px", fontWeight: "600", color: "#aaa",
-        userSelect: "none", cursor: "pointer",
+        userSelect: "none",
         borderBottom: "1px solid rgba(255,255,255,0.1)",
     });
     const label = makeEl("span", {}, title);
-    const chevron = makeEl("span", {
-        fontSize: "10px", color: C.textMuted, transition: "transform 0.15s",
-        marginLeft: "4px", flexShrink: "0",
-    }, startOpen ? "\u25BC" : "\u25B6");
-    header.append(label, chevron);
+    header.append(label);
     const body = makeEl("div", {
         padding: "4px 8px",
-        display: startOpen ? "" : "none",
-    });
-    // Toggle body on header click — snap node height to fit content.
-    header.addEventListener("click", () => {
-        const opening = body.style.display === "none";
-        body.style.display = opening ? "" : "none";
-        chevron.textContent = opening ? "\u25BC" : "\u25B6";
-        _snapNodeHeight(wrap);
     });
     wrap._titleLabel = label;
-    wrap._chevron = chevron;
     wrap.append(header, body);
     wrap._body = body;
-    wrap._expand = () => {
-        body.style.display = "";
-        chevron.textContent = "\u25BC";
-        _snapNodeHeight(wrap);
-    };
-    wrap._collapse = () => {
-        body.style.display = "none";
-        chevron.textContent = "\u25B6";
-        _snapNodeHeight(wrap);
-    };
     return wrap;
 }
 
@@ -1217,7 +1181,6 @@ function parseWorkflowData(jsonStr) {
             },
             resolution: d.resolution || { width: 768, height: 1280, batch_size: 1, length: null },
             model_family: d.family || "",
-            model_family_label: d.family_strategy || "",
         };
     } catch (e) {
         console.warn("[WorkflowBuilder] Could not parse workflow_data:", e);
@@ -1266,7 +1229,7 @@ app.registerExtension({
             // their events never reach this handler.
             forwardWheelToCanvas(root);
             node._weRoot = root;
-            root._weNode = node;   // back-reference for _snapNodeHeight
+            node._weRoot = root;
 
             // -- 1. RESOLUTION section (open) --
             const resSec = makeSection("RESOLUTION");
@@ -1887,16 +1850,20 @@ app.registerExtension({
                     // syncHidden no longer captures sampler/resolution/prompts
                     // in this mode, so overrides never freeze them. Always call
                     // updateUI so the UI stays in sync with the source workflow.
+                    const oldWfNames = [...(node._weExtracted?.loras_a || []), ...(node._weExtracted?.loras_b || [])]
+                        .map(l => l.name).sort().join(",");
                     node._weExtracted = info;
                     node.properties = node.properties || {};
                     node.properties.we_extracted_cache = JSON.stringify(info);
 
                     node._wePopulated = true;
-                    node._weLoraState = {};
+                    const newWfNames = [...(info.loras_a || []), ...(info.loras_b || [])]
+                        .map(l => l.name).sort().join(",");
+                    if (oldWfNames !== newWfNames) node._weLoraState = {};
                     node._weOverrides = {};
                     if (node.properties) {
                         delete node.properties.we_override_data;
-                        delete node.properties.we_lora_state;
+                        if (oldWfNames !== newWfNames) delete node.properties.we_lora_state;
                     }
                     updateUI(node);
                 }
@@ -1966,16 +1933,20 @@ app.registerExtension({
                     }
                 } else {
                     // use_workflow_data ON — always reflect the source
+                    const oldExNames = [...(this._weExtracted?.loras_a || []), ...(this._weExtracted?.loras_b || [])]
+                        .map(l => l.name).sort().join(",");
                     this._weExtracted = info;
                     this.properties = this.properties || {};
                     this.properties.we_extracted_cache = JSON.stringify(info);
 
                     this._wePopulated = true;
-                    this._weLoraState = {};
+                    const newExNames = [...(info.loras_a || []), ...(info.loras_b || [])]
+                        .map(l => l.name).sort().join(",");
+                    if (oldExNames !== newExNames) this._weLoraState = {};
                     this._weOverrides = {};
                     if (this.properties) {
                         delete this.properties.we_override_data;
-                        delete this.properties.we_lora_state;
+                        if (oldExNames !== newExNames) delete this.properties.we_lora_state;
                     }
                     updateUI(this);
                 }

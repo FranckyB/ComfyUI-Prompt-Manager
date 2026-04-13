@@ -32,12 +32,6 @@ from ..py.workflow_families import (
     list_compatible_vaes,
     list_compatible_clips,
 )
-from ..py.workflow_executor import (
-    load_template,
-    patch_template,
-    loras_to_text,
-    execute_template,
-)
 from ..py.workflow_extraction_utils import (
     extract_sampler_params,
     extract_vae_info,
@@ -301,6 +295,107 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
     return samples
 
 
+def _render_zimage(model, clip, vae, pos_prompt, neg_prompt,
+                   width, height, batch, sampler_params,
+                   loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    Z-Image render — uses the exact same ComfyUI node classes as the
+    original z_image.json workflow:
+
+        UNETLoader  → PromptApplyLora → ModelSamplingAuraFlow → KSampler
+        CLIPLoader  → CLIPTextEncode (pos / neg)  ──────────↗
+        EmptySD3LatentImage  ───────────────────────────────↗
+        VAELoader  → VAEDecode  ← ──────────────────KSampler
+
+    Model, CLIP, and VAE are loaded by the caller (cached).
+    Returns (IMAGE tensor, LATENT dict).
+    """
+    import torch
+    from comfy_extras.nodes_model_advanced import ModelSamplingAuraFlow
+
+    # ── 1. Apply LoRAs (PromptApplyLora equivalent) ───────────────────────
+    if loras_a:
+        model, clip = _apply_loras(
+            model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key,
+        )
+
+    # ── 2. Encode prompts (CLIPTextEncode) ────────────────────────────────
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    # ── 3. Create latent (EmptySD3LatentImage — 16 channels) ─────────────
+    latent = {
+        "samples": torch.zeros(
+            [batch, 16, height // 8, width // 8],
+            device=comfy.model_management.intermediate_device(),
+        ),
+    }
+
+    # ── 4. Patch model (ModelSamplingAuraFlow, shift from workflow) ───────
+    shift = float(sampler_params.get('guidance') or 3.0)
+    (model,) = ModelSamplingAuraFlow().patch(model, shift)
+
+    # ── 5. KSampler ──────────────────────────────────────────────────────
+    seed         = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
+    steps        = int(sampler_params['steps'])
+    cfg          = float(sampler_params['cfg'])
+    sampler_name = sampler_params['sampler_name']
+    scheduler    = sampler_params['scheduler']
+    denoise      = float(sampler_params.get('denoise', 1.0))
+
+    import latent_preview
+    latent_image = comfy.sample.fix_empty_latent_channels(model, latent["samples"])
+    noise    = comfy.sample.prepare_noise(latent_image, seed)
+    callback = latent_preview.prepare_callback(model, steps)
+    disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
+
+    samples = comfy.sample.sample(
+        model, noise, steps, cfg, sampler_name, scheduler,
+        cond_pos, cond_neg, latent_image,
+        denoise=denoise, disable_noise=False,
+        start_step=None, last_step=None,
+        force_full_denoise=False, noise_mask=None,
+        callback=callback, disable_pbar=disable_pbar, seed=seed,
+    )
+
+    # ── 6. VAEDecode ─────────────────────────────────────────────────────
+    print("[_render_zimage] Decoding latent…")
+    decoded = vae.decode(samples)
+    if len(decoded.shape) == 5:
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+
+    return decoded, {"samples": samples}
+
+
+def _run_zimage_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
+    """
+    Z-Image sampler path — ModelSamplingAuraFlow + standard KSampler.
+    Matches the z_image.json workflow exactly (16-channel latent).
+    NOTE: This is only used as a sampler-step fallback. Prefer _render_zimage
+    for the full pipeline.
+    """
+    from comfy_extras.nodes_model_advanced import ModelSamplingAuraFlow
+    import torch
+
+    shift = float(sampler_params.get('guidance') or 3.0)
+    (model,) = ModelSamplingAuraFlow().patch(model, shift)
+
+    # Z-Image uses 16-channel latent (EmptySD3LatentImage).
+    # If caller passed a 4-channel latent, recreate with 16 channels.
+    s = latent_dict["samples"]
+    if s.shape[1] == 4:
+        s = torch.zeros(
+            [s.shape[0], 16, s.shape[2], s.shape[3]],
+            device=s.device, dtype=s.dtype,
+        )
+        latent_dict = dict(latent_dict)
+        latent_dict["samples"] = s
+
+    return _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_params)
+
+
 def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     """
     Flux-style sampler path — BasicGuider + SamplerCustomAdvanced.
@@ -327,16 +422,11 @@ def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     except Exception:
         pass
 
-    guider_node   = BasicGuider()
-    sampler_node  = KSamplerSelect()
-    scheduler_node = BasicScheduler()
-    noise_node    = RandomNoise()
-    custom_node   = SamplerCustomAdvanced()
-
-    (guider,)    = guider_node.get_guider(model, cond_pos)
-    (sampler,)   = sampler_node.get_sampler(sampler_name)
-    (sigmas,)    = scheduler_node.get_sigmas(model, scheduler, steps, denoise)
-    (noise_obj,) = noise_node.get_noise(seed)
+    # V3 API: classmethods return NodeOutput — extract .args[0]
+    guider    = BasicGuider.execute(model, cond_pos).args[0]
+    sampler   = KSamplerSelect.execute(sampler_name).args[0]
+    sigmas    = BasicScheduler.execute(model, scheduler, steps, denoise).args[0]
+    noise_obj = RandomNoise.execute(seed).args[0]
 
     latent_image = comfy.sample.fix_empty_latent_channels(
         model, latent_dict["samples"],
@@ -344,8 +434,8 @@ def _run_flux_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     )
     latent_in = {"samples": latent_image}
 
-    out, out_denoised = custom_node.sample(noise_obj, guider, sampler, sigmas, latent_in)
-    return out_denoised["samples"]
+    sca_result = SamplerCustomAdvanced.execute(noise_obj, guider, sampler, sigmas, latent_in)
+    return sca_result.args[1]["samples"]  # denoised_output
 
 
 def _run_flux2_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
@@ -368,117 +458,539 @@ def _run_flux2_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
     scheduler    = sampler_params.get('scheduler', 'beta')
     denoise      = float(sampler_params.get('denoise', 1.0))
 
-    guider_node    = CFGGuider()
-    sampler_node   = KSamplerSelect()
-    scheduler_node = BasicScheduler()
-    noise_node     = RandomNoise()
-    custom_node    = SamplerCustomAdvanced()
-
-    (guider,)    = guider_node.get_guider(model, cond_pos, cond_neg, cfg)
-    (sampler,)   = sampler_node.get_sampler(sampler_name)
-    (sigmas,)    = scheduler_node.get_sigmas(model, scheduler, steps, denoise)
-    (noise_obj,) = noise_node.get_noise(seed)
+    # V3 API: classmethods return NodeOutput — extract .args[0]
+    guider    = CFGGuider.execute(model, cond_pos, cond_neg, cfg).args[0]
+    sampler   = KSamplerSelect.execute(sampler_name).args[0]
+    sigmas    = BasicScheduler.execute(model, scheduler, steps, denoise).args[0]
+    noise_obj = RandomNoise.execute(seed).args[0]
 
     latent_image = comfy.sample.fix_empty_latent_channels(
         model, latent_dict["samples"],
         latent_dict.get("downscale_ratio_spacial", None)
     )
     latent_in = {"samples": latent_image}
-    out, out_denoised = custom_node.sample(noise_obj, guider, sampler, sigmas, latent_in)
-    return out_denoised["samples"]
+    sca_result = SamplerCustomAdvanced.execute(noise_obj, guider, sampler, sigmas, latent_in)
+    return sca_result.args[1]["samples"]  # denoised_output
 
 
 def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
-                     model_b=None, cond_pos_b=None, cond_neg_b=None,
-                     sampler_params_b=None):
+                     model_b=None, cond_pos_b=None, cond_neg_b=None):
     """
-    WAN 2.x dual-sampler path (mirrors KSamplerAdvanced tandem pattern).
+    WAN 2.x dual-sampler path.
 
     model   / cond_pos   / cond_neg   = High-noise model (model A)
     model_b / cond_pos_b / cond_neg_b = Low-noise model  (model B)
 
-    Both samplers share the SAME noise schedule derived from total_steps.
-    The high model runs steps 0 → steps_high, then the low model continues
-    from steps_high → total_steps.  This matches the ComfyUI workflow where
-    two KSamplerAdvanced nodes run in tandem with start_at_step / end_at_step.
-
-    sampler_params['steps']   = steps for the HIGH pass
-    sampler_params_b['steps'] = steps for the LOW pass
-    total_steps = steps_high + steps_low
-
-    Falls back to single standard sampler if no model_b is provided.
+    Returns:
+        LATENT dict
     """
+    import torch
+    import comfy
     import latent_preview
 
-    # Apply ModelSamplingSD3 shift=5.0 to all WAN models before sampling
-    try:
-        from comfy_extras.nodes_model_advanced import ModelSamplingSD3
-        (model,) = ModelSamplingSD3().patch(model, shift=5.0, multiplier=1000)
-    except Exception:
-        pass
+    if not isinstance(latent_dict, dict) or "samples" not in latent_dict:
+        raise TypeError("latent_dict must be a LATENT dict containing a 'samples' tensor.")
 
-    # If no second model, fall back to standard path
+    def _patch_wan_sampling(m):
+        try:
+            from comfy_extras.nodes_model_advanced import ModelSamplingSD3
+        except Exception:
+            return m
+
+        # Try the most conservative call first, then fall back if needed.
+        try:
+            patched = ModelSamplingSD3().patch(m, shift=5.0)
+            if isinstance(patched, tuple):
+                return patched[0]
+            return patched
+        except TypeError:
+            patched = ModelSamplingSD3().patch(m, shift=5.0, multiplier=1000)
+            if isinstance(patched, tuple):
+                return patched[0]
+            return patched
+
+    model = _patch_wan_sampling(model)
+
     if model_b is None:
         return _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_params)
 
-    # Apply shift to model B as well
-    try:
-        from comfy_extras.nodes_model_advanced import ModelSamplingSD3
-        (model_b,) = ModelSamplingSD3().patch(model_b, shift=5.0, multiplier=1000)
-    except Exception:
-        pass
+    model_b = _patch_wan_sampling(model_b)
 
-    steps_high   = int(sampler_params.get('steps', 3))
-    steps_low    = int((sampler_params_b or sampler_params).get('steps', steps_high))
-    total_steps  = steps_high + steps_low
-    cfg_high     = float(sampler_params.get('cfg', 1.0))
-    cfg_low      = float((sampler_params_b or sampler_params).get('cfg', cfg_high))
-    seed         = int(sampler_params.get('seed_a', 0))
-    seed_low     = int((sampler_params_b or sampler_params).get('seed_a', seed))
-    sampler_name = sampler_params.get('sampler_name', 'euler')
-    scheduler    = sampler_params.get('scheduler', 'simple')
+    steps_high = int(sampler_params.get("steps_high", 2))
+    steps_low = int(sampler_params.get("steps_low", steps_high))
+    total_steps = steps_high + steps_low
 
-    print(f"[_run_wan_sampler] total_steps={total_steps}, "
-          f"high=0→{steps_high}, low={steps_high}→{total_steps}, "
-          f"cfg_high={cfg_high}, cfg_low={cfg_low}")
+    cfg = float(sampler_params.get("cfg", 1.0))
+    seed_a = int(sampler_params.get("seed_a", 0))
+    seed_b = int(sampler_params.get("seed_b", seed_a))
+    sampler_name = sampler_params.get("sampler_name", "euler")
+    scheduler = sampler_params.get("scheduler", "simple")
 
+    print(
+        f"[_run_wan_sampler] total_steps={total_steps}, "
+        f"high=0→{steps_high}, low={steps_high}→{total_steps}, "
+        f"cfg={cfg}, seed_a={seed_a}, seed_b={seed_b}"
+    )
+
+    # ---- High pass ----
+    latent_image = latent_dict["samples"]
     latent_image = comfy.sample.fix_empty_latent_channels(
-        model, latent_dict["samples"],
+        model,
+        latent_image,
         latent_dict.get("downscale_ratio_spacial", None)
     )
 
+    batch_inds = latent_dict["batch_index"] if "batch_index" in latent_dict else None
+    noise_mask = latent_dict["noise_mask"] if "noise_mask" in latent_dict else None
+
+    noise_high = comfy.sample.prepare_noise(latent_image, seed_a, batch_inds)
+    callback_high = latent_preview.prepare_callback(model, total_steps)
     disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
 
-    # ── High pass: steps 0 → steps_high (add noise, keep leftover noise) ──
-    noise = comfy.sample.prepare_noise(latent_image, seed)
-    callback = latent_preview.prepare_callback(model, total_steps)
-
     samples_high = comfy.sample.sample(
-        model, noise, total_steps, cfg_high, sampler_name, scheduler,
+        model, noise_high, total_steps, cfg, sampler_name, scheduler,
         cond_pos, cond_neg, latent_image,
         denoise=1.0, disable_noise=False,
         start_step=0, last_step=steps_high,
-        force_full_denoise=False, noise_mask=None,
-        callback=callback, disable_pbar=disable_pbar, seed=seed,
+        force_full_denoise=False, noise_mask=noise_mask,
+        callback=callback_high, disable_pbar=disable_pbar, seed=seed_a,
     )
 
-    # ── Low pass: steps steps_high → total (no new noise, full denoise) ───
+    # ---- Low pass ----
     latent_low = comfy.sample.fix_empty_latent_channels(
-        model_b, samples_high,
+        model_b,
+        samples_high,
         latent_dict.get("downscale_ratio_spacial", None)
     )
-    noise_low = comfy.sample.prepare_noise(latent_low, seed_low)
+
+    # Match documented common_ksampler behavior for disable_noise=True
+    noise_low = torch.zeros(
+        latent_low.size(),
+        dtype=latent_low.dtype,
+        layout=latent_low.layout,
+        device="cpu",
+    )
+
     callback_low = latent_preview.prepare_callback(model_b, total_steps)
 
     samples_final = comfy.sample.sample(
-        model_b, noise_low, total_steps, cfg_low, sampler_name, scheduler,
-        cond_pos_b or cond_pos, cond_neg_b or cond_neg, latent_low,
+        model_b, noise_low, total_steps, cfg, sampler_name, scheduler,
+        cond_pos_b if cond_pos_b is not None else cond_pos,
+        cond_neg_b if cond_neg_b is not None else cond_neg,
+        latent_low,
         denoise=1.0, disable_noise=True,
         start_step=steps_high, last_step=total_steps,
-        force_full_denoise=True, noise_mask=None,
-        callback=callback_low, disable_pbar=disable_pbar, seed=seed_low,
+        force_full_denoise=True, noise_mask=noise_mask,
+        callback=callback_low, disable_pbar=disable_pbar, seed=seed_b,
     )
-    return samples_final
+
+    out = latent_dict.copy()
+    out["samples"] = samples_final
+    return out
+
+
+# ─── Dedicated render functions (one per family) ────────────────────────────
+# Each function mirrors the exact node graph from the original workflow JSON.
+# Model, CLIP, and VAE are loaded by the caller (cached).
+# Returns (IMAGE tensor, LATENT dict).
+
+def _render_qwen_image(model, clip, vae, pos_prompt, neg_prompt,
+                       width, height, batch, sampler_params,
+                       loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    Qwen Image render — mirrors qwen_image.json:
+        UNETLoader → PromptApplyLora → ModelSamplingAuraFlow(shift=3.1) → KSampler
+        CLIPLoader(qwen_image) → CLIPTextEncode (pos / neg) ──────────↗
+        EmptySD3LatentImage (16ch) ────────────────────────────────────↗
+        VAELoader → VAEDecode ← KSampler
+    """
+    from comfy_extras.nodes_model_advanced import ModelSamplingAuraFlow
+
+    if loras_a:
+        model, clip = _apply_loras(model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key)
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    latent = {
+        "samples": torch.zeros(
+            [batch, 16, height // 8, width // 8],
+            device=comfy.model_management.intermediate_device(),
+        ),
+    }
+
+    shift = float(sampler_params.get('guidance') or 3.1)
+    (model,) = ModelSamplingAuraFlow().patch(model, shift)
+
+    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+
+    print("[_render_qwen_image] Decoding latent…")
+    decoded = vae.decode(samples)
+    if len(decoded.shape) == 5:
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    return decoded, {"samples": samples}
+
+
+def _render_flux1(model, clip, vae, pos_prompt, neg_prompt,
+                  width, height, batch, sampler_params,
+                  loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    Flux 1 render — mirrors flux_1.json:
+        DualCLIPLoader → CLIPTextEncode → FluxGuidance(guidance) → positive
+        CLIPTextEncode → ConditioningZeroOut → negative (zeroed out)
+        UNETLoader → PromptApplyLora → KSampler (cfg=1)
+        EmptySD3LatentImage (16ch) → KSampler → VAEDecode
+    """
+    import node_helpers
+    from nodes import ConditioningZeroOut
+
+    if loras_a:
+        model, clip = _apply_loras(model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key)
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    # FluxGuidance: apply guidance scale to positive conditioning
+    guidance = float(sampler_params.get('guidance') or 3.5)
+    cond_pos = node_helpers.conditioning_set_values(cond_pos, {"guidance": guidance})
+
+    # ConditioningZeroOut: zero out the negative conditioning
+    (cond_neg,) = ConditioningZeroOut().zero_out(cond_neg)
+
+    latent = {
+        "samples": torch.zeros(
+            [batch, 16, height // 8, width // 8],
+            device=comfy.model_management.intermediate_device(),
+        ),
+    }
+
+    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+
+    print("[_render_flux1] Decoding latent…")
+    decoded = vae.decode(samples)
+    if len(decoded.shape) == 5:
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    return decoded, {"samples": samples}
+
+
+def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
+                  width, height, batch, sampler_params,
+                  loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    Flux 2 render — mirrors flux_2.json:
+        CLIPLoader(qwen/flux2) → CLIPTextEncode (pos / neg)
+        UNETLoader → PromptApplyLora → CFGGuider(model, pos, neg, cfg)
+        KSamplerSelect(sampler) + Flux2Scheduler(steps, w, h) + RandomNoise(seed)
+        → SamplerCustomAdvanced → VAEDecode
+        EmptyFlux2LatentImage (16ch)
+    """
+    from comfy_extras.nodes_custom_sampler import (
+        CFGGuider, KSamplerSelect, BasicScheduler, SamplerCustomAdvanced, RandomNoise,
+    )
+
+    if loras_a:
+        model, clip = _apply_loras(model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key)
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    # Flux2 latent — 16 channels like SD3/Flux1
+    latent = {
+        "samples": torch.zeros(
+            [batch, 16, height // 8, width // 8],
+            device=comfy.model_management.intermediate_device(),
+        ),
+    }
+
+    steps   = int(sampler_params.get('steps', 20))
+    cfg     = float(sampler_params.get('cfg', 5.0))
+    seed    = int(sampler_params.get('seed_a', sampler_params.get('seed', 0)))
+    sampler_name = sampler_params.get('sampler_name', 'euler')
+    scheduler    = sampler_params.get('scheduler', 'beta')
+    denoise      = float(sampler_params.get('denoise', 1.0))
+
+    # V3 API: classmethods return NodeOutput — extract .args[0]
+    guider    = CFGGuider.execute(model, cond_pos, cond_neg, cfg).args[0]
+    sampler   = KSamplerSelect.execute(sampler_name).args[0]
+    sigmas    = BasicScheduler.execute(model, scheduler, steps, denoise).args[0]
+    noise_obj = RandomNoise.execute(seed).args[0]
+
+    latent_image = comfy.sample.fix_empty_latent_channels(model, latent["samples"])
+    latent_in = {"samples": latent_image}
+    sca_result = SamplerCustomAdvanced.execute(noise_obj, guider, sampler, sigmas, latent_in)
+    out_denoised = sca_result.args[1]  # second output is denoised_output
+    samples = out_denoised["samples"]
+
+    print("[_render_flux2] Decoding latent…")
+    decoded = vae.decode(samples)
+    if len(decoded.shape) == 5:
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    return decoded, {"samples": samples}
+
+
+def _render_sdxl(model, clip, vae, pos_prompt, neg_prompt,
+                 width, height, batch, sampler_params,
+                 loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    SDXL render — mirrors sdxl.json (also used for SD1.5):
+        CheckpointLoaderSimple → PromptApplyLora → KSampler
+        CLIPSetLastLayer(-2) → CLIPTextEncode (pos / neg) → KSampler
+        EmptyLatentImage (4ch) → KSampler → VAEDecode
+    """
+    if loras_a:
+        model, clip = _apply_loras(model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key)
+
+    # CLIPSetLastLayer(-2) — standard for SDXL
+    clip = clip.clone()
+    clip.clip_layer(-2)
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    latent = {
+        "samples": torch.zeros(
+            [batch, 4, height // 8, width // 8],
+            device=comfy.model_management.intermediate_device(),
+        ),
+    }
+
+    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+
+    print("[_render_sdxl] Decoding latent…")
+    decoded = vae.decode(samples)
+    if len(decoded.shape) == 5:
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    return decoded, {"samples": samples}
+
+
+def _render_wan_image(model, clip, vae, pos_prompt, neg_prompt,
+                      width, height, batch, sampler_params,
+                      loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    WAN Image render — mirrors wan_image.json:
+        CLIPLoader(umt5_xxl/wan) → CLIPTextEncode (pos / neg)
+        UNETLoader → PromptApplyLora → KSampler
+        EmptyLatentImage → KSampler → VAEDecode
+
+    Note: wan_image.json uses two CLIPTextEncode nodes with the same
+    prompt text (one for positive, one for negative).
+    """
+    if loras_a:
+        model, clip = _apply_loras(model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key)
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos   = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg   = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    # WAN is a video architecture — even for single images, use a 5D latent
+    # with temporal=1, matching EmptyHunyuanLatentVideo format.
+    latent = {
+        "samples": torch.zeros(
+            [batch, 16, 1, height // 8, width // 8],
+            device=comfy.model_management.intermediate_device(),
+        ),
+        "downscale_ratio_spacial": 8,
+    }
+
+    samples = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    print(f"[_render_wan_image] samples shape={samples.shape}")
+
+    print("[_render_wan_image] Decoding latent…")
+    decoded = vae.decode(samples)
+    print(f"[_render_wan_image] decoded shape={decoded.shape}")
+    if len(decoded.shape) == 5:
+        # WAN VAE outputs [batch, frames, H, W, C] for video — flatten to [B*F, H, W, C]
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    return decoded, {"samples": samples}
+
+
+def _render_wan_video_t2v(model_a, model_b, clip, vae, pos_prompt, neg_prompt,
+                          width, height, length, sampler_params,
+                          loras_a=None, loras_b=None,
+                          lora_overrides=None, lora_stack_key_a='', lora_stack_key_b=''):
+    """
+    WAN Video T2V render.
+    Returns:
+        decoded_frames, latent_dict
+    """
+
+    # Optional LoRAs for model A / CLIP A
+    if loras_a:
+        model_a, clip = _apply_loras(
+            model_a, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key_a
+        )
+
+    # Optional LoRAs for model B / CLIP B
+    clip_b = clip
+    if model_b and loras_b:
+        model_b, clip_b = _apply_loras(
+            model_b, clip_b, loras_b, lora_overrides or {}, stack_key=lora_stack_key_b
+        )
+
+    # Encode prompts for model A
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    # Encode prompts for model B if it has a distinct CLIP
+    if model_b and clip_b is not clip:
+        tokens_pos_b = clip_b.tokenize(pos_prompt)
+        cond_pos_b = clip_b.encode_from_tokens_scheduled(tokens_pos_b)
+        tokens_neg_b = clip_b.tokenize(neg_prompt)
+        cond_neg_b = clip_b.encode_from_tokens_scheduled(tokens_neg_b)
+    else:
+        cond_pos_b = cond_pos
+        cond_neg_b = cond_neg
+
+    # Create empty latent video, tolerant to either old-style generate() or V3-style execute()
+    L = int(length or 81)
+    from comfy_extras.nodes_hunyuan import EmptyHunyuanLatentVideo
+
+    latent = None
+    latent_node = EmptyHunyuanLatentVideo()
+
+    if hasattr(latent_node, "generate"):
+        latent = latent_node.generate(width=width, height=height, length=L, batch_size=1)[0]
+    elif hasattr(EmptyHunyuanLatentVideo, "execute"):
+        result = EmptyHunyuanLatentVideo.execute(
+            width=width, height=height, length=L, batch_size=1
+        )
+        if isinstance(result, tuple):
+            latent = result[0]
+        elif hasattr(result, "result"):
+            latent = result.result[0]
+        elif hasattr(result, "outputs"):
+            latent = result.outputs[0]
+        else:
+            latent = result
+    else:
+        raise RuntimeError("EmptyHunyuanLatentVideo has neither generate() nor execute().")
+
+    if not isinstance(latent, dict) or "samples" not in latent:
+        raise TypeError(
+            f"EmptyHunyuanLatentVideo returned unexpected value: {type(latent)}"
+        )
+
+    latent_out = _run_wan_sampler(
+        model_a, cond_pos, cond_neg, latent, sampler_params,
+        model_b=model_b, cond_pos_b=cond_pos_b, cond_neg_b=cond_neg_b,
+    )
+
+    print("[_render_wan_video_t2v] Decoding latent…")
+
+    latent_samples = latent_out["samples"]
+
+    # Try the direct decode API first
+    try:
+        decoded = vae.decode(latent_samples)
+    except Exception:
+        # Some setups expect decode on a latent dict or a tiled decode path elsewhere
+        decoded = vae.decode(latent_out["samples"])
+
+    if len(decoded.shape) == 5:
+        decoded = decoded.reshape(-1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+
+    return decoded, latent_out
+
+
+def _render_wan_video_i2v(model_a, model_b, clip, vae, pos_prompt, neg_prompt,
+                          width, height, length, sampler_params,
+                          source_image=None,
+                          loras_a=None, loras_b=None,
+                          lora_overrides=None, lora_stack_key_a='', lora_stack_key_b=''):
+    """
+    WAN Video I2V render — mirrors wan_video_i2v.json.
+    Returns:
+        decoded_frames, latent_dict
+    """
+
+    # Optional LoRAs for model A / CLIP A
+    if loras_a:
+        model_a, clip = _apply_loras(
+            model_a, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key_a
+        )
+
+    # Optional LoRAs for model B / CLIP B
+    clip_b = clip
+    if model_b and loras_b:
+        model_b, clip_b = _apply_loras(
+            model_b, clip_b, loras_b, lora_overrides or {}, stack_key=lora_stack_key_b
+        )
+
+    # Base prompt encodings (WanImageToVideo will re-use/modify these)
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    # WanImageToVideo: encode source image into conditioning + latent
+    L = int(length or 81)
+    from comfy_extras.nodes_wan import WanImageToVideo as WanI2VNode
+
+    # Be tolerant to V3 NodeOutput or direct tuple return
+    i2v_result = WanI2VNode.execute(
+        positive=cond_pos, negative=cond_neg, vae=vae,
+        width=width, height=height, length=L, batch_size=1,
+        start_image=source_image,
+    )
+
+    if hasattr(i2v_result, "args"):
+        i2v_pos, i2v_neg, i2v_latent = i2v_result.args
+    elif isinstance(i2v_result, tuple) and len(i2v_result) == 3:
+        i2v_pos, i2v_neg, i2v_latent = i2v_result
+    else:
+        raise TypeError(
+            f"WanImageToVideo returned unexpected value: {type(i2v_result)}"
+        )
+
+    # WanImageToVideo should return a LATENT dict for the third output
+    latent = i2v_latent
+    if not isinstance(latent, dict) or "samples" not in latent:
+        raise TypeError(
+            f"WanImageToVideo latent output has unexpected type: {type(latent)}"
+        )
+
+    # Both high and low samplers use WanImageToVideo’s modified conds
+    cond_pos = i2v_pos
+    cond_neg = i2v_neg
+    cond_pos_b = i2v_pos
+    cond_neg_b = i2v_neg
+
+    # Dual KSamplerAdvanced via _run_wan_sampler (same as T2V)
+    latent_out = _run_wan_sampler(
+        model_a, cond_pos, cond_neg, latent, sampler_params,
+        model_b=model_b, cond_pos_b=cond_pos_b, cond_neg_b=cond_neg_b,
+    )
+
+    print("[_render_wan_video_i2v] Decoding latent…")
+
+    latent_samples = latent_out["samples"]
+
+    # Try the straightforward tensor decode first
+    try:
+        decoded = vae.decode(latent_samples)
+    except Exception:
+        decoded = vae.decode(latent_out["samples"])
+
+    if len(decoded.shape) == 5:
+        decoded = decoded.reshape(
+            -1,
+            decoded.shape[-3],
+            decoded.shape[-2],
+            decoded.shape[-1],
+        )
+
+    return decoded, latent_out
 
 
 def _load_model_from_path(resolved_path, resolved_folder, full_model_path):
@@ -603,7 +1115,7 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
         state_key = f"{stack_key}:{lora_name}" if has_key else lora_name
         lora_st   = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
 
-        if lora_st.get('active') is False:
+        if lora_st.get('active') is False or lora.get('active') is False:
             print(f"[WorkflowBuilder] Skipping disabled LoRA: {lora_name}")
             continue
 
@@ -804,7 +1316,7 @@ class WorkflowBuilder:
                 },
                 'is_video': wf_res.get('length') is not None,
                 'model_family': wf_data.get('family', ''),
-                'model_family_label': wf_data.get('family_strategy', ''),
+                'model_family_label': get_family_label(wf_data.get('family', '')),
             }
         else:
             extracted = {
@@ -932,26 +1444,27 @@ class WorkflowBuilder:
         wf_overrides['positive_prompt'] = pos_text
         wf_overrides['negative_prompt'] = neg_text
         extracted['model_family'] = family_key
-        extracted['model_family_label'] = strategy
+        extracted['model_family_label'] = get_family_label(family_key)
 
-        # ── Apply lora_overrides: remove toggled-off, update strengths ────
+        # ── Apply lora_overrides: set active flag + update strengths ─────
+        # Keep ALL loras (like PMA) but mark inactive ones with active=False.
+        # Only _apply_loras filters out inactive when actually loading models.
         has_both = bool(extracted.get('loras_a')) and bool(extracted.get('loras_b'))
         for stack_key, list_key in [('a', 'loras_a'), ('b', 'loras_b')]:
             sk = stack_key if has_both else ''
-            filtered = []
+            updated_list = []
             for lora in extracted.get(list_key, []):
                 lora_name = lora.get('name', '')
                 state_key = f"{sk}:{lora_name}" if sk else lora_name
                 lora_st = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
-                if lora_st.get('active') is False:
-                    continue
                 updated = dict(lora)
+                updated['active'] = lora_st.get('active', True) is not False
                 if 'model_strength' in lora_st:
                     updated['model_strength'] = float(lora_st['model_strength'])
                 if 'clip_strength' in lora_st:
                     updated['clip_strength'] = float(lora_st['clip_strength'])
-                filtered.append(updated)
-            extracted[list_key] = filtered
+                updated_list.append(updated)
+            extracted[list_key] = updated_list
 
         simplified_wf = build_simplified_workflow_data(
             extracted, wf_overrides, sampler_params
@@ -980,6 +1493,61 @@ class WorkflowBuilder:
         vae_name_str = vae_info.get('name', '') if isinstance(vae_info, dict) else (vae_info or '')
         if vae_name_str and not vae_name_str.startswith('('):
             vae_found = resolve_vae_name(vae_name_str) is not None
+
+        # ── Fallback: replace not-found names in workflow_data ────────────
+        # JS shows original names in red; workflow_data gets valid defaults
+        # so downstream nodes (ModelLoader, Renderer) never get broken names.
+        # Always respect the workflow family when picking fallbacks.
+        if not model_a_found:
+            compat_models = list_compatible_models(model_name_a)
+            if compat_models:
+                fallback = compat_models[0]
+                print(f"[WorkflowBuilder] Model A '{model_name_a}' not found, workflow_data will use: {fallback}")
+                simplified_wf['model_a'] = fallback
+
+        if model_name_b and not model_b_found:
+            compat_models = list_compatible_models(model_name_b)
+            if compat_models:
+                fallback = compat_models[0]
+                print(f"[WorkflowBuilder] Model B '{model_name_b}' not found, workflow_data will use: {fallback}")
+                simplified_wf['model_b'] = fallback
+
+        if not vae_found and vae_name_str:
+            vaes, recommended = list_compatible_vaes(family_key, return_recommended=True)
+            fallback_vae = recommended or (vaes[0] if vaes else '')
+            if fallback_vae:
+                print(f"[WorkflowBuilder] VAE '{vae_name_str}' not found, workflow_data will use: {fallback_vae}")
+                simplified_wf['vae'] = fallback_vae
+
+        # CLIP fallback: check each clip name, replace not-found ones
+        clip_names_out = simplified_wf.get('clip', [])
+        if clip_names_out:
+            clip_paths = resolve_clip_names(clip_names_out, simplified_wf.get('clip_type', ''))
+            if any(p is None for p in clip_paths):
+                compatible_clips = list_compatible_clips(family_key)
+                if compatible_clips:
+                    fixed_clips = []
+                    for i, (name, path) in enumerate(zip(clip_names_out, clip_paths)):
+                        if path is None and i < len(compatible_clips):
+                            print(f"[WorkflowBuilder] CLIP '{name}' not found, workflow_data will use: {compatible_clips[i]}")
+                            fixed_clips.append(compatible_clips[i])
+                        else:
+                            fixed_clips.append(name)
+                    simplified_wf['clip'] = fixed_clips
+
+        # LoRA fallback: remove not-found LoRAs from workflow_data output
+        # (like PMA does) so downstream nodes never get broken LoRA names.
+        for lora_key in ('loras_a', 'loras_b'):
+            cleaned = [
+                l for l in simplified_wf.get(lora_key, [])
+                if lora_availability.get(l.get('name', ''), True)
+            ]
+            if len(cleaned) != len(simplified_wf.get(lora_key, [])):
+                removed = [l.get('name') for l in simplified_wf.get(lora_key, [])
+                           if not lora_availability.get(l.get('name', ''), True)]
+                for r in removed:
+                    print(f"[WorkflowBuilder] LoRA '{r}' not found, removed from workflow_data")
+                simplified_wf[lora_key] = cleaned
 
         # ── Build UI info for JS (always, even if generation fails) ───────
         # Echo back the *effective* values (overrides applied) so the JS
