@@ -1054,6 +1054,36 @@ function syncHidden(node) {
     node.properties = node.properties || {};
     node.properties.we_override_data = JSON.stringify(ov);
     node.properties.we_lora_state = JSON.stringify(node._weLoraState || {});
+
+    // If no extracted cache yet (user edited manually before first execute),
+    // build a minimal one from overrides so onConfigure can restore the UI.
+    if (!node._weExtracted && Object.keys(ov).length > 0) {
+        const isVideo = ["wan_video_t2v", "wan_video_i2v"].includes(ov._family);
+        node._weExtracted = {
+            positive_prompt: ov.positive_prompt || "",
+            negative_prompt: ov.negative_prompt || "",
+            model_a: ov.model_a || "",
+            model_b: ov.model_b || "",
+            model_family: ov._family || "sdxl",
+            model_family_label: "",
+            vae: { name: ov.vae || "", source: "manual" },
+            clip: { names: ov.clip_names || [], type: "", source: "manual" },
+            sampler: {
+                steps: ov.steps || 20, cfg: ov.cfg || 5.0,
+                seed_a: ov.seed_a || 0, seed_b: ov.seed_b,
+                sampler_name: ov.sampler_name || "euler",
+                scheduler: ov.scheduler || "simple",
+                denoise: 1.0, guidance: ov.guidance,
+                steps_high: ov.steps_high, steps_low: ov.steps_low,
+            },
+            resolution: {
+                width: ov.width || 768, height: ov.height || 1280,
+                batch_size: ov.batch_size || 1, length: isVideo ? (ov.length || 81) : undefined,
+            },
+            loras_a: [], loras_b: [],
+            is_video: isVideo,
+        };
+    }
     if (node._weExtracted) {
         node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
     }
@@ -2055,6 +2085,55 @@ app.registerExtension({
                     node.setDirtyCanvas(true, true);
                 }
             } else {
+                // No extracted cache — but user may have entered values manually
+                // before executing. Try to restore from override data alone.
+                const hasOverrides = savedOv && savedOv !== "{}";
+                if (hasOverrides && !wfToggle?.value) {
+                    try {
+                        const ov = JSON.parse(savedOv);
+                        const isVideo = ["wan_video_t2v", "wan_video_i2v"].includes(ov._family);
+                        node._weExtracted = {
+                            positive_prompt: ov.positive_prompt || "",
+                            negative_prompt: ov.negative_prompt || "",
+                            model_a: ov.model_a || "",
+                            model_b: ov.model_b || "",
+                            model_family: ov._family || "sdxl",
+                            model_family_label: "",
+                            vae: { name: ov.vae || "", source: "manual" },
+                            clip: { names: ov.clip_names || [], type: "", source: "manual" },
+                            sampler: {
+                                steps: ov.steps || 20, cfg: ov.cfg || 5.0,
+                                seed_a: ov.seed_a || 0, seed_b: ov.seed_b,
+                                sampler_name: ov.sampler_name || "euler",
+                                scheduler: ov.scheduler || "simple",
+                                denoise: 1.0, guidance: ov.guidance,
+                                steps_high: ov.steps_high, steps_low: ov.steps_low,
+                            },
+                            resolution: {
+                                width: ov.width || 768, height: ov.height || 1280,
+                                batch_size: ov.batch_size || 1,
+                                length: isVideo ? (ov.length || 81) : undefined,
+                            },
+                            loras_a: [], loras_b: [],
+                            is_video: isVideo,
+                        };
+                        node._wePopulated = true;
+                        const uiReady = updateUI(node);
+                        if (uiReady && typeof uiReady.then === "function") {
+                            uiReady.then(() => {
+                                applyOverrides(node, savedOv, savedLs);
+                                if (node._updatePromptGhosting) node._updatePromptGhosting();
+                                node.setDirtyCanvas(true, true);
+                            });
+                        } else {
+                            applyOverrides(node, savedOv, savedLs);
+                            if (node._updatePromptGhosting) node._updatePromptGhosting();
+                            node.setDirtyCanvas(true, true);
+                        }
+                    } catch {
+                        // Fall through to basic restore
+                    }
+                }
                 if (wfToggle?.value) {
                     setFieldsFrozen(node, true);
                 }

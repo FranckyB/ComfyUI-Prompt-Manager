@@ -412,6 +412,7 @@ def _load_clip(clip_info, overrides, existing_clip=None):
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
 
     print(f"[WorkflowRenderer] Loading CLIP: {clip_names}")
+    print(f"[WorkflowRenderer] clip_info={clip_info}, overrides={overrides}")
     return comfy.sd.load_clip(
         ckpt_paths=valid_paths,
         embedding_directory=folder_paths.get_folder_paths("embeddings"),

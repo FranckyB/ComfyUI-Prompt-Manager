@@ -583,7 +583,53 @@ class WorkflowBuilder:
             extracted, wf_overrides, sampler_params
         )
 
-        # ── Check LoRA availability for JS display ────────────────────────
+        # ── Ensure clip_type and loader_type are always set from family ───
+        # build_simplified_workflow_data derives these from extracted['clip'],
+        # which may have empty type/source when the user is in manual mode
+        # (no workflow_data connected) or the source file had no metadata.
+        # The family spec is authoritative — always fill from it.
+        from ..py.workflow_families import MODEL_FAMILIES
+        spec = MODEL_FAMILIES.get(family_key, {})
+        if not simplified_wf.get('clip_type'):
+            simplified_wf['clip_type'] = spec.get('clip_type', '')
+        if not simplified_wf.get('loader_type'):
+            # Non-checkpoint families use separate UNET+CLIP loaders
+            is_ckpt = spec.get('checkpoint', False)
+            simplified_wf['loader_type'] = 'checkpoint' if is_ckpt else 'unet'
+
+        # ── Default VAE/CLIP: resolve empty values to first compatible ────
+        # When the user leaves VAE/CLIP at "(Default)", the dropdown sends
+        # empty string.  Resolve to the recommended (or first) compatible
+        # file for the selected family so downstream nodes always get a name.
+        if not simplified_wf.get('vae'):
+            vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
+            fallback_vae = rec_vae or (vaes[0] if vaes else '')
+            if fallback_vae:
+                simplified_wf['vae'] = fallback_vae
+                print(f"[WorkflowBuilder] VAE defaulted to: {fallback_vae}")
+
+        if not simplified_wf.get('clip') or simplified_wf['clip'] == []:
+            clip_type_from_spec = spec.get('clip_type', '')
+            compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
+            if compatible_clips:
+                # Pick up to clip_slots files, matching patterns in order
+                clip_slots = spec.get('clip_slots', 1)
+                clip_patterns = [p.lower() for p in spec.get('clip', [])]
+                selected = []
+                if clip_patterns and clip_slots >= 2:
+                    for pat in clip_patterns:
+                        for c in compatible_clips:
+                            if pat in os.path.basename(c).lower() and c not in selected:
+                                selected.append(c)
+                                break
+                        if len(selected) >= clip_slots:
+                            break
+                if not selected:
+                    selected = [compatible_clips[0]]
+                simplified_wf['clip'] = selected
+                if clip_type_from_spec:
+                    simplified_wf['clip_type'] = clip_type_from_spec
+                print(f"[WorkflowBuilder] CLIP defaulted to: {selected}")
         lora_availability = {}
         for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
             lora_name = lora.get('name', '')
