@@ -520,6 +520,41 @@ function makeLoraTag(lora, avail, onToggle, onStrength) {
             : `${name}\nStrength: ${str.toFixed(2)}\nClick to toggle on/off`;
     }
 
+    // Right-click context menu
+    tag.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        document.querySelectorAll(".wb-lora-context-menu").forEach(m => m.remove());
+        const menu = makeEl("div", {
+            position: "fixed", left: e.clientX + "px", top: e.clientY + "px",
+            background: "#2a2a2a", border: "1px solid #555", borderRadius: "6px",
+            zIndex: "999999", boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+            minWidth: "120px", padding: "4px 0",
+        });
+        menu.className = "wb-lora-context-menu";
+        const title = makeEl("div", {
+            padding: "8px 12px", fontSize: "12px", color: "#aaa", fontWeight: "bold",
+            borderBottom: "1px solid #444", marginBottom: "4px", whiteSpace: "nowrap",
+        }, name);
+        menu.appendChild(title);
+        if (!avail) {
+            const searchItem = makeEl("div", {
+                padding: "8px 12px", cursor: "pointer", fontSize: "12px",
+                color: "#4da6ff", whiteSpace: "nowrap",
+            }, "\uD83D\uDD0D Search on CivitAI");
+            searchItem.addEventListener("mouseenter", () => { searchItem.style.backgroundColor = "#3a3a3a"; });
+            searchItem.addEventListener("mouseleave", () => { searchItem.style.backgroundColor = "transparent"; });
+            searchItem.addEventListener("click", (ev) => {
+                ev.stopPropagation(); menu.remove();
+                window.open(`https://civitai.com/search/models?sortBy=models_v9&query=${encodeURIComponent(name)}&modelType=LORA`, "_blank");
+            });
+            menu.appendChild(searchItem);
+        }
+        document.body.appendChild(menu);
+        const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener("mousedown", close); } };
+        document.addEventListener("mousedown", close);
+    });
+
     return tag;
 }
 
