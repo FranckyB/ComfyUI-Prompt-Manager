@@ -1035,6 +1035,7 @@ function syncHidden(node) {
     node.properties.we_lora_state = JSON.stringify(node._weLoraState || {});
     if (node._weWorkflowLoras) node.properties.we_workflow_loras = JSON.stringify(node._weWorkflowLoras);
     if (node._weInputLoras) node.properties.we_input_loras = JSON.stringify(node._weInputLoras);
+    if (node._weWorkflowPrompts) node.properties.we_workflow_prompts = JSON.stringify(node._weWorkflowPrompts);
 
     // If no extracted cache yet (user edited manually before first execute),
     // build a minimal one from overrides so onConfigure can restore the UI.
@@ -1353,6 +1354,11 @@ app.registerExtension({
                     // If prompts are connected, preserve current prompt values
                     const posConn = node.inputs?.find(i => i.name === "positive_prompt");
                     const negConn = node.inputs?.find(i => i.name === "negative_prompt");
+                    // Save workflow prompts before overwriting
+                    node._weWorkflowPrompts = {
+                        positive: processed.positive_prompt || "",
+                        negative: processed.negative_prompt || "",
+                    };
                     if (posConn?.link != null) {
                         processed.positive_prompt = node._wePosBox?.value || "";
                     }
@@ -1823,7 +1829,23 @@ app.registerExtension({
             const origConnInput = node.onConnectionsChange;
             node.onConnectionsChange = function () {
                 if (origConnInput) origConnInput.apply(this, arguments);
+
+                // Restore workflow prompts when prompt inputs are disconnected
+                // Check BEFORE _updatePromptGhosting clears readOnly
+                const posConn = node.inputs?.find(i => i.name === "positive_prompt");
+                const negConn = node.inputs?.find(i => i.name === "negative_prompt");
+                const wp = node._weWorkflowPrompts;
+                if (wp) {
+                    if (posConn?.link == null && node._wePosBox?.readOnly) {
+                        node._wePosBox.value = wp.positive;
+                    }
+                    if (negConn?.link == null && node._weNegBox?.readOnly) {
+                        node._weNegBox.value = wp.negative;
+                    }
+                }
+
                 _updatePromptGhosting();
+                if (wp) syncHidden(node);
 
                 // Clear input LoRAs for disconnected stacks and re-merge
                 const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
@@ -2053,7 +2075,7 @@ app.registerExtension({
             // LiteGraph restores slots from saved JSON; if INPUT_TYPES or
             // RETURN_TYPES changed between versions, phantom slots persist.
             const VALID_INPUTS = new Set([
-                "workflow_data", "image",
+                "workflow_data",
                 "positive_prompt", "negative_prompt",
                 "lora_stack_a", "lora_stack_b",
             ]);
@@ -2112,6 +2134,7 @@ app.registerExtension({
                 node._weOverrides = {};
                 try { node._weWorkflowLoras = JSON.parse(savedWl || '{"a":[],"b":[]}'); } catch { node._weWorkflowLoras = { a: [], b: [] }; }
                 try { node._weInputLoras = JSON.parse(savedIl || '{"a":[],"b":[]}'); } catch { node._weInputLoras = { a: [], b: [] }; }
+                try { node._weWorkflowPrompts = JSON.parse(props.we_workflow_prompts || 'null'); } catch { node._weWorkflowPrompts = null; }
                 const uiReady = updateUI(node);
                 if (uiReady && typeof uiReady.then === "function") {
                     uiReady.then(() => {

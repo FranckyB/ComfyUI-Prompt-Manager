@@ -467,10 +467,6 @@ class WorkflowBuilder:
                     "tooltip": "Connect workflow_data from PromptExtractor. "
                                "Used by the Update Workflow button.",
                 }),
-                "image": ("IMAGE", {
-                    "forceInput": True,
-                    "tooltip": "Source image for WAN i2v and similar workflows.",
-                }),
                 "positive_prompt": ("STRING", {
                     "forceInput": True,
                     "tooltip": "Positive prompt text. When connected, overrides and ghosts the prompt textarea.",
@@ -503,7 +499,7 @@ class WorkflowBuilder:
     )
 
     def execute(self,
-                workflow_data=None, image=None,
+                workflow_data=None,
                 positive_prompt=None, negative_prompt=None,
                 lora_stack_a=None, lora_stack_b=None,
                 override_data="{}", lora_state="{}",

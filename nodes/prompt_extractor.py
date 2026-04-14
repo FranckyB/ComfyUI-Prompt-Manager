@@ -3768,11 +3768,15 @@ class PromptExtractor:
         return (mtime, source_folder, frame_position, use_lora_input_only)
 
 
-class WorkflowExtractor(PromptExtractor):
+class WorkflowExtractor:
     """
     Simplified extractor for WorkflowBuilder — outputs only workflow_data + image.
     No LoRA inputs/outputs, no prompt outputs. Same extraction logic as PromptExtractor.
+    Uses composition (not inheritance) to avoid ComfyUI node-type confusion on reload.
     """
+
+    def __init__(self):
+        self._pe = PromptExtractor()
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -3816,10 +3820,14 @@ class WorkflowExtractor(PromptExtractor):
     FUNCTION = "extract_workflow"
     OUTPUT_NODE = False
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        return True
+
     def extract_workflow(self, image="", source_folder="input", frame_position=0.0,
                          unique_id=None, extra_pnginfo=None, prompt=None):
-        """Extract workflow_data and image only — delegates to parent extract()."""
-        result = self.extract(
+        """Extract workflow_data and image only — delegates to PromptExtractor.extract()."""
+        result = self._pe.extract(
             image=image, source_folder=source_folder, frame_position=frame_position,
             use_lora_input_only=True, lora_stack_a=None, lora_stack_b=None,
             unique_id=unique_id, extra_pnginfo=extra_pnginfo, prompt=prompt,

@@ -1123,7 +1123,10 @@ app.registerExtension({
                     const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
 
                     // ── Migration: remove stale inputs/outputs from old workflows ──
-                    const VALID_INPUTS = new Set(["lora_stack_a", "lora_stack_b"]);
+                    const isWorkflowExtractor = this.type === "WorkflowExtractor";
+                    const VALID_INPUTS = isWorkflowExtractor
+                        ? new Set([])
+                        : new Set(["lora_stack_a", "lora_stack_b"]);
                     if (this.inputs) {
                         for (let i = this.inputs.length - 1; i >= 0; i--) {
                             if (!VALID_INPUTS.has(this.inputs[i].name)) {
@@ -1131,14 +1134,19 @@ app.registerExtension({
                             }
                         }
                     }
-                    const VALID_OUTPUTS = [
-                        { name: "positive_prompt", type: "STRING" },
-                        { name: "negative_prompt", type: "STRING" },
-                        { name: "lora_stack_a",    type: "LORA_STACK" },
-                        { name: "lora_stack_b",    type: "LORA_STACK" },
-                        { name: "workflow_data",   type: "WORKFLOW_DATA" },
-                        { name: "image",           type: "IMAGE" },
-                    ];
+                    const VALID_OUTPUTS = isWorkflowExtractor
+                        ? [
+                            { name: "workflow_data",   type: "WORKFLOW_DATA" },
+                            { name: "image",           type: "IMAGE" },
+                        ]
+                        : [
+                            { name: "positive_prompt", type: "STRING" },
+                            { name: "negative_prompt", type: "STRING" },
+                            { name: "lora_stack_a",    type: "LORA_STACK" },
+                            { name: "lora_stack_b",    type: "LORA_STACK" },
+                            { name: "workflow_data",   type: "WORKFLOW_DATA" },
+                            { name: "image",           type: "IMAGE" },
+                        ];
                     if (this.outputs) {
                         const namesMatch = this.outputs.length === VALID_OUTPUTS.length &&
                             VALID_OUTPUTS.every((v, i) => this.outputs[i]?.name === v.name && this.outputs[i]?.type === v.type);
