@@ -900,7 +900,7 @@ app.registerExtension({
             // Find the node with this filename
             if (app.graph && app.graph._nodes) {
                 for (const node of app.graph._nodes) {
-                    if (node.type === "PromptExtractor") {
+                    if (node.type === "PromptExtractor" || node.type === "WorkflowExtractor") {
                         const imageWidget = node.widgets?.find(w => w.name === "image");
                         const frameWidget = node.widgets?.find(w => w.name === "frame_position");
                         
@@ -922,7 +922,7 @@ app.registerExtension({
     },
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptExtractor") {
+        if (nodeData.name === "PromptExtractor" || nodeData.name === "WorkflowExtractor") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {

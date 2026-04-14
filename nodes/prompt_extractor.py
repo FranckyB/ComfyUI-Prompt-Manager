@@ -3252,7 +3252,7 @@ class PromptExtractor:
     RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "WORKFLOW_DATA", "IMAGE")
     RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "workflow_data", "image")
     FUNCTION = "extract"
-    OUTPUT_NODE = True  # Enable preview display
+    OUTPUT_NODE = False
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):
@@ -3486,6 +3486,8 @@ class PromptExtractor:
                                 _, _found = _resolve_lora(_ln)
                                 _lora_avail[_ln] = _found
                         _last_extracted_info[str(unique_id)] = {
+                            '_source_file':       file_path,
+                            '_source_folder':     source_folder,
                             'positive_prompt':    positive_prompt,
                             'negative_prompt':    negative_prompt,
                             'model_a':            model_a,
@@ -3599,6 +3601,44 @@ class PromptExtractor:
                         added_count += 1
                     else:
                         skipped_count += 1
+
+        # ── Merge final LoRA stacks back into workflow_data & cache ──────
+        # Connected lora_stack inputs may have added LoRAs that weren't in
+        # the extracted metadata.  Push the merged set into workflow_data
+        # (the _simplified dict) and the _last_extracted_info cache so
+        # WorkflowBuilder's "Update Workflow" button sees the full set.
+        if isinstance(workflow_data, dict) and (final_lora_stack_a or final_lora_stack_b):
+            def _tuples_to_lora_dicts(stack_tuples):
+                """Convert (path, model_str, clip_str) tuples to LoRA dicts."""
+                result = []
+                for path, ms, cs in stack_tuples:
+                    result.append({
+                        'name': os.path.splitext(os.path.basename(path))[0],
+                        'path': path,
+                        'model_strength': ms,
+                        'clip_strength': cs,
+                        'active': True,
+                    })
+                return result
+
+            merged_a = _tuples_to_lora_dicts(final_lora_stack_a)
+            merged_b = _tuples_to_lora_dicts(final_lora_stack_b)
+            workflow_data['loras_a'] = merged_a
+            workflow_data['loras_b'] = merged_b
+
+            # Update the _last_extracted_info cache too
+            uid_str = str(unique_id) if unique_id is not None else None
+            if uid_str and uid_str in _last_extracted_info:
+                _last_extracted_info[uid_str]['loras_a'] = merged_a
+                _last_extracted_info[uid_str]['loras_b'] = merged_b
+                # Refresh availability for any newly-added LoRAs
+                avail = _last_extracted_info[uid_str].get('lora_availability', {})
+                for _l in merged_a + merged_b:
+                    _ln = _l.get('name', '')
+                    if _ln and _ln not in avail:
+                        _, _found = resolve_lora_path(_ln)
+                        avail[_ln] = _found
+                _last_extracted_info[uid_str]['lora_availability'] = avail
 
         # Provide placeholder image tensor if none loaded (e.g., for JSON files)
         if image_tensor is None:
@@ -3726,3 +3766,86 @@ class PromptExtractor:
                 mtime = os.path.getmtime(file_path)
 
         return (mtime, source_folder, frame_position, use_lora_input_only)
+
+
+class WorkflowExtractor(PromptExtractor):
+    """
+    Simplified extractor for WorkflowBuilder — outputs only workflow_data + image.
+    No LoRA inputs/outputs, no prompt outputs. Same extraction logic as PromptExtractor.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        input_dir = folder_paths.get_input_directory()
+        files = ["(none)"]
+        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
+
+        if os.path.exists(input_dir):
+            for root, dirs, filenames in os.walk(input_dir):
+                for filename in filenames:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext in supported_extensions:
+                        full_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(full_path, input_dir).replace('\\', '/')
+                        files.append(rel_path)
+
+        files_to_sort = files[1:]
+        files_to_sort.sort()
+        files = ["(none)"] + files_to_sort
+
+        return {
+            "required": {
+                "source_folder": (["input", "output"], {
+                    "default": "input",
+                    "tooltip": "Browse files from the input or output folder"
+                }),
+                "image": (files, {}),
+                "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "prompt": "PROMPT",
+            },
+        }
+
+    CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Extract workflow data from images, videos, and workflow files. Simplified version for WorkflowBuilder."
+    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE")
+    RETURN_NAMES = ("workflow_data", "image")
+    FUNCTION = "extract_workflow"
+    OUTPUT_NODE = False
+
+    def extract_workflow(self, image="", source_folder="input", frame_position=0.0,
+                         unique_id=None, extra_pnginfo=None, prompt=None):
+        """Extract workflow_data and image only — delegates to parent extract()."""
+        result = self.extract(
+            image=image, source_folder=source_folder, frame_position=frame_position,
+            use_lora_input_only=True, lora_stack_a=None, lora_stack_b=None,
+            unique_id=unique_id, extra_pnginfo=extra_pnginfo, prompt=prompt,
+        )
+        # Parent returns {"ui": ..., "result": (pos, neg, loras_a, loras_b, workflow_data, image)}
+        full = result["result"]
+        workflow_data = full[4]
+        image_tensor = full[5]
+        return {
+            "ui": result["ui"],
+            "result": (workflow_data, image_tensor),
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, **kwargs):
+        mtime = "no_file"
+        if image:
+            file_path = image.strip()
+            if not os.path.isabs(file_path):
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                potential_path = os.path.join(base_dir, file_path)
+                if os.path.exists(potential_path):
+                    mtime = os.path.getmtime(potential_path)
+            elif os.path.exists(file_path):
+                mtime = os.path.getmtime(file_path)
+        return (mtime, source_folder, frame_position)

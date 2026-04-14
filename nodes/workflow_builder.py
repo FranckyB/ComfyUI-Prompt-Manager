@@ -56,7 +56,7 @@ from .prompt_extractor import (
     get_cached_video_frame,
     get_placeholder_image_tensor,
 )
-from ..py.lora_utils import resolve_lora_path
+from ..py.lora_utils import resolve_lora_path, strip_lora_extension
 
 # ── Sampler/scheduler lists ──────────────────────────────────────────────────
 SAMPLERS   = comfy.samplers.KSampler.SAMPLERS
@@ -253,8 +253,7 @@ async def api_process_extracted(request):
     """Process raw extracted data through WB's normalization logic.
     Matches execute() behavior: family resolution, sampler normalization,
     VAE/CLIP defaults, availability checking.
-    Used by the 'Update Workflow' button so it produces the same result
-    as toggling use_workflow_data ON and executing."""
+    Used by the 'Update Workflow' button."""
     try:
         body = await request.json()
         raw = body.get('extracted', {})
@@ -459,74 +458,29 @@ class WorkflowBuilder:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # Family labels sorted alphabetically with SDXL default
-        family_labels = get_all_family_labels()
-        family_keys = sorted(family_labels.keys(), key=lambda k: family_labels[k].lower())
-        # Move sdxl to front as default
-        if "sdxl" in family_keys:
-            family_keys.remove("sdxl")
-            family_keys.insert(0, "sdxl")
-
-        # Gather all models for initial model_a default
-        all_models = []
-        for fn in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
-            try:
-                all_models.extend(folder_paths.get_filename_list(fn))
-            except Exception:
-                continue
-        # Deduplicate
-        seen = set()
-        unique_models = []
-        for m in all_models:
-            if m not in seen:
-                seen.add(m)
-                unique_models.append(m)
-        # Filter to SDXL-compatible for default
-        sdxl_compat = get_compatible_families("sdxl")
-        sdxl_models = sorted([m for m in unique_models if get_model_family(m) in sdxl_compat])
-        first_model = sdxl_models[0] if sdxl_models else (sorted(unique_models)[0] if unique_models else "")
-
         return {
-            "required": {
-                "use_prompt_input": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
-                    "tooltip": "When on, use the connected prompt input (overrides prompt from workflow_data). "
-                               "When off, use the prompt from workflow_data or manual entry.",
-                }),
-                "use_lora_input": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
-                    "tooltip": "When on, use LoRA stacks from connected inputs. "
-                               "When off, use only the LoRAs shown in the node UI.",
-                }),
-                "use_workflow_data": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
-                    "tooltip": "When on, populate all fields from connected workflow_data input. "
-                               "When off, use manual values (keeps last loaded values).",
-                }),
-            },
+            "required": {},
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
+                "workflow_data": ("WORKFLOW_DATA", {
+                    "forceInput": True,
+                    "tooltip": "Connect workflow_data from PromptExtractor. "
+                               "Used by the Update Workflow button.",
+                }),
+                "image": ("IMAGE", {
+                    "forceInput": True,
+                    "tooltip": "Source image for WAN i2v and similar workflows.",
+                }),
                 "positive_prompt": ("STRING", {
                     "forceInput": True,
-                    "tooltip": "Positive prompt text. Overrides positive prompt from workflow_data when use_prompt_input is on.",
+                    "tooltip": "Positive prompt text. When connected, overrides and ghosts the prompt textarea.",
                 }),
                 "negative_prompt": ("STRING", {
                     "forceInput": True,
-                    "tooltip": "Negative prompt text. Overrides negative prompt from workflow_data when use_prompt_input is on.",
+                    "tooltip": "Negative prompt text. When connected, overrides and ghosts the prompt textarea.",
                 }),
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
-                "workflow_data": ("WORKFLOW_DATA", {
-                    "forceInput": True,
-                    "lazy": True,
-                    "tooltip": "Connect workflow_data output from PromptExtractor",
-                }),
                 # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
                 "lora_state":      ("STRING", {"default": "{}", "multiline": True}),
@@ -548,30 +502,23 @@ class WorkflowBuilder:
         "a full editing UI, and outputs workflow_data for the Workflow Renderer."
     )
 
-    def check_lazy_status(self, use_workflow_data=False, use_lora_input=False,
-                          workflow_data=None, **kwargs):
-        """Tell ComfyUI which lazy inputs need evaluation this run."""
-        needed = []
-        if use_workflow_data and workflow_data is None:
-            needed.append('workflow_data')
-        return needed
-
-    def execute(self, use_prompt_input=False, use_workflow_data=False, use_lora_input=False,
-                positive_prompt=None, negative_prompt=None, workflow_data=None,
+    def execute(self,
+                workflow_data=None, image=None,
+                positive_prompt=None, negative_prompt=None,
                 lora_stack_a=None, lora_stack_b=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         """
         Main execution:
-          1. Parse workflow_data or use defaults
+          1. Parse workflow_data (if connected)
           2. Apply JS overrides
-          3. Merge lora inputs if enabled
+          3. Merge connected lora inputs (always)
           4. Build workflow_data JSON
           5. Return WORKFLOW_DATA
         """
-        # ── Parse workflow_data input (if enabled and connected) ─────────
+        # ── Parse workflow_data input (if connected) ─────────────────────
         wf_data = None
-        if use_workflow_data and workflow_data:
+        if workflow_data is not None:
             if isinstance(workflow_data, dict):
                 wf_data = workflow_data
             elif isinstance(workflow_data, str):
@@ -640,18 +587,40 @@ class WorkflowBuilder:
                 'is_video': False,
             }
 
-        # ── Merge connected LoRA stacks if use_lora_input is enabled ─────
-        if use_lora_input:
-            if lora_stack_a:
-                extracted['loras_a'] = [
-                    {'name': name, 'model_strength': ms, 'clip_strength': cs}
-                    for name, ms, cs in lora_stack_a
-                ]
-            if lora_stack_b:
-                extracted['loras_b'] = [
-                    {'name': name, 'model_strength': ms, 'clip_strength': cs}
-                    for name, ms, cs in lora_stack_b
-                ]
+        # ── Merge connected LoRA stacks with workflow LoRAs ──────────────
+        # Keep workflow LoRAs and add connected input LoRAs.
+        # Dedup by name; if same LoRA in both, input wins (user intent).
+        workflow_loras_a = list(extracted.get('loras_a', []))
+        workflow_loras_b = list(extracted.get('loras_b', []))
+        input_loras_a = []
+        input_loras_b = []
+
+        def _merge_lora_lists(wf_list, inp_list):
+            by_name = {}
+            for l in wf_list:
+                by_name[l.get('name', '')] = l
+            for l in inp_list:
+                by_name[l.get('name', '')] = l
+            return list(by_name.values())
+
+        if lora_stack_a:
+            input_loras_a = [
+                {'name': strip_lora_extension(os.path.basename(name)),
+                 'path': name,
+                 'model_strength': ms, 'clip_strength': cs,
+                 'active': True}
+                for name, ms, cs in lora_stack_a
+            ]
+            extracted['loras_a'] = _merge_lora_lists(workflow_loras_a, input_loras_a)
+        if lora_stack_b:
+            input_loras_b = [
+                {'name': strip_lora_extension(os.path.basename(name)),
+                 'path': name,
+                 'model_strength': ms, 'clip_strength': cs,
+                 'active': True}
+                for name, ms, cs in lora_stack_b
+            ]
+            extracted['loras_b'] = _merge_lora_lists(workflow_loras_b, input_loras_b)
 
         # ── Parse overrides from JS ──────────────────────────────────────
         try:
@@ -667,12 +636,11 @@ class WorkflowBuilder:
         pos_text = overrides.get('positive_prompt', extracted['positive_prompt'])
         neg_text = overrides.get('negative_prompt', extracted['negative_prompt'])
 
-        # ── Prompt input override (highest priority) ─────────────────────
-        if use_prompt_input:
-            if positive_prompt is not None:
-                pos_text = positive_prompt
-            if negative_prompt is not None:
-                neg_text = negative_prompt
+        # ── Prompt input override (if connected, use them) ─────────────
+        if positive_prompt is not None:
+            pos_text = positive_prompt
+        if negative_prompt is not None:
+            neg_text = negative_prompt
         model_name_a    = overrides.get('model_a', extracted['model_a'])
         model_name_b    = overrides.get('model_b', extracted['model_b'])
         vae_name        = overrides.get('vae', extracted['vae']['name'])
@@ -932,6 +900,10 @@ class WorkflowBuilder:
                 'model_b_found':      model_b_found,
                 'loras_a':            extracted['loras_a'],
                 'loras_b':            extracted['loras_b'],
+                'workflow_loras_a':   workflow_loras_a,
+                'workflow_loras_b':   workflow_loras_b,
+                'input_loras_a':      input_loras_a,
+                'input_loras_b':      input_loras_b,
                 'vae':                effective_vae,
                 'vae_found':          vae_found,
                 'clip':               effective_clip,

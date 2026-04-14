@@ -2,9 +2,10 @@
  * Workflow Builder - Full DOM-based UI
  *
  * Layout order: Resolution -> Model/VAE/CLIP -> Prompts -> Sampler -> LoRAs
- * Accepts workflow_data input (from PromptExtractor) + optional lora_stack inputs.
- * "use_workflow_data" toggle: ON -> populate & freeze fields; OFF -> editable (keeps last values).
- * "use_lora_input" toggle: ON -> display connected lora stacks; OFF -> manual/extracted only.
+ * Accepts workflow_data input (from PromptExtractor) + optional lora_stack / prompt / image inputs.
+ * "Update Workflow" button pulls data from connected PromptExtractor.
+ * Connected prompt inputs automatically ghost textareas and override prompts.
+ * Connected LoRA stacks are always merged on execution.
  * Non-WAN families show "Model A" / "Model B" / "LoRA Stack A" / "LoRA Stack B" labels.
  * WAN family renames them to (High)/(Low) and shows Frames input in Resolution section.
  */
@@ -563,6 +564,7 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
     tagsContainer.className = "lora-tags-container";
     Object.assign(tagsContainer.style, {
         display: "flex", flexWrap: "wrap", gap: "4px",
+        alignContent: "flex-start",
         height: "100px", overflowY: "auto", scrollbarWidth: "none",
         border: "1px solid rgba(255,255,255,0.1)", borderRadius: "4px",
         padding: "4px",
@@ -842,6 +844,14 @@ function updateWanVisibility(node) {
 
 }
 
+/** Merge two LoRA lists, dedup by name (second list wins on conflict). */
+function _mergeLoraLists(listA, listB) {
+    const byName = new Map();
+    for (const l of listA) byName.set(l.name || "", l);
+    for (const l of listB) byName.set(l.name || "", l);
+    return [...byName.values()];
+}
+
 // --- LoRA display ---
 function updateLoras(node) {
     const containerA = node._weLoraAContainer;
@@ -962,84 +972,53 @@ function syncHidden(node) {
         const w = node.widgets?.find(x => x.name === name);
         if (w) w.value = val;
     };
-    const wfOn = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
     const ov = { ...node._weOverrides };
-    // When workflow_data is ON, all values come from the source workflow —
-    // do NOT capture model/VAE/CLIP/sampler/resolution/prompts from the DOM
-    // or they freeze at stale values and fight against updateUI.
-    if (!wfOn) {
-        if (node._weModelRow?._getValue) {
-            const v = node._weModelRow._getValue();
-            if (v) ov.model_a = v;
-        }
-        if (node._weModelBRow?._getValue) {
-            const v = node._weModelBRow._getValue();
-            if (v) ov.model_b = v;
-        }
-        if (node._weVaeRow?._getValue) {
-            const v = node._weVaeRow._getValue();
-            if (v) ov.vae = v;
-        }
-        if (node._weClipRow?._getValue) {
-            const v = node._weClipRow._getValue();
-            if (v) ov.clip_names = [v];
-        }
-    } else {
-        // wfOn=true: clear any stale model/VAE/CLIP overrides so wf_data wins
-        delete ov.model_a; delete ov.model_b;
-        delete ov.vae; delete ov.clip_names;
+    // Always capture DOM values as overrides
+    if (node._weModelRow?._getValue) {
+        const v = node._weModelRow._getValue();
+        if (v) ov.model_a = v;
     }
-    if (!wfOn) {
-        if (node._weSamplerRows) {
-            const r = node._weSamplerRows;
-            if (r.steps?._inp) ov.steps = parseInt(r.steps._inp.value) || 20;
-            if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
-            if (r.seed_a?._inp) ov.seed_a = parseInt(r.seed_a._inp.value) || 0;
-            if (r.seed_b?._inp && r.seed_b.style.display !== "none") {
-                ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
-            }
-            if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
-            if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
-            // WAN Video dual steps
-            if (r.steps_high?._inp && r.steps_high.style.display !== "none") {
-                ov.steps_high = parseInt(r.steps_high._inp.value) || 3;
-            }
-            if (r.steps_low?._inp && r.steps_low.style.display !== "none") {
-                ov.steps_low = parseInt(r.steps_low._inp.value) || 3;
-            }
+    if (node._weModelBRow?._getValue) {
+        const v = node._weModelBRow._getValue();
+        if (v) ov.model_b = v;
+    }
+    if (node._weVaeRow?._getValue) {
+        const v = node._weVaeRow._getValue();
+        if (v) ov.vae = v;
+    }
+    if (node._weClipRow?._getValue) {
+        const v = node._weClipRow._getValue();
+        if (v) ov.clip_names = [v];
+    }
+    if (node._weSamplerRows) {
+        const r = node._weSamplerRows;
+        if (r.steps?._inp) ov.steps = parseInt(r.steps._inp.value) || 20;
+        if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
+        if (r.seed_a?._inp) ov.seed_a = parseInt(r.seed_a._inp.value) || 0;
+        if (r.seed_b?._inp && r.seed_b.style.display !== "none") {
+            ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
         }
-        if (node._weResRows) {
-            const r = node._weResRows;
-            if (r.width?._inp) ov.width = parseInt(r.width._inp.value) || 768;
-            if (r.height?._inp) ov.height = parseInt(r.height._inp.value) || 1280;
-            if (r.batch?._inp) ov.batch_size = parseInt(r.batch._inp.value) || 1;
-            if (r.frames?._inp && r.frames.style.display !== "none") {
-                ov.length = parseInt(r.frames._inp.value) || 81;
-            }
+        if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
+        if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
+        // WAN Video dual steps
+        if (r.steps_high?._inp && r.steps_high.style.display !== "none") {
+            ov.steps_high = parseInt(r.steps_high._inp.value) || 3;
         }
-        if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
-        if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
-    } else {
-        // In workflow_data mode, remove stale sampler/resolution/prompt overrides
-        // so Python uses values from the source workflow.
-        // KEEP steps_high, steps_low, seed_a, seed_b — user explicitly sets these
-        // even in wfOn mode (e.g. entering 2,2 for WAN dual steps).
-        delete ov.steps; delete ov.cfg;
-        delete ov.sampler_name; delete ov.scheduler;
-        delete ov.width; delete ov.height; delete ov.batch_size; delete ov.length;
-        delete ov.positive_prompt; delete ov.negative_prompt;
-        // Re-capture steps_high/steps_low and seed_a/seed_b from DOM so user edits stick
-        if (node._weSamplerRows) {
-            const r = node._weSamplerRows;
-            if (r.steps_high?._inp && r.steps_high.style.display !== "none")
-                ov.steps_high = parseInt(r.steps_high._inp.value) || 3;
-            if (r.steps_low?._inp && r.steps_low.style.display !== "none")
-                ov.steps_low = parseInt(r.steps_low._inp.value) || 3;
-            if (r.seed_a?._inp) ov.seed_a = parseInt(r.seed_a._inp.value) || 0;
-            if (r.seed_b?._inp && r.seed_b.style.display !== "none")
-                ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
+        if (r.steps_low?._inp && r.steps_low.style.display !== "none") {
+            ov.steps_low = parseInt(r.steps_low._inp.value) || 3;
         }
     }
+    if (node._weResRows) {
+        const r = node._weResRows;
+        if (r.width?._inp) ov.width = parseInt(r.width._inp.value) || 768;
+        if (r.height?._inp) ov.height = parseInt(r.height._inp.value) || 1280;
+        if (r.batch?._inp) ov.batch_size = parseInt(r.batch._inp.value) || 1;
+        if (r.frames?._inp && r.frames.style.display !== "none") {
+            ov.length = parseInt(r.frames._inp.value) || 81;
+        }
+    }
+    if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
+    if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
     if (node._weFamily) ov._family = node._weFamily;
 
     // Control after generate
@@ -1054,6 +1033,8 @@ function syncHidden(node) {
     node.properties = node.properties || {};
     node.properties.we_override_data = JSON.stringify(ov);
     node.properties.we_lora_state = JSON.stringify(node._weLoraState || {});
+    if (node._weWorkflowLoras) node.properties.we_workflow_loras = JSON.stringify(node._weWorkflowLoras);
+    if (node._weInputLoras) node.properties.we_input_loras = JSON.stringify(node._weInputLoras);
 
     // If no extracted cache yet (user edited manually before first execute),
     // build a minimal one from overrides so onConfigure can restore the UI.
@@ -1279,22 +1260,23 @@ app.registerExtension({
                     const linkInfo = node.graph?.links?.[wfInput.link];
                     if (linkInfo) {
                         const srcNode = node.graph?.getNodeById(linkInfo.origin_id);
-                        if (srcNode?.comfyClass === "PromptExtractor") {
+                        if (srcNode?.comfyClass === "PromptExtractor" || srcNode?.comfyClass === "WorkflowExtractor") {
                             peNode = srcNode;
                         }
                     }
                 }
-                // Fallback: find any PromptExtractor on the graph
+                // Fallback: find any PromptExtractor or WorkflowExtractor on the graph
                 if (!peNode && app.graph?._nodes) {
                     for (const n of app.graph._nodes) {
-                        if (n.comfyClass === "PromptExtractor" || n.type === "PromptExtractor") {
+                        if (n.comfyClass === "PromptExtractor" || n.comfyClass === "WorkflowExtractor" ||
+                            n.type === "PromptExtractor" || n.type === "WorkflowExtractor") {
                             peNode = n;
                             break;
                         }
                     }
                 }
                 if (!peNode) {
-                    _showError(node, "No PromptExtractor node found on the graph.");
+                    _showError(node, "No PromptExtractor or WorkflowExtractor node found on the graph.");
                     return;
                 }
 
@@ -1303,18 +1285,40 @@ app.registerExtension({
                 try {
                     let extracted = null;
 
-                    // 2a. Try client-side cache first (set by PE JS on file selection)
-                    const cachedStr = peNode.properties?.pe_extracted_data;
-                    if (cachedStr) {
-                        try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
+                    // Determine PE's current file for staleness check
+                    const peImageW = peNode.widgets?.find(w => w.name === "image");
+                    const peSourceW = peNode.widgets?.find(w => w.name === "source_folder");
+                    const peFilename = peImageW?.value || "";
+                    const peSource = peSourceW?.value || "input";
+
+                    // 2a. Try execution cache (includes merged LoRA inputs)
+                    //     Only use if the cached file matches the current selection.
+                    try {
+                        const cacheResp = await fetch(
+                            `/prompt-extractor/get-extracted-data?node_id=${encodeURIComponent(peNode.id)}`
+                        );
+                        const cacheData = await cacheResp.json();
+                        if (cacheData.extracted) {
+                            const cachedFile = cacheData.extracted._source_file || "";
+                            const cachedFolder = cacheData.extracted._source_folder || "input";
+                            if (cachedFile === peFilename && cachedFolder === peSource) {
+                                extracted = cacheData.extracted;
+                            } else {
+                                console.log("[WorkflowBuilder] Execution cache stale — file changed");
+                            }
+                        }
+                    } catch { /* fall through */ }
+
+                    // 2b. Try client-side cache (set by PE JS on file selection)
+                    if (!extracted) {
+                        const cachedStr = peNode.properties?.pe_extracted_data;
+                        if (cachedStr) {
+                            try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
+                        }
                     }
 
-                    // 2b. Fallback: call extract-preview API with PE's current widget values
+                    // 2c. Fallback: call extract-preview API
                     if (!extracted) {
-                        const peImageW = peNode.widgets?.find(w => w.name === "image");
-                        const peSourceW = peNode.widgets?.find(w => w.name === "source_folder");
-                        const peFilename = peImageW?.value || "";
-                        const peSource = peSourceW?.value || "input";
                         if (!peFilename || peFilename === "(none)") {
                             _showError(node, "PromptExtractor has no file selected.");
                             return;
@@ -1343,10 +1347,34 @@ app.registerExtension({
                     }
                     const processed = processData.extracted || extracted;
 
-                    // 4. Populate the UI exactly like use_workflow_data ON + execute
+                    // 4. Populate the UI
                     _showError(node, null);
+
+                    // If prompts are connected, preserve current prompt values
+                    const posConn = node.inputs?.find(i => i.name === "positive_prompt");
+                    const negConn = node.inputs?.find(i => i.name === "negative_prompt");
+                    if (posConn?.link != null) {
+                        processed.positive_prompt = node._wePosBox?.value || "";
+                    }
+                    if (negConn?.link != null) {
+                        processed.negative_prompt = node._weNegBox?.value || "";
+                    }
+
                     node._weExtracted = processed;
                     node._wePopulated = true;
+                    // Track workflow LoRAs separately; merge with existing input LoRAs
+                    // (only if those inputs are still connected)
+                    node._weWorkflowLoras = {
+                        a: [...(processed.loras_a || [])],
+                        b: [...(processed.loras_b || [])],
+                    };
+                    const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
+                    const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
+                    if (!node._weInputLoras) node._weInputLoras = { a: [], b: [] };
+                    if (loraAConn?.link == null) node._weInputLoras.a = [];
+                    if (loraBConn?.link == null) node._weInputLoras.b = [];
+                    node._weExtracted.loras_a = _mergeLoraLists(processed.loras_a || [], node._weInputLoras.a);
+                    node._weExtracted.loras_b = _mergeLoraLists(processed.loras_b || [], node._weInputLoras.b);
                     node._weLoraState = {};
                     node._weOverrides = {};
                     node.properties = node.properties || {};
@@ -1738,7 +1766,7 @@ app.registerExtension({
             // IMPORTANT: override_data and lora_state must keep their original
             // STRING type so ComfyUI's graphToPrompt includes them in execution.
             // "converted-widget" type causes ComfyUI to skip the widget value.
-            const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input", "use_prompt_input"]);
+            const KEEP_VISIBLE = new Set([]);
             const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
@@ -1771,126 +1799,57 @@ app.registerExtension({
 
             applyZoomScaling(root);
 
-            // -- Handle use_workflow_data toggle --
-            const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
-            if (wfToggle) {
-                const origWfCb = wfToggle.callback;
-                wfToggle.callback = async function (value) {
-                    if (origWfCb) origWfCb.apply(this, arguments);
-                    if (value) {
-                        // Try reading workflow_data from the connected source node's
-                        // properties cache (forceInput — no local widget exists).
-                        let parsed = null;
-                        const wfInput = node.inputs?.find(i => i.name === "workflow_data");
-                        if (wfInput?.link != null) {
-                            const linkInfo = node.graph?.links?.[wfInput.link];
-                            if (linkInfo) {
-                                const srcNode = node.graph?.getNodeById(linkInfo.origin_id);
-                                // PromptExtractor caches its last workflow_data in properties
-                                const srcCache = srcNode?.properties?.we_last_workflow_data;
-                                if (srcCache) parsed = parseWorkflowData(srcCache);
-                            }
-                        }
-                        // Fallback: use our own extracted cache
-                        if (!parsed && node._weExtracted) {
-                            parsed = node._weExtracted;
-                        }
-                        if (parsed) {
-                            node._weExtracted = parsed;
-                            node._wePopulated = true;
-                            node._weLoraState = {};
-                            node._weOverrides = {};
-                            // Await updateUI so family/_weFamily is set BEFORE
-                            // _syncS() writes override_data — otherwise family
-                            // snaps back to SDXL in the serialised overrides.
-                            await updateUI(node);
-                        }
-                        setFieldsFrozen(node, true);
-                    } else {
-                        // LoRAs come from workflow_data — clear them when toggling off.
-                        // Users who want LoRAs in manual mode connect lora_stack inputs.
-                        if (node._weExtracted) {
-                            node._weExtracted.loras_a = [];
-                            node._weExtracted.loras_b = [];
-                            node._weExtracted.lora_availability = {};
-                        }
-                        node._weLoraState = {};
-                        updateLoras(node);
-                        setFieldsFrozen(node, false);
-                    }
-                    _syncS();
-                };
-            }
-
-            // -- Handle use_prompt_input toggle --
-            // Ghost (disable) the positive/negative prompt textareas when
-            // use_prompt_input is ON and the corresponding input is connected.
+            // -- Auto-ghost prompt textareas when inputs are connected --
             function _updatePromptGhosting() {
-                const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
-                const isOn = promptToggle?.value;
-                const wfOn = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
                 const posConn = node.inputs?.find(i => i.name === "positive_prompt");
                 const negConn = node.inputs?.find(i => i.name === "negative_prompt");
                 const posLinked = posConn && posConn.link != null;
                 const negLinked = negConn && negConn.link != null;
 
-                // Ghost = prompt input connected, OR workflow_data mode
-                // Either way: read-only, scrollable, single opacity level
-                const ghostPos = (isOn && posLinked) || wfOn;
-                const ghostNeg = (isOn && negLinked) || wfOn;
-
                 if (node._wePosBox) {
-                    node._wePosBox.readOnly = ghostPos;
-                    node._wePosBox.style.opacity = ghostPos ? "0.5" : "1";
+                    node._wePosBox.readOnly = posLinked;
+                    node._wePosBox.style.opacity = posLinked ? "0.5" : "1";
                     node._wePosBox.style.pointerEvents = "auto";
                 }
                 if (node._weNegBox) {
-                    node._weNegBox.readOnly = ghostNeg;
-                    node._weNegBox.style.opacity = ghostNeg ? "0.5" : "1";
+                    node._weNegBox.readOnly = negLinked;
+                    node._weNegBox.style.opacity = negLinked ? "0.5" : "1";
                     node._weNegBox.style.pointerEvents = "auto";
                 }
             }
             node._updatePromptGhosting = _updatePromptGhosting;
 
-            const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
-            if (promptToggle) {
-                const origPromptCb = promptToggle.callback;
-                promptToggle.callback = function (value) {
-                    if (origPromptCb) origPromptCb.apply(this, arguments);
-                    _updatePromptGhosting();
-                    _syncS();
-                };
-            }
-            // Also update ghosting when connections change
+            // Update ghosting and LoRA inputs when connections change
             const origConnInput = node.onConnectionsChange;
             node.onConnectionsChange = function () {
                 if (origConnInput) origConnInput.apply(this, arguments);
                 _updatePromptGhosting();
+
+                // Clear input LoRAs for disconnected stacks and re-merge
+                const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
+                const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
+                let changed = false;
+                if (!node._weInputLoras) node._weInputLoras = { a: [], b: [] };
+                if (loraAConn?.link == null && node._weInputLoras.a.length > 0) {
+                    node._weInputLoras.a = [];
+                    changed = true;
+                }
+                if (loraBConn?.link == null && node._weInputLoras.b.length > 0) {
+                    node._weInputLoras.b = [];
+                    changed = true;
+                }
+                if (changed && node._weExtracted) {
+                    const wl = node._weWorkflowLoras || { a: [], b: [] };
+                    node._weExtracted.loras_a = _mergeLoraLists(wl.a, node._weInputLoras.a);
+                    node._weExtracted.loras_b = _mergeLoraLists(wl.b, node._weInputLoras.b);
+                    node._weLoraState = {};
+                    updateLoras(node);
+                    syncHidden(node);
+                    node.setDirtyCanvas(true, true);
+                }
             };
             // Apply initial ghosting state
             _updatePromptGhosting();
-
-            // -- Handle use_lora_input toggle --
-            const loraToggle = node.widgets?.find(w => w.name === "use_lora_input");
-            if (loraToggle) {
-                const origLoraCb = loraToggle.callback;
-                loraToggle.callback = function (value) {
-                    if (origLoraCb) origLoraCb.apply(this, arguments);
-                    if (!value && node._weExtracted) {
-                        // Toggled OFF — clear LoRAs that came from connected inputs
-                        // (unless use_workflow_data is ON, which is the other LoRA source)
-                        const wfOn = node.widgets?.find(w => w.name === "use_workflow_data")?.value;
-                        if (!wfOn) {
-                            node._weExtracted.loras_a = [];
-                            node._weExtracted.loras_b = [];
-                            node._weExtracted.lora_availability = {};
-                            node._weLoraState = {};
-                            updateLoras(node);
-                        }
-                    }
-                    _syncS();
-                };
-            }
 
             // -- Seed control after generate --
             node._onExecutedSeed = function () {
@@ -1922,87 +1881,81 @@ app.registerExtension({
                 // Clear any previous error banner
                 _showError(node, null);
 
-                const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
-
-                if (!wfToggle?.value) {
-                    // ── Manual mode (use_workflow_data OFF) ──────────────────
-                    // Python echoes effective values back.  We only update
-                    // availability/found flags and LoRA list — never reset
-                    // UI fields the user has already filled in.
-                    if (!node._weExtracted) {
-                        // Very first execution on a brand-new node: seed
-                        // _weExtracted with the effective info so subsequent
-                        // runs have something to compare against.
-                        node._weExtracted = info;
-                        node._wePopulated = true;
-                        node.properties = node.properties || {};
-                        node.properties.we_extracted_cache = JSON.stringify(info);
-                        // Do NOT call updateUI — user's typed values live in
-                        // _weOverrides / the DOM already; just sync family/visibility.
-                        if (info.model_family && node._weFamilySel) {
-                            const fam = info.model_family;
-                            if (![...node._weFamilySel.options].some(o => o.value === fam)) {
-                                const o = document.createElement("option");
-                                o.value = fam; o.textContent = info.model_family_label || fam;
-                                node._weFamilySel.appendChild(o);
-                            }
-                            node._weFamilySel.value = fam;
-                            node._weFamily = fam;
-                        }
-                        updateWanVisibility(node);
-                    } else {
-                        // Subsequent runs — keep UI as-is, only update metadata
-                        const loraToggle = node.widgets?.find(w => w.name === "use_lora_input");
-                        if (loraToggle?.value) {
-                            const oldNames = [...(node._weExtracted.loras_a || []), ...(node._weExtracted.loras_b || [])]
-                                .map(l => l.name).sort().join(",");
-                            node._weExtracted.loras_a = info.loras_a || [];
-                            node._weExtracted.loras_b = info.loras_b || [];
-                            const newNames = [...node._weExtracted.loras_a, ...node._weExtracted.loras_b]
-                                .map(l => l.name).sort().join(",");
-                            if (oldNames !== newNames) node._weLoraState = {};
-                        }
-                        if (info.lora_availability) node._weExtracted.lora_availability = info.lora_availability;
-                        if (info.model_a_found !== undefined) node._weExtracted.model_a_found = info.model_a_found;
-                        if (info.model_b_found !== undefined) node._weExtracted.model_b_found = info.model_b_found;
-                        if (info.vae_found !== undefined) node._weExtracted.vae_found = info.vae_found;
-                        node.properties = node.properties || {};
-                        node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
-                        updateLoras(node);
-                    }
-
-                    // ── Show connected prompt values in ghosted textareas ────
-                    const promptToggle = node.widgets?.find(w => w.name === "use_prompt_input");
-                    if (promptToggle?.value) {
-                        if (info.positive_prompt != null && node._wePosBox && node._wePosBox.readOnly) {
-                            node._wePosBox.value = info.positive_prompt;
-                        }
-                        if (info.negative_prompt != null && node._weNegBox && node._weNegBox.readOnly) {
-                            node._weNegBox.value = info.negative_prompt;
-                        }
-                    }
-                } else {
-                    // ── use_workflow_data ON — always reflect the source ──────
-                    // syncHidden no longer captures sampler/resolution/prompts
-                    // in this mode, so overrides never freeze them. Always call
-                    // updateUI so the UI stays in sync with the source workflow.
-                    const oldWfNames = [...(node._weExtracted?.loras_a || []), ...(node._weExtracted?.loras_b || [])]
-                        .map(l => l.name).sort().join(",");
+                // Update availability/found flags and LoRA list from execution.
+                // Never reset UI fields the user has already set.
+                if (!node._weExtracted) {
+                    // Very first execution on a brand-new node: seed
+                    // _weExtracted with the effective info so subsequent
+                    // runs have something to compare against.
                     node._weExtracted = info;
+                    node._wePopulated = true;
+                    node._weWorkflowLoras = {
+                        a: [...(info.workflow_loras_a || info.loras_a || [])],
+                        b: [...(info.workflow_loras_b || info.loras_b || [])],
+                    };
+                    node._weInputLoras = {
+                        a: [...(info.input_loras_a || [])],
+                        b: [...(info.input_loras_b || [])],
+                    };
                     node.properties = node.properties || {};
                     node.properties.we_extracted_cache = JSON.stringify(info);
-
-                    node._wePopulated = true;
-                    const newWfNames = [...(info.loras_a || []), ...(info.loras_b || [])]
-                        .map(l => l.name).sort().join(",");
-                    if (oldWfNames !== newWfNames) node._weLoraState = {};
-                    node._weOverrides = {};
-                    if (node.properties) {
-                        delete node.properties.we_override_data;
-                        if (oldWfNames !== newWfNames) delete node.properties.we_lora_state;
+                    if (info.model_family && node._weFamilySel) {
+                        const fam = info.model_family;
+                        if (![...node._weFamilySel.options].some(o => o.value === fam)) {
+                            const o = document.createElement("option");
+                            o.value = fam; o.textContent = info.model_family_label || fam;
+                            node._weFamilySel.appendChild(o);
+                        }
+                        node._weFamilySel.value = fam;
+                        node._weFamily = fam;
                     }
-                    updateUI(node);
+                    updateWanVisibility(node);
+                } else {
+                    // Subsequent runs — keep UI as-is, only update metadata + LoRAs
+                    // Track separate LoRA sources for change detection
+                    const oldWl = node._weWorkflowLoras || { a: [], b: [] };
+                    const oldIl = node._weInputLoras || { a: [], b: [] };
+                    const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
+                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                    node._weWorkflowLoras = {
+                        a: [...(info.workflow_loras_a || oldWl.a)],
+                        b: [...(info.workflow_loras_b || oldWl.b)],
+                    };
+                    node._weInputLoras = {
+                        a: [...(info.input_loras_a || [])],
+                        b: [...(info.input_loras_b || [])],
+                    };
+                    const newSig = [node._weWorkflowLoras.a, node._weWorkflowLoras.b,
+                        node._weInputLoras.a, node._weInputLoras.b]
+                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                    // Merged lists (Python already merged them)
+                    node._weExtracted.loras_a = info.loras_a || [];
+                    node._weExtracted.loras_b = info.loras_b || [];
+                    if (oldSig !== newSig) node._weLoraState = {};
+
+                    if (info.lora_availability) node._weExtracted.lora_availability = info.lora_availability;
+                    if (info.model_a_found !== undefined) node._weExtracted.model_a_found = info.model_a_found;
+                    if (info.model_b_found !== undefined) node._weExtracted.model_b_found = info.model_b_found;
+                    if (info.vae_found !== undefined) node._weExtracted.vae_found = info.vae_found;
+                    node.properties = node.properties || {};
+                    node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
+                    updateLoras(node);
                 }
+
+                // Show connected prompt values in ghosted textareas
+                const posConn = node.inputs?.find(i => i.name === "positive_prompt");
+                const negConn = node.inputs?.find(i => i.name === "negative_prompt");
+                if (posConn?.link != null) {
+                    if (info.positive_prompt != null && node._wePosBox) {
+                        node._wePosBox.value = info.positive_prompt;
+                    }
+                }
+                if (negConn?.link != null) {
+                    if (info.negative_prompt != null && node._weNegBox) {
+                        node._weNegBox.value = info.negative_prompt;
+                    }
+                }
+
                 node._preUpdateApplied = true;
             });
 
@@ -2028,63 +1981,58 @@ app.registerExtension({
             // generation).  Only run here as a fallback if send_sync failed.
             const info = wfInfo?.extracted;
             if (info && !this._preUpdateApplied) {
-                const wfToggle = this.widgets?.find(w => w.name === "use_workflow_data");
-
-                if (!wfToggle?.value) {
-                    // Manual mode — mirror the pre-update handler: never reset user fields
-                    if (!this._weExtracted) {
-                        this._weExtracted = info;
-                        this._wePopulated = true;
-                        this.properties = this.properties || {};
-                        this.properties.we_extracted_cache = JSON.stringify(info);
-                        if (info.model_family && this._weFamilySel) {
-                            const fam = info.model_family;
-                            if (![...this._weFamilySel.options].some(o => o.value === fam)) {
-                                const o = document.createElement("option");
-                                o.value = fam; o.textContent = info.model_family_label || fam;
-                                this._weFamilySel.appendChild(o);
-                            }
-                            this._weFamilySel.value = fam;
-                            this._weFamily = fam;
-                        }
-                        updateWanVisibility(this);
-                    } else {
-                        const loraToggle = this.widgets?.find(w => w.name === "use_lora_input");
-                        if (loraToggle?.value) {
-                            const oldNames = [...(this._weExtracted.loras_a || []), ...(this._weExtracted.loras_b || [])]
-                                .map(l => l.name).sort().join(",");
-                            this._weExtracted.loras_a = info.loras_a || [];
-                            this._weExtracted.loras_b = info.loras_b || [];
-                            const newNames = [...this._weExtracted.loras_a, ...this._weExtracted.loras_b]
-                                .map(l => l.name).sort().join(",");
-                            if (oldNames !== newNames) this._weLoraState = {};
-                        }
-                        if (info.lora_availability) this._weExtracted.lora_availability = info.lora_availability;
-                        if (info.model_a_found !== undefined) this._weExtracted.model_a_found = info.model_a_found;
-                        if (info.model_b_found !== undefined) this._weExtracted.model_b_found = info.model_b_found;
-                        if (info.vae_found !== undefined) this._weExtracted.vae_found = info.vae_found;
-                        this.properties = this.properties || {};
-                        this.properties.we_extracted_cache = JSON.stringify(this._weExtracted);
-                        updateLoras(this);
-                    }
-                } else {
-                    // use_workflow_data ON — always reflect the source
-                    const oldExNames = [...(this._weExtracted?.loras_a || []), ...(this._weExtracted?.loras_b || [])]
-                        .map(l => l.name).sort().join(",");
+                if (!this._weExtracted) {
                     this._weExtracted = info;
+                    this._wePopulated = true;
+                    this._weWorkflowLoras = {
+                        a: [...(info.workflow_loras_a || info.loras_a || [])],
+                        b: [...(info.workflow_loras_b || info.loras_b || [])],
+                    };
+                    this._weInputLoras = {
+                        a: [...(info.input_loras_a || [])],
+                        b: [...(info.input_loras_b || [])],
+                    };
                     this.properties = this.properties || {};
                     this.properties.we_extracted_cache = JSON.stringify(info);
-
-                    this._wePopulated = true;
-                    const newExNames = [...(info.loras_a || []), ...(info.loras_b || [])]
-                        .map(l => l.name).sort().join(",");
-                    if (oldExNames !== newExNames) this._weLoraState = {};
-                    this._weOverrides = {};
-                    if (this.properties) {
-                        delete this.properties.we_override_data;
-                        if (oldExNames !== newExNames) delete this.properties.we_lora_state;
+                    if (info.model_family && this._weFamilySel) {
+                        const fam = info.model_family;
+                        if (![...this._weFamilySel.options].some(o => o.value === fam)) {
+                            const o = document.createElement("option");
+                            o.value = fam; o.textContent = info.model_family_label || fam;
+                            this._weFamilySel.appendChild(o);
+                        }
+                        this._weFamilySel.value = fam;
+                        this._weFamily = fam;
                     }
-                    updateUI(this);
+                    updateWanVisibility(this);
+                } else {
+                    // Subsequent runs — always update LoRAs from execution
+                    const oldWl = this._weWorkflowLoras || { a: [], b: [] };
+                    const oldIl = this._weInputLoras || { a: [], b: [] };
+                    const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
+                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                    this._weWorkflowLoras = {
+                        a: [...(info.workflow_loras_a || oldWl.a)],
+                        b: [...(info.workflow_loras_b || oldWl.b)],
+                    };
+                    this._weInputLoras = {
+                        a: [...(info.input_loras_a || [])],
+                        b: [...(info.input_loras_b || [])],
+                    };
+                    const newSig = [this._weWorkflowLoras.a, this._weWorkflowLoras.b,
+                        this._weInputLoras.a, this._weInputLoras.b]
+                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                    this._weExtracted.loras_a = info.loras_a || [];
+                    this._weExtracted.loras_b = info.loras_b || [];
+                    if (oldSig !== newSig) this._weLoraState = {};
+
+                    if (info.lora_availability) this._weExtracted.lora_availability = info.lora_availability;
+                    if (info.model_a_found !== undefined) this._weExtracted.model_a_found = info.model_a_found;
+                    if (info.model_b_found !== undefined) this._weExtracted.model_b_found = info.model_b_found;
+                    if (info.vae_found !== undefined) this._weExtracted.vae_found = info.vae_found;
+                    this.properties = this.properties || {};
+                    this.properties.we_extracted_cache = JSON.stringify(this._weExtracted);
+                    updateLoras(this);
                 }
             }
             // Reset flag for next execution
@@ -2105,8 +2053,9 @@ app.registerExtension({
             // LiteGraph restores slots from saved JSON; if INPUT_TYPES or
             // RETURN_TYPES changed between versions, phantom slots persist.
             const VALID_INPUTS = new Set([
+                "workflow_data", "image",
                 "positive_prompt", "negative_prompt",
-                "lora_stack_a", "lora_stack_b", "workflow_data",
+                "lora_stack_a", "lora_stack_b",
             ]);
             if (node.inputs) {
                 for (let i = node.inputs.length - 1; i >= 0; i--) {
@@ -2131,7 +2080,7 @@ app.registerExtension({
 
             // Re-hide data widgets (same logic as onNodeCreated)
             const domW = node.widgets?.find(w => w.name === "we_ui");
-            const KEEP_VISIBLE = new Set(["use_workflow_data", "use_lora_input", "use_prompt_input"]);
+            const KEEP_VISIBLE = new Set([]);
             const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
@@ -2149,44 +2098,29 @@ app.registerExtension({
             const savedOv = props.we_override_data;
             const savedLs = props.we_lora_state;
             const savedCache = props.we_extracted_cache;
+            const savedWl = props.we_workflow_loras;
+            const savedIl = props.we_input_loras;
 
             let cached = null;
             try { cached = JSON.parse(savedCache || "{}"); } catch { cached = null; }
             const hasCache = cached && Object.keys(cached).length > 0;
-
-            // Restore freeze state based on use_workflow_data toggle
-            const wfToggle = node.widgets?.find(w => w.name === "use_workflow_data");
 
             if (hasCache) {
                 node._weExtracted = cached;
                 node._wePopulated = true;
                 node._weLoraState = {};
                 node._weOverrides = {};
-                // updateUI is async (fetches family list & reloads dropdowns).
-                // Chain applyOverrides via .then() so overrides are restored
-                // AFTER dropdowns are populated — otherwise values can't be set.
-                // onConfigure itself stays synchronous (_configuredFromWorkflow
-                // is already set above).
+                try { node._weWorkflowLoras = JSON.parse(savedWl || '{"a":[],"b":[]}'); } catch { node._weWorkflowLoras = { a: [], b: [] }; }
+                try { node._weInputLoras = JSON.parse(savedIl || '{"a":[],"b":[]}'); } catch { node._weInputLoras = { a: [], b: [] }; }
                 const uiReady = updateUI(node);
                 if (uiReady && typeof uiReady.then === "function") {
                     uiReady.then(() => {
-                        if (!wfToggle?.value) {
-                            applyOverrides(node, savedOv, savedLs);
-                        }
-                        if (wfToggle?.value) {
-                            setFieldsFrozen(node, true);
-                        }
+                        applyOverrides(node, savedOv, savedLs);
                         if (node._updatePromptGhosting) node._updatePromptGhosting();
                         node.setDirtyCanvas(true, true);
                     });
                 } else {
-                    // Fallback if updateUI is ever made sync again
-                    if (!wfToggle?.value) {
-                        applyOverrides(node, savedOv, savedLs);
-                    }
-                    if (wfToggle?.value) {
-                        setFieldsFrozen(node, true);
-                    }
+                    applyOverrides(node, savedOv, savedLs);
                     if (node._updatePromptGhosting) node._updatePromptGhosting();
                     node.setDirtyCanvas(true, true);
                 }
@@ -2194,7 +2128,7 @@ app.registerExtension({
                 // No extracted cache — but user may have entered values manually
                 // before executing. Try to restore from override data alone.
                 const hasOverrides = savedOv && savedOv !== "{}";
-                if (hasOverrides && !wfToggle?.value) {
+                if (hasOverrides) {
                     try {
                         const ov = JSON.parse(savedOv);
                         const isVideo = ["wan_video_t2v", "wan_video_i2v"].includes(ov._family);
@@ -2239,9 +2173,6 @@ app.registerExtension({
                     } catch {
                         // Fall through to basic restore
                     }
-                }
-                if (wfToggle?.value) {
-                    setFieldsFrozen(node, true);
                 }
                 if (node._updatePromptGhosting) node._updatePromptGhosting();
                 node.setDirtyCanvas(true, true);
