@@ -147,7 +147,7 @@ class PromptManagerAdvanced:
                 "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
                 "thumbnail_image": ("IMAGE", {"tooltip": "Connect an image to use as thumbnail when saving the prompt"}),
-                "workflow_data": ("WORKFLOW_DATA", {"forceInput": True, "lazy": True, "tooltip": "Connect workflow_data from WorkflowBuilder or PromptExtractor"}),
+                "workflow_data": ("WORKFLOW_DATA", {"forceInput": True, "tooltip": "Connect workflow_data from WorkflowBuilder or PromptExtractor"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -657,8 +657,6 @@ class PromptManagerAdvanced:
         needed = []
         if use_prompt_input:
             needed.append("prompt")
-        if workflow_data is None:
-            needed.append("workflow_data")
         return needed
 
     def _build_stack_from_toggle(self, toggle_data):
