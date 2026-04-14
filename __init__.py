@@ -38,7 +38,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced": "Prompt Manager Advanced",
     "PromptGenerator":       "Prompt Generator",
     "PromptGenOptions":      "Prompt Generator Options",
-    "PromptExtractor":       "Workflow Extractor",
+    "PromptExtractor":       "Prompt Extractor",
     "WorkflowBuilder":       "Workflow Builder",
     "WorkflowRenderer":      "Workflow Renderer",
     "WorkflowContext":       "Workflow Context",

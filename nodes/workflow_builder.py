@@ -247,6 +247,194 @@ async def api_list_files(request):
     except Exception as e:
         return server.web.json_response({"files": [], "error": str(e)})
 
+
+@server.PromptServer.instance.routes.post("/workflow-builder/process-extracted")
+async def api_process_extracted(request):
+    """Process raw extracted data through WB's normalization logic.
+    Matches execute() behavior: family resolution, sampler normalization,
+    VAE/CLIP defaults, availability checking.
+    Used by the 'Update Workflow' button so it produces the same result
+    as toggling use_workflow_data ON and executing."""
+    try:
+        body = await request.json()
+        raw = body.get('extracted', {})
+        if not raw:
+            return server.web.json_response({"error": "No extracted data"}, status=400)
+
+        # ── Normalize sampler: preserve ALL keys, ensure seed_a exists ──
+        raw_sampler = raw.get('sampler', {})
+        sampler = {
+            'steps': raw_sampler.get('steps', 20),
+            'cfg': raw_sampler.get('cfg', 5.0),
+            'seed_a': raw_sampler.get('seed_a', raw_sampler.get('seed', 0)),
+            'seed_b': raw_sampler.get('seed_b'),
+            'sampler_name': raw_sampler.get('sampler_name', 'euler'),
+            'scheduler': raw_sampler.get('scheduler', 'simple'),
+            'denoise': raw_sampler.get('denoise', 1.0),
+            'guidance': raw_sampler.get('guidance'),
+        }
+        # Pass through WAN Video dual-step fields and any future keys
+        for k in ('steps_high', 'steps_low'):
+            if k in raw_sampler:
+                sampler[k] = raw_sampler[k]
+
+        # ── Normalize VAE ───────────────────────────────────────────────
+        raw_vae = raw.get('vae', {})
+        if isinstance(raw_vae, dict):
+            vae = {'name': raw_vae.get('name', ''), 'source': raw_vae.get('source', 'workflow_data')}
+        elif isinstance(raw_vae, str):
+            vae = {'name': raw_vae, 'source': 'workflow_data'}
+        else:
+            vae = {'name': '', 'source': 'unknown'}
+
+        # ── Normalize CLIP ──────────────────────────────────────────────
+        raw_clip = raw.get('clip', {})
+        if isinstance(raw_clip, dict):
+            clip = {
+                'names': raw_clip.get('names', []),
+                'type': raw_clip.get('type', ''),
+                'source': raw_clip.get('source', 'workflow_data'),
+            }
+        elif isinstance(raw_clip, list):
+            clip = {'names': raw_clip, 'type': '', 'source': 'workflow_data'}
+        elif isinstance(raw_clip, str):
+            clip = {'names': [raw_clip] if raw_clip else [], 'type': '', 'source': 'workflow_data'}
+        else:
+            clip = {'names': [], 'type': '', 'source': 'unknown'}
+
+        # ── Normalize resolution: preserve ALL keys ─────────────────────
+        raw_res = raw.get('resolution', {})
+        resolution = {
+            'width': raw_res.get('width', 768),
+            'height': raw_res.get('height', 1280),
+            'batch_size': raw_res.get('batch_size', 1),
+            'length': raw_res.get('length'),
+            '_width_from_node_ref': raw_res.get('_width_from_node_ref', False),
+            '_height_from_node_ref': raw_res.get('_height_from_node_ref', False),
+        }
+
+        extracted = {
+            'positive_prompt': raw.get('positive_prompt', ''),
+            'negative_prompt': raw.get('negative_prompt', ''),
+            'loras_a': raw.get('loras_a', []),
+            'loras_b': raw.get('loras_b', []),
+            'model_a': raw.get('model_a', ''),
+            'model_b': raw.get('model_b', ''),
+            'vae': vae,
+            'clip': clip,
+            'sampler': sampler,
+            'resolution': resolution,
+            'is_video': raw.get('is_video', resolution.get('length') is not None),
+            'model_family': raw.get('model_family', ''),
+            'model_family_label': raw.get('model_family_label', ''),
+        }
+
+        model_name_a = extracted['model_a']
+        model_name_b = extracted['model_b']
+
+        # ── Resolve family ──────────────────────────────────────────────
+        family_key = extracted.get('model_family') or None
+        if not family_key and model_name_a:
+            resolved_ref, _ = resolve_model_name(model_name_a)
+            family_key = get_model_family(resolved_ref or model_name_a)
+        if not family_key:
+            family_key = 'sdxl'
+
+        extracted['model_family'] = family_key
+        extracted['model_family_label'] = get_family_label(family_key)
+
+        from ..py.workflow_families import MODEL_FAMILIES
+        spec = MODEL_FAMILIES.get(family_key, {})
+
+        # ── Default VAE fallback ────────────────────────────────────────
+        vae_name = vae.get('name', '')
+        if not vae_name or vae_name.startswith('('):
+            vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
+            fallback_vae = rec_vae or (vaes[0] if vaes else '')
+            if fallback_vae:
+                vae = {'name': fallback_vae, 'source': 'default'}
+                extracted['vae'] = vae
+
+        # ── Default CLIP fallback ───────────────────────────────────────
+        clip_names = clip.get('names', [])
+        if not clip_names:
+            clip_type_from_spec = spec.get('clip_type', '')
+            compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
+            if compatible_clips:
+                clip_slots = spec.get('clip_slots', 1)
+                clip_patterns = [p.lower() for p in spec.get('clip', [])]
+                selected = []
+                if clip_patterns and clip_slots >= 2:
+                    for pat in clip_patterns:
+                        for c in compatible_clips:
+                            if pat in os.path.basename(c).lower() and c not in selected:
+                                selected.append(c)
+                                break
+                        if len(selected) >= clip_slots:
+                            break
+                if not selected:
+                    selected = [compatible_clips[0]]
+                clip = {'names': selected, 'type': clip_type_from_spec, 'source': 'default'}
+                extracted['clip'] = clip
+
+        # ── Ensure clip_type and loader_type from family spec ───────────
+        clip_type = clip.get('type', '') or spec.get('clip_type', '')
+        is_ckpt = spec.get('checkpoint', False)
+        loader_type = 'checkpoint' if is_ckpt else 'unet'
+
+        # ── Availability checks ─────────────────────────────────────────
+        model_a_found = True
+        model_b_found = True
+        if model_name_a:
+            resolved_a, _ = resolve_model_name(model_name_a)
+            model_a_found = resolved_a is not None
+        if model_name_b:
+            resolved_b, _ = resolve_model_name(model_name_b)
+            model_b_found = resolved_b is not None
+
+        vae_found = True
+        vae_name_str = vae.get('name', '')
+        if vae_name_str and not vae_name_str.startswith('('):
+            vae_found = resolve_vae_name(vae_name_str) is not None
+
+        lora_availability = {}
+        for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
+            lora_name = lora.get('name', '')
+            if lora_name and lora_name not in lora_availability:
+                _, found = resolve_lora_path(lora_name)
+                lora_availability[lora_name] = found
+
+        # ── Build response matching execute() ui_info['extracted'] ──────
+        ui_info = {
+            'positive_prompt':    extracted['positive_prompt'],
+            'negative_prompt':    extracted['negative_prompt'],
+            'model_a':            model_name_a,
+            'model_b':            model_name_b,
+            'model_a_found':      model_a_found,
+            'model_b_found':      model_b_found,
+            'loras_a':            extracted['loras_a'],
+            'loras_b':            extracted['loras_b'],
+            'vae':                extracted['vae'],
+            'vae_found':          vae_found,
+            'clip':               extracted['clip'],
+            'sampler':            sampler,
+            'resolution':         resolution,
+            'is_video':           extracted.get('is_video', False),
+            'model_family':       family_key,
+            'model_family_label': get_family_label(family_key),
+            'lora_availability':  lora_availability,
+        }
+
+        print(f"[WorkflowBuilder] process-extracted: family={family_key}, "
+              f"model_a={model_name_a}, vae={vae.get('name', '')}, "
+              f"loras={len(extracted.get('loras_a', []))}+{len(extracted.get('loras_b', []))}")
+        return server.web.json_response({"extracted": ui_info})
+    except Exception as e:
+        print(f"[WorkflowBuilder] process-extracted error: {e}")
+        traceback.print_exc()
+        return server.web.json_response({"error": str(e)}, status=500)
+
+
 # ─── Main Node ──────────────────────────────────────────────────────────────
 
 class WorkflowBuilder:

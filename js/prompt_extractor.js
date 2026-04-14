@@ -1523,6 +1523,28 @@ async function extractAndUpdateMetadata(node, filename) {
         // Force canvas redraw to update indicator
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
+
+        // Extract full preview data for WorkflowBuilder's "Update Workflow" button.
+        // Runs the Python parse+build pipeline on the cached metadata so WB can
+        // pull it without executing PromptExtractor (live-menu pattern).
+        if (node.hasWorkflow) {
+            try {
+                const sourceFolder = node._sourceFolder || 'input';
+                const previewResp = await fetch(
+                    `/prompt-extractor/extract-preview?filename=${encodeURIComponent(filename)}&source=${encodeURIComponent(sourceFolder)}`
+                );
+                if (previewResp.ok) {
+                    const previewData = await previewResp.json();
+                    if (previewData.extracted) {
+                        node.properties = node.properties || {};
+                        node.properties.pe_extracted_data = JSON.stringify(previewData.extracted);
+                        console.log(`[PromptExtractor] Cached extracted preview data for: ${filename}`);
+                    }
+                }
+            } catch (previewErr) {
+                console.warn('[PromptExtractor] Could not cache preview data:', previewErr);
+            }
+        }
     } catch (error) {
         console.error("[PromptExtractor] Error extracting metadata:", error);
         node.hasWorkflow = false;

@@ -1261,6 +1261,112 @@ app.registerExtension({
             node._weRoot = root;
             node._weRoot = root;
 
+            // -- "Update Workflow" button — pull data from PromptExtractor --
+            const updateBtn = makeEl("button", {
+                width: "100%", padding: "6px 0",
+                background: C.accent, color: "#fff", border: "none",
+                borderRadius: "4px", cursor: "pointer",
+                fontWeight: "bold", fontSize: "13px",
+                fontFamily: "inherit", marginBottom: "2px",
+            }, "\u{1F504} Update Workflow");
+            updateBtn.onmouseenter = () => { updateBtn.style.background = C.accentDim; };
+            updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
+            updateBtn.onclick = async () => {
+                // 1. Find a PromptExtractor node — prefer one connected via workflow_data input
+                let peNode = null;
+                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                if (wfInput?.link != null) {
+                    const linkInfo = node.graph?.links?.[wfInput.link];
+                    if (linkInfo) {
+                        const srcNode = node.graph?.getNodeById(linkInfo.origin_id);
+                        if (srcNode?.comfyClass === "PromptExtractor") {
+                            peNode = srcNode;
+                        }
+                    }
+                }
+                // Fallback: find any PromptExtractor on the graph
+                if (!peNode && app.graph?._nodes) {
+                    for (const n of app.graph._nodes) {
+                        if (n.comfyClass === "PromptExtractor" || n.type === "PromptExtractor") {
+                            peNode = n;
+                            break;
+                        }
+                    }
+                }
+                if (!peNode) {
+                    _showError(node, "No PromptExtractor node found on the graph.");
+                    return;
+                }
+
+                updateBtn.disabled = true;
+                updateBtn.textContent = "\u23F3 Fetching\u2026";
+                try {
+                    let extracted = null;
+
+                    // 2a. Try client-side cache first (set by PE JS on file selection)
+                    const cachedStr = peNode.properties?.pe_extracted_data;
+                    if (cachedStr) {
+                        try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
+                    }
+
+                    // 2b. Fallback: call extract-preview API with PE's current widget values
+                    if (!extracted) {
+                        const peImageW = peNode.widgets?.find(w => w.name === "image");
+                        const peSourceW = peNode.widgets?.find(w => w.name === "source_folder");
+                        const peFilename = peImageW?.value || "";
+                        const peSource = peSourceW?.value || "input";
+                        if (!peFilename || peFilename === "(none)") {
+                            _showError(node, "PromptExtractor has no file selected.");
+                            return;
+                        }
+                        const resp = await fetch(
+                            `/prompt-extractor/extract-preview?filename=${encodeURIComponent(peFilename)}&source=${encodeURIComponent(peSource)}`
+                        );
+                        const data = await resp.json();
+                        extracted = data.extracted;
+                        if (!extracted) {
+                            _showError(node, data.error || "No metadata found in selected file.");
+                            return;
+                        }
+                    }
+
+                    // 3. Process through WB Python (matches execute() behavior)
+                    const processResp = await fetch("/workflow-builder/process-extracted", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ extracted }),
+                    });
+                    const processData = await processResp.json();
+                    if (processData.error) {
+                        _showError(node, processData.error);
+                        return;
+                    }
+                    const processed = processData.extracted || extracted;
+
+                    // 4. Populate the UI exactly like use_workflow_data ON + execute
+                    _showError(node, null);
+                    node._weExtracted = processed;
+                    node._wePopulated = true;
+                    node._weLoraState = {};
+                    node._weOverrides = {};
+                    node.properties = node.properties || {};
+                    node.properties.we_extracted_cache = JSON.stringify(processed);
+                    delete node.properties.we_override_data;
+                    delete node.properties.we_lora_state;
+                    await updateUI(node);
+                    syncHidden(node);
+                    node.setDirtyCanvas(true, true);
+                    app.graph.setDirtyCanvas(true, true);
+                } catch (e) {
+                    console.error("[WorkflowBuilder] Update Workflow error:", e);
+                    _showError(node, "Failed to fetch data from PromptExtractor.");
+                } finally {
+                    updateBtn.disabled = false;
+                    updateBtn.textContent = "\u{1F504} Update Workflow";
+                }
+            };
+            root.appendChild(updateBtn);
+
             // -- 1. RESOLUTION section (open) --
             const resSec = makeSection("RESOLUTION");
             node._weSections.resolution = resSec;

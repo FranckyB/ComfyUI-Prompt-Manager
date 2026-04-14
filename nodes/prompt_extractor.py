@@ -24,6 +24,9 @@ except ImportError:
 _file_metadata_cache = {}
 # Cache for video frames extracted by JavaScript
 _video_frames_cache = {}
+# Cache for last extracted info per node (keyed by unique_id) — used by WorkflowBuilder's
+# "Update Workflow" button to pull data without re-executing PromptExtractor.
+_last_extracted_info = {}
 
 
 # LoRA Blacklist - LoRAs containing these keywords will be excluded from extraction
@@ -396,6 +399,160 @@ async def list_input_files(request):
     except Exception as e:
         print(f"[PromptExtractor] Error listing files: {e}")
         return server.web.json_response({"files": [], "error": str(e)}, status=500)
+
+
+# API endpoint to get cached extracted info for WorkflowBuilder's "Update Workflow" button.
+# Accepts ?node_id=<id> for a specific PE node, or returns all cached entries.
+@server.PromptServer.instance.routes.get("/prompt-extractor/get-extracted-data")
+async def get_extracted_data(request):
+    """Return the last extracted info cached by PromptExtractor after execution."""
+    try:
+        node_id = request.rel_url.query.get('node_id', '')
+        if node_id:
+            data = _last_extracted_info.get(str(node_id))
+            if data:
+                return server.web.json_response({"extracted": data, "node_id": node_id})
+            else:
+                return server.web.json_response({"extracted": None, "node_id": node_id,
+                                                  "error": "No cached data for this node. Execute PromptExtractor first."})
+        else:
+            # Return all cached node IDs so JS can pick
+            available = {nid: bool(d) for nid, d in _last_extracted_info.items()}
+            return server.web.json_response({"available": available})
+    except Exception as e:
+        print(f"[PromptExtractor] Error in get-extracted-data: {e}")
+        return server.web.json_response({"extracted": None, "error": str(e)}, status=500)
+
+
+# API endpoint to extract metadata from a file on demand (no node execution required).
+# Used by WorkflowBuilder's "Update Workflow" button and PE JS on file selection.
+@server.PromptServer.instance.routes.get("/prompt-extractor/extract-preview")
+async def extract_preview(request):
+    """Extract metadata from a file and return structured info for WorkflowBuilder."""
+    try:
+        filename = request.rel_url.query.get('filename', '')
+        source = request.rel_url.query.get('source', 'input')
+
+        if not filename or filename == '(none)':
+            return server.web.json_response({"extracted": None})
+
+        # Resolve path with directory-traversal protection
+        base_dir = folder_paths.get_output_directory() if source == 'output' else folder_paths.get_input_directory()
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+        real_base = os.path.realpath(base_dir)
+        real_path = os.path.realpath(file_path)
+        if not (real_path == real_base or real_path.startswith(real_base + os.sep)):
+            return server.web.json_response({"extracted": None, "error": "Invalid path"}, status=403)
+        if not os.path.exists(file_path):
+            return server.web.json_response({"extracted": None, "error": "File not found"})
+
+        ext = os.path.splitext(file_path)[1].lower()
+        prompt_data = None
+        wf_data = None
+
+        if ext == '.png':
+            prompt_data, wf_data = extract_metadata_from_png(file_path)
+        elif ext in ['.jpg', '.jpeg', '.webp']:
+            prompt_data, wf_data = extract_metadata_from_jpeg(file_path)
+        elif ext == '.json':
+            prompt_data, wf_data = extract_metadata_from_json(file_path)
+        elif ext in ['.mp4', '.webm', '.mov', '.avi']:
+            prompt_data, wf_data = extract_metadata_from_video(file_path)
+
+        if not prompt_data and not wf_data:
+            return server.web.json_response({"extracted": None, "error": "No metadata found in file"})
+
+        parsed = parse_workflow_for_prompts(prompt_data, wf_data)
+        pos = parsed['positive_prompt'] or ""
+        neg = parsed['negative_prompt'] or ""
+        loras_a = parsed['loras_a']
+        loras_b = parsed['loras_b']
+
+        model_a = ""
+        model_b = ""
+        raw_a = parsed.get('models_a', [])
+        raw_b = parsed.get('models_b', [])
+        if raw_a:
+            model_a = os.path.basename(raw_a[0].replace('\\', '/'))
+        if raw_b:
+            model_b = os.path.basename(raw_b[0].replace('\\', '/'))
+
+        from ..py.workflow_extraction_utils import (
+            extract_sampler_params, extract_vae_info, extract_clip_info,
+            extract_resolution, resolve_model_name, resolve_vae_name,
+        )
+        from ..py.workflow_families import get_model_family, get_family_label
+
+        sampler = extract_sampler_params(prompt_data, wf_data)
+        vae = extract_vae_info(prompt_data, wf_data)
+        clip = extract_clip_info(prompt_data, wf_data)
+        resolution = extract_resolution(prompt_data, wf_data)
+
+        # Handle A1111 format
+        is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
+        if is_a1111:
+            for key in ['sampler_name', 'scheduler', 'steps', 'cfg', 'seed']:
+                if prompt_data.get(key) is not None:
+                    sampler[key] = prompt_data[key]
+            if prompt_data.get('denoise') is not None:
+                sampler['denoise'] = prompt_data['denoise']
+            if prompt_data.get('width') and prompt_data.get('height'):
+                resolution['width'] = prompt_data['width']
+                resolution['height'] = prompt_data['height']
+        sampler['denoise'] = sampler.get('denoise', 1.0)
+
+        _model_a_path = raw_a[0] if raw_a else model_a
+        family = get_model_family(_model_a_path)
+
+        # Check availability
+        model_a_found = True
+        model_b_found = True
+        if model_a:
+            _r, _ = resolve_model_name(model_a)
+            model_a_found = _r is not None
+        if model_b:
+            _r, _ = resolve_model_name(model_b)
+            model_b_found = _r is not None
+
+        vae_found = True
+        vae_name_str = vae.get('name', '') if isinstance(vae, dict) else (vae or '')
+        if vae_name_str and not vae_name_str.startswith('('):
+            vae_found = resolve_vae_name(vae_name_str) is not None
+
+        lora_avail = {}
+        for _l in loras_a + loras_b:
+            _ln = _l.get('name', '')
+            if _ln:
+                _, _found = resolve_lora_path(_ln)
+                lora_avail[_ln] = _found
+
+        extracted = {
+            'positive_prompt':    pos,
+            'negative_prompt':    neg,
+            'model_a':            model_a,
+            'model_b':            model_b,
+            'model_a_found':      model_a_found,
+            'model_b_found':      model_b_found,
+            'loras_a':            loras_a,
+            'loras_b':            loras_b,
+            'vae':                vae,
+            'vae_found':          vae_found,
+            'clip':               clip,
+            'sampler':            sampler,
+            'resolution':         resolution,
+            'is_video':           ext in ['.mp4', '.webm', '.mov', '.avi'],
+            'model_family':       family,
+            'model_family_label': get_family_label(family),
+            'lora_availability':  lora_avail,
+        }
+
+        print(f"[PromptExtractor] extract-preview: {filename} -> {family}, model_a={model_a}")
+        return server.web.json_response({"extracted": extracted})
+    except Exception as e:
+        print(f"[PromptExtractor] extract-preview error: {e}")
+        import traceback
+        traceback.print_exc()
+        return server.web.json_response({"extracted": None, "error": str(e)}, status=500)
 
 
 # ── Shared LoRA utilities ─────────────────────────────────────────────────────
@@ -3317,6 +3474,37 @@ class PromptExtractor:
                         _simplified['vae_found'] = resolve_vae_name(_vae_name) is not None
                     workflow_data = _simplified
                     print(f"[PromptExtractor] Output structured workflow_data (dict, {len(workflow_data)} keys)")
+
+                    # Cache extracted info for WorkflowBuilder's "Update Workflow" button.
+                    # Shape matches what WB's updateUI() expects (ui_info['extracted']).
+                    if unique_id is not None:
+                        from ..py.lora_utils import resolve_lora_path as _resolve_lora
+                        _lora_avail = {}
+                        for _l in loras_a + loras_b:
+                            _ln = _l.get('name', '')
+                            if _ln:
+                                _, _found = _resolve_lora(_ln)
+                                _lora_avail[_ln] = _found
+                        _last_extracted_info[str(unique_id)] = {
+                            'positive_prompt':    positive_prompt,
+                            'negative_prompt':    negative_prompt,
+                            'model_a':            model_a,
+                            'model_b':            model_b,
+                            'model_a_found':      _simplified.get('model_a_found', True),
+                            'model_b_found':      _simplified.get('model_b_found', True),
+                            'loras_a':            loras_a,
+                            'loras_b':            loras_b,
+                            'vae':                _vae,
+                            'vae_found':          _simplified.get('vae_found', True),
+                            'clip':               _clip,
+                            'sampler':            _sampler,
+                            'resolution':         _res,
+                            'is_video':           ext in ['.mp4', '.webm', '.mov', '.avi'],
+                            'model_family':       _family,
+                            'model_family_label': get_family_label(_family),
+                            'lora_availability':  _lora_avail,
+                        }
+                        print(f"[PromptExtractor] Cached extracted info for node {unique_id}")
 
                 except Exception as e:
                     print(f"[PromptExtractor] Error building structured workflow_data: {e}")
