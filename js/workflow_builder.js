@@ -1251,6 +1251,10 @@ app.registerExtension({
                 fontWeight: "bold", fontSize: "13px",
                 fontFamily: "inherit", marginBottom: "2px",
             }, "\u{1F504} Update Workflow");
+            // Hide button initially if workflow_data not connected
+            const wfConn = node.inputs?.find(i => i.name === "workflow_data");
+            if (!wfConn || wfConn.link == null) updateBtn.style.display = "none";
+            node._weUpdateBtn = updateBtn;
             updateBtn.onmouseenter = () => { updateBtn.style.background = C.accentDim; };
             updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
             updateBtn.onclick = async () => {
@@ -1847,6 +1851,12 @@ app.registerExtension({
                 _updatePromptGhosting();
                 if (wp) syncHidden(node);
 
+                // Show/hide Update Workflow button based on workflow_data connection
+                const wfDataConn = node.inputs?.find(i => i.name === "workflow_data");
+                if (node._weUpdateBtn) {
+                    node._weUpdateBtn.style.display = (wfDataConn?.link != null) ? "" : "none";
+                }
+
                 // Clear input LoRAs for disconnected stacks and re-merge
                 const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
                 const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
@@ -2199,6 +2209,12 @@ app.registerExtension({
                 }
                 if (node._updatePromptGhosting) node._updatePromptGhosting();
                 node.setDirtyCanvas(true, true);
+            }
+
+            // Show/hide Update Workflow button based on workflow_data connection
+            const wfSlot = node.inputs?.find(i => i.name === "workflow_data");
+            if (node._weUpdateBtn) {
+                node._weUpdateBtn.style.display = (wfSlot?.link != null) ? "" : "none";
             }
         };
     },
