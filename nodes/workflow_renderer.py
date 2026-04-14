@@ -146,6 +146,15 @@ class WorkflowRenderer:
 
         # ── Load Model A ──────────────────────────────────────────────────
         resolved_a, folder_a = resolve_model_name(model_name_a)
+        # Verify resolved model belongs to a compatible family — resolve_model_name
+        # does basename matching which can match unrelated models (e.g. audio files).
+        if resolved_a is not None:
+            compat_check = get_compatible_families(family_key)
+            resolved_family = get_model_family(resolved_a)
+            if resolved_family is not None and resolved_family not in compat_check:
+                print(f"[WorkflowRenderer] Resolved model {resolved_a} is family "
+                      f"{resolved_family}, not compatible with {family_key} — rejecting")
+                resolved_a, folder_a = None, None
         if resolved_a is None:
             compat = get_compatible_families(family_key)
             all_on_disk = []

@@ -271,12 +271,18 @@ def get_all_family_labels():
 
 # ─── Model listing ───────────────────────────────────────────────────────────
 
-def list_compatible_models(reference_model):
+def list_compatible_models(reference_model, family_override=None):
     """
     Given a reference model name/path, return a sorted list of compatible
-    models found on disk.  If the family is unknown, returns ALL models.
+    models found on disk.  If the family is unknown and no override is
+    provided, returns ALL models.
+
+    Parameters
+    ----------
+    reference_model : str — model path/name to derive family from
+    family_override : str | None — explicit family key (takes priority)
     """
-    family = get_model_family(reference_model)
+    family = family_override or get_model_family(reference_model)
     compat = get_compatible_families(family)
 
     all_models = []
@@ -295,7 +301,7 @@ def list_compatible_models(reference_model):
             unique.append(m)
 
     if not compat:
-        return sorted(unique)
+        return []
 
     compatible = []
     for m in unique:

@@ -89,8 +89,8 @@ async def api_list_models(request):
                         models.append(m)
             family = family_key
         elif ref:
-            models = list_compatible_models(ref)
-            family = get_model_family(ref)
+            family = get_model_family(ref) or 'sdxl'
+            models = list_compatible_models(ref, family_override=family)
         else:
             model_type = request.rel_url.query.get('type', 'checkpoints')
             try:
@@ -345,40 +345,50 @@ async def api_process_extracted(request):
         from ..py.workflow_families import MODEL_FAMILIES
         spec = MODEL_FAMILIES.get(family_key, {})
 
-        # ── Default VAE fallback ────────────────────────────────────────
+        # ── Default VAE/CLIP fallback ───────────────────────────────────
+        # For checkpoint models, empty means "use from checkpoint".
+        # For non-checkpoint (unet) models, resolve to a compatible file.
+        is_ckpt = spec.get('checkpoint', False)
         vae_name = vae.get('name', '')
         if not vae_name or vae_name.startswith('('):
-            vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
-            fallback_vae = rec_vae or (vaes[0] if vaes else '')
-            if fallback_vae:
-                vae = {'name': fallback_vae, 'source': 'default'}
+            if is_ckpt:
+                vae = {'name': '(from checkpoint)', 'source': 'checkpoint'}
                 extracted['vae'] = vae
+            else:
+                vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
+                fallback_vae = rec_vae or (vaes[0] if vaes else '')
+                if fallback_vae:
+                    vae = {'name': fallback_vae, 'source': 'default'}
+                    extracted['vae'] = vae
 
         # ── Default CLIP fallback ───────────────────────────────────────
         clip_names = clip.get('names', [])
         if not clip_names:
-            clip_type_from_spec = spec.get('clip_type', '')
-            compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
-            if compatible_clips:
-                clip_slots = spec.get('clip_slots', 1)
-                clip_patterns = [p.lower() for p in spec.get('clip', [])]
-                selected = []
-                if clip_patterns and clip_slots >= 2:
-                    for pat in clip_patterns:
-                        for c in compatible_clips:
-                            if pat in os.path.basename(c).lower() and c not in selected:
-                                selected.append(c)
-                                break
-                        if len(selected) >= clip_slots:
-                            break
-                if not selected:
-                    selected = [compatible_clips[0]]
-                clip = {'names': selected, 'type': clip_type_from_spec, 'source': 'default'}
+            if is_ckpt:
+                clip = {'names': ['(from checkpoint)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
                 extracted['clip'] = clip
+            else:
+                clip_type_from_spec = spec.get('clip_type', '')
+                compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
+                if compatible_clips:
+                    clip_slots = spec.get('clip_slots', 1)
+                    clip_patterns = [p.lower() for p in spec.get('clip', [])]
+                    selected = []
+                    if clip_patterns and clip_slots >= 2:
+                        for pat in clip_patterns:
+                            for c in compatible_clips:
+                                if pat in os.path.basename(c).lower() and c not in selected:
+                                    selected.append(c)
+                                    break
+                            if len(selected) >= clip_slots:
+                                break
+                    if not selected:
+                        selected = [compatible_clips[0]]
+                    clip = {'names': selected, 'type': clip_type_from_spec, 'source': 'default'}
+                    extracted['clip'] = clip
 
         # ── Ensure clip_type and loader_type from family spec ───────────
         clip_type = clip.get('type', '') or spec.get('clip_type', '')
-        is_ckpt = spec.get('checkpoint', False)
         loader_type = 'checkpoint' if is_ckpt else 'unet'
 
         # ── Availability checks ─────────────────────────────────────────
@@ -749,39 +759,48 @@ class WorkflowBuilder:
             is_ckpt = spec.get('checkpoint', False)
             simplified_wf['loader_type'] = 'checkpoint' if is_ckpt else 'unet'
 
-        # ── Default VAE/CLIP: resolve empty values to first compatible ────
-        # When the user leaves VAE/CLIP at "(Default)", the dropdown sends
-        # empty string.  Resolve to the recommended (or first) compatible
-        # file for the selected family so downstream nodes always get a name.
+        # ── Default VAE/CLIP: resolve empty values ─────────────────────────
+        # For checkpoint models, empty VAE/CLIP means "use from checkpoint"
+        # — the renderer uses the checkpoint's built-in VAE/CLIP.
+        # For non-checkpoint (unet) models, resolve to a compatible file.
+        is_checkpoint = simplified_wf.get('loader_type') == 'checkpoint'
         if not simplified_wf.get('vae'):
-            vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
-            fallback_vae = rec_vae or (vaes[0] if vaes else '')
-            if fallback_vae:
-                simplified_wf['vae'] = fallback_vae
-                print(f"[WorkflowBuilder] VAE defaulted to: {fallback_vae}")
+            if is_checkpoint:
+                simplified_wf['vae'] = '(from checkpoint)'
+                print(f"[WorkflowBuilder] VAE: using checkpoint default")
+            else:
+                vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
+                fallback_vae = rec_vae or (vaes[0] if vaes else '')
+                if fallback_vae:
+                    simplified_wf['vae'] = fallback_vae
+                    print(f"[WorkflowBuilder] VAE defaulted to: {fallback_vae}")
 
         if not simplified_wf.get('clip') or simplified_wf['clip'] == []:
-            clip_type_from_spec = spec.get('clip_type', '')
-            compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
-            if compatible_clips:
-                # Pick up to clip_slots files, matching patterns in order
-                clip_slots = spec.get('clip_slots', 1)
-                clip_patterns = [p.lower() for p in spec.get('clip', [])]
-                selected = []
-                if clip_patterns and clip_slots >= 2:
-                    for pat in clip_patterns:
-                        for c in compatible_clips:
-                            if pat in os.path.basename(c).lower() and c not in selected:
-                                selected.append(c)
+            if is_checkpoint:
+                simplified_wf['clip'] = ['(from checkpoint)']
+                print(f"[WorkflowBuilder] CLIP: using checkpoint default")
+            else:
+                clip_type_from_spec = spec.get('clip_type', '')
+                compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
+                if compatible_clips:
+                    # Pick up to clip_slots files, matching patterns in order
+                    clip_slots = spec.get('clip_slots', 1)
+                    clip_patterns = [p.lower() for p in spec.get('clip', [])]
+                    selected = []
+                    if clip_patterns and clip_slots >= 2:
+                        for pat in clip_patterns:
+                            for c in compatible_clips:
+                                if pat in os.path.basename(c).lower() and c not in selected:
+                                    selected.append(c)
+                                    break
+                            if len(selected) >= clip_slots:
                                 break
-                        if len(selected) >= clip_slots:
-                            break
-                if not selected:
-                    selected = [compatible_clips[0]]
-                simplified_wf['clip'] = selected
-                if clip_type_from_spec:
-                    simplified_wf['clip_type'] = clip_type_from_spec
-                print(f"[WorkflowBuilder] CLIP defaulted to: {selected}")
+                    if not selected:
+                        selected = [compatible_clips[0]]
+                    simplified_wf['clip'] = selected
+                    if clip_type_from_spec:
+                        simplified_wf['clip_type'] = clip_type_from_spec
+                    print(f"[WorkflowBuilder] CLIP defaulted to: {selected}")
         lora_availability = {}
         for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
             lora_name = lora.get('name', '')
@@ -810,14 +829,14 @@ class WorkflowBuilder:
         # so downstream nodes (ModelLoader, Renderer) never get broken names.
         # Always respect the workflow family when picking fallbacks.
         if not model_a_found:
-            compat_models = list_compatible_models(model_name_a)
+            compat_models = list_compatible_models(model_name_a, family_override=family_key)
             if compat_models:
                 fallback = compat_models[0]
                 print(f"[WorkflowBuilder] Model A '{model_name_a}' not found, workflow_data will use: {fallback}")
                 simplified_wf['model_a'] = fallback
 
         if model_name_b and not model_b_found:
-            compat_models = list_compatible_models(model_name_b)
+            compat_models = list_compatible_models(model_name_b, family_override=family_key)
             if compat_models:
                 fallback = compat_models[0]
                 print(f"[WorkflowBuilder] Model B '{model_name_b}' not found, workflow_data will use: {fallback}")

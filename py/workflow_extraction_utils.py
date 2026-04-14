@@ -878,6 +878,17 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
     else:
         loader_type = ''
 
+    vae_val  = overrides.get('vae',  extracted.get('vae', {}).get('name', ''))
+    clip_val = overrides.get('clip_names', extracted.get('clip', {}).get('names', []))
+
+    # For checkpoint models, empty VAE/CLIP means "use from checkpoint" —
+    # set an explicit marker so downstream nodes never receive blank values.
+    if loader_type == 'checkpoint':
+        if not vae_val or vae_val.startswith('('):
+            vae_val = '(from checkpoint)'
+        if not clip_val or clip_val == [] or (len(clip_val) == 1 and (not clip_val[0] or clip_val[0].startswith('('))):
+            clip_val = ['(from checkpoint)']
+
     return {
         "_version":        1,
         "_source":         overrides.get('_source', 'PromptExtractor'),
@@ -888,8 +899,8 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
         "negative_prompt": overrides.get('negative_prompt', extracted.get('negative_prompt', '')),
         "loras_a":         extracted.get('loras_a', []),
         "loras_b":         extracted.get('loras_b', []),
-        "vae":             overrides.get('vae',  extracted.get('vae', {}).get('name', '')),
-        "clip":            overrides.get('clip_names', extracted.get('clip', {}).get('names', [])),
+        "vae":             vae_val,
+        "clip":            clip_val,
         "clip_type":       clip_info.get('type', ''),
         "loader_type":     loader_type,
         "sampler":         _build_sampler_dict(sampler, family),
