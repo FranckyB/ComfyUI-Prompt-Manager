@@ -857,15 +857,24 @@ function updateWanVisibility(node) {
 
     // LoRA stack titles
     if (node._weLoraACard?._titleLabel) {
-        node._weLoraACard._titleLabel.textContent = isWanVideo ? "LoRA Stack (High)" : "LoRA Stack A";
+        node._weLoraACard._titleLabel.textContent = isWanVideo ? "LoRA Stack (High)" : "LoRA Stack";
     }
     if (node._weLoraB?._titleLabel) {
         node._weLoraB._titleLabel.textContent = isWanVideo ? "LoRA Stack (Low)" : "LoRA Stack B";
     }
+    // LoRA Stack B section: only for WAN Video
+    if (node._weLoraB) {
+        node._weLoraB.style.display = isWanVideo ? "" : "none";
+    }
 
-    // Frames row: show for any WAN (image or video)
+    // Model A label: "Model A" for WAN Video, "Model" otherwise
+    if (node._weModelRow?._label) {
+        node._weModelRow._label.textContent = isWanVideo ? "Model A" : "Model";
+    }
+
+    // Frames row: only for WAN Video (not WAN Image)
     if (node._weResRows?.frames) {
-        node._weResRows.frames.style.display = isWan ? "flex" : "none";
+        node._weResRows.frames.style.display = isWanVideo ? "flex" : "none";
     }
 
     // Model B: only for WAN Video (dual sampler)
@@ -1742,15 +1751,16 @@ app.registerExtension({
                 } catch { return []; }
             };
 
-            // Model A row
-            const modelRow = makeSelectRow("Model A", "", fetchModels,
+            // Model A row (label updated by updateWanVisibility)
+            const modelRow = makeSelectRow("Model", "", fetchModels,
                 (v) => { node._weOverrides.model_a = v; _syncS(); }, true);
             modelSec._body.appendChild(modelRow);
             node._weModelRow = modelRow;
 
-            // Model B row (always visible)
+            // Model B row (hidden by default, shown by updateWanVisibility for WAN Video)
             const modelBRow = makeSelectRow("Model B", "", fetchModels,
                 (v) => { node._weOverrides.model_b = v; _syncS(); }, true);
+            modelBRow.style.display = "none";
             modelSec._body.appendChild(modelBRow);
             node._weModelBRow = modelBRow;
 
@@ -1864,9 +1874,10 @@ app.registerExtension({
             const stepsBRow    = makeInput("Steps B",      "number", 3,  { min: 1, max: 200, step: 1 }, _syncS);
             stepsBRow.style.display = "none";
 
-            // WAN Video seed B (always visible)
-            const seedRow  = makeInput("Seed A", "number", 0, { min: 0, step: 1 }, _syncS);
+            // Seed rows (labels updated by updateWanVisibility)
+            const seedRow  = makeInput("Seed", "number", 0, { min: 0, step: 1 }, _syncS);
             const seedBRow = makeInput("Seed B", "number", 0, { min: 0, step: 1 }, _syncS);
+            seedBRow.style.display = "none";
 
             const sampRows = {
                 steps_a:    stepsARow,
@@ -2250,7 +2261,8 @@ app.registerExtension({
 
             // -- If not restoring from workflow, try initial load --
             if (!node._configuredFromWorkflow) {
-                // No extraction needed on fresh node -- just defaults
+                // Apply initial visibility for default family (sdxl)
+                updateWanVisibility(node);
             }
 
             return r;
