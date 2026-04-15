@@ -1329,7 +1329,7 @@ app.registerExtension({
             node._weRoot = root;
             node._weRoot = root;
 
-            // -- "Update Workflow" button — pull data from PromptExtractor --
+            // -- "Update Workflow" button — pull data from source node --
             const updateBtn = makeEl("button", {
                 width: "100%", padding: "6px 0",
                 background: C.accent, color: "#fff", border: "none",
@@ -1344,30 +1344,61 @@ app.registerExtension({
             updateBtn.onmouseenter = () => { updateBtn.style.background = C.accentDim; };
             updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
             updateBtn.onclick = async () => {
-                // 1. Find a PromptExtractor node — prefer one connected via workflow_data input
-                let peNode = null;
+                // 1. Find a source node — prefer one connected via workflow_data input
+                // Supported: PromptExtractor, WorkflowExtractor, WorkflowBuilder.
+                const _isSupportedSource = (n) => {
+                    if (!n) return false;
+                    const cc = n.comfyClass || "";
+                    const ty = n.type || "";
+                    return cc === "PromptExtractor" || cc === "WorkflowExtractor" || cc === "WorkflowBuilder" ||
+                           ty === "PromptExtractor" || ty === "WorkflowExtractor" || ty === "WorkflowBuilder";
+                };
+                const _isRerouteNode = (n) => {
+                    if (!n) return false;
+                    const cc = (n.comfyClass || "").toLowerCase();
+                    const ty = (n.type || "").toLowerCase();
+                    return cc.includes("reroute") || ty.includes("reroute");
+                };
+                const _resolveUpstreamSource = (graph, startLinkId) => {
+                    if (!graph || startLinkId == null) return null;
+                    let linkId = startLinkId;
+                    const seen = new Set();
+                    for (let hop = 0; hop < 24; hop++) {
+                        if (linkId == null || seen.has(linkId)) break;
+                        seen.add(linkId);
+                        const linkInfo = graph.links?.[linkId];
+                        if (!linkInfo) break;
+                        const srcNode = graph.getNodeById?.(linkInfo.origin_id);
+                        if (!srcNode) break;
+                        if (_isSupportedSource(srcNode)) return srcNode;
+                        if (!_isRerouteNode(srcNode)) return null;
+
+                        // Follow reroute input upstream.
+                        const in0 = srcNode.inputs?.[0];
+                        linkId = in0?.link ?? null;
+                    }
+                    return null;
+                };
+                let sourceNode = null;
                 const wfInput = node.inputs?.find(i => i.name === "workflow_data");
                 if (wfInput?.link != null) {
-                    const linkInfo = node.graph?.links?.[wfInput.link];
-                    if (linkInfo) {
-                        const srcNode = node.graph?.getNodeById(linkInfo.origin_id);
-                        if (srcNode?.comfyClass === "PromptExtractor" || srcNode?.comfyClass === "WorkflowExtractor") {
-                            peNode = srcNode;
-                        }
-                    }
+                    sourceNode = _resolveUpstreamSource(node.graph, wfInput.link);
                 }
-                // Fallback: find any PromptExtractor or WorkflowExtractor on the graph
-                if (!peNode && app.graph?._nodes) {
+                // Fallback only when workflow_data isn't connected.
+                if (wfInput?.link == null && !sourceNode && app.graph?._nodes) {
                     for (const n of app.graph._nodes) {
-                        if (n.comfyClass === "PromptExtractor" || n.comfyClass === "WorkflowExtractor" ||
-                            n.type === "PromptExtractor" || n.type === "WorkflowExtractor") {
-                            peNode = n;
+                        if (_isSupportedSource(n)) {
+                            sourceNode = n;
                             break;
                         }
                     }
                 }
-                if (!peNode) {
-                    _showError(node, "No PromptExtractor or WorkflowExtractor node found on the graph.");
+                if (!sourceNode) {
+                    if (wfInput?.link != null) {
+                        _showError(node, "Connected workflow_data source is unsupported or routed through an unresolved node.");
+                    } else {
+                        _showError(node, "No PromptExtractor, WorkflowExtractor, or WorkflowBuilder node found on the graph.");
+                    }
                     return;
                 }
 
@@ -1375,53 +1406,152 @@ app.registerExtension({
                 updateBtn.textContent = "\u23F3 Fetching\u2026";
                 try {
                     let extracted = null;
+                    const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
+                    const isBuilderSource = sourceClass === "WorkflowBuilder";
 
-                    // Determine PE's current file for staleness check
-                    const peImageW = peNode.widgets?.find(w => w.name === "image");
-                    const peSourceW = peNode.widgets?.find(w => w.name === "source_folder");
-                    const peFilename = peImageW?.value || "";
-                    const peSource = peSourceW?.value || "input";
+                    if (isBuilderSource) {
+                        // Prefer server-side WB cache from last execution.
+                        try {
+                            const cacheResp = await fetch(
+                                `/workflow-builder/get-extracted-data?node_id=${encodeURIComponent(sourceNode.id)}`
+                            );
+                            const cacheData = await cacheResp.json();
+                            if (cacheData.extracted) extracted = cacheData.extracted;
+                        } catch { /* fall through */ }
 
-                    // 2a. Try execution cache (includes merged LoRA inputs)
-                    //     Only use if the cached file matches the current selection.
-                    try {
-                        const cacheResp = await fetch(
-                            `/prompt-extractor/get-extracted-data?node_id=${encodeURIComponent(peNode.id)}`
-                        );
-                        const cacheData = await cacheResp.json();
-                        if (cacheData.extracted) {
-                            const cachedFile = cacheData.extracted._source_file || "";
-                            const cachedFolder = cacheData.extracted._source_folder || "input";
-                            if (cachedFile === peFilename && cachedFolder === peSource) {
-                                extracted = cacheData.extracted;
-                            } else {
-                                console.log("[WorkflowBuilder] Execution cache stale — file changed");
+                        // Fallback to in-memory node state when available.
+                        if (!extracted && sourceNode._weExtracted) {
+                            extracted = sourceNode._weExtracted;
+                        }
+
+                        // Fallback to persisted property cache.
+                        if (!extracted) {
+                            const cachedStr = sourceNode.properties?.we_extracted_cache;
+                            if (cachedStr) {
+                                try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
                             }
                         }
-                    } catch { /* fall through */ }
 
-                    // 2b. Try client-side cache (set by PE JS on file selection)
-                    if (!extracted) {
-                        const cachedStr = peNode.properties?.pe_extracted_data;
-                        if (cachedStr) {
-                            try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
-                        }
-                    }
-
-                    // 2c. Fallback: call extract-preview API
-                    if (!extracted) {
-                        if (!peFilename || peFilename === "(none)") {
-                            _showError(node, "PromptExtractor has no file selected.");
-                            return;
-                        }
-                        const resp = await fetch(
-                            `/prompt-extractor/extract-preview?filename=${encodeURIComponent(peFilename)}&source=${encodeURIComponent(peSource)}`
-                        );
-                        const data = await resp.json();
-                        extracted = data.extracted;
                         if (!extracted) {
-                            _showError(node, data.error || "No metadata found in selected file.");
+                            _showError(node, "Connected WorkflowBuilder has no cached extracted data yet. Execute it once, then click Update Workflow.");
                             return;
+                        }
+
+                        // Merge source Builder's live UI overrides so chaining
+                        // Builder -> Builder reflects current tweaks even before
+                        // the source Builder is executed again.
+                        const ovWidget = sourceNode.widgets?.find(w => w.name === "override_data");
+                        const ovJson = (ovWidget?.value || sourceNode.properties?.we_override_data || "{}");
+                        try {
+                            const ov = JSON.parse(ovJson || "{}");
+                            if (ov && typeof ov === "object") {
+                                if (Object.prototype.hasOwnProperty.call(ov, "positive_prompt")) {
+                                    extracted.positive_prompt = ov.positive_prompt || "";
+                                }
+                                if (Object.prototype.hasOwnProperty.call(ov, "negative_prompt")) {
+                                    extracted.negative_prompt = ov.negative_prompt || "";
+                                }
+                                if (Object.prototype.hasOwnProperty.call(ov, "model_a")) {
+                                    extracted.model_a = ov.model_a || "";
+                                }
+                                if (Object.prototype.hasOwnProperty.call(ov, "model_b")) {
+                                    extracted.model_b = ov.model_b || "";
+                                }
+
+                                if (Object.prototype.hasOwnProperty.call(ov, "vae")) {
+                                    const curVae = (extracted.vae && typeof extracted.vae === "object")
+                                        ? extracted.vae
+                                        : { name: "", source: "workflow_data" };
+                                    extracted.vae = {
+                                        ...curVae,
+                                        name: ov.vae || "",
+                                        source: ov.vae ? "override" : curVae.source || "workflow_data",
+                                    };
+                                }
+
+                                if (Object.prototype.hasOwnProperty.call(ov, "clip_names")) {
+                                    const curClip = (extracted.clip && typeof extracted.clip === "object")
+                                        ? extracted.clip
+                                        : { names: [], type: "", source: "workflow_data" };
+                                    const clipNames = Array.isArray(ov.clip_names)
+                                        ? ov.clip_names
+                                        : (ov.clip_names ? [ov.clip_names] : []);
+                                    extracted.clip = {
+                                        ...curClip,
+                                        names: clipNames,
+                                        source: clipNames.length ? "override" : (curClip.source || "workflow_data"),
+                                    };
+                                }
+
+                                const s = { ...(extracted.sampler || {}) };
+                                for (const k of ["steps_a", "steps_b", "cfg", "seed_a", "seed_b", "sampler_name", "scheduler"]) {
+                                    if (Object.prototype.hasOwnProperty.call(ov, k)) s[k] = ov[k];
+                                }
+                                extracted.sampler = s;
+
+                                const r = { ...(extracted.resolution || {}) };
+                                if (Object.prototype.hasOwnProperty.call(ov, "width")) r.width = ov.width;
+                                if (Object.prototype.hasOwnProperty.call(ov, "height")) r.height = ov.height;
+                                if (Object.prototype.hasOwnProperty.call(ov, "batch_size")) r.batch_size = ov.batch_size;
+                                if (Object.prototype.hasOwnProperty.call(ov, "length")) r.length = ov.length;
+                                extracted.resolution = r;
+
+                                if (ov._family) {
+                                    extracted.model_family = ov._family;
+                                    extracted.model_family_label = ov._family;
+                                }
+                            }
+                        } catch (e) {
+                            console.warn("[WorkflowBuilder] Failed to merge source builder override_data:", e);
+                        }
+                    } else {
+
+                        // Determine extractor's current file for staleness check
+                        const peImageW = sourceNode.widgets?.find(w => w.name === "image");
+                        const peSourceW = sourceNode.widgets?.find(w => w.name === "source_folder");
+                        const peFilename = peImageW?.value || "";
+                        const peSource = peSourceW?.value || "input";
+
+                        // 2a. Try execution cache (includes merged LoRA inputs)
+                        //     Only use if the cached file matches the current selection.
+                        try {
+                            const cacheResp = await fetch(
+                                `/prompt-extractor/get-extracted-data?node_id=${encodeURIComponent(sourceNode.id)}`
+                            );
+                            const cacheData = await cacheResp.json();
+                            if (cacheData.extracted) {
+                                const cachedFile = cacheData.extracted._source_file || "";
+                                const cachedFolder = cacheData.extracted._source_folder || "input";
+                                if (cachedFile === peFilename && cachedFolder === peSource) {
+                                    extracted = cacheData.extracted;
+                                } else {
+                                    console.log("[WorkflowBuilder] Execution cache stale — file changed");
+                                }
+                            }
+                        } catch { /* fall through */ }
+
+                        // 2b. Try client-side cache (set by PE JS on file selection)
+                        if (!extracted) {
+                            const cachedStr = sourceNode.properties?.pe_extracted_data;
+                            if (cachedStr) {
+                                try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
+                            }
+                        }
+
+                        if (!extracted) {
+                            if (!peFilename || peFilename === "(none)") {
+                                _showError(node, "PromptExtractor has no file selected.");
+                                return;
+                            }
+                            const resp = await fetch(
+                                `/prompt-extractor/extract-preview?filename=${encodeURIComponent(peFilename)}&source=${encodeURIComponent(peSource)}`
+                            );
+                            const data = await resp.json();
+                            extracted = data.extracted;
+                            if (!extracted) {
+                                _showError(node, data.error || "No metadata found in selected file.");
+                                return;
+                            }
                         }
                     }
 
@@ -1429,10 +1559,7 @@ app.registerExtension({
                     const processResp = await fetch("/workflow-builder/process-extracted", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            extracted,
-                            family_override: node._weFamily || null,
-                        }),
+                        body: JSON.stringify({ extracted }),
                     });
                     const processData = await processResp.json();
                     if (processData.error) {

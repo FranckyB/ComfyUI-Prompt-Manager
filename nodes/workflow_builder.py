@@ -62,6 +62,10 @@ from ..py.lora_utils import resolve_lora_path, strip_lora_extension
 SAMPLERS   = comfy.samplers.KSampler.SAMPLERS
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS
 
+# Cache for last extracted info per WorkflowBuilder node (keyed by unique_id).
+# Used by another WorkflowBuilder's "Update Workflow" button for live pull.
+_last_workflow_builder_info = {}
+
 
 # ─── API endpoints ──────────────────────────────────────────────────────────
 
@@ -445,6 +449,28 @@ async def api_process_extracted(request):
         print(f"[WorkflowBuilder] process-extracted error: {e}")
         traceback.print_exc()
         return server.web.json_response({"error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/workflow-builder/get-extracted-data")
+async def api_get_workflow_builder_extracted_data(request):
+    """Return the last extracted info cached by WorkflowBuilder after execution."""
+    try:
+        node_id = request.rel_url.query.get('node_id', '')
+        if node_id:
+            data = _last_workflow_builder_info.get(str(node_id))
+            if data:
+                return server.web.json_response({"extracted": data, "node_id": node_id})
+            return server.web.json_response({
+                "extracted": None,
+                "node_id": node_id,
+                "error": "No cached data for this node. Execute WorkflowBuilder first.",
+            })
+
+        available = {nid: bool(d) for nid, d in _last_workflow_builder_info.items()}
+        return server.web.json_response({"available": available})
+    except Exception as e:
+        print(f"[WorkflowBuilder] Error in get-extracted-data: {e}")
+        return server.web.json_response({"extracted": None, "error": str(e)}, status=500)
 
 
 # ─── Main Node ──────────────────────────────────────────────────────────────
@@ -997,6 +1023,11 @@ class WorkflowBuilder:
             )
         except Exception:
             pass  # Non-critical — JS will still get data from onExecuted
+
+        # Cache last extracted info so downstream WorkflowBuilder nodes can
+        # pull this node's live state via /workflow-builder/get-extracted-data.
+        if unique_id is not None:
+            _last_workflow_builder_info[str(unique_id)] = ui_info.get('extracted', {})
 
         return {
             "ui":     {"workflow_info": [ui_info]},
