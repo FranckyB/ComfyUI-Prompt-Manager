@@ -1429,7 +1429,10 @@ app.registerExtension({
                     const processResp = await fetch("/workflow-builder/process-extracted", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ extracted }),
+                        body: JSON.stringify({
+                            extracted,
+                            family_override: node._weFamily || null,
+                        }),
                     });
                     const processData = await processResp.json();
                     if (processData.error) {

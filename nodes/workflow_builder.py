@@ -257,6 +257,11 @@ async def api_process_extracted(request):
     try:
         body = await request.json()
         raw = body.get('extracted', {})
+        family_override = body.get('family_override', None)
+        if isinstance(family_override, str):
+            family_override = family_override.strip() or None
+        else:
+            family_override = None
         if not raw:
             return server.web.json_response({"error": "No extracted data"}, status=400)
 
@@ -327,7 +332,7 @@ async def api_process_extracted(request):
         model_name_b = extracted['model_b']
 
         # ── Resolve family ──────────────────────────────────────────────
-        family_key = extracted.get('model_family') or None
+        family_key = family_override or extracted.get('model_family') or None
         if not family_key and model_name_a:
             resolved_ref, _ = resolve_model_name(model_name_a)
             family_key = get_model_family(resolved_ref or model_name_a)
