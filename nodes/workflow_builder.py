@@ -355,9 +355,14 @@ async def api_process_extracted(request):
         is_ckpt = spec.get('checkpoint', False)
         vae_name = vae.get('name', '')
         if is_ckpt:
-            # Checkpoint models always use built-in VAE
-            vae = {'name': '(from checkpoint)', 'source': 'checkpoint'}
-            extracted['vae'] = vae
+            # Checkpoint models default to built-in VAE, but respect an
+            # explicit separate VAE selection from the incoming data.
+            if not vae_name or str(vae_name).startswith('('):
+                vae = {'name': '(from checkpoint)', 'source': 'checkpoint'}
+                extracted['vae'] = vae
+            else:
+                vae = {'name': vae_name, 'source': vae.get('source', 'separate')}
+                extracted['vae'] = vae
         elif not vae_name or vae_name.startswith('('):
             vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
             fallback_vae = rec_vae or (vaes[0] if vaes else '')
@@ -371,8 +376,16 @@ async def api_process_extracted(request):
             (not n) or str(n).startswith('(') for n in clip_names
         )
         if is_ckpt:
-            # Checkpoint models always use built-in CLIP
-            clip = {'names': ['(from checkpoint)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
+            # Checkpoint models default to built-in CLIP, but respect an
+            # explicit separate CLIP selection from the incoming data.
+            if not clip_names or clip_is_placeholder:
+                clip = {'names': ['(from checkpoint)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
+            else:
+                clip = {
+                    'names': clip_names,
+                    'type': clip.get('type', ''),
+                    'source': clip.get('source', 'separate'),
+                }
             extracted['clip'] = clip
         elif not clip_names or clip_is_placeholder:
             clip_type_from_spec = spec.get('clip_type', '')
@@ -898,19 +911,16 @@ class WorkflowBuilder:
                             fixed_clips.append(name)
                     simplified_wf['clip'] = fixed_clips
 
-        # LoRA fallback: remove not-found LoRAs from workflow_data output
-        # (like PMA does) so downstream nodes never get broken LoRA names.
+        # Keep not-found LoRAs in workflow_data so Builder->Builder chaining
+        # preserves the full authored stack. Renderer already skips missing
+        # LoRAs at load time via resolve_lora_path.
         for lora_key in ('loras_a', 'loras_b'):
-            cleaned = [
-                l for l in simplified_wf.get(lora_key, [])
-                if lora_availability.get(l.get('name', ''), True)
+            missing = [
+                l.get('name') for l in simplified_wf.get(lora_key, [])
+                if not lora_availability.get(l.get('name', ''), True)
             ]
-            if len(cleaned) != len(simplified_wf.get(lora_key, [])):
-                removed = [l.get('name') for l in simplified_wf.get(lora_key, [])
-                           if not lora_availability.get(l.get('name', ''), True)]
-                for r in removed:
-                    print(f"[WorkflowBuilder] LoRA '{r}' not found, removed from workflow_data")
-                simplified_wf[lora_key] = cleaned
+            for r in missing:
+                print(f"[WorkflowBuilder] LoRA '{r}' not found, preserving in workflow_data (renderer will skip)")
 
         # ── Build UI info for JS (always, even if generation fails) ───────
         # Echo back the *effective* values (overrides applied) so the JS

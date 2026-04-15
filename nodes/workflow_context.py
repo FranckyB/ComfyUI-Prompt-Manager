@@ -5,6 +5,7 @@ Any connected optional input overrides the corresponding field before output.
 Models (MODEL/CLIP/VAE) are passed through only — use WorkflowGetModel for loading.
 """
 import json
+from ..py.lora_utils import resolve_lora_path
 
 
 class WorkflowContext:
@@ -131,13 +132,37 @@ class WorkflowContext:
             wf['VAE'] = vae
 
         # ── Build lora stacks as tuples for LORA_STACK output ────────
+        # Filter not-found LoRAs here so downstream nodes receiving
+        # LORA_STACK don't get unavailable entries. Keep wf['loras_*']
+        # unchanged to preserve authored workflow_data for chaining.
+        _lora_found_cache = {}
+
+        def _lora_is_found(name):
+            if not name:
+                return False
+            if name in _lora_found_cache:
+                return _lora_found_cache[name]
+            _, found = resolve_lora_path(name)
+            _lora_found_cache[name] = bool(found)
+            return _lora_found_cache[name]
+
         lora_stack_a = [
             (l['name'], l.get('model_strength', 1.0), l.get('clip_strength', 1.0))
-            for l in wf.get('loras_a', []) if isinstance(l, dict) and l.get('name') and l.get('active', True)
+            for l in wf.get('loras_a', [])
+            if isinstance(l, dict)
+            and l.get('name')
+            and l.get('active', True)
+            and l.get('available', True)
+            and _lora_is_found(l.get('name'))
         ]
         lora_stack_b = [
             (l['name'], l.get('model_strength', 1.0), l.get('clip_strength', 1.0))
-            for l in wf.get('loras_b', []) if isinstance(l, dict) and l.get('name') and l.get('active', True)
+            for l in wf.get('loras_b', [])
+            if isinstance(l, dict)
+            and l.get('name')
+            and l.get('active', True)
+            and l.get('available', True)
+            and _lora_is_found(l.get('name'))
         ]
 
         # ── Extract all output values ────────────────────────────────
