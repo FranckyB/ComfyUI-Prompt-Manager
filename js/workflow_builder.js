@@ -868,6 +868,11 @@ function updateWanVisibility(node) {
         node._weResRows.frames.style.display = isWan ? "flex" : "none";
     }
 
+    // Model B: only for WAN Video (dual sampler)
+    if (node._weModelBRow) {
+        node._weModelBRow.style.display = isWanVideo ? "flex" : "none";
+    }
+
     // Steps B row: only for WAN Video
     if (node._weSamplerRows?.steps_b) {
         node._weSamplerRows.steps_b.style.display = isWanVideo ? "flex" : "none";
@@ -875,6 +880,14 @@ function updateWanVisibility(node) {
     // Steps A label: "Steps A" for WAN Video, "Steps" otherwise
     if (node._weSamplerRows?.steps_a?._label) {
         node._weSamplerRows.steps_a._label.textContent = isWanVideo ? "Steps A" : "Steps";
+    }
+    // Seed B: only for WAN Video
+    if (node._weSamplerRows?.seed_b) {
+        node._weSamplerRows.seed_b.style.display = isWanVideo ? "flex" : "none";
+    }
+    // Seed A label: "Seed A" for WAN Video, "Seed" otherwise
+    if (node._weSamplerRows?.seed_a?._label) {
+        node._weSamplerRows.seed_a._label.textContent = isWanVideo ? "Seed A" : "Seed";
     }
 
 }
@@ -1510,7 +1523,7 @@ app.registerExtension({
             // Helper: ghost / un-ghost resolution inputs + update lock icon
             function _setResDisabled(disabled) {
                 if (!resRows) return;
-                for (const key of ["width", "height", "batch"]) {
+                for (const key of ["width", "height", "batch", "frames"]) {
                     const inp = resRows[key]?._inp;
                     if (inp) { inp.disabled = disabled; inp.style.opacity = disabled ? "0.35" : "1"; }
                     const lbl = resRows[key]?._label;
@@ -1519,10 +1532,13 @@ app.registerExtension({
                 lockIcon.innerHTML = disabled ? _lockSvgClosed : _lockSvgOpen;
             }
 
-            // --- Ratio row: [label "Ratio"] [orient icon] [14px reset spacer] [dropdown] ---
+            // Reduced label width for res rows so gutter + label = LABEL_W
+            const RES_LABEL_W = `calc(${LABEL_W} - ${RES_GUTTER})`;
+
+            // --- Ratio row: [label] [orient icon] [reset spacer] [dropdown] ---
             const ratioRow = makeEl("div", { ...ROW_STYLE });
             ratioRow.appendChild(makeEl("span", {
-                color: C.textMuted, width: LABEL_W, flexShrink: "0",
+                color: C.textMuted, width: RES_LABEL_W, flexShrink: "0",
             }, "Ratio"));
             // Orient icon in the gutter column (after label, before reset spacer)
             const orientIcon = makeEl("span", {
@@ -1628,14 +1644,21 @@ app.registerExtension({
                 return g;
             }
 
-            // Width: line, Height: lock, Batch: line
+            // Width: line, Height: lock, Batch: line, Frames: line
             const widthGutter = _makeLineGutter();
             const batchGutter = _makeLineGutter();
+            const framesGutter = _makeLineGutter();
+
+            // Shrink labels on all res rows so gutter + label = LABEL_W
+            for (const key of ["width", "height", "batch", "frames"]) {
+                if (resRows[key]?._label) resRows[key]._label.style.width = RES_LABEL_W;
+            }
 
             // Insert gutters after label (label is firstChild) in each row
             resRows.width.insertBefore(widthGutter, resRows.width._resetBtn);
             resRows.height.insertBefore(lockIcon, resRows.height._resetBtn);
             resRows.batch.insertBefore(batchGutter, resRows.batch._resetBtn);
+            resRows.frames.insertBefore(framesGutter, resRows.frames._resetBtn);
 
             // Assemble section
             resSec._body.appendChild(ratioRow);
