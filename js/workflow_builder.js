@@ -1542,8 +1542,12 @@ app.registerExtension({
                 _landscape = !_landscape;
                 node._weRatioLandscape = _landscape;
                 _drawOrient();
+                // Swap width ↔ height so 1920×1080 becomes 1080×1920
+                const oldW = resRows.width._inp.value;
+                const oldH = resRows.height._inp.value;
+                resRows.width._inp.value  = oldH;
+                resRows.height._inp.value = oldW;
                 _populateRatioSel();
-                _applyRatio();
                 _syncS();
             };
             ratioRow.appendChild(orientIcon);
