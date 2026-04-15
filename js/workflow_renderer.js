@@ -8,7 +8,7 @@ app.registerExtension({
     async nodeCreated(node) {
         if (node.comfyClass !== "WorkflowRenderer") return;
         requestAnimationFrame(() => {
-            node.setSize([478, node.size[1]]);
+            node.setSize([320, node.size[1]]);
             app.graph.setDirtyCanvas(true, true);
         });
     },

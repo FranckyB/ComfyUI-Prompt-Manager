@@ -263,19 +263,14 @@ async def api_process_extracted(request):
         # ── Normalize sampler: preserve ALL keys, ensure seed_a exists ──
         raw_sampler = raw.get('sampler', {})
         sampler = {
-            'steps': raw_sampler.get('steps', 20),
+            'steps_a': raw_sampler.get('steps_a', raw_sampler.get('steps', 20)),
+            'steps_b': raw_sampler.get('steps_b'),
             'cfg': raw_sampler.get('cfg', 5.0),
             'seed_a': raw_sampler.get('seed_a', raw_sampler.get('seed', 0)),
             'seed_b': raw_sampler.get('seed_b'),
             'sampler_name': raw_sampler.get('sampler_name', 'euler'),
             'scheduler': raw_sampler.get('scheduler', 'simple'),
-            'denoise': raw_sampler.get('denoise', 1.0),
-            'guidance': raw_sampler.get('guidance'),
         }
-        # Pass through WAN Video dual-step fields and any future keys
-        for k in ('steps_high', 'steps_low'):
-            if k in raw_sampler:
-                sampler[k] = raw_sampler[k]
 
         # ── Normalize VAE ───────────────────────────────────────────────
         raw_vae = raw.get('vae', {})
@@ -350,42 +345,42 @@ async def api_process_extracted(request):
         # For non-checkpoint (unet) models, resolve to a compatible file.
         is_ckpt = spec.get('checkpoint', False)
         vae_name = vae.get('name', '')
-        if not vae_name or vae_name.startswith('('):
-            if is_ckpt:
-                vae = {'name': '(from checkpoint)', 'source': 'checkpoint'}
+        if is_ckpt:
+            # Checkpoint models always use built-in VAE
+            vae = {'name': '(from checkpoint)', 'source': 'checkpoint'}
+            extracted['vae'] = vae
+        elif not vae_name or vae_name.startswith('('):
+            vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
+            fallback_vae = rec_vae or (vaes[0] if vaes else '')
+            if fallback_vae:
+                vae = {'name': fallback_vae, 'source': 'default'}
                 extracted['vae'] = vae
-            else:
-                vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
-                fallback_vae = rec_vae or (vaes[0] if vaes else '')
-                if fallback_vae:
-                    vae = {'name': fallback_vae, 'source': 'default'}
-                    extracted['vae'] = vae
 
         # ── Default CLIP fallback ───────────────────────────────────────
         clip_names = clip.get('names', [])
-        if not clip_names:
-            if is_ckpt:
-                clip = {'names': ['(from checkpoint)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
-                extracted['clip'] = clip
-            else:
-                clip_type_from_spec = spec.get('clip_type', '')
-                compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
-                if compatible_clips:
-                    clip_slots = spec.get('clip_slots', 1)
-                    clip_patterns = [p.lower() for p in spec.get('clip', [])]
-                    selected = []
-                    if clip_patterns and clip_slots >= 2:
-                        for pat in clip_patterns:
-                            for c in compatible_clips:
-                                if pat in os.path.basename(c).lower() and c not in selected:
-                                    selected.append(c)
-                                    break
-                            if len(selected) >= clip_slots:
+        if is_ckpt:
+            # Checkpoint models always use built-in CLIP
+            clip = {'names': ['(from checkpoint)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
+            extracted['clip'] = clip
+        elif not clip_names:
+            clip_type_from_spec = spec.get('clip_type', '')
+            compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
+            if compatible_clips:
+                clip_slots = spec.get('clip_slots', 1)
+                clip_patterns = [p.lower() for p in spec.get('clip', [])]
+                selected = []
+                if clip_patterns and clip_slots >= 2:
+                    for pat in clip_patterns:
+                        for c in compatible_clips:
+                            if pat in os.path.basename(c).lower() and c not in selected:
+                                selected.append(c)
                                 break
-                    if not selected:
-                        selected = [compatible_clips[0]]
-                    clip = {'names': selected, 'type': clip_type_from_spec, 'source': 'default'}
-                    extracted['clip'] = clip
+                        if len(selected) >= clip_slots:
+                            break
+                if not selected:
+                    selected = [compatible_clips[0]]
+                clip = {'names': selected, 'type': clip_type_from_spec, 'source': 'default'}
+                extracted['clip'] = clip
 
         # ── Ensure clip_type and loader_type from family spec ───────────
         clip_type = clip.get('type', '') or spec.get('clip_type', '')
@@ -551,14 +546,13 @@ class WorkflowBuilder:
                     'type': wf_data.get('clip_type', ''), 'source': 'workflow_data',
                 },
                 'sampler': {
-                    'steps': wf_sampler.get('steps', 20),
+                    'steps_a': wf_sampler.get('steps_a', wf_sampler.get('steps', 20)),
+                    'steps_b': wf_sampler.get('steps_b'),
                     'cfg': wf_sampler.get('cfg', 5.0),
                     'seed_a': wf_sampler.get('seed_a', wf_sampler.get('seed', 0)),
                     'seed_b': wf_sampler.get('seed_b'),  # None = same as seed_a
                     'sampler_name': wf_sampler.get('sampler_name', 'euler'),
                     'scheduler': wf_sampler.get('scheduler', 'simple'),
-                    'denoise': 1.0,
-                    'guidance': wf_sampler.get('guidance'),
                 },
                 'resolution': {
                     'width': wf_res.get('width', 768),
@@ -583,9 +577,8 @@ class WorkflowBuilder:
                 'vae':     {'name': '', 'source': 'unknown'},
                 'clip':    {'names': [], 'type': '', 'source': 'unknown'},
                 'sampler': {
-                    'steps': 20, 'cfg': 5.0, 'seed_a': 0,
+                    'steps_a': 20, 'steps_b': None, 'cfg': 5.0, 'seed_a': 0,
                     'sampler_name': 'euler', 'scheduler': 'simple',
-                    'denoise': 1.0, 'guidance': None,
                 },
                 'resolution': {
                     'width': 768, 'height': 1280, 'batch_size': 1, 'length': None,
@@ -652,37 +645,35 @@ class WorkflowBuilder:
         vae_name        = overrides.get('vae', extracted['vae']['name'])
 
         sampler_params = extracted['sampler'].copy()
-        sampler_params['denoise'] = 1.0
-        for key in ['steps', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
+        for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
             if key in overrides:
                 val = overrides[key]
                 # Guard: overrides could carry a stale list from a corrupt
                 # override_data blob — coerce numeric fields to scalar.
-                if key in ('steps', 'seed_a', 'seed_b') and isinstance(val, list):
+                if key in ('steps_a', 'steps_b', 'seed_a', 'seed_b') and isinstance(val, list):
                     val = 0
                 elif key == 'cfg' and isinstance(val, list):
                     val = 5.0
                 sampler_params[key] = val
         # Also ensure extracted sampler seed/steps are never lists
-        for key, default in (('seed_a', 0), ('seed_b', None), ('steps', 20), ('cfg', 5.0)):
+        for key, default in (('seed_a', 0), ('seed_b', None), ('steps_a', 20), ('steps_b', None), ('cfg', 5.0)):
             if isinstance(sampler_params.get(key), list):
                 sampler_params[key] = default
-        # WAN Video step overrides (steps_high / steps_low)
-        if 'steps_high' in overrides:
-            sampler_params['steps_high'] = int(overrides['steps_high'])
-        if 'steps_low' in overrides:
-            sampler_params['steps_low'] = int(overrides['steps_low'])
 
         # Family + strategy
-        # wf_data['family'] is authoritative when workflow_data is driving the node
-        # — it must take priority over the stale '_family' the JS serialised into
-        # override_data (which may still say 'sdxl' if the async updateUI hadn't
-        # finished before syncHidden ran).
+        # Priority: 1. wf_data['family'] (from PE — authoritative when connected)
+        #           2. Detected from actual model_name_a (reliable, based on disk)
+        #           3. JS override '_family' (may be stale — dropdown defaults to 'sdxl')
+        #           4. extracted['model_family'] (fallback)
+        # The JS override must NOT beat model detection: the family dropdown
+        # defaults to 'sdxl' on node creation and syncHidden serialises that
+        # before updateUI has had a chance to correct it.
         wf_family = wf_data.get('family', '') if wf_data else ''
-        family_key = wf_family or overrides.get('_family') or extracted.get('model_family') or None
-        if not family_key:
+        model_detected_family = None
+        if model_name_a:
             resolved_ref, _ = resolve_model_name(model_name_a)
-            family_key = get_model_family(resolved_ref or model_name_a)
+            model_detected_family = get_model_family(resolved_ref or model_name_a)
+        family_key = wf_family or model_detected_family or overrides.get('_family') or extracted.get('model_family') or None
         if not family_key and wf_data:
             clip_type = wf_data.get('clip_type', '').lower()
             loader_type = wf_data.get('loader_type', '')
@@ -764,26 +755,29 @@ class WorkflowBuilder:
         # — the renderer uses the checkpoint's built-in VAE/CLIP.
         # For non-checkpoint (unet) models, resolve to a compatible file.
         is_checkpoint = simplified_wf.get('loader_type') == 'checkpoint'
-        if not simplified_wf.get('vae'):
-            if is_checkpoint:
+
+        # Checkpoint models: use (from checkpoint) when user selected "(Default)"
+        # (i.e. override value is empty/missing). If user explicitly picked a
+        # file in the dropdown, respect that choice.
+        if is_checkpoint:
+            vae_ov = overrides.get('vae', '')
+            if not vae_ov or vae_ov.startswith('('):
                 simplified_wf['vae'] = '(from checkpoint)'
-                print(f"[WorkflowBuilder] VAE: using checkpoint default")
-            else:
+            clip_ov = overrides.get('clip_names', [])
+            if not clip_ov or all(not c or c.startswith('(') for c in clip_ov):
+                simplified_wf['clip'] = ['(from checkpoint)']
+        else:
+            # Non-checkpoint: resolve empty VAE/CLIP to compatible files
+            if not simplified_wf.get('vae'):
                 vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
                 fallback_vae = rec_vae or (vaes[0] if vaes else '')
                 if fallback_vae:
                     simplified_wf['vae'] = fallback_vae
                     print(f"[WorkflowBuilder] VAE defaulted to: {fallback_vae}")
-
-        if not simplified_wf.get('clip') or simplified_wf['clip'] == []:
-            if is_checkpoint:
-                simplified_wf['clip'] = ['(from checkpoint)']
-                print(f"[WorkflowBuilder] CLIP: using checkpoint default")
-            else:
+            if not simplified_wf.get('clip') or simplified_wf['clip'] == []:
                 clip_type_from_spec = spec.get('clip_type', '')
                 compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
                 if compatible_clips:
-                    # Pick up to clip_slots files, matching patterns in order
                     clip_slots = spec.get('clip_slots', 1)
                     clip_patterns = [p.lower() for p in spec.get('clip', [])]
                     selected = []
@@ -850,8 +844,9 @@ class WorkflowBuilder:
                 simplified_wf['vae'] = fallback_vae
 
         # CLIP fallback: check each clip name, replace not-found ones
+        # Skip for "(from checkpoint)" — those aren't real files on disk.
         clip_names_out = simplified_wf.get('clip', [])
-        if clip_names_out:
+        if clip_names_out and not all(n.startswith('(') for n in clip_names_out):
             clip_paths = resolve_clip_names(clip_names_out, simplified_wf.get('clip_type', ''))
             if any(p is None for p in clip_paths):
                 compatible_clips = list_compatible_clips(family_key)
@@ -884,13 +879,9 @@ class WorkflowBuilder:
         # pre-update handler sees what the user actually has set and does
         # NOT mistakenly treat it as a source change that clears all fields.
         effective_sampler = dict(extracted['sampler'])
-        for key in ['steps', 'cfg', 'seed_a', 'sampler_name', 'scheduler']:
+        for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'sampler_name', 'scheduler']:
             if key in overrides:
                 effective_sampler[key] = overrides[key]
-        if 'steps_high' in overrides:
-            effective_sampler['steps_high'] = overrides['steps_high']
-        if 'steps_low' in overrides:
-            effective_sampler['steps_low'] = overrides['steps_low']
 
         effective_resolution = dict(extracted['resolution'])
         for key in ['width', 'height', 'batch_size', 'length']:

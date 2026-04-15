@@ -8,6 +8,7 @@ import re
 import folder_paths
 import torch
 import server
+import comfy.samplers
 
 # Import PIL for image metadata reading
 try:
@@ -98,17 +99,25 @@ _A1111_SCHEDULER_MAP = {
 
 
 def _map_a1111_sampler(name):
-    """Convert an A1111 sampler name to its ComfyUI equivalent."""
+    """Convert an A1111 sampler name to its ComfyUI equivalent.
+    Returns 'euler' if the mapped value isn't a valid ComfyUI sampler."""
     if not name:
-        return name
-    return _A1111_SAMPLER_MAP.get(name.lower().strip(), name)
+        return 'euler'
+    mapped = _A1111_SAMPLER_MAP.get(name.lower().strip(), name)
+    if mapped not in comfy.samplers.KSampler.SAMPLERS:
+        return 'euler'
+    return mapped
 
 
 def _map_a1111_scheduler(name):
-    """Convert an A1111 scheduler / schedule-type to its ComfyUI equivalent."""
+    """Convert an A1111 scheduler / schedule-type to its ComfyUI equivalent.
+    Returns 'simple' if the mapped value isn't a valid ComfyUI scheduler."""
     if not name:
-        return name
-    return _A1111_SCHEDULER_MAP.get(name.lower().strip(), name)
+        return 'simple'
+    mapped = _A1111_SCHEDULER_MAP.get(name.lower().strip(), name)
+    if mapped not in comfy.samplers.KSampler.SCHEDULERS:
+        return 'simple'
+    return mapped
 
 
 def parse_a1111_parameters(parameters_text):
@@ -212,12 +221,16 @@ def parse_a1111_parameters(parameters_text):
                 result['width'] = int(m.group(1))
                 result['height'] = int(m.group(2))
 
-        denoise = _a1111_val('Denoising strength')
-        if denoise:
-            try:
-                result['denoise'] = float(denoise)
-            except ValueError:
-                pass
+        # ── Extract Forge/A1111 Module fields ────────────────────────────
+        # Forge embeds CLIP/VAE module names as "Module 1: ae, Module 2: clip_l, Module 3: t5xxl_fp16"
+        # These are reliable family indicators when the model name is unrecognised.
+        modules = []
+        for i in range(1, 5):
+            mod = _a1111_val(f'Module {i}')
+            if mod:
+                modules.append(mod.lower())
+        if modules:
+            result['modules'] = modules
 
     return result
 
@@ -491,18 +504,56 @@ async def extract_preview(request):
         # Handle A1111 format
         is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
         if is_a1111:
-            for key in ['sampler_name', 'scheduler', 'steps', 'cfg', 'seed']:
+            for key in ['sampler_name', 'scheduler', 'cfg']:
                 if prompt_data.get(key) is not None:
                     sampler[key] = prompt_data[key]
-            if prompt_data.get('denoise') is not None:
-                sampler['denoise'] = prompt_data['denoise']
+            if prompt_data.get('steps') is not None:
+                sampler['steps_a'] = prompt_data['steps']
+            if prompt_data.get('seed') is not None:
+                sampler['seed_a'] = prompt_data['seed']
             if prompt_data.get('width') and prompt_data.get('height'):
                 resolution['width'] = prompt_data['width']
                 resolution['height'] = prompt_data['height']
-        sampler['denoise'] = sampler.get('denoise', 1.0)
+            # Forge modules → clip_type inference
+            _modules = prompt_data.get('modules', [])
+            if _modules and not clip.get('type'):
+                _mod_str = ' '.join(_modules)
+                if 'qwen_3_8b' in _mod_str:
+                    clip['type'] = 'flux2'
+                    clip['source'] = 'a1111_modules'
+                elif 'qwen_3_4b' in _mod_str or 'qwen-4b' in _mod_str:
+                    clip['type'] = 'lumina2'
+                    clip['source'] = 'a1111_modules'
+                elif 't5xxl' in _mod_str:
+                    clip['type'] = 'flux'
+                    clip['source'] = 'a1111_modules'
+                elif 'umt5' in _mod_str:
+                    clip['type'] = 'wan'
+                    clip['source'] = 'a1111_modules'
 
         _model_a_path = raw_a[0] if raw_a else model_a
         family = get_model_family(_model_a_path)
+
+        # Fallback: infer family from clip type (same logic as PE execute path)
+        if not family:
+            _clip_src  = clip.get('source', '')
+            _clip_type = clip.get('type', '').lower()
+            if _clip_src == 'checkpoint':
+                family = 'sdxl'
+            elif 'flux2' in _clip_type:
+                family = 'flux2'
+            elif 'flux' in _clip_type:
+                family = 'flux1'
+            elif 'sd3' in _clip_type:
+                family = 'sd3'
+            elif 'wan' in _clip_type:
+                family = 'wan_video_t2v'
+            elif 'qwen_image' in _clip_type:
+                family = 'qwen_image'
+            elif 'lumina2' in _clip_type:
+                family = 'zimage'
+        if not family:
+            family = 'sdxl'
 
         # Check availability
         model_a_found = True
@@ -649,14 +700,14 @@ def extract_metadata_from_png(file_path):
                 if metadata.get('parsed_parameters'):
                     print("[PromptExtractor] Found parsed A1111 parameters")
                     parsed = metadata['parsed_parameters']
-                    # JS parser doesn't extract sampler/resolution — enrich
+                    # JS parser doesn't extract sampler/resolution/modules — enrich
                     # from the raw parameters text via the Python parser.
                     raw_params = metadata.get('parameters', '')
-                    if raw_params and not parsed.get('sampler_name'):
+                    if raw_params:
                         py_parsed = parse_a1111_parameters(raw_params)
                         if py_parsed:
                             for k in ('steps', 'sampler_name', 'scheduler', 'cfg',
-                                      'seed', 'width', 'height', 'denoise'):
+                                      'seed', 'width', 'height', 'modules'):
                                 if k in py_parsed and k not in parsed:
                                     parsed[k] = py_parsed[k]
                     return parsed, workflow_data
@@ -3424,23 +3475,60 @@ class PromptExtractor:
                         if prompt_data.get('scheduler'):
                             _sampler['scheduler'] = prompt_data['scheduler']
                         if prompt_data.get('steps'):
-                            _sampler['steps'] = prompt_data['steps']
+                            _sampler['steps_a'] = prompt_data['steps']
                         if prompt_data.get('cfg'):
                             _sampler['cfg'] = prompt_data['cfg']
                         if prompt_data.get('seed'):
-                            _sampler['seed'] = prompt_data['seed']
-                        if prompt_data.get('denoise') is not None:
-                            _sampler['denoise'] = prompt_data['denoise']
+                            _sampler['seed_a'] = prompt_data['seed']
                         if prompt_data.get('width') and prompt_data.get('height'):
                             _res['width'] = prompt_data['width']
                             _res['height'] = prompt_data['height']
 
-                    _sampler['denoise'] = _sampler.get('denoise', 1.0)
+                        # Forge embeds CLIP/VAE module names (e.g. "Module 2: clip_l, Module 3: t5xxl_fp16").
+                        # Use these to infer clip_type when extract_clip_info found nothing.
+                        _modules = prompt_data.get('modules', [])
+                        if _modules and not _clip.get('type'):
+                            _mod_str = ' '.join(_modules)
+                            if 'qwen_3_8b' in _mod_str:
+                                _clip['type'] = 'flux2'
+                                _clip['source'] = 'a1111_modules'
+                            elif 'qwen_3_4b' in _mod_str or 'qwen-4b' in _mod_str:
+                                _clip['type'] = 'lumina2'
+                                _clip['source'] = 'a1111_modules'
+                            elif 't5xxl' in _mod_str:
+                                _clip['type'] = 'flux'
+                                _clip['source'] = 'a1111_modules'
+                            elif 'umt5' in _mod_str:
+                                _clip['type'] = 'wan'
+                                _clip['source'] = 'a1111_modules'
 
                     # Resolve model family from model_a path
                     _raw_models_a = parsed.get('models_a', [])
                     _model_a_path = _raw_models_a[0] if _raw_models_a else model_a
                     _family = get_model_family(_model_a_path)
+
+                    # Fallback: if model name doesn't match any family pattern,
+                    # infer from clip source/type (checkpoint → sdxl, clip_type
+                    # substring → specific family).
+                    if not _family:
+                        _clip_src  = _clip.get('source', '')
+                        _clip_type = _clip.get('type', '').lower()
+                        if _clip_src == 'checkpoint':
+                            _family = 'sdxl'
+                        elif 'flux2' in _clip_type:
+                            _family = 'flux2'
+                        elif 'flux' in _clip_type:
+                            _family = 'flux1'
+                        elif 'sd3' in _clip_type:
+                            _family = 'sd3'
+                        elif 'wan' in _clip_type:
+                            _family = 'wan_video_t2v'
+                        elif 'qwen_image' in _clip_type:
+                            _family = 'qwen_image'
+                        elif 'lumina2' in _clip_type:
+                            _family = 'zimage'
+                    if not _family:
+                        _family = 'sdxl'
 
                     _extracted_for_wf = {
                         'positive_prompt': positive_prompt,

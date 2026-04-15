@@ -662,18 +662,18 @@ const CONTROL_MODES = ["fixed", "increment", "decrement", "randomize"];
 // --- Per-family sampler defaults (applied on manual family switch) ---
 // Edit values here to change what each family starts with.
 const FAMILY_DEFAULTS = {
-    sdxl:          { steps: 20, cfg: 7.0,  sampler: "euler",         scheduler: "normal" },
-    sd15:          { steps: 20, cfg: 7.0,  sampler: "euler",         scheduler: "normal" },
-    flux1:         { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
-    flux2:         { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
-    zimage:        { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
-    ltxv:          { steps: 20, cfg: 3.5,  sampler: "euler",         scheduler: "simple" },
-    wan_image:     { steps: 30, cfg: 5.0,  sampler: "lcm",           scheduler: "simple" },
-    wan_video_t2v: { steps: 3,  cfg: 5.0,  sampler: "lcm",           scheduler: "simple",
-                     steps_high: 3, steps_low: 3 },
-    wan_video_i2v: { steps: 3,  cfg: 5.0,  sampler: "lcm",           scheduler: "simple",
-                     steps_high: 3, steps_low: 3 },
-    qwen_image:    { steps: 20, cfg: 5.0,  sampler: "euler",         scheduler: "simple" },
+    sdxl:          { steps_a: 20, cfg: 6.0,  sampler: "euler",         scheduler: "normal" },
+    sd15:          { steps_a: 20, cfg: 6.0,  sampler: "euler",         scheduler: "normal" },
+    flux1:         { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    flux2:         { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    zimage:        { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    ltxv:          { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    wan_image:     { steps_a: 30, cfg: 1.0,  sampler: "lcm",           scheduler: "simple" },
+    wan_video_t2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",           scheduler: "simple",
+                     steps_b: 3 },
+    wan_video_i2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",           scheduler: "simple",
+                     steps_b: 3 },
+    qwen_image:    { steps_a: 20, cfg: 5.0,  sampler: "euler",         scheduler: "simple" },
 };
 
 // --- Separator helper ---
@@ -772,28 +772,31 @@ async function updateUI(node) {
     const s = d.sampler || {};
     if (node._weSamplerRows) {
         const rows = node._weSamplerRows;
-        if (rows.steps?._setOriginal) rows.steps._setOriginal(s.steps ?? 20);
+        if (rows.steps_a?._setOriginal) rows.steps_a._setOriginal(s.steps_a ?? s.steps ?? 20);
         if (rows.cfg?._setOriginal) rows.cfg._setOriginal(s.cfg ?? 5.0);
         if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
         if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "simple");
         if (rows.seed_a?._setOriginal) rows.seed_a._setOriginal(s.seed_a ?? s.seed ?? 0);
         if (rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed_a ?? s.seed ?? 0);
         // WAN Video dual steps
-        // Fall back to splitting s.steps evenly if steps_high/steps_low not in wf_data
-        const _total = s.steps || 6;
-        const _sh = s.steps_high ?? Math.ceil(_total / 2);
-        const _sl = s.steps_low  ?? (_total - Math.ceil(_total / 2));
-        if (rows.steps_high?._setOriginal) rows.steps_high._setOriginal(_sh);
-        if (rows.steps_low?._setOriginal)  rows.steps_low._setOriginal(_sl);
+        if (rows.steps_b?._setOriginal) rows.steps_b._setOriginal(s.steps_b ?? s.steps_a ?? s.steps ?? 3);
     }
 
-    // Resolution
+    // Resolution — skip width/height/batch if locked
     const r = d.resolution || {};
     if (node._weResRows) {
         const rr = node._weResRows;
-        if (rr.width?._setOriginal) rr.width._setOriginal(r.width ?? 768);
-        if (rr.height?._setOriginal) rr.height._setOriginal(r.height ?? 1280);
-        if (rr.batch?._setOriginal) rr.batch._setOriginal(r.batch_size ?? 1);
+        if (!node._weResLocked) {
+            // Reset ratio to Freeform so the incoming values aren't constrained
+            if (node._weRatioSel) {
+                node._weRatioSel.value = "0";
+                node._weRatio = "Freeform";
+                if (node._weSetRatioIdx) node._weSetRatioIdx(0);
+            }
+            if (rr.width?._setOriginal) rr.width._setOriginal(r.width ?? 768);
+            if (rr.height?._setOriginal) rr.height._setOriginal(r.height ?? 1280);
+            if (rr.batch?._setOriginal) rr.batch._setOriginal(r.batch_size ?? 1);
+        }
         if (rr.frames) {
             if (r.length != null) {
                 rr.frames.style.display = "flex";
@@ -865,16 +868,13 @@ function updateWanVisibility(node) {
         node._weResRows.frames.style.display = isWan ? "flex" : "none";
     }
 
-    // Steps High / Low rows: only for WAN Video
-    if (node._weSamplerRows?.steps_high) {
-        node._weSamplerRows.steps_high.style.display = isWanVideo ? "flex" : "none";
+    // Steps B row: only for WAN Video
+    if (node._weSamplerRows?.steps_b) {
+        node._weSamplerRows.steps_b.style.display = isWanVideo ? "flex" : "none";
     }
-    if (node._weSamplerRows?.steps_low) {
-        node._weSamplerRows.steps_low.style.display  = isWanVideo ? "flex" : "none";
-    }
-    // Standard Steps row: hide when WAN Video (replaced by high/low)
-    if (node._weSamplerRows?.steps) {
-        node._weSamplerRows.steps.style.display = isWanVideo ? "none" : "flex";
+    // Steps A label: "Steps A" for WAN Video, "Steps" otherwise
+    if (node._weSamplerRows?.steps_a?._label) {
+        node._weSamplerRows.steps_a._label.textContent = isWanVideo ? "Steps A" : "Steps";
     }
 
 }
@@ -1019,15 +1019,15 @@ function syncHidden(node) {
     }
     if (node._weVaeRow?._getValue) {
         const v = node._weVaeRow._getValue();
-        if (v) ov.vae = v;
+        if (v) ov.vae = v; else delete ov.vae;
     }
     if (node._weClipRow?._getValue) {
         const v = node._weClipRow._getValue();
-        if (v) ov.clip_names = [v];
+        if (v) ov.clip_names = [v]; else delete ov.clip_names;
     }
     if (node._weSamplerRows) {
         const r = node._weSamplerRows;
-        if (r.steps?._inp) ov.steps = parseInt(r.steps._inp.value) || 20;
+        if (r.steps_a?._inp) ov.steps_a = parseInt(r.steps_a._inp.value) || 20;
         if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
         if (r.seed_a?._inp) ov.seed_a = parseInt(r.seed_a._inp.value) || 0;
         if (r.seed_b?._inp && r.seed_b.style.display !== "none") {
@@ -1036,11 +1036,8 @@ function syncHidden(node) {
         if (r.sampler?._inp) ov.sampler_name = r.sampler._inp.value;
         if (r.scheduler?._inp) ov.scheduler = r.scheduler._inp.value;
         // WAN Video dual steps
-        if (r.steps_high?._inp && r.steps_high.style.display !== "none") {
-            ov.steps_high = parseInt(r.steps_high._inp.value) || 3;
-        }
-        if (r.steps_low?._inp && r.steps_low.style.display !== "none") {
-            ov.steps_low = parseInt(r.steps_low._inp.value) || 3;
+        if (r.steps_b?._inp && r.steps_b.style.display !== "none") {
+            ov.steps_b = parseInt(r.steps_b._inp.value) || 3;
         }
     }
     if (node._weResRows) {
@@ -1052,6 +1049,10 @@ function syncHidden(node) {
             ov.length = parseInt(r.frames._inp.value) || 81;
         }
     }
+    // Persist resolution UI state
+    if (node._weRatio) ov._ratio = node._weRatio;
+    if (node._weRatioLandscape) ov._ratio_landscape = true;
+    if (node._weResLocked) ov._res_locked = true;
     if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
     if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
     if (node._weFamily) ov._family = node._weFamily;
@@ -1086,12 +1087,11 @@ function syncHidden(node) {
             vae: { name: ov.vae || "", source: "manual" },
             clip: { names: ov.clip_names || [], type: "", source: "manual" },
             sampler: {
-                steps: ov.steps || 20, cfg: ov.cfg || 5.0,
+                steps_a: ov.steps_a || 20, cfg: ov.cfg || 5.0,
                 seed_a: ov.seed_a || 0, seed_b: ov.seed_b,
                 sampler_name: ov.sampler_name || "euler",
                 scheduler: ov.scheduler || "simple",
-                denoise: 1.0, guidance: ov.guidance,
-                steps_high: ov.steps_high, steps_low: ov.steps_low,
+                steps_b: ov.steps_b,
             },
             resolution: {
                 width: ov.width || 768, height: ov.height || 1280,
@@ -1166,14 +1166,13 @@ function applyOverrides(node, ovJson, lsJson) {
 
     if (node._weSamplerRows) {
         const rows = node._weSamplerRows;
-        if (ov.steps != null) applyInput(rows.steps, ov.steps);
+        if (ov.steps_a != null) applyInput(rows.steps_a, ov.steps_a);
         if (ov.cfg != null) applyInput(rows.cfg, ov.cfg);
         if (ov.seed_a != null) applyInput(rows.seed_a, ov.seed_a);
         if (ov.seed_b != null) applyInput(rows.seed_b, ov.seed_b);
         if (ov.sampler_name) applyInput(rows.sampler, ov.sampler_name);
         if (ov.scheduler) applyInput(rows.scheduler, ov.scheduler);
-        if (ov.steps_high != null) applyInput(rows.steps_high, ov.steps_high);
-        if (ov.steps_low  != null) applyInput(rows.steps_low,  ov.steps_low);
+        if (ov.steps_b != null) applyInput(rows.steps_b, ov.steps_b);
     }
 
     if (node._weResRows) {
@@ -1182,6 +1181,29 @@ function applyOverrides(node, ovJson, lsJson) {
         if (ov.height != null) applyInput(rr.height, ov.height);
         if (ov.batch_size != null) applyInput(rr.batch, ov.batch_size);
         if (ov.length != null) applyInput(rr.frames, ov.length);
+    }
+    // Restore resolution UI state (ratio, landscape, lock)
+    if (node._weRatioSel) {
+        if (ov._ratio_landscape) {
+            node._weRatioLandscape = true;
+            if (node._weSetLandscape) node._weSetLandscape(true);
+        }
+        if (ov._ratio) {
+            // Find matching ratio index by label
+            const opts = node._weRatioSel.options;
+            for (let i = 0; i < opts.length; i++) {
+                if (opts[i].textContent === ov._ratio) {
+                    node._weRatioSel.value = String(i);
+                    node._weRatio = ov._ratio;
+                    if (node._weSetRatioIdx) node._weSetRatioIdx(i);
+                    break;
+                }
+            }
+        }
+    }
+    if (ov._res_locked && node._weResLockBtn) {
+        node._weResLocked = true;
+        if (node._weSetResDisabled) node._weSetResDisabled(true);
     }
 
     if (ov.positive_prompt != null && node._wePosBox) node._wePosBox.value = ov.positive_prompt;
@@ -1223,7 +1245,7 @@ function parseWorkflowData(jsonStr) {
                 type: "", source: "workflow_data",
             },
             sampler: d.sampler || {
-                steps: 20, cfg: 5.0, seed_a: 0,
+                steps_a: 20, cfg: 5.0, seed_a: 0,
                 sampler_name: "euler", scheduler: "simple",
             },
             resolution: d.resolution || { width: 768, height: 1280, batch_size: 1, length: null },
@@ -1443,16 +1465,194 @@ app.registerExtension({
             // -- 1. RESOLUTION section (open) --
             const resSec = makeSection("RESOLUTION");
             node._weSections.resolution = resSec;
-            const resRows = {
-                width:  makeInput("Width",  "number", 768, { min: 64, max: 8192, step: 8 }, _syncS),
-                height: makeInput("Height", "number", 1280, { min: 64, max: 8192, step: 8 }, _syncS),
-                batch:  makeInput("Batch",  "number", 1,   { min: 1, max: 128, step: 1 }, _syncS),
-                frames: makeInput("Frames", "number", 81,  { min: 1, max: 1000, step: 1 }, _syncS),
+
+            // SVG lock icons (white, clean outline)
+            const _lockSvgOpen = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`;
+            const _lockSvgClosed = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+
+            const RES_GUTTER = "18px";
+
+            // Aspect ratio definitions — stored as portrait (w < h)
+            const RATIOS = [
+                { w: 0,  h: 0  },   // Freeform
+                { w: 1,  h: 1  },
+                { w: 4,  h: 5  },
+                { w: 3,  h: 4  },
+                { w: 2,  h: 3  },
+                { w: 9,  h: 16 },
+            ];
+            function _ratioLabel(r, land) {
+                if (r.w === 0) return "Freeform";
+                return land ? `${r.h}:${r.w}` : `${r.w}:${r.h}`;
+            }
+
+            let _landscape = false;
+            let _resLocked = false;
+            let _currentRatioIdx = 0;
+            node._weResLocked = false;
+            node._weRatioLandscape = false;
+            node._weRatio = "Freeform";
+
+            // Lock icon (created early so _setResDisabled can reference it)
+            const lockIcon = makeEl("span", {
+                cursor: "pointer", display: "inline-flex", alignItems: "center",
+                justifyContent: "center", width: RES_GUTTER, flexShrink: "0",
+            });
+            lockIcon.innerHTML = _lockSvgOpen;
+            lockIcon.title = "Lock resolution";
+            lockIcon.onclick = () => {
+                _resLocked = !_resLocked;
+                node._weResLocked = _resLocked;
+                _setResDisabled(_resLocked);
+                _syncS();
             };
-            resRows.frames.style.display = "none"; // hidden until WAN
-            for (const row of Object.values(resRows)) resSec._body.appendChild(row);
+
+            // Helper: ghost / un-ghost resolution inputs + update lock icon
+            function _setResDisabled(disabled) {
+                if (!resRows) return;
+                for (const key of ["width", "height", "batch"]) {
+                    const inp = resRows[key]?._inp;
+                    if (inp) { inp.disabled = disabled; inp.style.opacity = disabled ? "0.35" : "1"; }
+                    const lbl = resRows[key]?._label;
+                    if (lbl) lbl.style.opacity = disabled ? "0.35" : "1";
+                }
+                lockIcon.innerHTML = disabled ? _lockSvgClosed : _lockSvgOpen;
+            }
+
+            // --- Ratio row: [label "Ratio"] [orient icon] [14px reset spacer] [dropdown] ---
+            const ratioRow = makeEl("div", { ...ROW_STYLE });
+            ratioRow.appendChild(makeEl("span", {
+                color: C.textMuted, width: LABEL_W, flexShrink: "0",
+            }, "Ratio"));
+            // Orient icon in the gutter column (after label, before reset spacer)
+            const orientIcon = makeEl("span", {
+                cursor: "pointer", display: "inline-flex", alignItems: "center",
+                justifyContent: "center", width: RES_GUTTER, flexShrink: "0",
+            });
+            function _drawOrient() {
+                if (_landscape) {
+                    orientIcon.innerHTML = `<svg width="14" height="11" viewBox="0 0 14 11" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x=".5" y=".5" width="13" height="10" rx="1" stroke="rgba(255,255,255,0.55)" stroke-width="1"/><circle cx="7" cy="3.8" r="1.4" fill="rgba(255,255,255,0.45)"/><path d="M4.5 9.5v-.8c0-1.1.9-2 2-2h1c1.1 0 2 .9 2 2v.8" stroke="rgba(255,255,255,0.45)" stroke-width=".9" stroke-linecap="round" fill="none"/></svg>`;
+                } else {
+                    orientIcon.innerHTML = `<svg width="10" height="14" viewBox="0 0 10 14" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x=".5" y=".5" width="9" height="13" rx="1" stroke="rgba(255,255,255,0.55)" stroke-width="1"/><circle cx="5" cy="4.5" r="1.5" fill="rgba(255,255,255,0.45)"/><path d="M2.5 12.5v-1c0-1.2 1-2.2 2.2-2.2h.6c1.2 0 2.2 1 2.2 2.2v1" stroke="rgba(255,255,255,0.45)" stroke-width=".9" stroke-linecap="round" fill="none"/></svg>`;
+                }
+                orientIcon.title = _landscape ? "Landscape — click for portrait" : "Portrait — click for landscape";
+            }
+            _drawOrient();
+            orientIcon.onclick = () => {
+                _landscape = !_landscape;
+                node._weRatioLandscape = _landscape;
+                _drawOrient();
+                _populateRatioSel();
+                _applyRatio();
+                _syncS();
+            };
+            ratioRow.appendChild(orientIcon);
+            ratioRow.appendChild(makeEl("span", { width: "14px", flexShrink: "0" }));
+
+            // Ratio dropdown (same INPUT_W as other inputs)
+            const ratioSel = document.createElement("select");
+            function _populateRatioSel() {
+                ratioSel.innerHTML = "";
+                for (let i = 0; i < RATIOS.length; i++) {
+                    const o = document.createElement("option");
+                    o.value = String(i); o.textContent = _ratioLabel(RATIOS[i], _landscape);
+                    ratioSel.appendChild(o);
+                }
+                ratioSel.value = String(_currentRatioIdx);
+            }
+            _populateRatioSel();
+            Object.assign(ratioSel.style, { ...INPUT_STYLE });
+            ratioRow.appendChild(ratioSel);
+
+            // --- Ratio logic ---
+            function _getRatio() { return RATIOS[_currentRatioIdx] || RATIOS[0]; }
+            function _applyRatio() {
+                const r = _getRatio();
+                if (r.w === 0) return;
+                const rw = _landscape ? r.h : r.w, rh = _landscape ? r.w : r.h;
+                const curW = parseInt(resRows.width._inp.value) || 768;
+                const curH = parseInt(resRows.height._inp.value) || 1280;
+                let newW, newH;
+                if (_landscape) { newW = curW; newH = Math.round(curW * rh / rw / 8) * 8; }
+                else            { newH = curH; newW = Math.round(curH * rw / rh / 8) * 8; }
+                resRows.width._inp.value  = Math.max(64, Math.min(8192, newW));
+                resRows.height._inp.value = Math.max(64, Math.min(8192, newH));
+                _syncS();
+            }
+            function _applyRatioFromWidth() {
+                const r = _getRatio(); if (r.w === 0) return;
+                const rw = _landscape ? r.h : r.w, rh = _landscape ? r.w : r.h;
+                const curW = parseInt(resRows.width._inp.value) || 768;
+                resRows.height._inp.value = Math.max(64, Math.min(8192, Math.round(curW * rh / rw / 8) * 8));
+                _syncS();
+            }
+            function _applyRatioFromHeight() {
+                const r = _getRatio(); if (r.w === 0) return;
+                const rw = _landscape ? r.h : r.w, rh = _landscape ? r.w : r.h;
+                const curH = parseInt(resRows.height._inp.value) || 1280;
+                resRows.width._inp.value = Math.max(64, Math.min(8192, Math.round(curH * rw / rh / 8) * 8));
+                _syncS();
+            }
+            ratioSel.onchange = () => {
+                _currentRatioIdx = parseInt(ratioSel.value) || 0;
+                node._weRatio = _ratioLabel(RATIOS[_currentRatioIdx], _landscape);
+                _applyRatio(); _syncS();
+            };
+
+            // --- Input rows ---
+            const resRows = {
+                width:  makeInput("Width",  "number", 768,  { min: 64, max: 8192, step: 8 }, () => { _applyRatioFromWidth();  _syncS(); }),
+                height: makeInput("Height", "number", 1280, { min: 64, max: 8192, step: 8 }, () => { _applyRatioFromHeight(); _syncS(); }),
+                batch:  makeInput("Batch",  "number", 1,    { min: 1, max: 128, step: 1 }, _syncS),
+                frames: makeInput("Frames", "number", 81,   { min: 1, max: 1000, step: 1 }, _syncS),
+            };
+            resRows.frames.style.display = "none";
+
+            // Insert gutter elements AFTER label, BEFORE resetBtn in each row
+            // makeInput creates: [label] [resetBtn] [input]
+            // We insert between label and resetBtn: line segment or lock icon
+            const _lineSvg = `<svg width="2" height="100%" viewBox="0 0 2 20" preserveAspectRatio="none"><line x1="1" y1="0" x2="1" y2="20" stroke="${C.border}" stroke-width="1"/></svg>`;
+            function _makeLineGutter() {
+                const g = makeEl("span", {
+                    display: "inline-flex", alignItems: "stretch", justifyContent: "center",
+                    width: RES_GUTTER, flexShrink: "0", alignSelf: "stretch",
+                });
+                const line = makeEl("span", {
+                    width: "0", borderLeft: `1px solid ${C.border}`, alignSelf: "stretch",
+                });
+                g.appendChild(line);
+                return g;
+            }
+
+            // Width: line, Height: lock, Batch: line
+            const widthGutter = _makeLineGutter();
+            const batchGutter = _makeLineGutter();
+
+            // Insert gutters after label (label is firstChild) in each row
+            resRows.width.insertBefore(widthGutter, resRows.width._resetBtn);
+            resRows.height.insertBefore(lockIcon, resRows.height._resetBtn);
+            resRows.batch.insertBefore(batchGutter, resRows.batch._resetBtn);
+
+            // Assemble section
+            resSec._body.appendChild(ratioRow);
+            for (const key of ["width", "height", "batch", "frames"]) {
+                resSec._body.appendChild(resRows[key]);
+            }
             root.appendChild(resSec);
+
             node._weResRows = resRows;
+            node._weRatio = "Freeform";
+            node._weRatioSel = ratioSel;
+            node._weRatioLandBtn = orientIcon;
+            node._weResLockBtn = lockIcon;
+            node._weSetLandscape = (v) => {
+                _landscape = !!v;
+                node._weRatioLandscape = _landscape;
+                _drawOrient();
+                _populateRatioSel();
+            };
+            node._weSetRatioIdx = (i) => { _currentRatioIdx = i; };
+            node._weSetResDisabled = _setResDisabled;
 
             // -- 2. MODEL section (open, with VAE/CLIP) --
             const modelSec = makeSection("MODEL");
@@ -1539,7 +1739,7 @@ app.registerExtension({
                         const d = await r.json(); return d.vaes || [];
                     } catch { return []; }
                 },
-                (v) => { node._weOverrides.vae = v; _syncS(); }, false);
+                (v) => { if (v) node._weOverrides.vae = v; else delete node._weOverrides.vae; _syncS(); }, false);
             modelSec._body.appendChild(vaeRow);
             node._weVaeRow = vaeRow;
 
@@ -1552,7 +1752,7 @@ app.registerExtension({
                         const d = await r.json(); return d.clips || [];
                     } catch { return []; }
                 },
-                (v) => { node._weOverrides.clip_names = [v]; _syncS(); }, false);
+                (v) => { if (v) node._weOverrides.clip_names = [v]; else delete node._weOverrides.clip_names; _syncS(); }, false);
             modelSec._body.appendChild(clipRow);
             node._weClipRow = clipRow;
 
@@ -1614,9 +1814,8 @@ app.registerExtension({
                     const defs = FAMILY_DEFAULTS[familyKey];
                     if (defs && node._weSamplerRows) {
                         const rows = node._weSamplerRows;
-                        if (defs.steps != null      && rows.steps?._inp)      rows.steps._inp.value = defs.steps;
-                        if (defs.steps_high != null  && rows.steps_high?._inp) rows.steps_high._inp.value = defs.steps_high;
-                        if (defs.steps_low != null   && rows.steps_low?._inp)  rows.steps_low._inp.value = defs.steps_low;
+                        if (defs.steps_a != null    && rows.steps_a?._inp)    rows.steps_a._inp.value = defs.steps_a;
+                        if (defs.steps_b != null    && rows.steps_b?._inp)    rows.steps_b._inp.value = defs.steps_b;
                         if (defs.cfg != null         && rows.cfg?._inp)        rows.cfg._inp.value = defs.cfg;
                         if (defs.sampler             && rows.sampler?._inp)    rows.sampler._inp.value = defs.sampler;
                         if (defs.scheduler           && rows.scheduler?._inp)  rows.scheduler._inp.value = defs.scheduler;
@@ -1632,32 +1831,28 @@ app.registerExtension({
             const sampSec = makeSection("SAMPLER");
             node._weSections.sampler = sampSec;
 
-            // Standard steps (hidden when WAN Video)
-            const stepsRow     = makeInput("Steps",      "number", 20,  { min: 1, max: 200, step: 1 }, _syncS);
-            // WAN Video dual steps (hidden by default)
-            const stepsHighRow = makeInput("Steps (High)", "number", 3,  { min: 1, max: 200, step: 1 }, _syncS);
-            const stepsLowRow  = makeInput("Steps (Low)",  "number", 3, { min: 1, max: 200, step: 1 }, _syncS);
-            stepsHighRow.style.display = "none";
-            stepsLowRow.style.display  = "none";
+            // Steps A (always visible, labeled "Steps" for non-WAN, "Steps A" for WAN Video)
+            const stepsARow    = makeInput("Steps",        "number", 20, { min: 1, max: 200, step: 1 }, _syncS);
+            // Steps B — WAN Video low-pass (hidden by default)
+            const stepsBRow    = makeInput("Steps B",      "number", 3,  { min: 1, max: 200, step: 1 }, _syncS);
+            stepsBRow.style.display = "none";
 
             // WAN Video seed B (always visible)
             const seedRow  = makeInput("Seed A", "number", 0, { min: 0, step: 1 }, _syncS);
             const seedBRow = makeInput("Seed B", "number", 0, { min: 0, step: 1 }, _syncS);
 
             const sampRows = {
-                steps:      stepsRow,
-                steps_high: stepsHighRow,
-                steps_low:  stepsLowRow,
+                steps_a:    stepsARow,
+                steps_b:    stepsBRow,
                 cfg:        makeInput("CFG",       "number", 5.0,      { min: 0, max: 100, step: 0.5 }, _syncS),
                 sampler:    makeInput("Sampler",   "select", "euler",  { options: SAMPLERS }, _syncS),
                 scheduler:  makeInput("Scheduler", "select", "simple", { options: SCHEDULERS }, _syncS),
                 seed_a:     seedRow,
                 seed_b:     seedBRow,
             };
-            // Append in display order: steps, steps_high, steps_low, cfg, sampler, scheduler, seed, seed_b
-            sampSec._body.appendChild(stepsRow);
-            sampSec._body.appendChild(stepsHighRow);
-            sampSec._body.appendChild(stepsLowRow);
+            // Append in display order: steps_a, steps_b, cfg, sampler, scheduler, seed, seed_b
+            sampSec._body.appendChild(stepsARow);
+            sampSec._body.appendChild(stepsBRow);
             sampSec._body.appendChild(sampRows.cfg);
             sampSec._body.appendChild(sampRows.sampler);
             sampSec._body.appendChild(sampRows.scheduler);
@@ -2210,12 +2405,11 @@ app.registerExtension({
                             vae: { name: ov.vae || "", source: "manual" },
                             clip: { names: ov.clip_names || [], type: "", source: "manual" },
                             sampler: {
-                                steps: ov.steps || 20, cfg: ov.cfg || 5.0,
+                                steps_a: ov.steps_a || 20, cfg: ov.cfg || 5.0,
                                 seed_a: ov.seed_a || 0, seed_b: ov.seed_b,
                                 sampler_name: ov.sampler_name || "euler",
                                 scheduler: ov.scheduler || "simple",
-                                denoise: 1.0, guidance: ov.guidance,
-                                steps_high: ov.steps_high, steps_low: ov.steps_low,
+                                steps_b: ov.steps_b,
                             },
                             resolution: {
                                 width: ov.width || 768, height: ov.height || 1280,

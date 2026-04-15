@@ -59,7 +59,7 @@ MODEL_FAMILIES = {
         # Flux1 uses T5-XXL + CLIP-L dual encoders.
         # umt5_xxl also contains "t5xxl" as substring — exclude it explicitly.
         "clip":         ["t5xxl"],
-        "clip_exclude": ["umt5", "clip_l", "clip_g", "qwen", "gemma"],
+        "clip_exclude": ["umt5", "clip_l", "clip_g", "qwen", "gemma", "awq-int"],
         "clip_type": "flux",
         "clip_slots": 2,
         "sampler": "flux",
@@ -271,11 +271,25 @@ def get_all_family_labels():
 
 # ─── Model listing ───────────────────────────────────────────────────────────
 
+def _model_keywords(model_name):
+    """Extract meaningful keywords from a model filename for fuzzy matching.
+    Strips extension, path, and GGUF quantization tokens (Q8_0, Q4_K_M, etc.)."""
+    import re
+    base = os.path.splitext(os.path.basename(model_name))[0].lower()
+    # Remove GGUF quant suffixes: Q8_0, Q4_K_M, Q5_K_S, Q6_K, etc.
+    base = re.sub(r'[-_]?q\d[_\w]*$', '', base, flags=re.IGNORECASE)
+    # Also strip common precision suffixes: fp8, fp16, bf16, fp32
+    base = re.sub(r'[-_]?(?:fp8|fp16|bf16|fp32)(?:mixed)?$', '', base, flags=re.IGNORECASE)
+    # Split on _ and - to get keywords, filter empties
+    return set(tok for tok in re.split(r'[-_]', base) if tok)
+
+
 def list_compatible_models(reference_model, family_override=None):
     """
-    Given a reference model name/path, return a sorted list of compatible
-    models found on disk.  If the family is unknown and no override is
-    provided, returns ALL models.
+    Given a reference model name/path, return a list of compatible
+    models found on disk, sorted by keyword similarity to the reference.
+
+    The best keyword match is first, so callers can use [0] as a fallback.
 
     Parameters
     ----------
@@ -309,7 +323,23 @@ def list_compatible_models(reference_model, family_override=None):
         if m_family and m_family in compat:
             compatible.append(m)
 
-    return sorted(compatible)
+    if not compatible:
+        return []
+
+    # Sort by keyword similarity to reference model (best match first)
+    ref_keywords = _model_keywords(reference_model)
+    if ref_keywords:
+        def _match_score(m):
+            m_keywords = _model_keywords(m)
+            shared = len(ref_keywords & m_keywords)
+            # Tie-break: prefer fewer extra keywords (closer match)
+            extra = len(m_keywords - ref_keywords)
+            return (-shared, extra, m.lower())
+        compatible.sort(key=_match_score)
+    else:
+        compatible.sort()
+
+    return compatible
 
 
 def list_all_models():

@@ -78,6 +78,21 @@ class WorkflowRenderer:
         "and decodes. Outputs IMAGE + LATENT."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, workflow_data, source_image=None, **kwargs):
+        """Return a stable fingerprint so ComfyUI skips re-execution when nothing changed."""
+        import hashlib, json as _json
+        h = hashlib.sha256()
+        if isinstance(workflow_data, dict):
+            h.update(_json.dumps(workflow_data, sort_keys=True, default=str).encode())
+        elif isinstance(workflow_data, str):
+            h.update(workflow_data.encode())
+        if source_image is not None:
+            import torch
+            h.update(str(source_image.shape).encode())
+            h.update(str(source_image.sum().item()).encode())
+        return h.hexdigest()
+
     def execute(self, workflow_data, source_image=None, unique_id=None):
         # ── Parse workflow_data ───────────────────────────────────────────
         if isinstance(workflow_data, dict):
@@ -108,13 +123,11 @@ class WorkflowRenderer:
 
         # Sampler params
         sampler_params = {
-            "steps": int(wf_sampler.get("steps", 20)),
+            "steps": int(wf_sampler.get("steps_a", wf_sampler.get("steps", 20))),
             "cfg": float(wf_sampler.get("cfg", 5.0)),
             "seed_a": int(wf_sampler.get("seed_a", wf_sampler.get("seed", 0))),
             "sampler_name": wf_sampler.get("sampler_name", "euler"),
             "scheduler": wf_sampler.get("scheduler", "simple"),
-            "denoise": 1.0,
-            "guidance": wf_sampler.get("guidance"),
         }
         seed_b = wf_sampler.get("seed_b")
 
@@ -276,8 +289,8 @@ class WorkflowRenderer:
 
             # WAN dual-sampler step counts
             total_steps = sampler_params["steps"]
-            steps_high = int(wf_sampler.get("steps_high", math.ceil(total_steps / 2)))
-            steps_low = int(wf_sampler.get("steps_low", total_steps - steps_high))
+            steps_high = int(wf_sampler.get("steps_a", wf_sampler.get("steps_high", math.ceil(total_steps / 2))))
+            steps_low = int(wf_sampler.get("steps_b", wf_sampler.get("steps_low", total_steps - steps_high)))
             sampler_params["steps_high"] = steps_high
             sampler_params["steps_low"] = steps_low
             if seed_b is not None:
@@ -586,8 +599,6 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
     seed         = int(sampler_params.get("seed_a", sampler_params.get("seed", 0)))
     sampler_name = sampler_params["sampler_name"]
     scheduler    = sampler_params["scheduler"]
-    denoise      = float(sampler_params.get("denoise", 1.0))
-
     latent_image = comfy.sample.fix_empty_latent_channels(
         model,
         latent_dict["samples"],
@@ -604,7 +615,7 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
     samples = comfy.sample.sample(
         model, noise, steps, cfg, sampler_name, scheduler,
         cond_pos, cond_neg, latent_image,
-        denoise=denoise, disable_noise=False,
+        denoise=1.0, disable_noise=False,
         start_step=None, last_step=None,
         force_full_denoise=False, noise_mask=noise_mask,
         callback=callback, disable_pbar=disable_pbar, seed=seed,
@@ -793,8 +804,7 @@ def _render_flux1(model, clip, vae, pos_prompt, neg_prompt,
     tokens_neg = clip.tokenize(neg_prompt)
     cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
 
-    guidance = float(sampler_params.get("guidance") or 3.5)
-    cond_pos = node_helpers.conditioning_set_values(cond_pos, {"guidance": guidance})
+    cond_pos = node_helpers.conditioning_set_values(cond_pos, {"guidance": 3.5})
     (cond_neg,) = ConditioningZeroOut().zero_out(cond_neg)
 
     latent = _make_latent(16, width, height, batch=batch)
@@ -832,11 +842,10 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
     seed         = int(sampler_params.get("seed_a", sampler_params.get("seed", 0)))
     sampler_name = sampler_params.get("sampler_name", "euler")
     scheduler    = sampler_params.get("scheduler", "beta")
-    denoise      = float(sampler_params.get("denoise", 1.0))
 
     guider = _extract_node_outputs(CFGGuider.execute(model, cond_pos, cond_neg, cfg))[0]
     sampler = _extract_node_outputs(KSamplerSelect.execute(sampler_name))[0]
-    sigmas = _extract_node_outputs(BasicScheduler.execute(model, scheduler, steps, denoise))[0]
+    sigmas = _extract_node_outputs(BasicScheduler.execute(model, scheduler, steps, 1.0))[0]
     noise_obj = _extract_node_outputs(RandomNoise.execute(seed))[0]
 
     latent_image = comfy.sample.fix_empty_latent_channels(

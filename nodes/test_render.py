@@ -68,7 +68,6 @@ class TestRenderFunctions:
                 "steps": ("INT", {"default": 4, "min": 1, "max": 200}),
                 "cfg": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 30.0, "step": 0.1}),
                 "seed": ("INT", {"default": 42, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
-                "guidance": ("FLOAT", {"default": 3.5, "min": 0.0, "max": 30.0, "step": 0.1}),
                 "sampler_name": (["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_sde", "uni_pc"],
                                  {"default": "euler"}),
                 "scheduler": (["simple", "normal", "karras", "beta", "sgm_uniform"],
@@ -92,7 +91,7 @@ class TestRenderFunctions:
     )
 
     def execute(self, family, positive_prompt, negative_prompt,
-                width, height, steps, cfg, seed, guidance, sampler_name, scheduler,
+                width, height, steps, cfg, seed, sampler_name, scheduler,
                 length=33):
 
         report = []
@@ -234,8 +233,6 @@ class TestRenderFunctions:
             "seed_a": seed,
             "sampler_name": sampler_name,
             "scheduler": scheduler,
-            "denoise": 1.0,
-            "guidance": guidance,
         }
 
         batch = 1
@@ -246,7 +243,7 @@ class TestRenderFunctions:
             sampler_params=sampler_params,
         )
 
-        log(f"Rendering {width}x{height}, steps={steps}, cfg={cfg}, guidance={guidance}")
+        log(f"Rendering {width}x{height}, steps={steps}, cfg={cfg}")
 
         # ── 6. Dispatch ──────────────────────────────────────────────────
         unsupported = ("ltxv",)

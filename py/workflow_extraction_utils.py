@@ -75,17 +75,16 @@ def _get_embedded_extracted_data(workflow_data):
 def extract_sampler_params(prompt_data, workflow_data):
     """
     Extract sampler parameters from KSampler nodes in API or workflow format.
-    Returns a dict with steps, cfg, seed_a, sampler_name, scheduler, denoise, guidance.
+    Returns a dict with steps_a, steps_b, cfg, seed_a, seed_b, sampler_name, scheduler.
     """
     params = {
-        'steps': 20,
+        'steps_a': 20,
+        'steps_b': None,   # WAN Video low-pass steps (None = same as steps_a)
         'cfg': 7.0,
         'seed_a': 0,
         'seed_b': None,   # WAN Video second-sampler seed (None = use same as seed_a)
         'sampler_name': 'euler',
         'scheduler': 'normal',
-        'denoise': 1.0,
-        'guidance': None,  # Flux guidance / max_shift
     }
 
     # ── API format ────────────────────────────────────────────────────────────
@@ -100,20 +99,19 @@ def extract_sampler_params(prompt_data, workflow_data):
             inp = node_data.get('inputs', {})
 
             if ct == 'KSampler':
-                params['steps']        = inp.get('steps', params['steps'])
+                params['steps_a']      = inp.get('steps', params['steps_a'])
                 params['cfg']          = inp.get('cfg', params['cfg'])
                 seed_val               = inp.get('seed', inp.get('noise_seed', params['seed_a']))
                 params['seed_a']       = seed_val if not isinstance(seed_val, list) else params['seed_a']
                 params['sampler_name'] = inp.get('sampler_name', params['sampler_name'])
                 params['scheduler']    = inp.get('scheduler', params['scheduler'])
-                params['denoise']      = inp.get('denoise', params['denoise'])
                 return params  # standard KSampler found — done
 
             if ct == 'KSamplerAdvanced':
                 ksampler_advanced_nodes.append(inp)
 
             if ct == 'WanMoeKSamplerAdvanced':
-                params['steps']        = inp.get('steps', params['steps'])
+                params['steps_a']      = inp.get('steps', params['steps_a'])
                 params['cfg']          = inp.get('cfg', params['cfg'])
                 seed_val               = inp.get('seed', inp.get('noise_seed', params['seed_a']))
                 params['seed_a']       = seed_val if not isinstance(seed_val, list) else params['seed_a']
@@ -124,18 +122,21 @@ def extract_sampler_params(prompt_data, workflow_data):
         # Handle KSamplerAdvanced — including WAN Video dual-sampler pattern
         if ksampler_advanced_nodes:
             first = ksampler_advanced_nodes[0]
-            params['steps']        = first.get('steps', params['steps'])
+            params['steps_a']      = first.get('steps', params['steps_a'])
             params['cfg']          = first.get('cfg', params['cfg'])
             seed_val               = first.get('seed', first.get('noise_seed', params['seed_a']))
             params['seed_a']       = seed_val if not isinstance(seed_val, list) else params['seed_a']
             params['sampler_name'] = first.get('sampler_name', params['sampler_name'])
             params['scheduler']    = first.get('scheduler', params['scheduler'])
-            params['denoise']      = first.get('denoise', params['denoise'])
             if len(ksampler_advanced_nodes) >= 2:
                 # Second node = low-pass sampler — expose its seed as seed_b
                 second   = ksampler_advanced_nodes[1]
                 seed_b   = second.get('seed', second.get('noise_seed', params['seed_a']))
                 params['seed_b'] = seed_b if not isinstance(seed_b, list) else params['seed_a']
+                # Extract steps_b if the second sampler has different steps
+                steps_b_val = second.get('steps')
+                if steps_b_val is not None and not isinstance(steps_b_val, list):
+                    params['steps_b'] = int(steps_b_val)
             return params
 
         # Second pass for split-node pattern (SamplerCustomAdvanced)
@@ -148,11 +149,8 @@ def extract_sampler_params(prompt_data, workflow_data):
             if ct == 'KSamplerSelect':
                 params['sampler_name'] = inp.get('sampler_name', params['sampler_name'])
             elif ct in ('BasicScheduler', 'Flux2Scheduler'):
-                params['steps']     = inp.get('steps', params['steps'])
+                params['steps_a']   = inp.get('steps', params['steps_a'])
                 params['scheduler'] = inp.get('scheduler', params['scheduler'])
-                params['denoise']   = inp.get('denoise', params['denoise'])
-                if 'max_shift' in inp:
-                    params['guidance'] = inp.get('max_shift')
             elif ct == 'CFGGuider':
                 params['cfg'] = inp.get('cfg', params['cfg'])
             elif ct == 'RandomNoise':
@@ -169,12 +167,10 @@ def extract_sampler_params(prompt_data, workflow_data):
             if ntype == 'KSampler' and len(widgets) >= 6:
                 try:
                     params['seed_a']       = int(widgets[0])   if widgets[0] is not None else 0
-                    params['steps']        = int(widgets[2])   if widgets[2] is not None else 20
+                    params['steps_a']      = int(widgets[2])   if widgets[2] is not None else 20
                     params['cfg']          = float(widgets[3]) if widgets[3] is not None else 7.0
                     params['sampler_name'] = str(widgets[4])   if widgets[4] else 'euler'
                     params['scheduler']    = str(widgets[5])   if widgets[5] else 'normal'
-                    if len(widgets) > 6 and widgets[6] is not None:
-                        params['denoise'] = float(widgets[6])
                     return params
                 except (ValueError, IndexError):
                     pass
@@ -184,9 +180,7 @@ def extract_sampler_params(prompt_data, workflow_data):
             elif ntype in ('BasicScheduler', 'Flux2Scheduler') and len(widgets) >= 2:
                 try:
                     params['scheduler'] = str(widgets[0]) if widgets[0] else params['scheduler']
-                    params['steps']     = int(widgets[1]) if widgets[1] is not None else params['steps']
-                    if len(widgets) > 2 and widgets[2] is not None:
-                        params['denoise'] = float(widgets[2])
+                    params['steps_a']   = int(widgets[1]) if widgets[1] is not None else params['steps_a']
                 except (ValueError, IndexError):
                     pass
             elif ntype == 'CFGGuider' and widgets:
@@ -205,13 +199,12 @@ def extract_sampler_params(prompt_data, workflow_data):
     if ed:
         s = ed.get('sampler')
         if s and isinstance(s, dict) and s.get('sampler_name'):
-            params['steps']        = s.get('steps', params['steps'])
+            params['steps_a']      = s.get('steps_a', s.get('steps', params['steps_a']))
+            params['steps_b']      = s.get('steps_b', params['steps_b'])
             params['cfg']          = s.get('cfg', params['cfg'])
             params['seed_a']       = s.get('seed_a', s.get('seed', params['seed_a']))
             params['sampler_name'] = s.get('sampler_name', params['sampler_name'])
             params['scheduler']    = s.get('scheduler', params['scheduler'])
-            params['denoise']      = s.get('denoise', params['denoise'])
-            params['guidance']     = s.get('guidance', params['guidance'])
 
     return params
 
@@ -551,13 +544,13 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
         s = ed.get('sampler')
         if s and isinstance(s, dict) and s.get('sampler_name'):
             out['sampler'] = {
-                'steps':        s.get('steps', 20),
+                'steps_a':      s.get('steps_a', s.get('steps', 20)),
+                'steps_b':      s.get('steps_b'),
                 'cfg':          s.get('cfg', 7.0),
-                'seed':         s.get('seed', 0),
+                'seed_a':       s.get('seed_a', s.get('seed', 0)),
+                'seed_b':       s.get('seed_b'),
                 'sampler_name': s.get('sampler_name', 'euler'),
                 'scheduler':    s.get('scheduler', 'normal'),
-                'denoise':      s.get('denoise', 1.0),
-                'guidance':     s.get('guidance'),
             }
         r = ed.get('resolution')
         if r and isinstance(r, dict) and r.get('width'):
@@ -588,16 +581,16 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
             return
         if not isinstance(ov, dict):
             return
-        if ov.get('width') or ov.get('steps'):
+        if ov.get('width') or ov.get('steps_a') or ov.get('steps'):
             if 'sampler' not in out and ov.get('sampler_name'):
                 out['sampler'] = {
-                    'steps':        ov.get('steps', 20),
+                    'steps_a':      ov.get('steps_a', ov.get('steps', 20)),
+                    'steps_b':      ov.get('steps_b'),
                     'cfg':          ov.get('cfg', 7.0),
-                    'seed':         ov.get('seed', 0),
+                    'seed_a':       ov.get('seed_a', ov.get('seed', 0)),
+                    'seed_b':       ov.get('seed_b'),
                     'sampler_name': ov.get('sampler_name', 'euler'),
                     'scheduler':    ov.get('scheduler', 'normal'),
-                    'denoise':      1.0,
-                    'guidance':     None,
                 }
             if 'resolution' not in out and ov.get('width'):
                 out['resolution'] = {
@@ -663,7 +656,7 @@ def extract_all_from_file(file_path, source_folder='input'):
       model_a, model_b,
       vae  {'name', 'source'},
       clip {'names', 'type', 'source'},
-      sampler {'steps', 'cfg', 'seed', 'sampler_name', 'scheduler', 'denoise', 'guidance'},
+      sampler {'steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'},
       resolution {'width', 'height', 'batch_size', 'length'},
       is_video (bool)
     """
@@ -689,9 +682,8 @@ def extract_all_from_file(file_path, source_folder='input'):
         'vae':      {'name': '', 'source': 'unknown'},
         'clip':     {'names': [], 'type': '', 'source': 'unknown'},
         'sampler':  {
-            'steps': 20, 'cfg': 7.0, 'seed': 0,
+            'steps_a': 20, 'steps_b': None, 'cfg': 7.0, 'seed_a': 0, 'seed_b': None,
             'sampler_name': 'euler', 'scheduler': 'normal',
-            'denoise': 1.0, 'guidance': None,
         },
         'resolution': {'width': 512, 'height': 512, 'batch_size': 1, 'length': None},
         'is_video': False,
@@ -741,13 +733,11 @@ def extract_all_from_file(file_path, source_folder='input'):
         if prompt_data.get('scheduler'):
             _s['scheduler'] = prompt_data['scheduler']
         if prompt_data.get('steps'):
-            _s['steps'] = prompt_data['steps']
+            _s['steps_a'] = prompt_data['steps']
         if prompt_data.get('cfg'):
             _s['cfg'] = prompt_data['cfg']
         if prompt_data.get('seed'):
-            _s['seed'] = prompt_data['seed']
-        if prompt_data.get('denoise') is not None:
-            _s['denoise'] = prompt_data['denoise']
+            _s['seed_a'] = prompt_data['seed']
         _r = result['resolution']
         if prompt_data.get('width') and prompt_data.get('height'):
             _r['width'] = prompt_data['width']
@@ -835,15 +825,29 @@ def enrich_with_availability(result):
 
 
 def _build_sampler_dict(sampler, family):
-    """Return sampler dict, splitting steps into steps_high/steps_low for wan_video families."""
+    """Return sampler dict with steps_a/steps_b for all families."""
     import math as _math
-    d = {**sampler, 'seed_b': sampler.get('seed_b')}
+    d = {**sampler}
+    # Normalize: if only a plain 'seed' key exists, map it to seed_a
+    if 'seed' in d:
+        d.setdefault('seed_a', d.pop('seed'))
+    d.setdefault('seed_a', 0)
+    d.setdefault('seed_b', sampler.get('seed_b'))
+    # Normalize legacy 'steps' key → steps_a
+    if 'steps' in d and 'steps_a' not in d:
+        d['steps_a'] = d.pop('steps')
+    elif 'steps' in d:
+        d.pop('steps')
+    d.setdefault('steps_a', 20)
     if family in ('wan_video_i2v', 'wan_video_t2v'):
-        total = sampler.get('steps', 6)
-        sh = _math.ceil(total / 2)
-        sl = total - sh
-        d['steps_high'] = sh
-        d['steps_low']  = sl
+        # For WAN dual-sampler: if steps_b not set, split steps_a evenly
+        if d.get('steps_b') is None:
+            total = d['steps_a']
+            d['steps_a'] = _math.ceil(total / 2)
+            d['steps_b'] = total - d['steps_a']
+    # Remove legacy keys
+    d.pop('steps_high', None)
+    d.pop('steps_low', None)
     return d
 
 
@@ -862,31 +866,68 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
     if overrides is None:
         overrides = {}
     sampler = sampler_params if sampler_params is not None else extracted.get('sampler', {
-        'steps': 20, 'cfg': 7.0, 'seed': 0,
+        'steps_a': 20, 'steps_b': None, 'cfg': 7.0, 'seed_a': 0, 'seed_b': None,
         'sampler_name': 'euler', 'scheduler': 'normal',
-        'denoise': 1.0, 'guidance': None,
     })
 
     family      = extracted.get('model_family', '')
 
+    # If family is unknown, infer from clip type — each family requires a
+    # specific CLIPLoader type, so this is a reliable signal.
     clip_info = extracted.get('clip', {})
-    clip_source = clip_info.get('source', '')
-    if clip_source == 'checkpoint':
-        loader_type = 'checkpoint'
-    elif clip_source in ('separate', 'workflow_data'):
-        loader_type = 'unet'
+    if not family:
+        _clip_type = clip_info.get('type', '').lower()
+        _clip_src  = clip_info.get('source', '')
+        if _clip_src == 'checkpoint':
+            family = 'sdxl'
+        elif 'flux2' in _clip_type:
+            family = 'flux2'
+        elif 'flux' in _clip_type:
+            family = 'flux1'
+        elif 'sd3' in _clip_type:
+            family = 'sd3'
+        elif 'wan' in _clip_type:
+            family = 'wan_video_t2v'
+        elif 'qwen_image' in _clip_type:
+            family = 'qwen_image'
+        elif 'lumina2' in _clip_type:
+            family = 'zimage'
+
+    # Determine loader_type: family spec is authoritative when available.
+    # The clip source heuristic ('checkpoint' vs 'separate') is unreliable
+    # when data passes through multiple nodes (e.g. PE → WB → Renderer)
+    # because intermediate steps may set source to 'workflow_data'.
+    from .workflow_families import MODEL_FAMILIES
+    family_spec = MODEL_FAMILIES.get(family, {})
+    if family_spec:
+        is_ckpt = family_spec.get('checkpoint', False)
+        loader_type = 'checkpoint' if is_ckpt else 'unet'
     else:
-        loader_type = ''
+        # No family spec — fall back to clip source heuristic
+        clip_source = clip_info.get('source', '')
+        if clip_source == 'checkpoint':
+            loader_type = 'checkpoint'
+        elif clip_source in ('separate', 'workflow_data'):
+            loader_type = 'unet'
+        else:
+            loader_type = ''
+
+    vae_override_explicit  = 'vae' in overrides
+    clip_override_explicit = 'clip_names' in overrides
 
     vae_val  = overrides.get('vae',  extracted.get('vae', {}).get('name', ''))
     clip_val = overrides.get('clip_names', extracted.get('clip', {}).get('names', []))
 
-    # For checkpoint models, empty VAE/CLIP means "use from checkpoint" —
-    # set an explicit marker so downstream nodes never receive blank values.
+    # For checkpoint models: if the user didn't explicitly choose a separate
+    # VAE / CLIP file, the checkpoint's own VAE / CLIP should be used.
+    # The extracted values may contain real filenames from the source workflow
+    # (e.g. clip_g.safetensors) but those came from a DualCLIPLoader in the
+    # original graph — they shouldn't override the checkpoint's built-in ones.
     if loader_type == 'checkpoint':
-        if not vae_val or vae_val.startswith('('):
+        if not vae_override_explicit or not vae_val or vae_val.startswith('('):
             vae_val = '(from checkpoint)'
-        if not clip_val or clip_val == [] or (len(clip_val) == 1 and (not clip_val[0] or clip_val[0].startswith('('))):
+        if not clip_override_explicit or not clip_val or clip_val == [] or \
+                (len(clip_val) == 1 and (not clip_val[0] or clip_val[0].startswith('('))):
             clip_val = ['(from checkpoint)']
 
     return {
@@ -901,7 +942,7 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
         "loras_b":         extracted.get('loras_b', []),
         "vae":             vae_val,
         "clip":            clip_val,
-        "clip_type":       clip_info.get('type', ''),
+        "clip_type":       clip_info.get('type', '') or family_spec.get('clip_type', ''),
         "loader_type":     loader_type,
         "sampler":         _build_sampler_dict(sampler, family),
         "resolution": {
