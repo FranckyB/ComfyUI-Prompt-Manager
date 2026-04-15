@@ -16,7 +16,7 @@ from .nodes.prompt_extractor import WorkflowExtractor
 from .nodes.workflow_builder import WorkflowBuilder
 from .nodes.workflow_renderer import WorkflowRenderer
 from .nodes.workflow_context import WorkflowContext
-from .nodes.workflow_model_loader import WorkflowModelLoader
+from .tests.workflow_model_loader import WorkflowModelLoader
 from .nodes.workflow_get_model import WorkflowGetModel
 
 from .nodes.test_render import TestRenderFunctions

@@ -54,7 +54,7 @@ MODEL_FAMILIES = {
                     "flux1_schnell", "flux1-", "flux1_", "flux.1"],
         # ae.safetensors is the canonical Flux1 VAE — exact match required to
         # avoid catching "mae.safetensors" or other short-named files.
-        "vae":       ["ultrafluxvae"],
+        "vae":       [],
         "vae_exact": ["ae.safetensors"],
         # Flux1 uses T5-XXL + CLIP-L dual encoders.
         # umt5_xxl also contains "t5xxl" as substring — exclude it explicitly.

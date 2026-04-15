@@ -144,6 +144,9 @@ class WorkflowRenderer:
         if not family_key:
             family_key = "sdxl"
         strategy = get_family_sampler_strategy(family_key)
+        from ..py.workflow_families import MODEL_FAMILIES
+        _family_spec = MODEL_FAMILIES.get(family_key, {})
+        _family_is_ckpt = _family_spec.get('checkpoint', False)
 
         print(f"[WorkflowRenderer] Family: {get_family_label(family_key)} "
               f"(strategy={strategy}), model_a={model_name_a}, "
@@ -197,7 +200,7 @@ class WorkflowRenderer:
         _cache_key_a = (str(unique_id), full_path_a, family_key)
         if _cache_key_a not in _cache:
             print(f"[WorkflowRenderer] Loading model: {resolved_a}")
-            _cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a)
+            _cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a, family_is_checkpoint=_family_is_ckpt)
         else:
             print(f"[WorkflowRenderer] Using cached model: {resolved_a}")
         model_a, clip_a, vae_a = _cache[_cache_key_a]
@@ -282,7 +285,7 @@ class WorkflowRenderer:
                     _cache_key_b = (str(unique_id), full_path_b, family_key + "_b")
                     if _cache_key_b not in _cache:
                         print(f"[WorkflowRenderer] Loading model B: {resolved_b}")
-                        _cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b)
+                        _cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b, family_is_checkpoint=_family_is_ckpt)
                     else:
                         print(f"[WorkflowRenderer] Using cached model B: {resolved_b}")
                     model_b_obj, _, _ = _cache[_cache_key_b]
@@ -330,13 +333,20 @@ class WorkflowRenderer:
 
 # ── Model loading ──────────────────────────────────────────────────
 
-def _load_model_from_path(resolved_path, resolved_folder, full_model_path):
+def _load_model_from_path(resolved_path, resolved_folder, full_model_path, family_is_checkpoint=None):
     """
     Load a model from disk. Returns (model, clip, vae).
     clip and vae are None for non-checkpoint model types.
+
+    family_is_checkpoint: if explicitly False, load as diffusion model even if
+    the file is in the checkpoints folder (e.g. Z-Image models stored there).
     """
     is_gguf       = resolved_path.lower().endswith('.gguf')
-    is_checkpoint = resolved_folder == 'checkpoints'
+    # Family spec overrides folder-based heuristic when provided
+    if family_is_checkpoint is not None:
+        is_checkpoint = family_is_checkpoint
+    else:
+        is_checkpoint = resolved_folder == 'checkpoints'
 
     model = clip = vae = None
 

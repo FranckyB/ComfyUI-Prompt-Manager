@@ -62,7 +62,7 @@ function forwardWheelToCanvas(element) {
     const style = document.createElement("style");
     style.id = "we-select-style";
     style.textContent = `
-        .we-select option, .we-select optgroup { font-size: 16px; }
+        .we-select option, .we-select optgroup { font-size: 14px; }
         .we-select optgroup { font-weight: bold; color: #e06060; }
     `;
     document.head.appendChild(style);
@@ -153,16 +153,16 @@ function makeSection(title) {
 const LABEL_W = "35%";
 const INPUT_W = "58%";
 const ROW_STYLE = {
-    display: "flex", alignItems: "center", padding: "2px 0", fontSize: "11px", gap: "2px",
+    display: "flex", alignItems: "center", padding: "2px 0", fontSize: "12px", gap: "2px",
 };
 const INPUT_STYLE = {
     background: C.bgInput, color: C.text, border: `1px solid ${C.border}`,
-    borderRadius: "6px", padding: "3px 6px", fontSize: "11px",
+    borderRadius: "6px", padding: "3px 6px", fontSize: "12px",
     width: INPUT_W, boxSizing: "border-box", textAlign: "right",
 };
 const RESET_STYLE = {
     background: "none", border: "none", color: C.textMuted, cursor: "pointer",
-    fontSize: "11px", padding: "0 2px", lineHeight: "1", flexShrink: "0",
+    fontSize: "12px", padding: "0 2px", lineHeight: "1", flexShrink: "0",
     visibility: "hidden", width: "14px", textAlign: "center",
 };
 
@@ -388,6 +388,9 @@ function makeInput(label, type, value, attrs, onChange) {
         if (type === "number") {
             inp.addEventListener("focus", () => inp.select());
         }
+        inp.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); }
+        });
     }
     Object.assign(inp.style, { ...INPUT_STYLE });
     // Stop wheel propagation so scrolling over inputs doesn't zoom canvas
@@ -865,6 +868,10 @@ function updateWanVisibility(node) {
     // LoRA Stack B section: only for WAN Video
     if (node._weLoraB) {
         node._weLoraB.style.display = isWanVideo ? "" : "none";
+    }
+    // LoRA Stack A container: taller when alone, normal when both visible
+    if (node._weLoraAContainer) {
+        node._weLoraAContainer.style.height = isWanVideo ? "100px" : "160px";
     }
 
     // Model A label: "Model A" for WAN Video, "Model" otherwise

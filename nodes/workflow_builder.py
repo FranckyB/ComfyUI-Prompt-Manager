@@ -358,11 +358,14 @@ async def api_process_extracted(request):
 
         # ── Default CLIP fallback ───────────────────────────────────────
         clip_names = clip.get('names', [])
+        clip_is_placeholder = bool(clip_names) and all(
+            (not n) or str(n).startswith('(') for n in clip_names
+        )
         if is_ckpt:
             # Checkpoint models always use built-in CLIP
             clip = {'names': ['(from checkpoint)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
             extracted['clip'] = clip
-        elif not clip_names:
+        elif not clip_names or clip_is_placeholder:
             clip_type_from_spec = spec.get('clip_type', '')
             compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
             if compatible_clips:
@@ -661,19 +664,18 @@ class WorkflowBuilder:
                 sampler_params[key] = default
 
         # Family + strategy
-        # Priority: 1. wf_data['family'] (from PE — authoritative when connected)
+        # Priority: 1. JS override '_family' (user's explicit dropdown selection)
         #           2. Detected from actual model_name_a (reliable, based on disk)
-        #           3. JS override '_family' (may be stale — dropdown defaults to 'sdxl')
+        #           3. wf_data['family'] (from PE or previous run — may be stale)
         #           4. extracted['model_family'] (fallback)
-        # The JS override must NOT beat model detection: the family dropdown
-        # defaults to 'sdxl' on node creation and syncHidden serialises that
-        # before updateUI has had a chance to correct it.
+        # The JS dropdown is the user's deliberate choice and must win.
+        js_family = overrides.get('_family') or None
         wf_family = wf_data.get('family', '') if wf_data else ''
         model_detected_family = None
         if model_name_a:
             resolved_ref, _ = resolve_model_name(model_name_a)
             model_detected_family = get_model_family(resolved_ref or model_name_a)
-        family_key = wf_family or model_detected_family or overrides.get('_family') or extracted.get('model_family') or None
+        family_key = js_family or model_detected_family or wf_family or extracted.get('model_family') or None
         if not family_key and wf_data:
             clip_type = wf_data.get('clip_type', '').lower()
             loader_type = wf_data.get('loader_type', '')
@@ -768,13 +770,18 @@ class WorkflowBuilder:
                 simplified_wf['clip'] = ['(from checkpoint)']
         else:
             # Non-checkpoint: resolve empty VAE/CLIP to compatible files
-            if not simplified_wf.get('vae'):
+            vae_val = simplified_wf.get('vae')
+            if not vae_val or str(vae_val).startswith('('):
                 vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
                 fallback_vae = rec_vae or (vaes[0] if vaes else '')
                 if fallback_vae:
                     simplified_wf['vae'] = fallback_vae
                     print(f"[WorkflowBuilder] VAE defaulted to: {fallback_vae}")
-            if not simplified_wf.get('clip') or simplified_wf['clip'] == []:
+            clip_val = simplified_wf.get('clip')
+            clip_is_placeholder = bool(clip_val) and all(
+                (not n) or str(n).startswith('(') for n in clip_val
+            )
+            if not clip_val or clip_val == [] or clip_is_placeholder:
                 clip_type_from_spec = spec.get('clip_type', '')
                 compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
                 if compatible_clips:

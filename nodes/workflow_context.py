@@ -133,11 +133,11 @@ class WorkflowContext:
         # ── Build lora stacks as tuples for LORA_STACK output ────────
         lora_stack_a = [
             (l['name'], l.get('model_strength', 1.0), l.get('clip_strength', 1.0))
-            for l in wf.get('loras_a', []) if isinstance(l, dict) and l.get('name')
+            for l in wf.get('loras_a', []) if isinstance(l, dict) and l.get('name') and l.get('active', True)
         ]
         lora_stack_b = [
             (l['name'], l.get('model_strength', 1.0), l.get('clip_strength', 1.0))
-            for l in wf.get('loras_b', []) if isinstance(l, dict) and l.get('name')
+            for l in wf.get('loras_b', []) if isinstance(l, dict) and l.get('name') and l.get('active', True)
         ]
 
         # ── Extract all output values ────────────────────────────────
