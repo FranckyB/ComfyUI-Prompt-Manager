@@ -8,6 +8,7 @@ No UI, no extraction — purely a render engine.
 """
 import json
 import math
+import os
 import torch
 import folder_paths
 import comfy.model_management
@@ -68,14 +69,14 @@ class WorkflowRenderer:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "LATENT")
-    RETURN_NAMES = ("image", "latent")
+    RETURN_TYPES = ("IMAGE", "LATENT", "WORKFLOW_DATA")
+    RETURN_NAMES = ("image", "latent", "workflow_data")
     FUNCTION = "execute"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = False
     DESCRIPTION = (
         "Render-only node. Accepts workflow_data, loads models, samples, "
-        "and decodes. Outputs IMAGE + LATENT."
+        "and decodes. Outputs IMAGE + LATENT + WORKFLOW_DATA (with MODEL/CLIP/VAE passthrough)."
     )
 
     @classmethod
@@ -105,6 +106,7 @@ class WorkflowRenderer:
         else:
             raise ValueError(f"[WorkflowRenderer] Invalid workflow_data type: {type(workflow_data)}")
 
+        wf_out = dict(wf)
         wf_sampler = wf.get("sampler", {})
         wf_res = wf.get("resolution", {})
 
@@ -238,6 +240,7 @@ class WorkflowRenderer:
 
         stack_key_a = "a" if has_both_stacks else ""
         stack_key_b = "b" if has_both_stacks else ""
+        model_b_obj = None
 
         # ── Dispatch by family ────────────────────────────────────────────
         render_args = dict(
@@ -329,7 +332,23 @@ class WorkflowRenderer:
                 f"No render function available."
             )
 
-        return (decoded, out_latent)
+        def _short_display_name(name):
+            raw = str(name or "").strip()
+            if not raw:
+                return ""
+            base = os.path.basename(raw.replace("\\", "/"))
+            return os.path.splitext(base)[0]
+
+        wf_out["MODEL_A"] = model_a
+        if model_b_obj is not None:
+            wf_out["MODEL_B"] = model_b_obj
+        else:
+            wf_out.pop("MODEL_B", None)
+        wf_out["CLIP"] = clip
+        wf_out["VAE"] = vae
+        wf_out["model_name"] = _short_display_name(resolved_a or model_name_a)
+
+        return (decoded, out_latent, wf_out)
 
 # ── Model loading ──────────────────────────────────────────────────
 

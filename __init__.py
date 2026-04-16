@@ -16,10 +16,7 @@ from .nodes.prompt_extractor import WorkflowExtractor
 from .nodes.workflow_builder import WorkflowBuilder
 from .nodes.workflow_renderer import WorkflowRenderer
 from .nodes.workflow_context import WorkflowContext
-from .tests.workflow_model_loader import WorkflowModelLoader
-from .nodes.workflow_get_model import WorkflowGetModel
-
-from .nodes.test_render import TestRenderFunctions
+from .nodes.workflow_model_loader import WorkflowModelLoader
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":       PromptApplyLora,
@@ -33,8 +30,6 @@ NODE_CLASS_MAPPINGS = {
     "WorkflowRenderer":      WorkflowRenderer,
     "WorkflowContext":       WorkflowContext,
     "WorkflowModelLoader":   WorkflowModelLoader,
-    "WorkflowGetModel":      WorkflowGetModel,
-    "TestRenderFunctions":   TestRenderFunctions,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -49,8 +44,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WorkflowRenderer":      "Workflow Renderer",
     "WorkflowContext":       "Workflow Context",
     "WorkflowModelLoader":   "Workflow Model Loader",
-    "WorkflowGetModel":      "Workflow Get Model",
-    "TestRenderFunctions":   "Test Render Functions",
 }
 
 # WORKFLOW_DICT is a custom ComfyUI type used to pass workflow configuration

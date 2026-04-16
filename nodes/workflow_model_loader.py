@@ -47,7 +47,7 @@ def _load_gguf_unet(unet_path):
     gguf = _get_gguf_module()
     if gguf is None:
         raise RuntimeError(
-            "[WorkflowGetModel] This workflow requires ComfyUI-GGUF, "
+            "[WorkflowModelLoader] This workflow requires ComfyUI-GGUF, "
             "but UnetLoaderGGUF is not available."
         )
 
@@ -67,7 +67,7 @@ def _load_gguf_unet(unet_path):
 
     if model is None:
         raise RuntimeError(
-            f"[WorkflowGetModel] Could not detect model type of GGUF: {unet_path}"
+            f"[WorkflowModelLoader] Could not detect model type of GGUF: {unet_path}"
         )
 
     model = gguf["GGUFModelPatcher"].clone(model)
@@ -82,6 +82,19 @@ def _load_gguf_unet(unet_path):
 MODEL_EXTENSIONS = ['.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.sft']
 
 WEIGHT_DTYPE_OPTIONS = ["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"]
+
+
+def _short_display_name(name):
+    """Return basename without known model extension for compact UI/text output."""
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    base = os.path.basename(raw.replace("\\", "/"))
+    lower = base.lower()
+    for ext in MODEL_EXTENSIONS:
+        if lower.endswith(ext):
+            return base[:-len(ext)]
+    return os.path.splitext(base)[0]
 
 
 def _build_model_options(weight_dtype):
@@ -173,7 +186,7 @@ def _load_checkpoint_by_name(ckpt_name):
     """
     ckpt_path = _resolve_path(ckpt_name, ["checkpoints", "diffusion_models", "unet"])
     if not ckpt_path:
-        raise FileNotFoundError(f"[WorkflowGetModel] Checkpoint not found: {ckpt_name}")
+        raise FileNotFoundError(f"[WorkflowModelLoader] Checkpoint not found: {ckpt_name}")
 
     out = comfy.sd.load_checkpoint_guess_config(
         ckpt_path,
@@ -193,7 +206,7 @@ def _load_diffusion_model_by_name(model_name, weight_dtype="default"):
     """
     model_path = _resolve_path(model_name, ["diffusion_models", "unet", "unet_gguf", "checkpoints"])
     if not model_path:
-        raise FileNotFoundError(f"[WorkflowGetModel] Diffusion model not found: {model_name}")
+        raise FileNotFoundError(f"[WorkflowModelLoader] Diffusion model not found: {model_name}")
 
     if model_name.lower().endswith(".gguf"):
         return _load_gguf_unet(model_path)
@@ -201,7 +214,7 @@ def _load_diffusion_model_by_name(model_name, weight_dtype="default"):
     model_options = _build_model_options(weight_dtype)
     model = comfy.sd.load_diffusion_model(model_path, model_options=model_options)
     if model is None:
-        raise RuntimeError(f"[WorkflowGetModel] Could not load diffusion model: {model_name}")
+        raise RuntimeError(f"[WorkflowModelLoader] Could not load diffusion model: {model_name}")
     return model
 
 
@@ -211,7 +224,7 @@ def _load_vae_by_name(vae_name):
     """
     vae_path = _resolve_path(vae_name, ["vae", "checkpoints"])
     if not vae_path:
-        raise FileNotFoundError(f"[WorkflowGetModel] VAE not found: {vae_name}")
+        raise FileNotFoundError(f"[WorkflowModelLoader] VAE not found: {vae_name}")
 
     sd = comfy.utils.load_torch_file(vae_path)
     return comfy.sd.VAE(sd=sd)
@@ -229,7 +242,7 @@ def _load_clip_by_names(clip_names, clip_type=""):
     for name in clip_names:
         clip_path = _resolve_path(name, ["text_encoders", "clip", "checkpoints"])
         if not clip_path:
-            raise FileNotFoundError(f"[WorkflowGetModel] CLIP not found: {name}")
+            raise FileNotFoundError(f"[WorkflowModelLoader] CLIP not found: {name}")
         clip_paths.append(clip_path)
 
     clip_type = (clip_type or "").strip().lower()
@@ -259,10 +272,10 @@ def _load_clip_by_names(clip_names, clip_type=""):
 # Node
 # =========================================================
 
-class WorkflowGetModel:
-    CATEGORY = "WorkflowBuilder"
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
-    RETURN_NAMES = ("model", "clip", "vae")
+class WorkflowModelLoader:
+    CATEGORY = "Prompt Manager"
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
+    RETURN_NAMES = ("model", "clip", "vae", "model_name")
     FUNCTION = "get_model"
 
     @classmethod
@@ -273,7 +286,7 @@ class WorkflowGetModel:
                     "tooltip": "Workflow data containing model name strings to load.",
                     "forceInput": True,
                 }),
-                "model_key": (["model_a", "model_b"], {
+                "model": (["model_a", "model_b"], {
                     "default": "model_a",
                     "tooltip": "Which model slot to load from workflow_data.",
                 }),
@@ -284,20 +297,56 @@ class WorkflowGetModel:
             }
         }
 
-    def get_model(self, workflow_data, model_key="model_a", weight_dtype="default"):
+    def get_model(self, workflow_data, model="model_a", weight_dtype="default"):
         spec = self._normalize_spec(workflow_data)
-        self._model_key = model_key
+        selected_model_slot = model
+        if selected_model_slot not in ("model_a", "model_b"):
+            selected_model_slot = "model_a"
+
+        self._model_key = selected_model_slot
         self._weight_dtype = weight_dtype
         loader_type = spec.get("loader_type", "").lower()
+        selected_name = spec.get(selected_model_slot, "")
+        selected_display_name = _short_display_name(selected_name)
 
         if loader_type == "checkpoint":
-            return self._load_checkpoint_mode(spec)
+            core_result = self._load_checkpoint_mode(spec)
         elif loader_type in ("unet", "diffusion"):
-            return self._load_unet_mode(spec)
+            core_result = self._load_unet_mode(spec)
         else:
             raise ValueError(
-                f"[WorkflowGetModel] Unsupported loader_type: {spec.get('loader_type')}"
+                f"[WorkflowModelLoader] Unsupported loader_type: {spec.get('loader_type')}"
             )
+
+        result = (*core_result, selected_display_name)
+
+        clip_names = spec.get("clip") or []
+        vae_name = spec.get("vae", "")
+        selected_lower = selected_name.lower()
+        if loader_type == "checkpoint":
+            model_kind = "checkpoint"
+        elif selected_lower.endswith(".gguf"):
+            model_kind = "gguf"
+        else:
+            model_kind = "diffusion"
+
+        ui_info = {
+            "model": selected_model_slot,
+            "model_name": selected_display_name,
+            "loader_type": loader_type,
+            "model_kind": model_kind,
+            "vae_name": vae_name,
+            "clip_names": clip_names,
+            "status": "ok",
+            "error_message": "",
+            "missing_name": "",
+            "uses_checkpoint_vae": (loader_type == "checkpoint" and not vae_name),
+            "uses_checkpoint_clip": (loader_type == "checkpoint" and len(clip_names) == 0),
+        }
+        return {
+            "ui": {"workflow_model_loader_info": [ui_info]},
+            "result": result,
+        }
 
     @staticmethod
     def _is_placeholder(value):
@@ -383,12 +432,3 @@ class WorkflowGetModel:
         if not vae_name:
             return None
         return _load_vae_by_name(vae_name)
-
-
-NODE_CLASS_MAPPINGS = {
-    "WorkflowGetModel": WorkflowGetModel,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "WorkflowGetModel": "Workflow Get Model",
-}

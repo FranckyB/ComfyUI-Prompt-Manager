@@ -2,9 +2,10 @@
 ComfyUI Workflow Context — Pure passthrough node.
 Unpacks workflow_data into individual typed outputs.
 Any connected optional input overrides the corresponding field before output.
-Models (MODEL/CLIP/VAE) are passed through only — use WorkflowGetModel for loading.
+Models (MODEL/CLIP/VAE) are passed through only — use WorkflowModelLoader for loading.
 """
 import json
+import os
 from ..py.lora_utils import resolve_lora_path
 
 
@@ -53,7 +54,7 @@ class WorkflowContext:
         "LORA_STACK", "LORA_STACK",
         "INT", "INT", "INT", "INT",
         "INT", "INT", "FLOAT", "INT", "INT",
-        "STRING", "STRING",
+        "STRING", "STRING", "STRING",
     )
     RETURN_NAMES = (
         "workflow_data",
@@ -62,7 +63,7 @@ class WorkflowContext:
         "lora_stack_a", "lora_stack_b",
         "width", "height", "batch_size", "length",
         "steps_a", "steps_b", "cfg", "seed_a", "seed_b",
-        "sampler_name", "scheduler",
+        "sampler_name", "scheduler", "model_name",
     )
     FUNCTION = "unpack"
     CATEGORY = "Prompt Manager"
@@ -74,6 +75,13 @@ class WorkflowContext:
     # ------------------------------------------------------------------
 
     def unpack(self, workflow_data, **kwargs):
+        def _short_display_name(name):
+            raw = str(name or "").strip()
+            if not raw:
+                return ""
+            base = os.path.basename(raw.replace("\\", "/"))
+            return os.path.splitext(base)[0]
+
         # Accept both dict and JSON string (backward compat)
         if isinstance(workflow_data, str):
             try:
@@ -117,10 +125,22 @@ class WorkflowContext:
         wf['sampler'] = sampler
 
         # ── Pass-through MODEL / CLIP / VAE ──────────────────────────
+        # Priority: explicit connected inputs > embedded objects in workflow_data.
         model_a = kwargs.get('model_a')
+        if model_a is None:
+            model_a = wf.get('MODEL_A')
+
         model_b = kwargs.get('model_b')
+        if model_b is None:
+            model_b = wf.get('MODEL_B')
+
         clip = kwargs.get('clip')
+        if clip is None:
+            clip = wf.get('CLIP')
+
         vae = kwargs.get('vae')
+        if vae is None:
+            vae = wf.get('VAE')
 
         if model_a is not None:
             wf['MODEL_A'] = model_a
@@ -166,6 +186,10 @@ class WorkflowContext:
         ]
 
         # ── Extract all output values ────────────────────────────────
+        model_name = wf.get('model_name', '')
+        if not model_name:
+            model_name = _short_display_name(wf.get('model_a', ''))
+
         return (
             wf,
             model_a, model_b, clip, vae,
@@ -184,4 +208,5 @@ class WorkflowContext:
             sampler.get('seed_b', 0) or 0,
             sampler.get('sampler_name', 'euler'),
             sampler.get('scheduler', 'normal'),
+            model_name,
         )

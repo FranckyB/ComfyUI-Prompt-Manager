@@ -944,7 +944,6 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
             clip_val = ['(from checkpoint)']
 
     return {
-        "_version":        1,
         "_source":         overrides.get('_source', 'PromptExtractor'),
         "family":          family,
         "model_a":         overrides.get('model_a',   extracted.get('model_a', '')),
