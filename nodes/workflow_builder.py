@@ -23,6 +23,7 @@ import server
 
 # ── Shared helpers from py/ ──────────────────────────────────────────────────
 from ..py.workflow_families import (
+    MODEL_FAMILIES,
     get_model_family,
     get_family_label,
     get_family_sampler_strategy,
@@ -75,22 +76,71 @@ async def api_list_models(request):
     try:
         family_key = request.rel_url.query.get('family', '')
         ref        = request.rel_url.query.get('ref', '')
+        show_all_q = request.rel_url.query.get('show_all', '').strip().lower()
+        show_all   = show_all_q in ('1', 'true', 'yes', 'on')
 
-        if family_key:
-            compat    = get_compatible_families(family_key)
-            all_models = []
-            for fn in ['checkpoints', 'diffusion_models', 'unet', 'unet_gguf']:
+        def _gather_models(folder_names):
+            gathered = []
+            seen = set()
+            for fn in folder_names:
                 try:
-                    all_models.extend(folder_paths.get_filename_list(fn))
+                    for m in folder_paths.get_filename_list(fn):
+                        if m not in seen:
+                            seen.add(m)
+                            gathered.append(m)
                 except Exception:
                     continue
-            seen   = set()
-            models = []
-            for m in all_models:
-                if m not in seen:
-                    seen.add(m)
-                    if get_model_family(m) in compat:
-                        models.append(m)
+            return gathered
+
+        if family_key:
+            all_models = _gather_models(['checkpoints', 'diffusion_models', 'unet', 'unet_gguf'])
+
+            if show_all:
+                models = list(all_models)
+            else:
+                compat = get_compatible_families(family_key)
+                models = [m for m in all_models if get_model_family(m) in compat]
+
+                # Fallbacks for installations with inconsistent folder taxonomy:
+                # 1) Checkpoint families: if no match, show all checkpoints.
+                # 2) Diffusion/UNet families: if no match, do relaxed name/path matching.
+                if not models:
+                    compat_specs = [MODEL_FAMILIES.get(f, {}) for f in compat]
+                    compat_has_checkpoint = any(spec.get('checkpoint', False) for spec in compat_specs if spec)
+
+                    if compat_has_checkpoint:
+                        models = _gather_models(['checkpoints'])
+                    else:
+                        folder_patterns = []
+                        name_patterns = []
+                        for fam in compat:
+                            spec = MODEL_FAMILIES.get(fam, {})
+                            folder_patterns.extend([
+                                p.lower().replace('\\', '/').strip('/')
+                                for p in spec.get('folders', []) if p
+                            ])
+                            name_patterns.extend([p.lower() for p in spec.get('names', []) if p])
+
+                        relaxed = []
+                        for m in all_models:
+                            m_lower = m.lower().replace('\\', '/')
+                            m_name = os.path.basename(m_lower)
+                            folder_hit = any(fp and fp in m_lower for fp in folder_patterns)
+                            name_hit = any(pat and (pat in m_name or pat in m_lower) for pat in name_patterns)
+                            if folder_hit or name_hit:
+                                relaxed.append(m)
+                        models = relaxed
+
+                # WAN i2v can use i2v or t2v model files depending on naming.
+                # Use lowercase full-path checks to avoid case-sensitivity misses.
+                if family_key == 'wan_video_i2v' and models:
+                    i2v_t2v = []
+                    for m in models:
+                        m_lower = m.lower().replace('\\', '/')
+                        if ('i2v' in m_lower) or ('t2v' in m_lower):
+                            i2v_t2v.append(m)
+                    if i2v_t2v:
+                        models = i2v_t2v
             family = family_key
         elif ref:
             family = get_model_family(ref) or 'sdxl'

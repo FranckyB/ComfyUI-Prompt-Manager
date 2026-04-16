@@ -23,6 +23,11 @@ let loraManagerPreviewTooltip = null;
 let loraManagerCheckDone = false;
 let loraManagerAvailable = false;
 
+function withModelFilteringPreference(url, showAllModels) {
+    if (!showAllModels) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}show_all=1`;
+}
+
 async function getLoraManagerPreviewTooltip() {
     if (loraManagerCheckDone) return loraManagerPreviewTooltip;
     loraManagerCheckDone = true;
@@ -95,6 +100,9 @@ const C = {
     error:     "rgba(220, 53, 69, 0.9)",
 };
 
+const SECTION_LOCK_SVG_OPEN = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.45)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`;
+const SECTION_LOCK_SVG_CLOSED = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M6 11V7a4 4 0 0 1 8 0v4"/></svg>`;
+
 // --- Tiny helpers ---
 function makeEl(tag, style, text) {
     const el = document.createElement(tag);
@@ -139,10 +147,30 @@ function makeSection(title) {
         borderBottom: "1px solid rgba(255,255,255,0.1)",
     });
     const label = makeEl("span", {}, title);
-    header.append(label);
+    const lockBtn = makeEl("span", {
+        width: "14px", flexShrink: "0", display: "inline-flex",
+        alignItems: "center", justifyContent: "center", cursor: "pointer",
+    });
+    header.append(label, lockBtn);
     const body = makeEl("div", {
         padding: "4px 8px",
     });
+    wrap._locked = false;
+    wrap._setLocked = (locked) => {
+        wrap._locked = !!locked;
+        lockBtn.innerHTML = wrap._locked ? SECTION_LOCK_SVG_CLOSED : SECTION_LOCK_SVG_OPEN;
+        lockBtn.title = wrap._locked ? "Section locked" : "Section unlocked";
+        body.style.opacity = wrap._locked ? "0.45" : "1";
+        body.style.pointerEvents = wrap._locked ? "none" : "auto";
+    };
+    wrap._setLocked(false);
+    lockBtn.onclick = (e) => {
+        e.stopPropagation();
+        const next = !wrap._locked;
+        wrap._setLocked(next);
+        if (wrap._onLockChanged) wrap._onLockChanged(next);
+    };
+    wrap._lockBtn = lockBtn;
     wrap._titleLabel = label;
     wrap.append(header, body);
     wrap._body = body;
@@ -151,7 +179,7 @@ function makeSection(title) {
 
 // --- Shared layout constants ---
 const LABEL_W = "35%";
-const INPUT_W = "58%";
+const INPUT_W = "55%";
 const ROW_STYLE = {
     display: "flex", alignItems: "center", padding: "2px 0", fontSize: "12px", gap: "2px",
 };
@@ -203,6 +231,35 @@ function groupModelOptions(models) {
     return { groups, ungrouped };
 }
 
+function normalizeModelPath(modelPath) {
+    return String(modelPath || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function applyWanVideoModelSplit(models, familyKey, { preferHigh = false, preferLow = false } = {}) {
+    let filtered = Array.isArray(models) ? [...models] : [];
+    const isWanVideo = (familyKey === "wan_video_i2v" || familyKey === "wan_video_t2v");
+    if (!isWanVideo) return filtered;
+
+    // i2v can legitimately use i2v or t2v checkpoints depending on install naming.
+    if (familyKey === "wan_video_i2v") {
+        const i2vOrT2v = filtered.filter((m) => {
+            const p = normalizeModelPath(m);
+            return p.includes("i2v") || p.includes("t2v");
+        });
+        if (i2vOrT2v.length) filtered = i2vOrT2v;
+    }
+
+    if (preferHigh) {
+        const highOnly = filtered.filter((m) => normalizeModelPath(m).includes("high"));
+        if (highOnly.length) filtered = highOnly;
+    } else if (preferLow) {
+        const lowOnly = filtered.filter((m) => normalizeModelPath(m).includes("low"));
+        if (lowOnly.length) filtered = lowOnly;
+    }
+
+    return filtered;
+}
+
 function populateGroupedSelect(sel, models, keepFirst) {
     const firstOpt = keepFirst ? sel.options[0] : null;
     sel.innerHTML = "";
@@ -227,7 +284,7 @@ function populateGroupedSelect(sel, models, keepFirst) {
     }
 }
 
-function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
+function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includeEmptyOption = true) {
     const row = makeEl("div", { ...ROW_STYLE });
     row.appendChild(makeEl("span", { color: C.textMuted, width: LABEL_W, flexShrink: "0" }, label));
     let _origVal = initialValue || "";
@@ -248,17 +305,19 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
     const sel = document.createElement("select");
     Object.assign(sel.style, { ...INPUT_STYLE });
     {
-        const defOpt = document.createElement("option");
-        defOpt.value = "";
-        defOpt.textContent = grouped ? "(none)" : "(Default)";
-        sel.appendChild(defOpt);
+        if (includeEmptyOption) {
+            const defOpt = document.createElement("option");
+            defOpt.value = "";
+            defOpt.textContent = grouped ? "(none)" : "(Default)";
+            sel.appendChild(defOpt);
+        }
         if (initialValue && initialValue !== "\u2014" && !initialValue.startsWith("(")) {
             const o = document.createElement("option"); o.value = initialValue;
             o.textContent = grouped ? cleanModelName(initialValue) : initialValue;
             sel.appendChild(o);
             sel.value = initialValue;
         } else {
-            sel.value = "";
+            sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
         }
     }
     let _loaded = false;
@@ -273,9 +332,11 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
         const options = await lazyFetch();
         const currentVal = sel.value;
         sel.innerHTML = "";
-        const defOpt = document.createElement("option");
-        defOpt.value = ""; defOpt.textContent = grouped ? "(none)" : "(Default)";
-        sel.appendChild(defOpt);
+        if (includeEmptyOption) {
+            const defOpt = document.createElement("option");
+            defOpt.value = ""; defOpt.textContent = grouped ? "(none)" : "(Default)";
+            sel.appendChild(defOpt);
+        }
         if (grouped) {
             populateGroupedSelect(sel, options, true);
         } else {
@@ -304,10 +365,12 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
         _origVal = v || "";
         _loaded = false;
         sel.innerHTML = "";
-        const defOpt = document.createElement("option");
-        defOpt.value = "";
-        defOpt.textContent = grouped ? "(none)" : "(Default)";
-        sel.appendChild(defOpt);
+        if (includeEmptyOption) {
+            const defOpt = document.createElement("option");
+            defOpt.value = "";
+            defOpt.textContent = grouped ? "(none)" : "(Default)";
+            sel.appendChild(defOpt);
+        }
         if (v && v !== "\u2014" && !v.startsWith("(")) {
             const o = document.createElement("option"); o.value = v;
             o.textContent = grouped ? cleanModelName(v) : v;
@@ -316,7 +379,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
             sel.appendChild(o);
             sel.value = v;
         } else {
-            sel.value = "";
+            sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
         }
         sel.style.color = (found === false && v && !v.startsWith("(")) ? C.error : C.text;
         resetBtn.style.visibility = "hidden";
@@ -326,17 +389,19 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped) {
     return row;
 }
 
-async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue) {
+async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, includeEmptyOption = true) {
     const options = await fetchFn();
     const sel = row._sel;
     if (grouped) {
         sel.innerHTML = "";
-        const noneOpt = document.createElement("option");
-        noneOpt.value = ""; noneOpt.textContent = "(none)";
-        noneOpt.style.color = C.textMuted;
-        sel.appendChild(noneOpt);
+        if (includeEmptyOption) {
+            const noneOpt = document.createElement("option");
+            noneOpt.value = ""; noneOpt.textContent = "(none)";
+            noneOpt.style.color = C.textMuted;
+            sel.appendChild(noneOpt);
+        }
         populateGroupedSelect(sel, options, true);
-        sel.value = "";
+        sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
     } else {
         sel.innerHTML = "";
         const defOpt = document.createElement("option");
@@ -696,12 +761,20 @@ async function updateUI(node) {
     const d = node._weExtracted;
     if (!d) return;
 
+    const sectionLocks = node._weSectionLocks || {};
+    const modelLocked = !!sectionLocks.model;
+    const samplerLocked = !!sectionLocks.sampler;
+    const resolutionLocked = !!sectionLocks.resolution || !!node._weResLocked;
+    const positiveLocked = !!sectionLocks.positive;
+    const negativeLocked = !!sectionLocks.negative;
+    const lorasLocked = !!sectionLocks.loras;
+
     // Family — must be set FIRST and dropdowns reloaded before setting
     // model/VAE/CLIP values, otherwise the wrong family's options are shown.
     const newFamily = d.model_family || d.family || null;
     console.log("[updateUI] incoming family:", newFamily, "current:", node._weFamily);
-    const familyChanged = newFamily && newFamily !== node._weFamily;
-    if (node._weFamilySel) {
+    const familyChanged = !modelLocked && newFamily && newFamily !== node._weFamily;
+    if (!modelLocked && node._weFamilySel) {
         const sel = node._weFamilySel;
         // Pre-load the full families list if not yet done — this normally
         // happens lazily on focus, but we need it populated before we can
@@ -747,33 +820,35 @@ async function updateUI(node) {
         await node._onFamilyChanged(newFamily, { fromUpdateUI: true });
     }
 
-    // Model A
-    if (node._weModelRow?._setOriginal) {
-        node._weModelRow._setOriginal(d.model_a || "", d.model_a_found !== false);
-    }
-    // Model B
-    if (node._weModelBRow?._setOriginal) {
-        node._weModelBRow._setOriginal(d.model_b || "", d.model_b_found !== false);
-    }
+    if (!modelLocked) {
+        // Model A
+        if (node._weModelRow?._setOriginal) {
+            node._weModelRow._setOriginal(d.model_a || "", d.model_a_found !== false);
+        }
+        // Model B
+        if (node._weModelBRow?._setOriginal) {
+            node._weModelBRow._setOriginal(d.model_b || "", d.model_b_found !== false);
+        }
 
-    // VAE
-    if (node._weVaeRow?._setOriginal) {
-        const vn = d.vae?.name || (typeof d.vae === "string" ? d.vae : "") || "";
-        const isDefault = !vn || vn.startsWith("(") || vn === "\u2014";
-        node._weVaeRow._setOriginal(isDefault ? "" : vn, d.vae_found !== false);
-    }
+        // VAE
+        if (node._weVaeRow?._setOriginal) {
+            const vn = d.vae?.name || (typeof d.vae === "string" ? d.vae : "") || "";
+            const isDefault = !vn || vn.startsWith("(") || vn === "\u2014";
+            node._weVaeRow._setOriginal(isDefault ? "" : vn, d.vae_found !== false);
+        }
 
-    // CLIP
-    if (node._weClipRow?._setOriginal) {
-        const clipNames = d.clip?.names || (Array.isArray(d.clip) ? d.clip : []);
-        const firstName = clipNames[0] || "";
-        const isDefault = !firstName || firstName.startsWith("(") || firstName === "\u2014";
-        node._weClipRow._setOriginal(isDefault ? "" : firstName);
+        // CLIP
+        if (node._weClipRow?._setOriginal) {
+            const clipNames = d.clip?.names || (Array.isArray(d.clip) ? d.clip : []);
+            const firstName = clipNames[0] || "";
+            const isDefault = !firstName || firstName.startsWith("(") || firstName === "\u2014";
+            node._weClipRow._setOriginal(isDefault ? "" : firstName);
+        }
     }
 
     // Sampler
     const s = d.sampler || {};
-    if (node._weSamplerRows) {
+    if (!samplerLocked && node._weSamplerRows) {
         const rows = node._weSamplerRows;
         if (rows.steps_a?._setOriginal) rows.steps_a._setOriginal(s.steps_a ?? s.steps ?? 20);
         if (rows.cfg?._setOriginal) rows.cfg._setOriginal(s.cfg ?? 5.0);
@@ -789,7 +864,7 @@ async function updateUI(node) {
     const r = d.resolution || {};
     if (node._weResRows) {
         const rr = node._weResRows;
-        if (!node._weResLocked) {
+        if (!resolutionLocked) {
             // Reset ratio to Freeform so the incoming values aren't constrained
             if (node._weRatioSel) {
                 node._weRatioSel.value = "0";
@@ -809,11 +884,11 @@ async function updateUI(node) {
     }
 
     // Prompts
-    if (node._wePosBox) node._wePosBox.value = d.positive_prompt || "";
-    if (node._weNegBox) node._weNegBox.value = d.negative_prompt || "";
+    if (!positiveLocked && node._wePosBox) node._wePosBox.value = d.positive_prompt || "";
+    if (!negativeLocked && node._weNegBox) node._weNegBox.value = d.negative_prompt || "";
 
     // LoRAs
-    updateLoras(node);
+    if (!lorasLocked) updateLoras(node);
 
     // Update WAN-specific visibility
     updateWanVisibility(node);
@@ -821,7 +896,7 @@ async function updateUI(node) {
     syncHidden(node);
 
     // Async: check LoRA availability and update display
-    checkLoraAvailability(node);
+    if (!lorasLocked) checkLoraAvailability(node);
 }
 
 // --- Async LoRA availability check ---
@@ -1078,13 +1153,24 @@ function syncHidden(node) {
             ov.length = parseInt(r.frames._inp.value) || 81;
         }
     }
+    const sectionLocks = node._weSectionLocks || {};
+    const persistedLocks = {};
+    for (const [key, locked] of Object.entries(sectionLocks)) {
+        if (locked) persistedLocks[key] = true;
+    }
+    if (Object.keys(persistedLocks).length > 0) ov._section_locks = persistedLocks;
+    else delete ov._section_locks;
+
     // Persist resolution UI state
     if (node._weRatio) ov._ratio = node._weRatio;
     if (node._weRatioLandscape) ov._ratio_landscape = true;
-    if (node._weResLocked) ov._res_locked = true;
+    if (sectionLocks.resolution || node._weResLocked) ov._res_locked = true;
+    else delete ov._res_locked;
     if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
     if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
     if (node._weFamily) ov._family = node._weFamily;
+    if (node._weShowAllModels) ov._show_all_models = true;
+    else delete ov._show_all_models;
 
     // Control after generate
     if (node._weControlMode) {
@@ -1188,6 +1274,30 @@ function applyOverrides(node, ovJson, lsJson) {
         node._weFamily = ov._family;
     }
 
+    if (Object.prototype.hasOwnProperty.call(ov, "_show_all_models")) {
+        if (node._weSetModelFilterDisabled) {
+            node._weSetModelFilterDisabled(!!ov._show_all_models);
+        } else {
+            node._weShowAllModels = !!ov._show_all_models;
+        }
+        if (node._weApplyModelFilterTooltip) {
+            node._weApplyModelFilterTooltip(node._weModelRow?._sel);
+            node._weApplyModelFilterTooltip(node._weModelBRow?._sel);
+        }
+    }
+
+    if (ov._section_locks && typeof ov._section_locks === "object") {
+        for (const key of ["resolution", "model", "sampler", "positive", "negative", "loras"]) {
+            if (Object.prototype.hasOwnProperty.call(ov._section_locks, key) && node._weSetSectionLock) {
+                node._weSetSectionLock(key, !!ov._section_locks[key], { sync: false });
+            }
+        }
+    }
+    if (ov._res_locked && !(ov._section_locks && Object.prototype.hasOwnProperty.call(ov._section_locks, "resolution"))) {
+        if (node._weSetSectionLock) node._weSetSectionLock("resolution", true, { sync: false });
+        else if (node._weSetResDisabled) node._weSetResDisabled(true);
+    }
+
     if (ov.model_a) applySelect(node._weModelRow, ov.model_a, true);
     if (ov.model_b) applySelect(node._weModelBRow, ov.model_b, true);
     if (ov.vae) applySelect(node._weVaeRow, ov.vae, true);
@@ -1230,11 +1340,6 @@ function applyOverrides(node, ovJson, lsJson) {
             }
         }
     }
-    if (ov._res_locked && node._weResLockBtn) {
-        node._weResLocked = true;
-        if (node._weSetResDisabled) node._weSetResDisabled(true);
-    }
-
     if (ov.positive_prompt != null && node._wePosBox) node._wePosBox.value = ov.positive_prompt;
     if (ov.negative_prompt != null && node._weNegBox) node._weNegBox.value = ov.negative_prompt;
 
@@ -1306,10 +1411,32 @@ app.registerExtension({
             node._weLoraState = {};
             node._weOverrides = {};
             node._weFamily = "sdxl";
+            node._weShowAllModels = false;
             node._weSections = {};
+            node._weSectionLocks = {
+                resolution: false,
+                model: false,
+                sampler: false,
+                positive: false,
+                negative: false,
+                loras: false,
+            };
             this.serialize_widgets = true;
 
             const _syncS = () => syncHidden(node);
+            node._weSetSectionLock = (sectionName, locked, { sync = true } = {}) => {
+                const key = String(sectionName || "");
+                if (!key) return;
+                const val = !!locked;
+                node._weSectionLocks[key] = val;
+                const sec = node._weSections?.[key];
+                if (sec?._setLocked) sec._setLocked(val);
+                if (key === "resolution") {
+                    node._weResLocked = val;
+                    if (node._weSetResDisabled) node._weSetResDisabled(val);
+                }
+                if (sync) _syncS();
+            };
 
             // ============================================================
             // -- Build the DOM UI --
@@ -1567,6 +1694,10 @@ app.registerExtension({
                         return;
                     }
                     const processed = processData.extracted || extracted;
+                    const sectionLocks = node._weSectionLocks || {};
+                    const lorasLocked = !!sectionLocks.loras;
+                    const positiveLocked = !!sectionLocks.positive;
+                    const negativeLocked = !!sectionLocks.negative;
 
                     // 4. Populate the UI
                     _showError(node, null);
@@ -1575,9 +1706,10 @@ app.registerExtension({
                     const posConn = node.inputs?.find(i => i.name === "positive_prompt");
                     const negConn = node.inputs?.find(i => i.name === "negative_prompt");
                     // Save workflow prompts before overwriting
+                    const prevWorkflowPrompts = node._weWorkflowPrompts || { positive: "", negative: "" };
                     node._weWorkflowPrompts = {
-                        positive: processed.positive_prompt || "",
-                        negative: processed.negative_prompt || "",
+                        positive: positiveLocked ? (prevWorkflowPrompts.positive || node._wePosBox?.value || "") : (processed.positive_prompt || ""),
+                        negative: negativeLocked ? (prevWorkflowPrompts.negative || node._weNegBox?.value || "") : (processed.negative_prompt || ""),
                     };
                     if (posConn?.link != null) {
                         processed.positive_prompt = node._wePosBox?.value || "";
@@ -1586,22 +1718,31 @@ app.registerExtension({
                         processed.negative_prompt = node._weNegBox?.value || "";
                     }
 
+                    if (lorasLocked && node._weExtracted) {
+                        processed.loras_a = [...(node._weExtracted.loras_a || [])];
+                        processed.loras_b = [...(node._weExtracted.loras_b || [])];
+                    }
+
                     node._weExtracted = processed;
                     node._wePopulated = true;
                     // Track workflow LoRAs separately; merge with existing input LoRAs
                     // (only if those inputs are still connected)
-                    node._weWorkflowLoras = {
-                        a: [...(processed.loras_a || [])],
-                        b: [...(processed.loras_b || [])],
-                    };
+                    if (!lorasLocked) {
+                        node._weWorkflowLoras = {
+                            a: [...(processed.loras_a || [])],
+                            b: [...(processed.loras_b || [])],
+                        };
+                    }
                     const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
                     const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
                     if (!node._weInputLoras) node._weInputLoras = { a: [], b: [] };
                     if (loraAConn?.link == null) node._weInputLoras.a = [];
                     if (loraBConn?.link == null) node._weInputLoras.b = [];
-                    node._weExtracted.loras_a = _mergeLoraLists(processed.loras_a || [], node._weInputLoras.a);
-                    node._weExtracted.loras_b = _mergeLoraLists(processed.loras_b || [], node._weInputLoras.b);
-                    node._weLoraState = {};
+                    if (!lorasLocked) {
+                        node._weExtracted.loras_a = _mergeLoraLists(processed.loras_a || [], node._weInputLoras.a);
+                        node._weExtracted.loras_b = _mergeLoraLists(processed.loras_b || [], node._weInputLoras.b);
+                        node._weLoraState = {};
+                    }
                     node._weOverrides = {};
                     node.properties = node.properties || {};
                     node.properties.we_extracted_cache = JSON.stringify(processed);
@@ -1625,12 +1766,6 @@ app.registerExtension({
             const resSec = makeSection("RESOLUTION");
             node._weSections.resolution = resSec;
 
-            // SVG lock icons (white, clean outline)
-            const _lockSvgOpen = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`;
-            const _lockSvgClosed = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
-
-            const RES_GUTTER = "18px";
-
             // Aspect ratio definitions — stored as portrait (w < h)
             const RATIOS = [
                 { w: 0,  h: 0  },   // Freeform
@@ -1652,20 +1787,6 @@ app.registerExtension({
             node._weRatioLandscape = false;
             node._weRatio = "Freeform";
 
-            // Lock icon (created early so _setResDisabled can reference it)
-            const lockIcon = makeEl("span", {
-                cursor: "pointer", display: "inline-flex", alignItems: "center",
-                justifyContent: "center", width: RES_GUTTER, flexShrink: "0",
-            });
-            lockIcon.innerHTML = _lockSvgOpen;
-            lockIcon.title = "Lock resolution";
-            lockIcon.onclick = () => {
-                _resLocked = !_resLocked;
-                node._weResLocked = _resLocked;
-                _setResDisabled(_resLocked);
-                _syncS();
-            };
-
             // Helper: ghost / un-ghost resolution inputs + update lock icon
             function _setResDisabled(disabled) {
                 if (!resRows) return;
@@ -1675,21 +1796,41 @@ app.registerExtension({
                     const lbl = resRows[key]?._label;
                     if (lbl) lbl.style.opacity = disabled ? "0.35" : "1";
                 }
-                lockIcon.innerHTML = disabled ? _lockSvgClosed : _lockSvgOpen;
             }
+            resSec._onLockChanged = (locked) => {
+                _resLocked = !!locked;
+                node._weResLocked = _resLocked;
+                _setResDisabled(_resLocked);
+                node._weSectionLocks.resolution = _resLocked;
+                _syncS();
+            };
 
-            // Reduced label width for res rows so gutter + label = LABEL_W
-            const RES_LABEL_W = `calc(${LABEL_W} - ${RES_GUTTER})`;
-
-            // --- Ratio row: [label] [orient icon] [reset spacer] [dropdown] ---
+            // --- Ratio row: [label] [reset spacer] [dropdown] [orient icon] ---
             const ratioRow = makeEl("div", { ...ROW_STYLE });
             ratioRow.appendChild(makeEl("span", {
-                color: C.textMuted, width: RES_LABEL_W, flexShrink: "0",
+                color: C.textMuted, width: LABEL_W, flexShrink: "0",
             }, "Ratio"));
-            // Orient icon in the gutter column (after label, before reset spacer)
+            ratioRow.appendChild(makeEl("span", { width: "14px", flexShrink: "0" }));
+
+            // Ratio dropdown (same INPUT_W as other inputs)
+            const ratioSel = document.createElement("select");
+            function _populateRatioSel() {
+                ratioSel.innerHTML = "";
+                for (let i = 0; i < RATIOS.length; i++) {
+                    const o = document.createElement("option");
+                    o.value = String(i); o.textContent = _ratioLabel(RATIOS[i], _landscape);
+                    ratioSel.appendChild(o);
+                }
+                ratioSel.value = String(_currentRatioIdx);
+            }
+            _populateRatioSel();
+            Object.assign(ratioSel.style, { ...INPUT_STYLE });
+            ratioRow.appendChild(ratioSel);
+
+            // Orient icon in the right icon column
             const orientIcon = makeEl("span", {
                 cursor: "pointer", display: "inline-flex", alignItems: "center",
-                justifyContent: "center", width: RES_GUTTER, flexShrink: "0",
+                justifyContent: "center", width: "14px", flexShrink: "0", marginLeft: "auto",
             });
             function _drawOrient() {
                 if (_landscape) {
@@ -1713,22 +1854,6 @@ app.registerExtension({
                 _syncS();
             };
             ratioRow.appendChild(orientIcon);
-            ratioRow.appendChild(makeEl("span", { width: "14px", flexShrink: "0" }));
-
-            // Ratio dropdown (same INPUT_W as other inputs)
-            const ratioSel = document.createElement("select");
-            function _populateRatioSel() {
-                ratioSel.innerHTML = "";
-                for (let i = 0; i < RATIOS.length; i++) {
-                    const o = document.createElement("option");
-                    o.value = String(i); o.textContent = _ratioLabel(RATIOS[i], _landscape);
-                    ratioSel.appendChild(o);
-                }
-                ratioSel.value = String(_currentRatioIdx);
-            }
-            _populateRatioSel();
-            Object.assign(ratioSel.style, { ...INPUT_STYLE });
-            ratioRow.appendChild(ratioSel);
 
             // --- Ratio logic ---
             function _getRatio() { return RATIOS[_currentRatioIdx] || RATIOS[0]; }
@@ -1774,38 +1899,6 @@ app.registerExtension({
             };
             resRows.frames.style.display = "none";
 
-            // Insert gutter elements AFTER label, BEFORE resetBtn in each row
-            // makeInput creates: [label] [resetBtn] [input]
-            // We insert between label and resetBtn: line segment or lock icon
-            const _lineSvg = `<svg width="2" height="100%" viewBox="0 0 2 20" preserveAspectRatio="none"><line x1="1" y1="0" x2="1" y2="20" stroke="${C.border}" stroke-width="1"/></svg>`;
-            function _makeLineGutter() {
-                const g = makeEl("span", {
-                    display: "inline-flex", alignItems: "stretch", justifyContent: "center",
-                    width: RES_GUTTER, flexShrink: "0", alignSelf: "stretch",
-                });
-                const line = makeEl("span", {
-                    width: "0", borderLeft: `1px solid ${C.border}`, alignSelf: "stretch",
-                });
-                g.appendChild(line);
-                return g;
-            }
-
-            // Width: line, Height: lock, Batch: line, Frames: line
-            const widthGutter = _makeLineGutter();
-            const batchGutter = _makeLineGutter();
-            const framesGutter = _makeLineGutter();
-
-            // Shrink labels on all res rows so gutter + label = LABEL_W
-            for (const key of ["width", "height", "batch", "frames"]) {
-                if (resRows[key]?._label) resRows[key]._label.style.width = RES_LABEL_W;
-            }
-
-            // Insert gutters after label (label is firstChild) in each row
-            resRows.width.insertBefore(widthGutter, resRows.width._resetBtn);
-            resRows.height.insertBefore(lockIcon, resRows.height._resetBtn);
-            resRows.batch.insertBefore(batchGutter, resRows.batch._resetBtn);
-            resRows.frames.insertBefore(framesGutter, resRows.frames._resetBtn);
-
             // Assemble section
             resSec._body.appendChild(ratioRow);
             for (const key of ["width", "height", "batch", "frames"]) {
@@ -1817,7 +1910,6 @@ app.registerExtension({
             node._weRatio = "Freeform";
             node._weRatioSel = ratioSel;
             node._weRatioLandBtn = orientIcon;
-            node._weResLockBtn = lockIcon;
             node._weSetLandscape = (v) => {
                 _landscape = !!v;
                 node._weRatioLandscape = _landscape;
@@ -1826,10 +1918,16 @@ app.registerExtension({
             };
             node._weSetRatioIdx = (i) => { _currentRatioIdx = i; };
             node._weSetResDisabled = _setResDisabled;
+            if (resSec._setLocked) resSec._setLocked(false);
 
             // -- 2. MODEL section (open, with VAE/CLIP) --
             const modelSec = makeSection("MODEL");
             node._weSections.model = modelSec;
+            modelSec._onLockChanged = (locked) => {
+                node._weSectionLocks.model = !!locked;
+                _syncS();
+            };
+            if (modelSec._setLocked) modelSec._setLocked(false);
 
             // Family type row
             const familyRow = makeEl("div", { ...ROW_STYLE });
@@ -1839,6 +1937,12 @@ app.registerExtension({
             familyRow.appendChild(makeEl("span", { width: "14px", flexShrink: "0" }));
             const familySel = document.createElement("select");
             Object.assign(familySel.style, { ...INPUT_STYLE, color: C.accent, fontWeight: "bold" });
+            const modelFilterIcon = makeEl("span", {
+                width: "14px", flexShrink: "0", display: "inline-flex",
+                alignItems: "center", justifyContent: "center", cursor: "pointer", marginLeft: "auto",
+            });
+            const _filterSvgOn = `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 3.5h12L9.2 8.6V13l-2.4-1.3V8.6L2 3.5z" stroke="rgba(255,255,255,0.85)" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+            const _filterSvgOff = `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 3.5h12L9.2 8.6V13l-2.4-1.3V8.6L2 3.5z" stroke="rgba(255,90,90,0.95)" stroke-width="1.2" stroke-linejoin="round"/><path d="M3 13L13 3" stroke="rgba(255,120,120,1)" stroke-width="1.3" stroke-linecap="round"/></svg>`;
             let _familiesLoaded = false;
             familySel.onfocus = async () => {
                 if (_familiesLoaded || familySel._familiesLoaded) return;
@@ -1873,33 +1977,113 @@ app.registerExtension({
             }
             familySel.onchange = () => onFamilyChanged(familySel.value);
             familyRow.appendChild(familySel);
+            familyRow.appendChild(modelFilterIcon);
             modelSec._body.appendChild(familyRow);
             node._weFamilySel = familySel;
 
+            const updateModelFilterIcon = () => {
+                const showAll = !!node._weShowAllModels;
+                modelFilterIcon.innerHTML = showAll ? _filterSvgOff : _filterSvgOn;
+                modelFilterIcon.title = showAll
+                    ? "Model filtering OFF (showing all models). Click to filter by family."
+                    : "Model filtering ON (by family). Click to show all models.";
+            };
+            updateModelFilterIcon();
+            node._weModelFilterIcon = modelFilterIcon;
+            node._weSetModelFilterDisabled = (disabled) => {
+                node._weShowAllModels = !!disabled;
+                updateModelFilterIcon();
+            };
+
+            const applyModelFilterTooltip = (sel) => {
+                if (!sel) return;
+                const filterOff = !!node._weShowAllModels;
+                const famText = (node._weFamilySel?.selectedOptions?.[0]?.textContent || node._weFamily || "selected family");
+                sel.title = filterOff
+                    ? `Showing all models on disk. Family (${famText}) still controls renderer pipeline.`
+                    : `Showing models filtered for family: ${famText}.`;
+            };
+            node._weApplyModelFilterTooltip = applyModelFilterTooltip;
+            familySel.title = "Select family (render pipeline type).";
+
             // Fetch models helper
-            const fetchModels = async () => {
+            const fetchBaseModels = async () => {
                 try {
+                    applyModelFilterTooltip(node._weModelRow?._sel);
+                    applyModelFilterTooltip(node._weModelBRow?._sel);
                     const fam = node._weFamily;
-                    const url = fam
+                    const baseUrl = fam
                         ? `/workflow-extractor/list-models?family=${encodeURIComponent(fam)}`
                         : `/workflow-extractor/list-models`;
+                    const url = withModelFilteringPreference(baseUrl, node._weShowAllModels);
                     const r = await fetch(url); const d = await r.json();
                     return d.models || [];
                 } catch { return []; }
             };
 
+            const fetchModelsA = async () => {
+                const models = await fetchBaseModels();
+                return applyWanVideoModelSplit(models, node._weFamily, { preferHigh: true });
+            };
+            const fetchModelsB = async () => {
+                const models = await fetchBaseModels();
+                return applyWanVideoModelSplit(models, node._weFamily, { preferLow: true });
+            };
+
+            const reloadModelRowsForFamily = async (familyKey) => {
+                const fam = encodeURIComponent(familyKey || "");
+                const fetchModelsForFamilyBase = async () => {
+                    try {
+                        const url = withModelFilteringPreference(`/workflow-extractor/list-models?family=${fam}`, node._weShowAllModels);
+                        const r = await fetch(url);
+                        const d = await r.json(); return d.models || [];
+                    } catch { return []; }
+                };
+                const fetchModelsForFamilyA = async () => {
+                    const models = await fetchModelsForFamilyBase();
+                    return applyWanVideoModelSplit(models, familyKey, { preferHigh: true });
+                };
+                const fetchModelsForFamilyB = async () => {
+                    const models = await fetchModelsForFamilyBase();
+                    return applyWanVideoModelSplit(models, familyKey, { preferLow: true });
+                };
+                await Promise.all([
+                    reloadGroupedSelect(node._weModelRow, fetchModelsForFamilyA, true, null, false),
+                    reloadGroupedSelect(node._weModelBRow, fetchModelsForFamilyB, true, null, false),
+                ]);
+            };
+
+            modelFilterIcon.onclick = async () => {
+                node._weShowAllModels = !node._weShowAllModels;
+                updateModelFilterIcon();
+                applyModelFilterTooltip(node._weModelRow?._sel);
+                applyModelFilterTooltip(node._weModelBRow?._sel);
+                await reloadModelRowsForFamily(node._weFamily);
+                if (!node._weOverrides.model_a) {
+                    const firstA = node._weModelRow?._sel?.options?.[0]?.value || "";
+                    if (firstA) node._weModelRow._sel.value = firstA;
+                }
+                if (!node._weOverrides.model_b) {
+                    const firstB = node._weModelBRow?._sel?.options?.[0]?.value || "";
+                    if (firstB) node._weModelBRow._sel.value = firstB;
+                }
+                _syncS();
+            };
+
             // Model A row (label updated by updateWanVisibility)
-            const modelRow = makeSelectRow("Model", "", fetchModels,
-                (v) => { node._weOverrides.model_a = v; _syncS(); }, true);
+            const modelRow = makeSelectRow("Model", "", fetchModelsA,
+                (v) => { node._weOverrides.model_a = v; _syncS(); }, true, false);
             modelSec._body.appendChild(modelRow);
             node._weModelRow = modelRow;
+            applyModelFilterTooltip(modelRow._sel);
 
             // Model B row (hidden by default, shown by updateWanVisibility for WAN Video)
-            const modelBRow = makeSelectRow("Model B", "", fetchModels,
-                (v) => { node._weOverrides.model_b = v; _syncS(); }, true);
+            const modelBRow = makeSelectRow("Model B", "", fetchModelsB,
+                (v) => { node._weOverrides.model_b = v; _syncS(); }, true, false);
             modelBRow.style.display = "none";
             modelSec._body.appendChild(modelBRow);
             node._weModelBRow = modelBRow;
+            applyModelFilterTooltip(modelBRow._sel);
 
             // -- Separator before VAE/CLIP --
             modelSec._body.appendChild(makeSeparator());
@@ -1946,16 +2130,12 @@ app.registerExtension({
             // _setOriginal and _syncS itself right after, with the correct values.
             const onFamilyChanged = async (familyKey, { fromUpdateUI = false } = {}) => {
                 node._weFamily = familyKey;
+                applyModelFilterTooltip(node._weModelRow?._sel);
+                applyModelFilterTooltip(node._weModelBRow?._sel);
                 // Reset VAE/CLIP overrides — new family means old selections are invalid
                 delete node._weOverrides.vae;
                 delete node._weOverrides.clip_names;
                 const fam = encodeURIComponent(familyKey || "");
-                const fetchModelsForFamily = async () => {
-                    try {
-                        const r = await fetch(`/workflow-extractor/list-models?family=${fam}`);
-                        const d = await r.json(); return d.models || [];
-                    } catch { return []; }
-                };
                 const reloadVae = async () => {
                     try {
                         const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
@@ -1971,15 +2151,14 @@ app.registerExtension({
                     } catch { await reloadGroupedSelect(node._weClipRow, async () => [], false, null); }
                 };
                 await Promise.all([
-                    reloadGroupedSelect(node._weModelRow, fetchModelsForFamily, true),
-                    reloadGroupedSelect(node._weModelBRow, fetchModelsForFamily, true),
+                    reloadModelRowsForFamily(familyKey),
                     reloadVae(),
                     reloadClip(),
                 ]);
                 if (!fromUpdateUI) {
                     // Manual family change — auto-select first model and sync.
                     // updateUI calls _setOriginal itself so we skip this.
-                    const firstModel = node._weModelRow._sel.options[1]?.value || "";
+                    const firstModel = node._weModelRow._sel.options[0]?.value || "";
                     if (firstModel) {
                         node._weModelRow._sel.value = firstModel;
                         node._weOverrides.model_a = firstModel;
@@ -2004,6 +2183,11 @@ app.registerExtension({
             // -- 3. SAMPLER section --
             const sampSec = makeSection("SAMPLER");
             node._weSections.sampler = sampSec;
+            sampSec._onLockChanged = (locked) => {
+                node._weSectionLocks.sampler = !!locked;
+                _syncS();
+            };
+            if (sampSec._setLocked) sampSec._setLocked(false);
 
             // Steps A (always visible, labeled "Steps" for non-WAN, "Steps A" for WAN Video)
             const stepsARow    = makeInput("Steps",        "number", 20, { min: 1, max: 200, step: 1 }, _syncS);
@@ -2052,6 +2236,11 @@ app.registerExtension({
             // -- 4. PROMPTS (positive open, negative closed) --
             const posSec = makeSection("POSITIVE PROMPT");
             node._weSections.positive = posSec;
+            posSec._onLockChanged = (locked) => {
+                node._weSectionLocks.positive = !!locked;
+                _syncS();
+            };
+            if (posSec._setLocked) posSec._setLocked(false);
             const posBox = document.createElement("textarea");
             posBox.placeholder = "Positive prompt";
             posBox.rows = 5;
@@ -2072,6 +2261,11 @@ app.registerExtension({
 
             const negSec = makeSection("NEGATIVE PROMPT");
             node._weSections.negative = negSec;
+            negSec._onLockChanged = (locked) => {
+                node._weSectionLocks.negative = !!locked;
+                _syncS();
+            };
+            if (negSec._setLocked) negSec._setLocked(false);
             const negBox = document.createElement("textarea");
             negBox.placeholder = "Negative prompt";
             negBox.rows = 5;
@@ -2093,6 +2287,11 @@ app.registerExtension({
             // -- 5. LORAS section --
             const loraSec = makeSection("LORAS");
             node._weSections.loras = loraSec;
+            loraSec._onLockChanged = (locked) => {
+                node._weSectionLocks.loras = !!locked;
+                _syncS();
+            };
+            if (loraSec._setLocked) loraSec._setLocked(false);
 
             // Stack A card
             const loraACard = createLoraStackContainer("LoRA Stack A",

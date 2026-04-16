@@ -32,22 +32,29 @@ VIDEO_LATENT_TYPES = ['WanVideoLatentImage', 'WanImageToVideo', 'EmptyHunyuanLat
 
 CHECKPOINT_TYPES = ('CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderNF4')
 
-# Node types that carry embedded extracted_data
+# Node types that carry embedded extracted_data.
 # Keep 'WorkflowGenerator' for backward compat with images generated before rename.
-_EMBEDDED_NODE_TYPES = ('WorkflowRenderer', 'WorkflowGenerator', 'PromptExtractor')
+# WorkflowBuilder stores authoritative extracted_data for Builder+Renderer graphs.
+_EMBEDDED_NODE_TYPES = (
+    'WorkflowRenderer',
+    'WorkflowGenerator',
+    'WorkflowBuilder',
+    'PromptExtractor',
+)
 
 
 def _get_embedded_extracted_data(workflow_data):
     """Return the best ``extracted_data`` dict from a WR/WG or PE node, or *None*.
 
-    Prioritises WorkflowRenderer/WorkflowGenerator over PromptExtractor, and only returns
-    data that actually contains ``sampler`` or ``resolution`` keys.
+    Prioritises WorkflowRenderer/WorkflowGenerator over WorkflowBuilder over
+    PromptExtractor, and only returns data that actually contains ``sampler``
+    or ``resolution`` keys.
     """
     if not workflow_data or not isinstance(workflow_data, dict):
         return None
 
     best = None
-    best_is_wg = False
+    best_rank = -1
 
     for wf_node in workflow_data.get('nodes', []):
         ntype = wf_node.get('type', '')
@@ -59,13 +66,19 @@ def _get_embedded_extracted_data(workflow_data):
         has_useful = bool(ed.get('sampler') or ed.get('resolution'))
         if not has_useful:
             continue
-        is_wg = ntype in ('WorkflowRenderer', 'WorkflowGenerator')
-        # Prefer WR/WG; among same type, first wins
-        if best is None or (is_wg and not best_is_wg):
+        if ntype in ('WorkflowRenderer', 'WorkflowGenerator'):
+            rank = 3
+        elif ntype == 'WorkflowBuilder':
+            rank = 2
+        else:
+            rank = 1
+
+        # Prefer higher-priority source; among same type, first wins.
+        if best is None or rank > best_rank:
             best = ed
-            best_is_wg = is_wg
-        if best_is_wg:
-            break  # WG is highest priority — stop early
+            best_rank = rank
+        if best_rank == 3:
+            break  # WR/WG is highest priority — stop early
 
     return best
 
@@ -529,9 +542,9 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
     Look for sampler / resolution / model data embedded by WorkflowRenderer
     (or legacy WorkflowGenerator) or PromptExtractor.  Checks (in priority order):
 
-      1. WR/WG node ``extracted_data`` (full dict with sampler + resolution)
-      2. WR/WG node ``widgets_values`` containing the ``override_data`` JSON
-      3. WR/WG ``override_data`` in the prompt API inputs
+    1. WR/WG/WB node ``extracted_data`` (full dict with sampler + resolution)
+    2. WR/WG/WB node ``widgets_values`` containing the ``override_data`` JSON
+    3. WR/WG/WB ``override_data`` in the prompt API inputs
       4. PE node ``extracted_data``
 
     Returns a dict with ``sampler``, ``resolution``, ``vae``, ``clip``,
@@ -606,7 +619,7 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
     if workflow_data and isinstance(workflow_data, dict):
         for wf_node in workflow_data.get('nodes', []):
             ntype = wf_node.get('type', '')
-            if ntype in ('WorkflowRenderer', 'WorkflowGenerator'):
+            if ntype in ('WorkflowRenderer', 'WorkflowGenerator', 'WorkflowBuilder'):
                 # Priority 1: extracted_data
                 ed = wf_node.get('extracted_data')
                 if ed and isinstance(ed, dict):
@@ -619,7 +632,7 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
                             if 'sampler' in out and 'resolution' in out:
                                 break
                 if 'sampler' in out or 'resolution' in out:
-                    break  # WR/WG found — done
+                    break  # WR/WG/WB found — done
 
         # Priority 4: PromptExtractor extracted_data (only if WG wasn't found)
         if 'sampler' not in out and 'resolution' not in out:
@@ -636,7 +649,7 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
         for node_id, node_data in prompt_data.items():
             if not isinstance(node_data, dict):
                 continue
-            if node_data.get('class_type') in ('WorkflowRenderer', 'WorkflowGenerator'):
+            if node_data.get('class_type') in ('WorkflowRenderer', 'WorkflowGenerator', 'WorkflowBuilder'):
                 inp = node_data.get('inputs', {})
                 _apply_override_json(inp.get('override_data', ''), node_data['class_type'])
                 break

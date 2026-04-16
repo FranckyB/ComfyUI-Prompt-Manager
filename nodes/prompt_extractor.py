@@ -2335,10 +2335,9 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                             positive_prompts.append(val.strip())
                             break
 
-            # PromptExtractor / WorkflowRenderer nodes — collect embedded extracted_data.
-            # If both are present, WorkflowRenderer takes priority (it generated the image).
-            # Also accept legacy 'WorkflowGenerator' class_type from older images.
-            elif node_type in ('PromptExtractor', 'WorkflowRenderer', 'WorkflowGenerator'):
+            # PromptExtractor / WorkflowBuilder / WorkflowRenderer nodes — collect
+            # embedded extracted_data. Also accept legacy WorkflowGenerator.
+            elif node_type in ('PromptExtractor', 'WorkflowBuilder', 'WorkflowRenderer', 'WorkflowGenerator'):
                 ext_data = node.get('extracted_data')
                 if ext_data and isinstance(ext_data, dict):
                     _embedded_candidates.append((node_type, node_id, title, ext_data))
@@ -2361,17 +2360,27 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # ========================================
     # RESOLVE EMBEDDED DATA (PromptExtractor vs WorkflowRenderer)
     # ========================================
-    # If both node types are present, use only WorkflowRenderer’s data
-    # (it actually generated the image; PromptExtractor merely forwarded).
+    # Priority when multiple embedded sources are present:
+    #   1. WorkflowRenderer / WorkflowGenerator (actual render source)
+    #   2. WorkflowBuilder
+    #   3. PromptExtractor
     if _embedded_candidates:
-        has_wg = any(nt in ('WorkflowRenderer', 'WorkflowGenerator') for nt, *_ in _embedded_candidates)
-        chosen = [
-            c for c in _embedded_candidates
-            if not has_wg or c[0] in ('WorkflowRenderer', 'WorkflowGenerator')
-        ]
-        if has_wg and len(_embedded_candidates) > len(chosen):
-            print("[PromptExtractor] Both PromptExtractor and WorkflowRenderer found "
-                  "— preferring WorkflowRenderer embedded data")
+        has_render = any(nt in ('WorkflowRenderer', 'WorkflowGenerator') for nt, *_ in _embedded_candidates)
+        has_builder = any(nt == 'WorkflowBuilder' for nt, *_ in _embedded_candidates)
+
+        if has_render:
+            chosen = [
+                c for c in _embedded_candidates
+                if c[0] in ('WorkflowRenderer', 'WorkflowGenerator')
+            ]
+            if len(_embedded_candidates) > len(chosen):
+                print("[PromptExtractor] Multiple embedded sources found — preferring WorkflowRenderer/WorkflowGenerator")
+        elif has_builder:
+            chosen = [c for c in _embedded_candidates if c[0] == 'WorkflowBuilder']
+            if len(_embedded_candidates) > len(chosen):
+                print("[PromptExtractor] Both PromptExtractor and WorkflowBuilder found — preferring WorkflowBuilder embedded data")
+        else:
+            chosen = _embedded_candidates
 
         for node_type, node_id, title, ext_data in chosen:
             ext_pos = ext_data.get('positive_prompt', '').strip()
@@ -3732,9 +3741,6 @@ class PromptExtractor:
         if image_tensor is None:
             image_tensor = get_placeholder_image_tensor()
 
-        # Save preview image for display
-        preview_images = self.save_preview_images(image_tensor)
-
         # Ensure strings are never empty - ComfyUI treats "" as "no connection"
         # Use single space " " to indicate "connected but no content found"
         if not positive_prompt:
@@ -3801,7 +3807,9 @@ class PromptExtractor:
                     break
 
         return {
-            "ui": {"images": preview_images},
+            # Do not publish extractor preview images to Comfy history/tasks.
+            # This prevents extractor frames from becoming the queue thumbnail.
+            "ui": {},
             "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, workflow_data, image_tensor)
         }
 
@@ -3925,7 +3933,9 @@ class WorkflowExtractor:
         workflow_data = full[4]
         image_tensor = full[5]
         return {
-            "ui": result["ui"],
+            # Keep WorkflowExtractor silent in UI previews for the same reason
+            # as PromptExtractor: avoid replacing final generation thumbnails.
+            "ui": {},
             "result": (workflow_data, image_tensor),
         }
 
