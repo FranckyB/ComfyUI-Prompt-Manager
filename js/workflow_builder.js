@@ -240,21 +240,23 @@ function applyWanVideoModelSplit(models, familyKey, { preferHigh = false, prefer
     const isWanVideo = (familyKey === "wan_video_i2v" || familyKey === "wan_video_t2v");
     if (!isWanVideo) return filtered;
 
-    // i2v can legitimately use i2v or t2v checkpoints depending on install naming.
+    // Strict family filtering: i2v only sees i2v, t2v only sees t2v.
     if (familyKey === "wan_video_i2v") {
-        const i2vOrT2v = filtered.filter((m) => {
+        filtered = filtered.filter((m) => {
             const p = normalizeModelPath(m);
-            return p.includes("i2v") || p.includes("t2v");
+            return p.includes("i2v");
         });
-        if (i2vOrT2v.length) filtered = i2vOrT2v;
+    } else if (familyKey === "wan_video_t2v") {
+        filtered = filtered.filter((m) => {
+            const p = normalizeModelPath(m);
+            return p.includes("t2v");
+        });
     }
 
     if (preferHigh) {
-        const highOnly = filtered.filter((m) => normalizeModelPath(m).includes("high"));
-        if (highOnly.length) filtered = highOnly;
+        filtered = filtered.filter((m) => normalizeModelPath(m).includes("high"));
     } else if (preferLow) {
-        const lowOnly = filtered.filter((m) => normalizeModelPath(m).includes("low"));
-        if (lowOnly.length) filtered = lowOnly;
+        filtered = filtered.filter((m) => normalizeModelPath(m).includes("low"));
     }
 
     return filtered;
@@ -2023,10 +2025,12 @@ app.registerExtension({
 
             const fetchModelsA = async () => {
                 const models = await fetchBaseModels();
+                if (node._weShowAllModels) return models;
                 return applyWanVideoModelSplit(models, node._weFamily, { preferHigh: true });
             };
             const fetchModelsB = async () => {
                 const models = await fetchBaseModels();
+                if (node._weShowAllModels) return models;
                 return applyWanVideoModelSplit(models, node._weFamily, { preferLow: true });
             };
 
@@ -2034,17 +2038,20 @@ app.registerExtension({
                 const fam = encodeURIComponent(familyKey || "");
                 const fetchModelsForFamilyBase = async () => {
                     try {
-                        const url = withModelFilteringPreference(`/workflow-extractor/list-models?family=${fam}`, node._weShowAllModels);
+                        const baseUrl = `/workflow-extractor/list-models?family=${fam}`;
+                        const url = withModelFilteringPreference(baseUrl, node._weShowAllModels);
                         const r = await fetch(url);
                         const d = await r.json(); return d.models || [];
                     } catch { return []; }
                 };
                 const fetchModelsForFamilyA = async () => {
                     const models = await fetchModelsForFamilyBase();
+                    if (node._weShowAllModels) return models;
                     return applyWanVideoModelSplit(models, familyKey, { preferHigh: true });
                 };
                 const fetchModelsForFamilyB = async () => {
                     const models = await fetchModelsForFamilyBase();
+                    if (node._weShowAllModels) return models;
                     return applyWanVideoModelSplit(models, familyKey, { preferLow: true });
                 };
                 await Promise.all([
