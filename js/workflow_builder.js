@@ -1340,6 +1340,27 @@ function syncHidden(node) {
         const w = node.widgets?.find(x => x.name === name);
         if (w) w.value = val;
     };
+    const serializeLoraList = (list, stackKey = "") => {
+        const src = Array.isArray(list) ? list : [];
+        return src
+            .map((lora) => {
+                const name = String(lora?.name || "").trim();
+                if (!name) return null;
+                const prefKey = stackKey ? `${stackKey}:${name}` : name;
+                const st = node._weLoraState?.[prefKey] || node._weLoraState?.[name] || {};
+                const modelStrength = Number(st.model_strength ?? lora.model_strength ?? lora.strength ?? 1.0);
+                const clipStrength = Number(st.clip_strength ?? lora.clip_strength ?? modelStrength);
+                return {
+                    name,
+                    path: lora.path || name,
+                    model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
+                    clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1.0,
+                    active: st.active !== undefined ? (st.active !== false) : (lora._active !== false && lora.active !== false),
+                    available: node._weExtracted?.lora_availability?.[name] !== false,
+                };
+            })
+            .filter(Boolean);
+    };
     const ov = { ...node._weOverrides };
     // Always capture DOM values as overrides
     if (node._weModelRow?._getValue) {
@@ -1409,6 +1430,19 @@ function syncHidden(node) {
     if (node._weFamily) ov._family = node._weFamily;
     if (node._weShowAllModels) ov._show_all_models = true;
     else delete ov._show_all_models;
+
+    // Persist full LoRA stacks as part of authoritative UI state so tab
+    // switch rehydrate restores the same lists (not just toggle/strength state).
+    if (node._weExtracted) {
+        const lorasA = node._weExtracted.loras_a || [];
+        const lorasB = node._weExtracted.loras_b || [];
+        const hasBothStacks = lorasA.length > 0 && lorasB.length > 0;
+        ov.loras_a = serializeLoraList(lorasA, hasBothStacks ? "a" : "");
+        ov.loras_b = serializeLoraList(lorasB, "b");
+        if (node._weExtracted.lora_availability && typeof node._weExtracted.lora_availability === "object") {
+            ov._lora_availability = { ...node._weExtracted.lora_availability };
+        }
+    }
 
     // Control after generate
     if (node._weControlMode) {
@@ -3322,6 +3356,17 @@ app.registerExtension({
             const savedWl = props.we_workflow_loras;
             const savedIl = props.we_input_loras;
 
+            let savedWorkflowLoras = { a: [], b: [] };
+            let savedInputLoras = { a: [], b: [] };
+            try { savedWorkflowLoras = JSON.parse(savedWl || '{"a":[],"b":[]}'); } catch { savedWorkflowLoras = { a: [], b: [] }; }
+            try { savedInputLoras = JSON.parse(savedIl || '{"a":[],"b":[]}'); } catch { savedInputLoras = { a: [], b: [] }; }
+            const savedLsHasData = !!(savedLs && savedLs !== "{}" && savedLs !== "null");
+            const savedLoraListsCount =
+                (Array.isArray(savedWorkflowLoras.a) ? savedWorkflowLoras.a.length : 0) +
+                (Array.isArray(savedWorkflowLoras.b) ? savedWorkflowLoras.b.length : 0) +
+                (Array.isArray(savedInputLoras.a) ? savedInputLoras.a.length : 0) +
+                (Array.isArray(savedInputLoras.b) ? savedInputLoras.b.length : 0);
+
             let ovObj = {};
             try { ovObj = JSON.parse(savedOv || "{}"); } catch { ovObj = {}; }
             // Prompt fallback: old saves may have prompts only in we_workflow_prompts.
@@ -3336,12 +3381,32 @@ app.registerExtension({
                 }
             }
             const hasAuthoritativeOverrides = !!(ovObj && Object.keys(ovObj).length > 0);
+            const hasSavedLoraContext = savedLsHasData || savedLoraListsCount > 0;
 
             const buildExtractedFromOverrides = (ov, fallback = {}) => {
                 const fam = ov?._family || fallback.model_family || "sdxl";
                 const isVideo = ["wan_video_t2v", "wan_video_i2v"].includes(fam);
                 const fbSampler = fallback.sampler || {};
                 const fbRes = fallback.resolution || {};
+                const lorasA = Array.isArray(ov?.loras_a)
+                    ? ov.loras_a
+                    : (Array.isArray(fallback.loras_a) ? fallback.loras_a : []);
+                const lorasB = Array.isArray(ov?.loras_b)
+                    ? ov.loras_b
+                    : (Array.isArray(fallback.loras_b) ? fallback.loras_b : []);
+                const mergedAvailability = {};
+                for (const l of [...lorasA, ...lorasB]) {
+                    const n = String(l?.name || "").trim();
+                    if (!n) continue;
+                    if (l?.available === false) mergedAvailability[n] = false;
+                    else if (!(n in mergedAvailability)) mergedAvailability[n] = true;
+                }
+                const loraAvailability =
+                    (ov?._lora_availability && typeof ov._lora_availability === "object")
+                        ? ov._lora_availability
+                        : ((fallback.lora_availability && typeof fallback.lora_availability === "object")
+                            ? fallback.lora_availability
+                            : mergedAvailability);
                 return {
                     positive_prompt: (ov?.positive_prompt != null) ? ov.positive_prompt : (fallback.positive_prompt || ""),
                     negative_prompt: (ov?.negative_prompt != null) ? ov.negative_prompt : (fallback.negative_prompt || ""),
@@ -3373,20 +3438,26 @@ app.registerExtension({
                         batch_size: (ov?.batch_size != null) ? ov.batch_size : (fbRes.batch_size ?? 1),
                         length: (ov?.length != null) ? ov.length : (isVideo ? (fbRes.length ?? 81) : undefined),
                     },
-                    loras_a: Array.isArray(fallback.loras_a) ? fallback.loras_a : [],
-                    loras_b: Array.isArray(fallback.loras_b) ? fallback.loras_b : [],
+                    loras_a: lorasA,
+                    loras_b: lorasB,
+                    lora_availability: loraAvailability,
                     is_video: isVideo,
                 };
             };
-            if (hasAuthoritativeOverrides) {
+            if (hasAuthoritativeOverrides || hasSavedLoraContext) {
                 // UI state is the sole source of truth on restore.
                 // Intentionally ignore we_extracted_cache because it may be stale.
-                node._weExtracted = buildExtractedFromOverrides(ovObj, {});
+                const mergedLorasA = _mergeLoraLists(savedWorkflowLoras?.a || [], savedInputLoras?.a || []);
+                const mergedLorasB = _mergeLoraLists(savedWorkflowLoras?.b || [], savedInputLoras?.b || []);
+                node._weExtracted = buildExtractedFromOverrides(ovObj, {
+                    loras_a: mergedLorasA,
+                    loras_b: mergedLorasB,
+                });
                 node._wePopulated = true;
                 node._weLoraState = {};
                 node._weOverrides = {};
-                try { node._weWorkflowLoras = JSON.parse(savedWl || '{"a":[],"b":[]}'); } catch { node._weWorkflowLoras = { a: [], b: [] }; }
-                try { node._weInputLoras = JSON.parse(savedIl || '{"a":[],"b":[]}'); } catch { node._weInputLoras = { a: [], b: [] }; }
+                node._weWorkflowLoras = savedWorkflowLoras;
+                node._weInputLoras = savedInputLoras;
                 try { node._weWorkflowPrompts = JSON.parse(props.we_workflow_prompts || 'null'); } catch { node._weWorkflowPrompts = null; }
                 const uiReady = updateUI(node);
                 if (uiReady && typeof uiReady.then === "function") {

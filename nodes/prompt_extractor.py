@@ -9,6 +9,7 @@ import folder_paths
 import torch
 import server
 import comfy.samplers
+from ..py.workflow_families import get_family_label
 
 # Import PIL for image metadata reading
 try:
@@ -2378,6 +2379,75 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                     all_workflow_nodes.extend(subgraph['nodes'])
 
     if all_workflow_nodes:
+        def _parse_json_dict(value):
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str) and value.strip():
+                try:
+                    parsed = json.loads(value)
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+
+        def _build_embedded_from_builder_ui(node):
+            props = node.get('properties') if isinstance(node.get('properties'), dict) else {}
+            ui_state = _parse_json_dict(props.get('we_ui_state'))
+            if not ui_state:
+                ui_state = _parse_json_dict(props.get('we_override_data'))
+            if not ui_state:
+                return None
+
+            fam = ui_state.get('_family') or ui_state.get('family') or 'sdxl'
+            clip_names = ui_state.get('clip_names', [])
+            if isinstance(clip_names, str):
+                clip_names = [clip_names] if clip_names else []
+
+            sampler = {
+                'steps_a': ui_state.get('steps_a', 20),
+                'steps_b': ui_state.get('steps_b'),
+                'cfg': ui_state.get('cfg', 5.0),
+                'seed_a': ui_state.get('seed_a', 0),
+                'seed_b': ui_state.get('seed_b'),
+                'sampler_name': ui_state.get('sampler_name', 'euler'),
+                'scheduler': ui_state.get('scheduler', 'simple'),
+            }
+            resolution = {
+                'width': ui_state.get('width', 768),
+                'height': ui_state.get('height', 1280),
+                'batch_size': ui_state.get('batch_size', 1),
+                'length': ui_state.get('length'),
+            }
+
+            loras_a = ui_state.get('loras_a', []) if isinstance(ui_state.get('loras_a', []), list) else []
+            loras_b = ui_state.get('loras_b', []) if isinstance(ui_state.get('loras_b', []), list) else []
+            lora_avail = ui_state.get('_lora_availability', {})
+            if not isinstance(lora_avail, dict):
+                lora_avail = {}
+
+            return {
+                'positive_prompt': ui_state.get('positive_prompt', ''),
+                'negative_prompt': ui_state.get('negative_prompt', ''),
+                'model_a': ui_state.get('model_a', ''),
+                'model_b': ui_state.get('model_b', ''),
+                'loras_a': loras_a,
+                'loras_b': loras_b,
+                'vae': {
+                    'name': ui_state.get('vae', ''),
+                    'source': 'workflow_data',
+                },
+                'clip': {
+                    'names': clip_names,
+                    'type': '',
+                    'source': 'workflow_data',
+                },
+                'sampler': sampler,
+                'resolution': resolution,
+                'model_family': fam,
+                'model_family_label': get_family_label(fam),
+                'lora_availability': lora_avail,
+            }
+
         for node in all_workflow_nodes:
             if not isinstance(node, dict):
                 continue
@@ -2453,7 +2523,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             # PromptExtractor / WorkflowBuilder / WorkflowRenderer nodes — collect
             # embedded extracted_data. Also accept legacy WorkflowGenerator.
             elif node_type in ('PromptExtractor', 'WorkflowBuilder', 'WorkflowRenderer', 'WorkflowGenerator'):
-                ext_data = node.get('extracted_data')
+                ext_data = None
+                # Builder videos now persist authoritative UI state in properties.
+                # Prefer that over stale extracted_data snapshots when available.
+                if node_type == 'WorkflowBuilder':
+                    ext_data = _build_embedded_from_builder_ui(node)
+                if not ext_data:
+                    ext_data = node.get('extracted_data')
                 if ext_data and isinstance(ext_data, dict):
                     _embedded_candidates.append((node_type, node_id, title, ext_data))
 
