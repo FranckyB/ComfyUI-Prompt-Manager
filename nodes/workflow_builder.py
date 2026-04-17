@@ -791,6 +791,7 @@ class WorkflowBuilder:
         # The JS dropdown is the user's deliberate choice and must win.
         js_family = (overrides.get('_family') or None) if _allow_override('model') else None
         wf_family = wf_data.get('family', '') if wf_data else ''
+        incoming_family = extracted.get('model_family') or wf_family or ''
         model_detected_family = None
         if model_name_a:
             resolved_ref, _ = resolve_model_name(model_name_a)
@@ -822,6 +823,12 @@ class WorkflowBuilder:
               f"(strategy={strategy}), model_a={model_name_a}, "
               f"model_b={model_name_b or '—'}")
 
+        # If user changed family in UI, don't carry stale extracted VAE/CLIP
+        # from the previous family unless they explicitly selected them.
+        family_switched_in_ui = bool(
+            _allow_override('model') and js_family and incoming_family and js_family != incoming_family
+        )
+
         # ── Build workflow JSON + UI info BEFORE model loading ────────────
         # This ensures the JS UI is always populated, even if generation
         # fails (e.g. model not found).  The user can then edit settings
@@ -831,6 +838,11 @@ class WorkflowBuilder:
             for key in ('model_a', 'model_b', 'vae', 'clip_names', '_family'):
                 if key in overrides:
                     wf_overrides[key] = overrides[key]
+            if family_switched_in_ui:
+                if 'vae' not in overrides:
+                    wf_overrides['vae'] = ''
+                if 'clip_names' not in overrides:
+                    wf_overrides['clip_names'] = []
         if _allow_override('sampler'):
             for key in ('steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'):
                 if key in overrides:
@@ -880,12 +892,16 @@ class WorkflowBuilder:
         # The family spec is authoritative — always fill from it.
         from ..py.workflow_families import MODEL_FAMILIES
         spec = MODEL_FAMILIES.get(family_key, {})
-        if not simplified_wf.get('clip_type'):
+        if spec:
+            # Family selection is authoritative in WB: always align clip/loader type.
             simplified_wf['clip_type'] = spec.get('clip_type', '')
-        if not simplified_wf.get('loader_type'):
-            # Non-checkpoint families use separate UNET+CLIP loaders
             is_ckpt = spec.get('checkpoint', False)
             simplified_wf['loader_type'] = 'checkpoint' if is_ckpt else 'unet'
+        else:
+            if not simplified_wf.get('clip_type'):
+                simplified_wf['clip_type'] = ''
+            if not simplified_wf.get('loader_type'):
+                simplified_wf['loader_type'] = 'unet'
 
         # ── Default VAE/CLIP: resolve empty values ─────────────────────────
         # For checkpoint models, empty VAE/CLIP means "use from checkpoint"
@@ -1006,7 +1022,7 @@ class WorkflowBuilder:
         # This lets Builder -> Context/Builder chains keep loaded objects and
         # resolved text conditioning without requiring re-render in-between.
         if isinstance(wf_data, dict):
-            for key in ("MODEL_A", "MODEL_B", "CLIP", "VAE", "POSITIVE", "NEGATIVE"):
+            for key in ("MODEL_A", "MODEL_B", "CLIP", "VAE", "POSITIVE", "NEGATIVE", "LATENT", "IMAGE"):
                 if key in wf_data:
                     simplified_wf[key] = wf_data.get(key)
 

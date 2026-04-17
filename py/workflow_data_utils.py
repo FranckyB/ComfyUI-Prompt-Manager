@@ -5,7 +5,7 @@ ComfyUI objects and must be stripped before JSON serialization.
 """
 
 # Keys that hold runtime (non-JSON-serializable) objects
-RUNTIME_OBJECT_KEYS = frozenset({"MODEL_A", "MODEL_B", "CLIP", "VAE"})
+RUNTIME_OBJECT_KEYS = frozenset({"MODEL_A", "MODEL_B", "CLIP", "VAE", "LATENT", "IMAGE"})
 
 
 def strip_runtime_objects(wf):

@@ -1099,10 +1099,23 @@ async def save_prompt_advanced(request):
             "trigger_words": normalize_trigger_words(trigger_words)
         }
 
-        # Save workflow_data if provided
+        # Save workflow_data if provided.
+        # Always sanitize to remove runtime-only objects (MODEL_A/MODEL_B/CLIP/VAE)
+        # and accept either dict or JSON string payloads from frontend.
         workflow_data = data.get("workflow_data")
-        if workflow_data and isinstance(workflow_data, dict):
-            prompt_data["workflow_data"] = workflow_data
+        wf_to_save = None
+        if isinstance(workflow_data, dict):
+            wf_to_save = strip_runtime_objects(workflow_data)
+        elif isinstance(workflow_data, str) and workflow_data.strip():
+            try:
+                parsed_wf = json.loads(workflow_data)
+                if isinstance(parsed_wf, dict):
+                    wf_to_save = strip_runtime_objects(parsed_wf)
+            except (json.JSONDecodeError, TypeError):
+                wf_to_save = None
+
+        if wf_to_save:
+            prompt_data["workflow_data"] = wf_to_save
 
         if thumbnail:
             prompt_data["thumbnail"] = thumbnail

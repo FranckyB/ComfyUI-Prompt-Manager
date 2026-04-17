@@ -15,7 +15,7 @@ from .nodes.prompt_extractor import PromptExtractor
 from .nodes.prompt_extractor import WorkflowExtractor
 from .nodes.workflow_builder import WorkflowBuilder
 from .nodes.workflow_renderer import WorkflowRenderer
-from .nodes.workflow_context import WorkflowContext
+from .nodes.workflow_bridge import WorkflowBridge
 from .nodes.workflow_model_loader import WorkflowModelLoader
 
 NODE_CLASS_MAPPINGS = {
@@ -28,7 +28,7 @@ NODE_CLASS_MAPPINGS = {
     "WorkflowExtractor":     WorkflowExtractor,
     "WorkflowBuilder":       WorkflowBuilder,
     "WorkflowRenderer":      WorkflowRenderer,
-    "WorkflowContext":       WorkflowContext,
+    "WorkflowBridge":        WorkflowBridge,
     "WorkflowModelLoader":   WorkflowModelLoader,
 }
 
@@ -42,7 +42,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WorkflowExtractor":     "Workflow Extractor",
     "WorkflowBuilder":       "Workflow Builder",
     "WorkflowRenderer":      "Workflow Renderer",
-    "WorkflowContext":       "Workflow Context",
+    "WorkflowBridge":        "Workflow Bridge",
     "WorkflowModelLoader":   "Workflow Model Loader",
 }
 
@@ -54,4 +54,4 @@ WEB_DIRECTORY = "./js"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
-print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, PromptGenerator, PromptGenOptions, PromptExtractor, WorkflowExtractor, WorkflowBuilder, WorkflowRenderer, WorkflowContext, WorkflowModelLoader")
+print("[PromptManager] Nodes registered: PromptApplyLora, PromptManagerAdvanced, PromptGenerator, PromptGenOptions, PromptExtractor, WorkflowExtractor, WorkflowBuilder, WorkflowRenderer, WorkflowBridge, WorkflowModelLoader")

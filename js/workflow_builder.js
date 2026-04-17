@@ -1636,7 +1636,7 @@ app.registerExtension({
             updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
             updateBtn.onclick = async () => {
                 // 1. Find a source node — prefer one connected via workflow_data input
-                // Supported: PromptExtractor, WorkflowExtractor, WorkflowBuilder, WorkflowContext.
+                // Supported: PromptExtractor, WorkflowExtractor, WorkflowBuilder, WorkflowBridge.
                 const _isSupportedSource = (n) => {
                     if (!n) return false;
                     const cc = n.comfyClass || "";
@@ -1695,7 +1695,7 @@ app.registerExtension({
                     let extracted = null;
                     const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
                     const isBuilderSource = sourceClass === "WorkflowBuilder";
-                    const isContextSource = sourceClass === "WorkflowContext";
+                    const isContextSource = sourceClass === "WorkflowBridge";
 
                     if (isBuilderSource) {
                         // Prefer server-side WB cache from last execution.
@@ -1793,7 +1793,7 @@ app.registerExtension({
                             console.warn("[WorkflowBuilder] Failed to merge source builder override_data:", e);
                         }
                     } else if (isContextSource) {
-                        // Pull workflow_data from WorkflowContext output cache.
+                        // Pull workflow_data from WorkflowBridge output cache.
                         // This supports Builder -> Context -> Builder update flows.
                         let wfData = null;
                         const wfOutIdx = sourceNode.outputs?.findIndex(o => o.name === "workflow_data");
@@ -1803,14 +1803,14 @@ app.registerExtension({
                         }
 
                         if (!wfData) {
-                            _showError(node, "Connected WorkflowContext has no cached workflow_data yet. Execute upstream nodes, then click Update Workflow.");
+                            _showError(node, "Connected WorkflowBridge has no cached workflow_data yet. Execute upstream nodes, then click Update Workflow.");
                             return;
                         }
 
                         const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
                         extracted = parseWorkflowData(wfJson);
                         if (!extracted) {
-                            _showError(node, "Connected WorkflowContext workflow_data is unavailable or invalid. Execute upstream nodes, then click Update Workflow.");
+                            _showError(node, "Connected WorkflowBridge workflow_data is unavailable or invalid. Execute upstream nodes, then click Update Workflow.");
                             return;
                         }
                     } else {
@@ -2644,22 +2644,8 @@ app.registerExtension({
             node.onConnectionsChange = function () {
                 if (origConnInput) origConnInput.apply(this, arguments);
 
-                // Restore workflow prompts when prompt inputs are disconnected
-                // Check BEFORE _updatePromptGhosting clears readOnly
-                const posConn = node.inputs?.find(i => i.name === "positive_prompt");
-                const negConn = node.inputs?.find(i => i.name === "negative_prompt");
-                const wp = node._weWorkflowPrompts;
-                if (wp) {
-                    if (posConn?.link == null && node._wePosBox?.readOnly) {
-                        node._wePosBox.value = wp.positive;
-                    }
-                    if (negConn?.link == null && node._weNegBox?.readOnly) {
-                        node._weNegBox.value = wp.negative;
-                    }
-                }
-
                 _updatePromptGhosting();
-                if (wp) syncHidden(node);
+                syncHidden(node);
 
                 // Show/hide Update Workflow button based on workflow_data connection
                 const wfDataConn = node.inputs?.find(i => i.name === "workflow_data");
@@ -2721,6 +2707,21 @@ app.registerExtension({
                 const info = event.detail?.info?.extracted;
                 if (!info) return;
 
+                // Always mirror connected prompt inputs into textareas,
+                // even when extractor-connected mode skips full UI refresh.
+                const posInputConn = node.inputs?.find(i => i.name === "positive_prompt");
+                const negInputConn = node.inputs?.find(i => i.name === "negative_prompt");
+                if (posInputConn?.link != null && info.positive_prompt != null && node._wePosBox) {
+                    node._wePosBox.value = info.positive_prompt;
+                }
+                if (negInputConn?.link != null && info.negative_prompt != null && node._weNegBox) {
+                    node._weNegBox.value = info.negative_prompt;
+                }
+                if ((posInputConn?.link != null || negInputConn?.link != null) && node._updatePromptGhosting) {
+                    node._updatePromptGhosting();
+                    syncHidden(node);
+                }
+
                 // Extractor-connected mode is manual-refresh only.
                 // Keep user tweaks unless Update Workflow is clicked.
                 if (node._weIsConnectedWorkflowDataExtractor?.()) return;
@@ -2776,20 +2777,6 @@ app.registerExtension({
                     node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
                 }
 
-                // Show connected prompt values in ghosted textareas
-                const posConn = node.inputs?.find(i => i.name === "positive_prompt");
-                const negConn = node.inputs?.find(i => i.name === "negative_prompt");
-                if (posConn?.link != null) {
-                    if (info.positive_prompt != null && node._wePosBox) {
-                        node._wePosBox.value = info.positive_prompt;
-                    }
-                }
-                if (negConn?.link != null) {
-                    if (info.negative_prompt != null && node._weNegBox) {
-                        node._weNegBox.value = info.negative_prompt;
-                    }
-                }
-
                 node._preUpdateApplied = true;
             });
 
@@ -2812,9 +2799,26 @@ app.registerExtension({
             const genError = wfInfo?.error;
             _showError(this, genError || null);
 
+            // Always mirror connected prompt inputs into textareas so users
+            // can see generated prompts immediately.
+            const info = wfInfo?.extracted;
+            const posConn = this.inputs?.find(i => i.name === "positive_prompt");
+            const negConn = this.inputs?.find(i => i.name === "negative_prompt");
+            if (info) {
+                if (posConn?.link != null && info.positive_prompt != null && this._wePosBox) {
+                    this._wePosBox.value = info.positive_prompt;
+                }
+                if (negConn?.link != null && info.negative_prompt != null && this._weNegBox) {
+                    this._weNegBox.value = info.negative_prompt;
+                }
+                if ((posConn?.link != null || negConn?.link != null) && this._updatePromptGhosting) {
+                    this._updatePromptGhosting();
+                    syncHidden(this);
+                }
+            }
+
             // UI population is handled by pre-update listener (fires before
             // generation).  Only run here as a fallback if send_sync failed.
-            const info = wfInfo?.extracted;
             const isExtractorConnected = this._weIsConnectedWorkflowDataExtractor?.() === true;
             if (info && !this._preUpdateApplied && !isExtractorConnected) {
                 const oldWl = this._weWorkflowLoras || { a: [], b: [] };

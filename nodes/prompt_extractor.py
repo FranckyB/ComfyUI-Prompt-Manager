@@ -2928,6 +2928,24 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         if cleaned:
             clean_negative.append(cleaned)
 
+    # Guard against duplicate prompt chunks when metadata provides both
+    # workflow-node and API-node representations of the same text.
+    def _dedupe_prompt_chunks(chunks):
+        seen = set()
+        out = []
+        for chunk in chunks:
+            key = re.sub(r'\s+', ' ', str(chunk or '')).strip()
+            if not key:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+        return out
+
+    clean_positive = _dedupe_prompt_chunks(clean_positive)
+    clean_negative = _dedupe_prompt_chunks(clean_negative)
+
     # Use the first prompt from each list (our connection logic already determined which is which)
     # If multiple prompts exist, concatenate them with commas
     result['positive_prompt'] = ', '.join(clean_positive) if clean_positive else ''

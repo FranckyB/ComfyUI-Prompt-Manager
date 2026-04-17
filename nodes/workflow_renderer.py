@@ -2,7 +2,7 @@
 Workflow Renderer — render-only node.
 
 Accepts WORKFLOW_DATA (JSON string from Workflow Builder or PromptExtractor),
-loads models, samples, decodes, and outputs IMAGE + LATENT.
+loads models, samples, decodes, and outputs IMAGE.
 
 No UI, no extraction — purely a render engine.
 """
@@ -52,7 +52,7 @@ class WorkflowRenderer:
 
     Takes WORKFLOW_DATA (from Workflow Builder or PromptExtractor),
     loads models, applies LoRAs, samples, decodes.
-    Outputs IMAGE + LATENT.
+    Outputs IMAGE.
     """
 
     _class_model_cache: dict = {}
@@ -76,14 +76,14 @@ class WorkflowRenderer:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "LATENT", "WORKFLOW_DATA")
-    RETURN_NAMES = ("image", "latent", "workflow_data")
+    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE")
+    RETURN_NAMES = ("workflow_data", "output_image")
     FUNCTION = "execute"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = False
     DESCRIPTION = (
         "Render-only node. Accepts workflow_data, loads models, samples, "
-        "and decodes. Outputs IMAGE + LATENT + WORKFLOW_DATA (with MODEL/CLIP/VAE passthrough)."
+        "and decodes. Outputs IMAGE + WORKFLOW_DATA (with MODEL/CLIP/VAE passthrough)."
     )
 
     @classmethod
@@ -96,7 +96,6 @@ class WorkflowRenderer:
         elif isinstance(workflow_data, str):
             h.update(workflow_data.encode())
         if source_image is not None:
-            import torch
             h.update(str(source_image.shape).encode())
             h.update(str(source_image.sum().item()).encode())
         return h.hexdigest()
@@ -356,9 +355,11 @@ class WorkflowRenderer:
         cond_pos_out, cond_neg_out = _encode_text_conditioning(clip, positive_prompt, negative_prompt)
         wf_out["POSITIVE"] = cond_pos_out
         wf_out["NEGATIVE"] = cond_neg_out
+        wf_out["LATENT"] = out_latent
+        wf_out["IMAGE"] = decoded
         wf_out["model_name"] = _short_display_name(resolved_a or model_name_a)
 
-        return (decoded, out_latent, wf_out)
+        return (wf_out, decoded)
 
 
 def _encode_text_conditioning(clip, positive_prompt, negative_prompt):
@@ -442,7 +443,6 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path, famil
         except Exception as e:
             if 'weights_only' in str(e).lower() or 'unpickling' in str(e).lower() or 'unsupported operand' in str(e).lower():
                 print(f"[WorkflowRenderer] weights_only load failed, retrying with weights_only=False: {e}")
-                import torch
                 pl_sd = torch.load(full_model_path, map_location='cpu', weights_only=False)
                 sd = pl_sd.get('state_dict', pl_sd)
                 if hasattr(comfy.sd, 'load_diffusion_model_state_dict'):
@@ -601,7 +601,6 @@ def _make_latent(channels, width, height, batch=1, frames=None, spacial_ratio=No
     For image models: [B, C, H/8, W/8]
     For WAN/video-native models: [B, C, T, H/8, W/8]
     """
-    import torch
     import comfy
 
     if frames is None:
@@ -712,7 +711,6 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
     Input: LATENT dict
     Output: LATENT dict
     """
-    import torch
     import comfy
     import latent_preview
 
