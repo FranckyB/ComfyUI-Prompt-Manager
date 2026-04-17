@@ -121,12 +121,6 @@ class PromptManagerAdvanced:
                     "label_off": "off",
                     "tooltip": "When enabled, use LoRAs from connected inputs. When off, use only prompt LoRAs."
                 }),
-                "use_workflow_data": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
-                    "tooltip": "When enabled, use prompt and LoRAs from connected workflow_data input."
-                }),
                 "text": ("STRING", {
                     "multiline": True,
                     "default": first_prompt_text,
@@ -154,6 +148,7 @@ class PromptManagerAdvanced:
                 "loras_a_toggle": "STRING",
                 "loras_b_toggle": "STRING",
                 "trigger_words_toggle": "STRING",
+                "saved_workflow_data": "STRING",
             }
         }
 
@@ -166,7 +161,7 @@ class PromptManagerAdvanced:
 
     @classmethod
     def IS_CHANGED(cls, category, name, text, use_prompt_input, use_lora_input, swap_lora_outputs=False,
-                   use_workflow_data=False, **kwargs):
+                   **kwargs):
         """
         Track changes to the node's inputs to determine if re-execution is needed.
         Returns a tuple of relevant values that should trigger re-execution when changed.
@@ -177,6 +172,7 @@ class PromptManagerAdvanced:
         lora_stack_b = kwargs.get('lora_stack_b', None)
         trigger_words = kwargs.get('trigger_words', None)
         workflow_data = kwargs.get('workflow_data', None)
+        use_workflow_data = kwargs.get('use_workflow_data', False)
 
         # Return tuple of all values that should trigger re-execution when changed
         # Convert lists/objects to strings for hashable comparison
@@ -410,7 +406,8 @@ class PromptManagerAdvanced:
     def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, swap_lora_outputs=False,
                    use_workflow_data=False, prompt=None, lora_stack_a=None, lora_stack_b=None,
                    trigger_words=None, thumbnail_image=None, workflow_data=None,
-                   unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None):
+                   unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None,
+                   saved_workflow_data=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
 
         # ========================================
@@ -474,12 +471,33 @@ class PromptManagerAdvanced:
         # CONTINUE WITH NORMAL PROCESSING
         # ========================================
 
+        # Resolve workflow payload from connected input first, then saved prompt data.
+        # This allows PMA-saved workflow_data to be used even without a live upstream connection.
+        resolved_workflow_data = None
+        if isinstance(workflow_data, dict):
+            resolved_workflow_data = workflow_data
+        elif isinstance(workflow_data, str) and workflow_data.strip():
+            try:
+                parsed = json.loads(workflow_data)
+                if isinstance(parsed, dict):
+                    resolved_workflow_data = parsed
+            except (json.JSONDecodeError, TypeError):
+                resolved_workflow_data = None
+
+        if resolved_workflow_data is None and isinstance(saved_workflow_data, str) and saved_workflow_data.strip():
+            try:
+                parsed_saved = json.loads(saved_workflow_data)
+                if isinstance(parsed_saved, dict):
+                    resolved_workflow_data = parsed_saved
+            except (json.JSONDecodeError, TypeError):
+                resolved_workflow_data = None
+
         # Choose which text to use based on the toggles
         # Priority: use_prompt_input > use_workflow_data > internal text
         if use_prompt_input and prompt:
             output_text = prompt
-        elif use_workflow_data and workflow_data:
-            wf = workflow_data if isinstance(workflow_data, dict) else {}
+        elif use_workflow_data and resolved_workflow_data:
+            wf = resolved_workflow_data if isinstance(resolved_workflow_data, dict) else {}
             output_text = wf.get('positive_prompt', '') or text or ""
         else:
             output_text = text if text else ""
@@ -533,10 +551,24 @@ class PromptManagerAdvanced:
         all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
         all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if loras_b_toggle else []
 
+        wf_loras_a = []
+        wf_loras_b = []
+        if use_workflow_data and resolved_workflow_data and isinstance(resolved_workflow_data, dict):
+            wf_loras_a = [
+                (wf_lora['name'], wf_lora.get('model_strength', 1.0), wf_lora.get('clip_strength', 1.0))
+                for wf_lora in resolved_workflow_data.get('loras_a', []) if isinstance(wf_lora, dict) and wf_lora.get('name')
+            ]
+            wf_loras_b = [
+                (wf_lora['name'], wf_lora.get('model_strength', 1.0), wf_lora.get('clip_strength', 1.0))
+                for wf_lora in resolved_workflow_data.get('loras_b', []) if isinstance(wf_lora, dict) and wf_lora.get('name')
+            ]
+
         # When use_lora_input is disabled, ignore connected stacks and use only saved loras
         if not use_lora_input:
-            lora_stack_a = preset_stack_a
-            lora_stack_b = preset_stack_b
+            # If workflow mode is enabled and workflow_data carries LoRAs, show/use those.
+            # Otherwise, fall back to saved preset LoRAs.
+            lora_stack_a = wf_loras_a if wf_loras_a else preset_stack_a
+            lora_stack_b = wf_loras_b if wf_loras_b else preset_stack_b
         else:
             # Merge: preset loras + connected loras (avoiding duplicates by lora name)
             # Handle case where connected stack might be None or empty
@@ -551,19 +583,10 @@ class PromptManagerAdvanced:
                 lora_stack_b = preset_stack_b if preset_stack_b else []
 
             # Merge workflow_data loras (lowest priority — existing stacks take precedence)
-            if use_workflow_data and workflow_data and isinstance(workflow_data, dict):
-                wf_loras_a = [
-                    (l['name'], l.get('model_strength', 1.0), l.get('clip_strength', 1.0))
-                    for l in workflow_data.get('loras_a', []) if isinstance(l, dict) and l.get('name')
-                ]
-                wf_loras_b = [
-                    (l['name'], l.get('model_strength', 1.0), l.get('clip_strength', 1.0))
-                    for l in workflow_data.get('loras_b', []) if isinstance(l, dict) and l.get('name')
-                ]
-                if wf_loras_a:
-                    lora_stack_a = self._merge_lora_stacks(lora_stack_a, wf_loras_a)
-                if wf_loras_b:
-                    lora_stack_b = self._merge_lora_stacks(lora_stack_b, wf_loras_b)
+            if wf_loras_a:
+                lora_stack_a = self._merge_lora_stacks(lora_stack_a, wf_loras_a)
+            if wf_loras_b:
+                lora_stack_b = self._merge_lora_stacks(lora_stack_b, wf_loras_b)
 
         # Process lora stacks with toggle data (filter inactive, apply strength)
         processed_stack_a = self._process_lora_toggle(lora_stack_a, loras_a_toggle)
@@ -572,8 +595,13 @@ class PromptManagerAdvanced:
         # Display logic: Include ALL loras (available + unavailable) so UI shows complete picture
         # Build display from available loras first, then add unavailable ones
         if not use_lora_input:
-            loras_a_display = self._format_loras_for_display_with_unavailable(preset_stack_a, all_preset_loras_a)
-            loras_b_display = self._format_loras_for_display_with_unavailable(preset_stack_b, all_preset_loras_b)
+            if use_workflow_data and (wf_loras_a or wf_loras_b):
+                # Workflow mode: display workflow LoRAs directly.
+                loras_a_display = self._format_loras_for_display(lora_stack_a)
+                loras_b_display = self._format_loras_for_display(lora_stack_b)
+            else:
+                loras_a_display = self._format_loras_for_display_with_unavailable(preset_stack_a, all_preset_loras_a)
+                loras_b_display = self._format_loras_for_display_with_unavailable(preset_stack_b, all_preset_loras_b)
         else:
             loras_a_display = self._format_loras_for_display_with_unavailable(lora_stack_a, all_preset_loras_a)
             loras_b_display = self._format_loras_for_display_with_unavailable(lora_stack_b, all_preset_loras_b)
@@ -598,7 +626,7 @@ class PromptManagerAdvanced:
                 "use_prompt_input": use_prompt_input,
                 "use_workflow_data": use_workflow_data,
                 "prompt_input": prompt,
-                "workflow_data": strip_runtime_objects(workflow_data) if isinstance(workflow_data, dict) else None,
+                "workflow_data": strip_runtime_objects(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None,
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
                 "input_loras_a": input_loras_a,  # Original input loras for change detection
@@ -622,23 +650,34 @@ class PromptManagerAdvanced:
             out_stack_a, out_stack_b = out_stack_b, out_stack_a
 
         # Build workflow_data output — start from incoming or saved data, update with PMA state
-        if isinstance(workflow_data, dict):
-            out_workflow_data = dict(workflow_data)
-        elif isinstance(workflow_data, str) and workflow_data.strip():
-            try:
-                out_workflow_data = json.loads(workflow_data)
-            except (json.JSONDecodeError, TypeError):
-                out_workflow_data = {}
+        if isinstance(resolved_workflow_data, dict):
+            out_workflow_data = dict(resolved_workflow_data)
         else:
             out_workflow_data = {}
         out_workflow_data['positive_prompt'] = final_output
         out_workflow_data['loras_a'] = [
-            {'name': name, 'model_strength': ms, 'clip_strength': cs}
-            for name, ms, cs in out_stack_a
+            {
+                'name': lora.get('name', ''),
+                'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
+                'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
+                'active': lora.get('active', True),
+                'available': lora.get('available', True),
+                'found': lora.get('available', True),
+            }
+            for lora in loras_a_display
+            if isinstance(lora, dict) and lora.get('name')
         ]
         out_workflow_data['loras_b'] = [
-            {'name': name, 'model_strength': ms, 'clip_strength': cs}
-            for name, ms, cs in out_stack_b
+            {
+                'name': lora.get('name', ''),
+                'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
+                'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
+                'active': lora.get('active', True),
+                'available': lora.get('available', True),
+                'found': lora.get('available', True),
+            }
+            for lora in loras_b_display
+            if isinstance(lora, dict) and lora.get('name')
         ]
         out_workflow_data['_source'] = 'PromptManagerAdvanced'
 
@@ -648,7 +687,7 @@ class PromptManagerAdvanced:
                           use_workflow_data=False, prompt=None, lora_stack_a=None, lora_stack_b=None,
                           trigger_words=None, thumbnail_image=None, workflow_data=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None,
-                          trigger_words_toggle=None):
+                          trigger_words_toggle=None, saved_workflow_data=None):
         """Tell ComfyUI which lazy inputs are needed based on current settings.
 
         When use_prompt_input is enabled, we need to request the prompt_input
@@ -752,7 +791,8 @@ class PromptManagerAdvanced:
                 "clip_strength": clip_strength,
                 "active": True,
                 "strength": model_strength,
-                "available": available
+                "available": available,
+                "found": available
             })
             seen_names.add(lora_name_lower)
 
@@ -794,7 +834,8 @@ class PromptManagerAdvanced:
                 "strength": float(item.get('strength', 1.0)),
                 "clip_strength": float(item.get('clip_strength', item.get('strength', 1.0))),
                 "active": item.get('active', True),
-                "available": found
+                "available": found,
+                "found": found
             })
 
         return all_loras
@@ -819,7 +860,8 @@ class PromptManagerAdvanced:
                     "clip_strength": lora['clip_strength'],
                     "active": lora['active'],
                     "strength": lora['strength'],
-                    "available": lora['available']
+                    "available": lora['available'],
+                    "found": lora.get('found', lora['available'])
                 })
                 seen_names.add(lora_name_lower)
 
@@ -1056,11 +1098,15 @@ async def save_prompt_advanced(request):
             normalized = []
             for lora in loras:
                 if isinstance(lora, dict) and lora.get('name'):
+                    available = lora.get('available', lora.get('found', True))
+                    found = lora.get('found', available)
                     normalized.append({
                         "name": lora.get('name'),
                         "strength": lora.get('strength', lora.get('model_strength', 1.0)),
                         "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0)),
-                        "active": lora.get('active', True)
+                        "active": lora.get('active', True),
+                        "available": bool(available),
+                        "found": bool(found),
                     })
             return normalized
 
@@ -1303,7 +1349,8 @@ async def get_prompt_data_advanced(request):
                 "prompt": prompt_data.get("prompt", ""),
                 "loras_a": add_availability(prompt_data.get("loras_a", [])),
                 "loras_b": add_availability(prompt_data.get("loras_b", [])),
-                "trigger_words": prompt_data.get("trigger_words", [])
+                "trigger_words": prompt_data.get("trigger_words", []),
+                "workflow_data": prompt_data.get("workflow_data")
             }
         })
     except Exception as e:

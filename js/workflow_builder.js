@@ -1185,11 +1185,17 @@ function updateWanVisibility(node) {
 }
 
 /** Merge two LoRA lists, dedup by name (second list wins on conflict). */
+function _sortLorasByName(loras) {
+    const src = Array.isArray(loras) ? [...loras] : [];
+    return src.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
+}
+
+/** Merge two LoRA lists, dedup by name (second list wins on conflict), then sort by name. */
 function _mergeLoraLists(listA, listB) {
     const byName = new Map();
     for (const l of listA) byName.set(l.name || "", l);
     for (const l of listB) byName.set(l.name || "", l);
-    return [...byName.values()];
+    return _sortLorasByName([...byName.values()]);
 }
 
 // --- LoRA display ---
@@ -1203,8 +1209,8 @@ function updateLoras(node) {
     const d = node._weExtracted;
     if (!d) return;
 
-    const lorasA = d.loras_a || [];
-    const lorasB = d.loras_b || [];
+    const lorasA = _sortLorasByName(d.loras_a || []);
+    const lorasB = _sortLorasByName(d.loras_b || []);
     const hasBoth = lorasA.length > 0 && lorasB.length > 0;
 
     const noLorasMsg = () => makeEl("div", {
@@ -1341,7 +1347,7 @@ function syncHidden(node) {
         if (w) w.value = val;
     };
     const serializeLoraList = (list, stackKey = "") => {
-        const src = Array.isArray(list) ? list : [];
+        const src = _sortLorasByName(Array.isArray(list) ? list : []);
         return src
             .map((lora) => {
                 const name = String(lora?.name || "").trim();
@@ -1817,12 +1823,13 @@ app.registerExtension({
             }, "Update Workflow");
             node._weUpdateBtn = updateBtn;
 
-            const _isExtractorSourceHint = (n) => {
+            const _isUpdateSourceHint = (n) => {
                 if (!n) return false;
                 const cc = n.comfyClass || "";
                 const ty = n.type || "";
                 return cc === "PromptExtractor" || cc === "WorkflowExtractor" ||
-                       ty === "PromptExtractor" || ty === "WorkflowExtractor";
+                       ty === "PromptExtractor" || ty === "WorkflowExtractor" ||
+                       cc === "PromptManagerAdvanced" || ty === "PromptManagerAdvanced";
             };
             const _isRerouteNodeHint = (n) => {
                 if (!n) return false;
@@ -1855,7 +1862,7 @@ app.registerExtension({
                     return;
                 }
                 const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
-                node._weUpdateBtn.style.display = _isExtractorSourceHint(upstream) ? "" : "none";
+                node._weUpdateBtn.style.display = _isUpdateSourceHint(upstream) ? "" : "none";
             };
             const _refreshUpdateWorkflowTooltip = () => {
                 if (!node._weUpdateBtn) return;
@@ -1875,13 +1882,13 @@ app.registerExtension({
                     return;
                 }
 
-                node._weUpdateBtn.title = "Pull and refresh from connected extractor source.";
+                node._weUpdateBtn.title = "Pull and refresh from connected workflow source.";
             };
             const _isConnectedWorkflowDataExtractor = () => {
                 const wfInput = node.inputs?.find(i => i.name === "workflow_data");
                 if (wfInput?.link == null) return false;
                 const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
-                return _isExtractorSourceHint(upstream);
+                return _isUpdateSourceHint(upstream);
             };
             node._weRefreshUpdateWorkflowTooltip = _refreshUpdateWorkflowTooltip;
             node._weRefreshUpdateWorkflowButtonVisibility = _refreshUpdateWorkflowButtonVisibility;
@@ -1899,7 +1906,8 @@ app.registerExtension({
                     const cc = n.comfyClass || "";
                     const ty = n.type || "";
                     return cc === "PromptExtractor" || cc === "WorkflowExtractor" ||
-                           ty === "PromptExtractor" || ty === "WorkflowExtractor";
+                           ty === "PromptExtractor" || ty === "WorkflowExtractor" ||
+                           cc === "PromptManagerAdvanced" || ty === "PromptManagerAdvanced";
                 };
                 const _isRerouteNode = (n) => {
                     if (!n) return false;
@@ -1942,7 +1950,7 @@ app.registerExtension({
                     }
                 }
                 if (!sourceNode) {
-                    _showError(node, "No PromptExtractor or WorkflowExtractor connected to workflow_data.");
+                    _showError(node, "No PromptExtractor, WorkflowExtractor, or PromptManagerAdvanced connected to workflow_data.");
                     return;
                 }
 
@@ -1953,6 +1961,7 @@ app.registerExtension({
                     const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
                     const isBuilderSource = sourceClass === "WorkflowBuilder";
                     const isContextSource = sourceClass === "WorkflowBridge";
+                    const isPmaSource = sourceClass === "PromptManagerAdvanced";
 
                     console.log("[WB UpdateTrace] Update Workflow start", {
                         nodeId: node.id,
@@ -2075,6 +2084,81 @@ app.registerExtension({
                         if (!extracted) {
                             _showError(node, "Connected WorkflowBridge workflow_data is unavailable or invalid. Execute upstream nodes, then click Update Workflow.");
                             return;
+                        }
+                    } else if (isPmaSource) {
+                        let wfData = null;
+                        const wfOutIdx = sourceNode.outputs?.findIndex(o => o.name === "workflow_data");
+                        if (wfOutIdx >= 0) {
+                            const out = sourceNode.outputs[wfOutIdx];
+                            wfData = out?._data ?? out?.value ?? null;
+                        }
+
+                        if (!wfData && sourceNode.lastWorkflowData) {
+                            wfData = sourceNode.lastWorkflowData;
+                        }
+
+                        if (wfData) {
+                            const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
+                            extracted = parseWorkflowData(wfJson);
+                        }
+
+                        if (!extracted) {
+                            const textWidget = sourceNode.widgets?.find(w => w.name === "text");
+                            const promptText = String(textWidget?.value || "");
+
+                            const toLora = (l) => {
+                                const name = String(l?.name || "").trim();
+                                if (!name) return null;
+                                const modelStrength = Number(l?.model_strength ?? l?.strength ?? 1.0);
+                                const clipStrength = Number(l?.clip_strength ?? l?.strength ?? modelStrength);
+                                return {
+                                    name,
+                                    model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
+                                    clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1.0,
+                                    active: l?.active !== false,
+                                };
+                            };
+                            const normalizeList = (arr) => (Array.isArray(arr) ? arr.map(toLora).filter(Boolean) : []);
+                            const mergeByName = (a, b) => {
+                                const out = [];
+                                const seen = new Set();
+                                for (const item of [...a, ...b]) {
+                                    const key = String(item?.name || "").toLowerCase();
+                                    if (!key || seen.has(key)) continue;
+                                    seen.add(key);
+                                    out.push(item);
+                                }
+                                return out;
+                            };
+
+                            const savedA = normalizeList(sourceNode.savedLorasA || []);
+                            const savedB = normalizeList(sourceNode.savedLorasB || []);
+                            const currentA = normalizeList(sourceNode.currentLorasA || []);
+                            const currentB = normalizeList(sourceNode.currentLorasB || []);
+
+                            extracted = {
+                                positive_prompt: promptText,
+                                negative_prompt: "",
+                                loras_a: mergeByName(savedA, currentA),
+                                loras_b: mergeByName(savedB, currentB),
+                                model_a: "",
+                                model_b: "",
+                                vae: { name: "", source: "workflow_data" },
+                                clip: { names: [], type: "", source: "workflow_data" },
+                                sampler: {
+                                    steps_a: 20,
+                                    cfg: 5.0,
+                                    seed_a: 0,
+                                    sampler_name: "euler",
+                                    scheduler: "simple",
+                                },
+                                resolution: { width: 768, height: 1280, batch_size: 1, length: null },
+                                model_family: "sdxl",
+                            };
+                        }
+
+                        if (extracted) {
+                            extracted._source = "PromptManagerAdvanced";
                         }
                     } else {
 

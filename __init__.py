@@ -2,7 +2,7 @@
 ComfyUI Prompt Manager - A comprehensive prompt and workflow management system for ComfyUI.
 Features: prompt management, LoRA stacks, workflow extraction, workflow generation.
 """
-__version__ = "1.23.0"
+__version__ = "1.25.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
