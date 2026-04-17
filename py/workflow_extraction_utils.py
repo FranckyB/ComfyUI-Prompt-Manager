@@ -353,8 +353,18 @@ def extract_clip_info(prompt_data, workflow_data):
 
 # ─── Resolution extraction ────────────────────────────────────────────────────
 
-def extract_resolution(prompt_data, workflow_data):
-    """Extract image/video resolution from Empty Latent nodes."""
+def extract_resolution(prompt_data, workflow_data, return_source=False):
+    """Extract image/video resolution from latent nodes.
+
+    Parameters
+    ----------
+    return_source : bool
+        If True, returns ``(resolution_dict, source)`` where source is one of:
+        ``prompt_graph``, ``workflow_graph``, ``embedded``, ``default``.
+    """
+    def _ret(res, source):
+        return (res, source) if return_source else res
+
     resolution = {'width': 512, 'height': 512, 'batch_size': 1, 'length': None}
 
     if prompt_data and isinstance(prompt_data, dict):
@@ -411,7 +421,7 @@ def extract_resolution(prompt_data, workflow_data):
                     if 'length' in inp:
                         l = inp.get('length')
                         resolution['length'] = _scalar(l, None) if l is not None else None
-                return resolution
+                return _ret(resolution, 'prompt_graph')
 
     if workflow_data and isinstance(workflow_data, dict):
         from .workflow_node_utils import build_node_map
@@ -427,7 +437,7 @@ def extract_resolution(prompt_data, workflow_data):
                     resolution['batch_size'] = int(widgets[2]) if widgets[2] else 1
                 except (ValueError, IndexError):
                     pass
-                return resolution
+                return _ret(resolution, 'workflow_graph')
 
             if ntype in VIDEO_LATENT_TYPES and len(widgets) >= 3:
                 try:
@@ -438,7 +448,7 @@ def extract_resolution(prompt_data, workflow_data):
                     resolution['batch_size'] = int(widgets[3]) if len(widgets) > 3 and widgets[3] else 1
                 except (ValueError, IndexError):
                     pass
-                return resolution
+                return _ret(resolution, 'workflow_graph')
 
     # ── Fallback: embedded extracted_data from WG / PE nodes ──────────────
     ed = _get_embedded_extracted_data(workflow_data)
@@ -450,8 +460,9 @@ def extract_resolution(prompt_data, workflow_data):
             resolution['batch_size'] = r.get('batch_size', resolution['batch_size'])
             if r.get('length') is not None:
                 resolution['length'] = r['length']
+            return _ret(resolution, 'embedded')
 
-    return resolution
+    return _ret(resolution, 'default')
 
 
 # ─── Model resolution ─────────────────────────────────────────────────────────

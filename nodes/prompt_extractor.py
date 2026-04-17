@@ -501,6 +501,29 @@ async def extract_preview(request):
         clip = extract_clip_info(prompt_data, wf_data)
         resolution = extract_resolution(prompt_data, wf_data)
 
+        print(
+            f"[PE UpdateTrace] extract-preview base resolution for {filename}: "
+            f"{resolution.get('width')}x{resolution.get('height')}"
+        )
+
+        # Simpler policy:
+        # - image/video files: always use the source media dimensions
+        # - json files: use workflow-derived resolution only
+        if ext != '.json':
+            src_w, src_h = _get_media_dimensions(file_path, ext, filename_hint=filename)
+            if src_w and src_h:
+                resolution['width'] = int(src_w)
+                resolution['height'] = int(src_h)
+                print(
+                    f"[PE UpdateTrace] extract-preview media resolution override for {filename}: "
+                    f"{resolution['width']}x{resolution['height']}"
+                )
+            else:
+                print(
+                    f"[PE UpdateTrace] extract-preview media probe failed for {filename}; "
+                    f"keeping {resolution.get('width')}x{resolution.get('height')}"
+                )
+
         # Handle A1111 format
         is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
         if is_a1111:
@@ -597,6 +620,11 @@ async def extract_preview(request):
             'lora_availability':  lora_avail,
         }
 
+        print(
+            f"[PE UpdateTrace] extract-preview final resolution for {filename}: "
+            f"{extracted['resolution'].get('width')}x{extracted['resolution'].get('height')}"
+        )
+
         print(f"[PromptExtractor] extract-preview: {filename} -> {family}, model_a={model_a}")
         return server.web.json_response({"extracted": extracted})
     except Exception as e:
@@ -639,6 +667,93 @@ def get_available_models():
         except Exception:
             pass
     return models
+
+
+def _get_media_dimensions(file_path, ext, filename_hint=None):
+    """Return (width, height) from an image/video file, or (None, None).
+
+    For videos, attempts in order:
+        1) ffprobe stream width/height
+        2) cached JS-extracted frame dimensions
+        3) PyAV first-frame dimensions
+    """
+    try:
+        if ext in ['.png', '.jpg', '.jpeg', '.webp'] and IMAGE_SUPPORT:
+            with Image.open(file_path) as img:
+                w, h = img.size
+                if w and h:
+                    return int(w), int(h)
+    except Exception:
+        pass
+
+    if ext in ['.mp4', '.webm', '.mov', '.avi']:
+        try:
+            result = subprocess.run(
+                [
+                    'ffprobe', '-v', 'quiet', '-print_format', 'json',
+                    '-select_streams', 'v:0', '-show_streams', file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout:
+                data = json.loads(result.stdout)
+                streams = data.get('streams') or []
+                if streams:
+                    s = streams[0]
+                    w = int(s.get('width') or 0)
+                    h = int(s.get('height') or 0)
+                    if w > 0 and h > 0:
+                        return w, h
+        except Exception:
+            pass
+
+        # Fallback: use cached JS video frame dimensions when available.
+        try:
+            candidates = []
+            if filename_hint:
+                hint = str(filename_hint).replace('\\', '/')
+                candidates.append(hint.replace('/', '_'))
+            for base_dir in (folder_paths.get_input_directory(), folder_paths.get_output_directory()):
+                try:
+                    real_base = os.path.realpath(base_dir)
+                    real_path = os.path.realpath(file_path)
+                    if real_path == real_base or real_path.startswith(real_base + os.sep):
+                        rel = os.path.relpath(file_path, base_dir).replace('\\', '/')
+                        candidates.append(rel.replace('/', '_'))
+                except Exception:
+                    pass
+            candidates.append(os.path.basename(file_path).replace('\\', '/').replace('/', '_'))
+
+            seen = set()
+            for key in candidates:
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                frame_b64 = _video_frames_cache.get(key)
+                if not frame_b64:
+                    continue
+                frame_tensor = base64_to_tensor(frame_b64)
+                if frame_tensor is not None and hasattr(frame_tensor, 'shape') and len(frame_tensor.shape) >= 3:
+                    h = int(frame_tensor.shape[1])
+                    w = int(frame_tensor.shape[2])
+                    if w > 0 and h > 0:
+                        return w, h
+        except Exception:
+            pass
+
+        # Last fallback: decode first frame via PyAV and read its dimensions.
+        try:
+            img = extract_video_frame_av(file_path, 0.0)
+            if img is not None and hasattr(img, 'size'):
+                w, h = img.size
+                if w and h:
+                    return int(w), int(h)
+        except Exception:
+            pass
+
+    return None, None
 
 
 def resolve_model_path(model_name):
@@ -3481,17 +3596,18 @@ class PromptExtractor:
                     _clip     = extract_clip_info(prompt_data, _raw_wf)
                     _res      = extract_resolution(prompt_data, _raw_wf)
 
-                    # If extracted resolution is still the bare 512 default,
-                    # use the actual image/video frame dimensions instead.
-                    # image_tensor shape is [B, H, W, C].
-                    if image_tensor is not None and hasattr(image_tensor, 'shape'):
-                        src_h = int(image_tensor.shape[1])
-                        src_w = int(image_tensor.shape[2])
-                        if src_w > 0 and src_h > 0:
-                            if _res['width'] == 512:
-                                _res['width'] = src_w
-                            if _res['height'] == 512:
-                                _res['height'] = src_h
+                    # Simpler policy:
+                    # - image/video files: always use source media dimensions
+                    # - json files: use workflow-derived resolution only
+                    if ext != '.json':
+                        src_w, src_h = _get_media_dimensions(resolved_path, ext)
+                        if src_w and src_h:
+                            _res['width'] = int(src_w)
+                            _res['height'] = int(src_h)
+                        elif image_tensor is not None and hasattr(image_tensor, 'shape'):
+                            # Last fallback if direct media probe fails.
+                            _res['width'] = int(image_tensor.shape[2])
+                            _res['height'] = int(image_tensor.shape[1])
 
                     # A1111 images embed sampler/resolution in the parameters
                     # string — the ComfyUI extraction functions won't find them.

@@ -248,6 +248,46 @@ function normalizeModelPath(modelPath) {
     return String(modelPath || "").replace(/\\/g, "/").toLowerCase();
 }
 
+function _leafName(v) {
+    const p = normalizeModelPath(v);
+    const idx = p.lastIndexOf("/");
+    return idx >= 0 ? p.substring(idx + 1) : p;
+}
+
+function _leafStem(v) {
+    const leaf = _leafName(v);
+    const dot = leaf.lastIndexOf(".");
+    return dot > 0 ? leaf.substring(0, dot) : leaf;
+}
+
+function _findEquivalentOptionValue(sel, value) {
+    const v = String(value ?? "");
+    if (!v) return "";
+    const opts = [...(sel?.options || [])];
+    if (!opts.length) return "";
+
+    // 1) exact value
+    const exact = opts.find(o => o.value === v);
+    if (exact) return exact.value;
+
+    // 2) normalized full path match
+    const nv = normalizeModelPath(v);
+    const byNorm = opts.find(o => normalizeModelPath(o.value) === nv);
+    if (byNorm) return byNorm.value;
+
+    // 3) filename (with extension) match ignoring folders
+    const leaf = _leafName(v);
+    const byLeaf = opts.find(o => _leafName(o.value) === leaf);
+    if (byLeaf) return byLeaf.value;
+
+    // 4) filename stem match ignoring folders + extension
+    const stem = _leafStem(v);
+    const byStem = opts.find(o => _leafStem(o.value) === stem);
+    if (byStem) return byStem.value;
+
+    return "";
+}
+
 function applyWanVideoModelSplit(models, familyKey, { preferHigh = false, preferLow = false } = {}) {
     let filtered = Array.isArray(models) ? [...models] : [];
     const isWanVideo = (familyKey === "wan_video_i2v" || familyKey === "wan_video_t2v");
@@ -297,6 +337,17 @@ function populateGroupedSelect(sel, models, keepFirst) {
         }
         sel.appendChild(og);
     }
+}
+
+function _ensureOptionValue(sel, value, grouped) {
+    const v = String(value ?? "");
+    if (!v) return;
+    if (_findEquivalentOptionValue(sel, v)) return;
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = grouped ? cleanModelName(v) : v;
+    o.style.color = C.text;
+    sel.appendChild(o);
 }
 
 function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includeEmptyOption = true) {
@@ -367,7 +418,14 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
             if (_origVal && ![...sel.options].some(o => o.value === _origVal)) {
                 resetBtn.style.visibility = "visible";
             }
-            sel.value = currentVal || sel.options[0]?.value || "";
+            // Keep existing selection stable even if fetched options changed.
+            _ensureOptionValue(sel, currentVal, grouped);
+            const resolvedCurrent = _findEquivalentOptionValue(sel, currentVal);
+            if (resolvedCurrent) {
+                sel.value = resolvedCurrent;
+            } else {
+                sel.value = sel.options[0]?.value || "";
+            }
             _recolor();
             _loaded = true;
         })();
@@ -403,18 +461,26 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
         if (v && v !== "\u2014" && !v.startsWith("(")) {
             const o = document.createElement("option"); o.value = v;
             o.textContent = grouped ? cleanModelName(v) : v;
-            if (found === false) { o.style.color = C.error; o.dataset.missing = "1"; }
+            const equivalentNow = _findEquivalentOptionValue(sel, v);
+            const missing = (found === false) && !equivalentNow;
+            if (missing) { o.style.color = C.error; o.dataset.missing = "1"; }
             else { o.style.color = C.text; }
             sel.appendChild(o);
-            sel.value = v;
+            sel.value = equivalentNow || v;
         } else {
             sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
         }
-        sel.style.color = (found === false && v && !v.startsWith("(")) ? C.error : C.text;
+        const resolvedAfterSet = _findEquivalentOptionValue(sel, v);
+        const missingAfterSet = (found === false && v && !v.startsWith("(") && !resolvedAfterSet);
+        sel.style.color = missingAfterSet ? C.error : C.text;
         resetBtn.style.visibility = "hidden";
     };
     row._getValue = () => sel.value;
     row._resetLoaded = () => { _loaded = false; };
+    row._markLoaded = () => {
+        _loaded = true;
+        _loadingPromise = null;
+    };
     row._ensureLoaded = _ensureLoaded;
     return row;
 }
@@ -422,6 +488,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
 async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, includeEmptyOption = true) {
     const options = await fetchFn();
     const sel = row._sel;
+    const previousVal = sel.value;
     if (grouped) {
         sel.innerHTML = "";
         if (includeEmptyOption) {
@@ -431,7 +498,13 @@ async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, incl
             sel.appendChild(noneOpt);
         }
         populateGroupedSelect(sel, options, true);
-        sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
+        _ensureOptionValue(sel, previousVal, grouped);
+        const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
+        if (resolvedPrev) {
+            sel.value = resolvedPrev;
+        } else {
+            sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
+        }
     } else {
         sel.innerHTML = "";
         const defOpt = document.createElement("option");
@@ -446,10 +519,18 @@ async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, incl
         if (recommendedValue && options.includes(recommendedValue)) {
             sel.value = recommendedValue;
         } else {
-            sel.value = "";
+            const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
+            if (resolvedPrev) {
+                sel.value = resolvedPrev;
+            } else if (previousVal) {
+                _ensureOptionValue(sel, previousVal, grouped);
+                sel.value = previousVal;
+            } else {
+                sel.value = "";
+            }
         }
     }
-    if (row._resetLoaded) row._resetLoaded();
+    if (row._markLoaded) row._markLoaded();
     sel.style.color = C.text;
 }
 
@@ -801,10 +882,17 @@ async function updateUI(node) {
     const sectionLocks = node._weSectionLocks || {};
     const modelLocked = !!sectionLocks.model;
     const samplerLocked = !!sectionLocks.sampler;
-    const resolutionLocked = !!sectionLocks.resolution || !!node._weResLocked;
+    const resolutionLocked = !!sectionLocks.resolution;
     const positiveLocked = !!sectionLocks.positive;
     const negativeLocked = !!sectionLocks.negative;
     const lorasLocked = !!sectionLocks.loras;
+
+    console.log("[WB UpdateTrace] updateUI start", {
+        incomingResolution: d?.resolution || null,
+        resolutionLocked,
+        sectionLocks: { ...sectionLocks },
+        weResLocked: !!node._weResLocked,
+    });
 
     // Family — must be set FIRST and dropdowns reloaded before setting
     // model/VAE/CLIP values, otherwise the wrong family's options are shown.
@@ -883,6 +971,15 @@ async function updateUI(node) {
             const isDefault = !firstName || firstName.startsWith("(") || firstName === "\u2014";
             node._weClipRow._setOriginal(isDefault ? "" : firstName);
         }
+
+        // Prewarm options so the first dropdown open after Update Workflow
+        // already has the selected item highlighted.
+        await Promise.allSettled([
+            node._weModelRow?._ensureLoaded?.(),
+            node._weModelBRow?._ensureLoaded?.(),
+            node._weVaeRow?._ensureLoaded?.(),
+            node._weClipRow?._ensureLoaded?.(),
+        ]);
     }
 
     // Guard: never leave Model A visually empty when models are available.
@@ -909,15 +1006,67 @@ async function updateUI(node) {
     if (node._weResRows) {
         const rr = node._weResRows;
         if (!resolutionLocked) {
-            // Reset ratio to None so the incoming values aren't constrained
-            if (node._weRatioSel) {
-                node._weRatioSel.value = "0";
-                node._weRatio = "None";
-                if (node._weSetRatioIdx) node._weSetRatioIdx(0);
+            const inW = parseInt(r.width ?? 768) || 768;
+            const inH = parseInt(r.height ?? 1280) || 1280;
+
+            console.log("[WB UpdateTrace] updateUI applying resolution", {
+                inW,
+                inH,
+                batch: r.batch_size ?? 1,
+                length: r.length ?? null,
+            });
+
+            // Match orientation to incoming resolution.
+            if (node._weSetLandscape) {
+                node._weSetLandscape(inW > inH);
             }
-            if (rr.width?._setOriginal) rr.width._setOriginal(r.width ?? 768);
-            if (rr.height?._setOriginal) rr.height._setOriginal(r.height ?? 1280);
+
+            if (rr.width?._setOriginal) rr.width._setOriginal(inW);
+            if (rr.height?._setOriginal) rr.height._setOriginal(inH);
             if (rr.batch?._setOriginal) rr.batch._setOriginal(r.batch_size ?? 1);
+
+            // If incoming resolution exactly matches a known ratio preset,
+            // select that ratio; otherwise keep None.
+            if (node._weRatioSel && node._weSetRatioIdx) {
+                const ratios = Array.isArray(node._weRatioDefs) ? node._weRatioDefs : [];
+                const landscape = inW > inH;
+                let matchedIdx = 0;
+
+                for (let i = 1; i < ratios.length; i++) {
+                    const ratio = ratios[i];
+                    if (!ratio || !ratio.w || !ratio.h) continue;
+                    const isMatch = landscape
+                        ? (inW * ratio.w === inH * ratio.h)
+                        : (inW * ratio.h === inH * ratio.w);
+                    if (isMatch) {
+                        matchedIdx = i;
+                        break;
+                    }
+                }
+
+                node._weSetRatioIdx(matchedIdx);
+                node._weRatioSel.value = String(matchedIdx);
+                if (matchedIdx === 0) {
+                    node._weRatio = "None";
+                } else {
+                    const ratio = ratios[matchedIdx];
+                    node._weRatio = landscape
+                        ? `${ratio.h}:${ratio.w}`
+                        : `${ratio.w}:${ratio.h}`;
+                }
+
+                console.log("[WB UpdateTrace] updateUI ratio/orientation", {
+                    matchedIdx,
+                    ratioLabel: node._weRatio,
+                    landscape,
+                });
+            }
+        } else {
+            console.warn("[WB UpdateTrace] resolution apply skipped because section is locked", {
+                sectionLocks: { ...sectionLocks },
+                weResLocked: !!node._weResLocked,
+                incomingResolution: r,
+            });
         }
         if (rr.frames) {
             if (r.length != null) {
@@ -925,6 +1074,14 @@ async function updateUI(node) {
                 if (rr.frames._setOriginal) rr.frames._setOriginal(r.length);
             }
         }
+
+        console.log("[WB UpdateTrace] updateUI final resolution UI", {
+            width: rr.width?._inp?.value,
+            height: rr.height?._inp?.value,
+            batch: rr.batch?._inp?.value,
+            frames: rr.frames?._inp?.value,
+            ratio: node._weRatio,
+        });
     }
 
     // Prompts
@@ -1763,6 +1920,12 @@ app.registerExtension({
                     const isBuilderSource = sourceClass === "WorkflowBuilder";
                     const isContextSource = sourceClass === "WorkflowBridge";
 
+                    console.log("[WB UpdateTrace] Update Workflow start", {
+                        nodeId: node.id,
+                        sourceNodeId: sourceNode?.id,
+                        sourceClass,
+                    });
+
                     if (isBuilderSource) {
                         // Prefer server-side WB cache from last execution.
                         try {
@@ -1895,6 +2058,12 @@ app.registerExtension({
                             );
                             const cacheData = await cacheResp.json();
                             if (cacheData.extracted) {
+                                console.log("[WB UpdateTrace] extractor cache payload", {
+                                    sourceNodeId: sourceNode.id,
+                                    sourceFile: cacheData.extracted._source_file,
+                                    sourceFolder: cacheData.extracted._source_folder,
+                                    resolution: cacheData.extracted.resolution || null,
+                                });
                                 const cachedFile = cacheData.extracted._source_file || "";
                                 const cachedFolder = cacheData.extracted._source_folder || "input";
                                 if (cachedFile === peFilename && cachedFolder === peSource) {
@@ -1913,20 +2082,57 @@ app.registerExtension({
                             }
                         }
 
+                        // Always refresh resolution from live preview extraction.
+                        // This keeps Update Workflow aligned with current media size
+                        // even when using stale cached extractor payloads.
+                        let previewExtracted = null;
+                        if (peFilename && peFilename !== "(none)") {
+                            try {
+                                const resp = await fetch(
+                                    `/prompt-extractor/extract-preview?filename=${encodeURIComponent(peFilename)}&source=${encodeURIComponent(peSource)}`
+                                );
+                                const data = await resp.json();
+                                previewExtracted = data.extracted || null;
+                                console.log("[WB UpdateTrace] extractor preview payload", {
+                                    filename: peFilename,
+                                    source: peSource,
+                                    resolution: previewExtracted?.resolution || null,
+                                    isVideo: previewExtracted?.is_video,
+                                    error: data.error || null,
+                                });
+                                if (!previewExtracted && !extracted) {
+                                    _showError(node, data.error || "No metadata found in selected file.");
+                                    return;
+                                }
+                            } catch (e) {
+                                console.warn("[WorkflowBuilder] Preview refresh failed:", e);
+                            }
+                        }
+
+                        if (previewExtracted) {
+                            if (!extracted) {
+                                extracted = previewExtracted;
+                            } else {
+                                extracted.resolution = {
+                                    ...(extracted.resolution || {}),
+                                    ...(previewExtracted.resolution || {}),
+                                };
+                            }
+                        }
+
+                        console.log("[WB UpdateTrace] merged extracted for process", {
+                            resolution: extracted?.resolution || null,
+                            model_family: extracted?.model_family || extracted?.family || null,
+                            sourceFile: extracted?._source_file || null,
+                        });
+
                         if (!extracted) {
                             if (!peFilename || peFilename === "(none)") {
                                 _showError(node, "PromptExtractor has no file selected.");
-                                return;
+                            } else {
+                                _showError(node, "No extracted data available from PromptExtractor.");
                             }
-                            const resp = await fetch(
-                                `/prompt-extractor/extract-preview?filename=${encodeURIComponent(peFilename)}&source=${encodeURIComponent(peSource)}`
-                            );
-                            const data = await resp.json();
-                            extracted = data.extracted;
-                            if (!extracted) {
-                                _showError(node, data.error || "No metadata found in selected file.");
-                                return;
-                            }
+                            return;
                         }
                     }
 
@@ -1937,6 +2143,10 @@ app.registerExtension({
                         body: JSON.stringify({ extracted }),
                     });
                     const processData = await processResp.json();
+                    console.log("[WB UpdateTrace] process-extracted response", {
+                        error: processData.error || null,
+                        resolution: processData.extracted?.resolution || extracted?.resolution || null,
+                    });
                     if (processData.error) {
                         _showError(node, processData.error);
                         return;
@@ -2023,6 +2233,7 @@ app.registerExtension({
                 { w: 2,  h: 3  },
                 { w: 9,  h: 16 },
             ];
+            node._weRatioDefs = RATIOS;
             function _ratioLabel(r, land) {
                 if (r.w === 0) return "None";
                 return land ? `${r.h}:${r.w}` : `${r.w}:${r.h}`;
