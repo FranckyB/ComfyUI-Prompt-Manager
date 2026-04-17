@@ -346,9 +346,37 @@ class WorkflowRenderer:
             wf_out.pop("MODEL_B", None)
         wf_out["CLIP"] = clip
         wf_out["VAE"] = vae
+        cond_pos_out, cond_neg_out = _encode_text_conditioning(clip, positive_prompt, negative_prompt)
+        wf_out["POSITIVE"] = cond_pos_out
+        wf_out["NEGATIVE"] = cond_neg_out
         wf_out["model_name"] = _short_display_name(resolved_a or model_name_a)
 
         return (decoded, out_latent, wf_out)
+
+
+def _encode_text_conditioning(clip, positive_prompt, negative_prompt):
+    """
+    Resolve positive/negative text conditioning from a CLIP encoder.
+    Returns (positive_conditioning, negative_conditioning), each possibly None.
+    """
+    if clip is None:
+        return None, None
+
+    try:
+        tokens_pos = clip.tokenize(str(positive_prompt or ""))
+        cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
+    except Exception as e:
+        print(f"[WorkflowRenderer] Failed to encode positive conditioning: {e}")
+        cond_pos = None
+
+    try:
+        tokens_neg = clip.tokenize(str(negative_prompt or ""))
+        cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
+    except Exception as e:
+        print(f"[WorkflowRenderer] Failed to encode negative conditioning: {e}")
+        cond_neg = None
+
+    return cond_pos, cond_neg
 
 # ── Model loading ──────────────────────────────────────────────────
 

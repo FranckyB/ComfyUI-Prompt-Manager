@@ -100,8 +100,12 @@ const C = {
     error:     "rgba(220, 53, 69, 0.9)",
 };
 
-const SECTION_LOCK_SVG_OPEN = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`;
-const SECTION_LOCK_SVG_CLOSED = `<svg width="10" height="12" viewBox="0 0 20 24" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="11" rx="2"/><path d="M6 11V7a4 4 0 0 1 8 0v4"/></svg>`;
+const UI_ICON_STROKE = 1.6;
+const LOCK_ICON_STROKE = 2.7;
+const UI_ICON_COLOR = "rgba(255,255,255,0.85)";
+const UI_ICON_COLOR_DIM = "rgba(255,255,255,0.72)";
+const SECTION_LOCK_SVG_OPEN = `<svg width="14" height="16" viewBox="0 0 20 24" fill="none" stroke="${UI_ICON_COLOR}" stroke-width="${LOCK_ICON_STROKE}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`;
+const SECTION_LOCK_SVG_CLOSED = `<svg width="14" height="16" viewBox="0 0 20 24" fill="none" stroke="${UI_ICON_COLOR}" stroke-width="${LOCK_ICON_STROKE}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="10" rx="2"/><path d="M6 11V7a4 4 0 0 1 8 0v4"/></svg>`;
 
 // --- Tiny helpers ---
 function makeEl(tag, style, text) {
@@ -148,7 +152,7 @@ function makeSection(title) {
     });
     const label = makeEl("span", {}, title);
     const lockBtn = makeEl("span", {
-        width: "14px", flexShrink: "0", display: "inline-flex",
+        width: "20px", flexShrink: "0", display: "inline-flex",
         alignItems: "center", justifyContent: "center", cursor: "pointer",
     });
     header.append(label, lockBtn);
@@ -867,10 +871,10 @@ async function updateUI(node) {
     if (node._weResRows) {
         const rr = node._weResRows;
         if (!resolutionLocked) {
-            // Reset ratio to Freeform so the incoming values aren't constrained
+            // Reset ratio to None so the incoming values aren't constrained
             if (node._weRatioSel) {
                 node._weRatioSel.value = "0";
-                node._weRatio = "Freeform";
+                node._weRatio = "None";
                 if (node._weSetRatioIdx) node._weSetRatioIdx(0);
             }
             if (rr.width?._setOriginal) rr.width._setOriginal(r.width ?? 768);
@@ -1024,7 +1028,7 @@ function updateLoras(node) {
             const avail = d.lora_availability?.[name] !== false;
             if (node._weLoraState[stateKey] === undefined) {
                 node._weLoraState[stateKey] = {
-                    active: true,
+                    active: lora.active !== false,
                     model_strength: lora.model_strength ?? 1.0,
                     clip_strength: lora.clip_strength ?? 1.0,
                 };
@@ -1104,6 +1108,35 @@ function _showError(node, errorMsg) {
     banner.append(icon, text);
 
     // Insert at the top of the root
+    root.insertBefore(banner, root.firstChild);
+}
+
+function _showInfo(node, infoMsg) {
+    const root = node._weRoot;
+    if (!root) return;
+
+    const existing = root.querySelector(".we-info-banner");
+    if (existing) existing.remove();
+
+    if (!infoMsg) return;
+
+    const banner = makeEl("div", {
+        padding: "8px 12px",
+        backgroundColor: "rgba(66, 153, 225, 0.16)",
+        border: "1px solid rgba(66, 153, 225, 0.65)",
+        borderRadius: "6px",
+        color: "#b9dcff",
+        fontSize: "12px",
+        lineHeight: "1.4",
+        marginBottom: "4px",
+        whiteSpace: "pre-line",
+        wordBreak: "break-word",
+    });
+    banner.className = "we-info-banner";
+
+    const icon = makeEl("span", { marginRight: "6px", fontSize: "13px" }, "\u2139\uFE0F");
+    const text = makeEl("span", {}, infoMsg);
+    banner.append(icon, text);
     root.insertBefore(banner, root.firstChild);
 }
 
@@ -1444,6 +1477,7 @@ app.registerExtension({
             // -- Build the DOM UI --
             // ============================================================
             const root = makeEl("div", {
+                position: "relative",
                 display: "flex", flexDirection: "column", gap: "4px",
                 // paddingBottom: 12px small buffer at the bottom of the node.
                 padding: "6px 6px 12px 6px", marginTop: "-10px",
@@ -1458,6 +1492,63 @@ app.registerExtension({
             node._weRoot = root;
             node._weRoot = root;
 
+            const FILTER_ICON_GLYPH = "👁\uFE0E";
+
+            // -- Top-right help icon on node frame (canvas-drawn) --
+            node._weHelpText = [
+                "Workflow Builder quick help:",
+                "- Connect workflow_data to drive this node from upstream data.",
+                "- Update Workflow appears only for extractor sources.",
+                "- For normal workflow_data sources, execute queue to refresh UI.",
+                `- Model family filtering can be toggled with ${FILTER_ICON_GLYPH}.`,
+                "- Lock a section to keep those values unchanged.",
+            ].join("\n");
+            node._weHelpVisible = false;
+            node._weHelpIconRect = null;
+
+            const origDrawForeground = node.onDrawForeground;
+            node.onDrawForeground = function (ctx) {
+                if (origDrawForeground) origDrawForeground.apply(this, arguments);
+
+                const w = this.size?.[0] || 0;
+                const x = Math.max(4, w - 18);
+                const y = -12;
+                this._weHelpIconRect = { x: x - 4, y: y - 7, w: 12, h: 14 };
+
+                ctx.save();
+                ctx.fillStyle = "rgba(255,255,255,0.9)";
+                ctx.font = "bold 19px sans-serif";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                ctx.fillText("?", x, y);
+                ctx.restore();
+            };
+
+            const origMouseDown = node.onMouseDown;
+            node.onMouseDown = function (e, pos) {
+                const r = this._weHelpIconRect;
+                const overHelp = !!(r && pos && pos[0] >= r.x && pos[0] <= (r.x + r.w) && pos[1] >= r.y && pos[1] <= (r.y + r.h));
+                if (overHelp) {
+                    this._weHelpVisible = !this._weHelpVisible;
+                    _showInfo(this, this._weHelpVisible ? this._weHelpText : null);
+                    this.setDirtyCanvas(true, true);
+                    return true;
+                }
+                if (origMouseDown) return origMouseDown.apply(this, arguments);
+                return false;
+            };
+
+            const origMouseMove = node.onMouseMove;
+            node.onMouseMove = function (e, pos, graphcanvas) {
+                const r = this._weHelpIconRect;
+                const overHelp = !!(r && pos && pos[0] >= r.x && pos[0] <= (r.x + r.w) && pos[1] >= r.y && pos[1] <= (r.y + r.h));
+                if (graphcanvas?.canvas) {
+                    graphcanvas.canvas.style.cursor = overHelp ? "help" : "";
+                }
+                if (origMouseMove) return origMouseMove.apply(this, arguments);
+                return false;
+            };
+
             // -- "Update Workflow" button — pull data from source node --
             const updateBtn = makeEl("button", {
                 width: "100%", padding: "6px 0",
@@ -1466,21 +1557,84 @@ app.registerExtension({
                 fontWeight: "bold", fontSize: "13px",
                 fontFamily: "inherit", marginBottom: "2px",
             }, "\u{1F504} Update Workflow");
-            // Hide button initially if workflow_data not connected
-            const wfConn = node.inputs?.find(i => i.name === "workflow_data");
-            if (!wfConn || wfConn.link == null) updateBtn.style.display = "none";
             node._weUpdateBtn = updateBtn;
+
+            const _isExtractorSourceHint = (n) => {
+                if (!n) return false;
+                const cc = n.comfyClass || "";
+                const ty = n.type || "";
+                return cc === "PromptExtractor" || cc === "WorkflowExtractor" ||
+                       ty === "PromptExtractor" || ty === "WorkflowExtractor";
+            };
+            const _isRerouteNodeHint = (n) => {
+                if (!n) return false;
+                const cc = (n.comfyClass || "").toLowerCase();
+                const ty = (n.type || "").toLowerCase();
+                return cc.includes("reroute") || ty.includes("reroute");
+            };
+            const _resolveUpstreamNodeHint = (graph, startLinkId) => {
+                if (!graph || startLinkId == null) return null;
+                let linkId = startLinkId;
+                const seen = new Set();
+                for (let hop = 0; hop < 24; hop++) {
+                    if (linkId == null || seen.has(linkId)) break;
+                    seen.add(linkId);
+                    const linkInfo = graph.links?.[linkId];
+                    if (!linkInfo) break;
+                    const srcNode = graph.getNodeById?.(linkInfo.origin_id);
+                    if (!srcNode) break;
+                    if (!_isRerouteNodeHint(srcNode)) return srcNode;
+                    const in0 = srcNode.inputs?.[0];
+                    linkId = in0?.link ?? null;
+                }
+                return null;
+            };
+            const _refreshUpdateWorkflowButtonVisibility = () => {
+                if (!node._weUpdateBtn) return;
+                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                if (wfInput?.link == null) {
+                    node._weUpdateBtn.style.display = "none";
+                    return;
+                }
+                const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
+                node._weUpdateBtn.style.display = _isExtractorSourceHint(upstream) ? "" : "none";
+            };
+            const _refreshUpdateWorkflowTooltip = () => {
+                if (!node._weUpdateBtn) return;
+                if (node._weUpdateBtn.style.display === "none") {
+                    node._weUpdateBtn.title = "";
+                    return;
+                }
+                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                if (wfInput?.link == null) {
+                    node._weUpdateBtn.title = "Connect workflow_data, execute upstream nodes, then click Update Workflow.";
+                    return;
+                }
+
+                const sourceNode = _resolveUpstreamNodeHint(node.graph, wfInput.link);
+                if (!sourceNode) {
+                    node._weUpdateBtn.title = "Execute upstream nodes, then click Update Workflow.";
+                    return;
+                }
+
+                node._weUpdateBtn.title = "Pull and refresh from connected extractor source.";
+            };
+            node._weRefreshUpdateWorkflowTooltip = _refreshUpdateWorkflowTooltip;
+            node._weRefreshUpdateWorkflowButtonVisibility = _refreshUpdateWorkflowButtonVisibility;
+            _refreshUpdateWorkflowButtonVisibility();
+            _refreshUpdateWorkflowTooltip();
+
             updateBtn.onmouseenter = () => { updateBtn.style.background = C.accentDim; };
             updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
             updateBtn.onclick = async () => {
                 // 1. Find a source node — prefer one connected via workflow_data input
-                // Supported: PromptExtractor, WorkflowExtractor, WorkflowBuilder.
+                // Supported: PromptExtractor, WorkflowExtractor, WorkflowBuilder, WorkflowContext.
                 const _isSupportedSource = (n) => {
                     if (!n) return false;
                     const cc = n.comfyClass || "";
                     const ty = n.type || "";
-                    return cc === "PromptExtractor" || cc === "WorkflowExtractor" || cc === "WorkflowBuilder" ||
-                           ty === "PromptExtractor" || ty === "WorkflowExtractor" || ty === "WorkflowBuilder";
+                    return cc === "PromptExtractor" || cc === "WorkflowExtractor" ||
+                           ty === "PromptExtractor" || ty === "WorkflowExtractor";
                 };
                 const _isRerouteNode = (n) => {
                     if (!n) return false;
@@ -1523,11 +1677,7 @@ app.registerExtension({
                     }
                 }
                 if (!sourceNode) {
-                    if (wfInput?.link != null) {
-                        _showError(node, "Connected workflow_data source is unsupported or routed through an unresolved node.");
-                    } else {
-                        _showError(node, "No PromptExtractor, WorkflowExtractor, or WorkflowBuilder node found on the graph.");
-                    }
+                    _showError(node, "No PromptExtractor or WorkflowExtractor connected to workflow_data.");
                     return;
                 }
 
@@ -1537,6 +1687,7 @@ app.registerExtension({
                     let extracted = null;
                     const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
                     const isBuilderSource = sourceClass === "WorkflowBuilder";
+                    const isContextSource = sourceClass === "WorkflowContext";
 
                     if (isBuilderSource) {
                         // Prefer server-side WB cache from last execution.
@@ -1632,6 +1783,27 @@ app.registerExtension({
                             }
                         } catch (e) {
                             console.warn("[WorkflowBuilder] Failed to merge source builder override_data:", e);
+                        }
+                    } else if (isContextSource) {
+                        // Pull workflow_data from WorkflowContext output cache.
+                        // This supports Builder -> Context -> Builder update flows.
+                        let wfData = null;
+                        const wfOutIdx = sourceNode.outputs?.findIndex(o => o.name === "workflow_data");
+                        if (wfOutIdx >= 0) {
+                            const out = sourceNode.outputs[wfOutIdx];
+                            wfData = out?._data ?? out?.value ?? null;
+                        }
+
+                        if (!wfData) {
+                            _showError(node, "Connected WorkflowContext has no cached workflow_data yet. Execute upstream nodes, then click Update Workflow.");
+                            return;
+                        }
+
+                        const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
+                        extracted = parseWorkflowData(wfJson);
+                        if (!extracted) {
+                            _showError(node, "Connected WorkflowContext workflow_data is unavailable or invalid. Execute upstream nodes, then click Update Workflow.");
+                            return;
                         }
                     } else {
 
@@ -1756,7 +1928,7 @@ app.registerExtension({
                     app.graph.setDirtyCanvas(true, true);
                 } catch (e) {
                     console.error("[WorkflowBuilder] Update Workflow error:", e);
-                    _showError(node, "Failed to fetch data from PromptExtractor.");
+                    _showError(node, "Failed to refresh workflow data from the connected source.");
                 } finally {
                     updateBtn.disabled = false;
                     updateBtn.textContent = "\u{1F504} Update Workflow";
@@ -1770,7 +1942,7 @@ app.registerExtension({
 
             // Aspect ratio definitions — stored as portrait (w < h)
             const RATIOS = [
-                { w: 0,  h: 0  },   // Freeform
+                { w: 0,  h: 0  },   // None
                 { w: 1,  h: 1  },
                 { w: 4,  h: 5  },
                 { w: 3,  h: 4  },
@@ -1778,7 +1950,7 @@ app.registerExtension({
                 { w: 9,  h: 16 },
             ];
             function _ratioLabel(r, land) {
-                if (r.w === 0) return "Freeform";
+                if (r.w === 0) return "None";
                 return land ? `${r.h}:${r.w}` : `${r.w}:${r.h}`;
             }
 
@@ -1787,7 +1959,7 @@ app.registerExtension({
             let _currentRatioIdx = 0;
             node._weResLocked = false;
             node._weRatioLandscape = false;
-            node._weRatio = "Freeform";
+            node._weRatio = "None";
 
             // Helper: ghost / un-ghost resolution inputs + update lock icon
             function _setResDisabled(disabled) {
@@ -1832,13 +2004,13 @@ app.registerExtension({
             // Orient icon in the right icon column
             const orientIcon = makeEl("span", {
                 cursor: "pointer", display: "inline-flex", alignItems: "center",
-                justifyContent: "center", width: "14px", flexShrink: "0", marginLeft: "auto",
+                justifyContent: "center", width: "18px", flexShrink: "0", marginLeft: "auto",
             });
             function _drawOrient() {
                 if (_landscape) {
-                    orientIcon.innerHTML = `<svg width="14" height="11" viewBox="0 0 14 11" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x=".5" y=".5" width="13" height="10" rx="1" stroke="rgba(255,255,255,0.55)" stroke-width="1"/><circle cx="7" cy="3.8" r="1.4" fill="rgba(255,255,255,0.45)"/><path d="M4.5 9.5v-.8c0-1.1.9-2 2-2h1c1.1 0 2 .9 2 2v.8" stroke="rgba(255,255,255,0.45)" stroke-width=".9" stroke-linecap="round" fill="none"/></svg>`;
+                    orientIcon.innerHTML = `<svg width="17" height="13" viewBox="0 0 14 11" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x=".5" y=".5" width="13" height="10" rx="1" stroke="${UI_ICON_COLOR}" stroke-width="${UI_ICON_STROKE}"/><circle cx="7" cy="3.8" r="1.35" fill="${UI_ICON_COLOR_DIM}"/><path d="M4.5 9.5v-.8c0-1.1.9-2 2-2h1c1.1 0 2 .9 2 2v.8" stroke="${UI_ICON_COLOR_DIM}" stroke-width="${UI_ICON_STROKE}" stroke-linecap="round" fill="none"/></svg>`;
                 } else {
-                    orientIcon.innerHTML = `<svg width="10" height="14" viewBox="0 0 10 14" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x=".5" y=".5" width="9" height="13" rx="1" stroke="rgba(255,255,255,0.55)" stroke-width="1"/><circle cx="5" cy="4.5" r="1.5" fill="rgba(255,255,255,0.45)"/><path d="M2.5 12.5v-1c0-1.2 1-2.2 2.2-2.2h.6c1.2 0 2.2 1 2.2 2.2v1" stroke="rgba(255,255,255,0.45)" stroke-width=".9" stroke-linecap="round" fill="none"/></svg>`;
+                    orientIcon.innerHTML = `<svg width="12" height="17" viewBox="0 0 10 14" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x=".5" y=".5" width="9" height="13" rx="1" stroke="${UI_ICON_COLOR}" stroke-width="${UI_ICON_STROKE}"/><circle cx="5" cy="4.5" r="1.35" fill="${UI_ICON_COLOR_DIM}"/><path d="M2.5 12.5v-1c0-1.2 1-2.2 2.2-2.2h.6c1.2 0 2.2 1 2.2 2.2v1" stroke="${UI_ICON_COLOR_DIM}" stroke-width="${UI_ICON_STROKE}" stroke-linecap="round" fill="none"/></svg>`;
                 }
                 orientIcon.title = _landscape ? "Landscape — click for portrait" : "Portrait — click for landscape";
             }
@@ -1909,7 +2081,7 @@ app.registerExtension({
             root.appendChild(resSec);
 
             node._weResRows = resRows;
-            node._weRatio = "Freeform";
+            node._weRatio = "None";
             node._weRatioSel = ratioSel;
             node._weRatioLandBtn = orientIcon;
             node._weSetLandscape = (v) => {
@@ -1940,11 +2112,11 @@ app.registerExtension({
             const familySel = document.createElement("select");
             Object.assign(familySel.style, { ...INPUT_STYLE, color: C.accent, fontWeight: "bold" });
             const modelFilterIcon = makeEl("span", {
-                width: "14px", flexShrink: "0", display: "inline-flex",
+                width: "20px", flexShrink: "0", display: "inline-flex",
                 alignItems: "center", justifyContent: "center", cursor: "pointer", marginLeft: "auto",
+                lineHeight: "1",
             });
-            const _filterSvgOn = `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 3.5h12L9.2 8.6V13l-2.4-1.3V8.6L2 3.5z" stroke="rgba(255,255,255,0.85)" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
-            const _filterSvgOff = `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 3.5h12L9.2 8.6V13l-2.4-1.3V8.6L2 3.5z" stroke="rgba(255,90,90,0.95)" stroke-width="1.2" stroke-linejoin="round"/><path d="M3 13L13 3" stroke="rgba(255,120,120,1)" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+            const _eyeIconSvg = (color) => (`<svg width="18" height="14" viewBox="0 0 18 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M1 7C2.9 3.8 5.7 2 9 2C12.3 2 15.1 3.8 17 7C15.1 10.2 12.3 12 9 12C5.7 12 2.9 10.2 1 7Z" stroke="${color}" stroke-width="${UI_ICON_STROKE}" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="7" r="1.5" fill="${color}"/></svg>`);
             let _familiesLoaded = false;
             familySel.onfocus = async () => {
                 if (_familiesLoaded || familySel._familiesLoaded) return;
@@ -1985,7 +2157,8 @@ app.registerExtension({
 
             const updateModelFilterIcon = () => {
                 const showAll = !!node._weShowAllModels;
-                modelFilterIcon.innerHTML = showAll ? _filterSvgOff : _filterSvgOn;
+                const iconColor = showAll ? "rgba(255,120,120,1)" : "rgba(255,255,255,0.9)";
+                modelFilterIcon.innerHTML = _eyeIconSvg(iconColor);
                 modelFilterIcon.title = showAll
                     ? "Model filtering OFF (showing all models). Click to filter by family."
                     : "Model filtering ON (by family). Click to show all models.";
@@ -2061,19 +2234,37 @@ app.registerExtension({
             };
 
             modelFilterIcon.onclick = async () => {
+                const prevModelA = node._weModelRow?._sel?.value || "";
+                const prevModelB = node._weModelBRow?._sel?.value || "";
+
                 node._weShowAllModels = !node._weShowAllModels;
                 updateModelFilterIcon();
                 applyModelFilterTooltip(node._weModelRow?._sel);
                 applyModelFilterTooltip(node._weModelBRow?._sel);
                 await reloadModelRowsForFamily(node._weFamily);
-                if (!node._weOverrides.model_a) {
-                    const firstA = node._weModelRow?._sel?.options?.[0]?.value || "";
-                    if (firstA) node._weModelRow._sel.value = firstA;
+
+                const selA = node._weModelRow?._sel;
+                if (selA) {
+                    const hasPrevA = prevModelA && [...selA.options].some(o => o.value === prevModelA);
+                    if (hasPrevA) {
+                        selA.value = prevModelA;
+                    } else {
+                        const firstA = selA.options?.[0]?.value || "";
+                        if (firstA) selA.value = firstA;
+                    }
                 }
-                if (!node._weOverrides.model_b) {
-                    const firstB = node._weModelBRow?._sel?.options?.[0]?.value || "";
-                    if (firstB) node._weModelBRow._sel.value = firstB;
+
+                const selB = node._weModelBRow?._sel;
+                if (selB) {
+                    const hasPrevB = prevModelB && [...selB.options].some(o => o.value === prevModelB);
+                    if (hasPrevB) {
+                        selB.value = prevModelB;
+                    } else {
+                        const firstB = selB.options?.[0]?.value || "";
+                        if (firstB) selB.value = firstB;
+                    }
                 }
+
                 _syncS();
             };
 
@@ -2465,7 +2656,8 @@ app.registerExtension({
                 // Show/hide Update Workflow button based on workflow_data connection
                 const wfDataConn = node.inputs?.find(i => i.name === "workflow_data");
                 if (node._weUpdateBtn) {
-                    node._weUpdateBtn.style.display = (wfDataConn?.link != null) ? "" : "none";
+                    if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
+                    if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
                 }
 
                 // Clear input LoRAs for disconnected stacks and re-merge
@@ -2524,65 +2716,52 @@ app.registerExtension({
                 // Clear any previous error banner
                 _showError(node, null);
 
-                // Update availability/found flags and LoRA list from execution.
-                // Never reset UI fields the user has already set.
-                if (!node._weExtracted) {
-                    // Very first execution on a brand-new node: seed
-                    // _weExtracted with the effective info so subsequent
-                    // runs have something to compare against.
-                    node._weExtracted = info;
-                    node._wePopulated = true;
-                    node._weWorkflowLoras = {
-                        a: [...(info.workflow_loras_a || info.loras_a || [])],
-                        b: [...(info.workflow_loras_b || info.loras_b || [])],
-                    };
-                    node._weInputLoras = {
-                        a: [...(info.input_loras_a || [])],
-                        b: [...(info.input_loras_b || [])],
-                    };
-                    node.properties = node.properties || {};
-                    node.properties.we_extracted_cache = JSON.stringify(info);
-                    if (info.model_family && node._weFamilySel) {
-                        const fam = info.model_family;
-                        if (![...node._weFamilySel.options].some(o => o.value === fam)) {
-                            const o = document.createElement("option");
-                            o.value = fam; o.textContent = info.model_family_label || fam;
-                            node._weFamilySel.appendChild(o);
-                        }
-                        node._weFamilySel.value = fam;
-                        node._weFamily = fam;
-                    }
-                    updateWanVisibility(node);
-                } else {
-                    // Subsequent runs — keep UI as-is, only update metadata + LoRAs
-                    // Track separate LoRA sources for change detection
-                    const oldWl = node._weWorkflowLoras || { a: [], b: [] };
-                    const oldIl = node._weInputLoras || { a: [], b: [] };
-                    const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
-                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
-                    node._weWorkflowLoras = {
-                        a: [...(info.workflow_loras_a || oldWl.a)],
-                        b: [...(info.workflow_loras_b || oldWl.b)],
-                    };
-                    node._weInputLoras = {
-                        a: [...(info.input_loras_a || [])],
-                        b: [...(info.input_loras_b || [])],
-                    };
-                    const newSig = [node._weWorkflowLoras.a, node._weWorkflowLoras.b,
-                        node._weInputLoras.a, node._weInputLoras.b]
-                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
-                    // Merged lists (Python already merged them)
-                    node._weExtracted.loras_a = info.loras_a || [];
-                    node._weExtracted.loras_b = info.loras_b || [];
-                    if (oldSig !== newSig) node._weLoraState = {};
+                const oldWl = node._weWorkflowLoras || { a: [], b: [] };
+                const oldIl = node._weInputLoras || { a: [], b: [] };
+                const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
+                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
 
-                    if (info.lora_availability) node._weExtracted.lora_availability = info.lora_availability;
-                    if (info.model_a_found !== undefined) node._weExtracted.model_a_found = info.model_a_found;
-                    if (info.model_b_found !== undefined) node._weExtracted.model_b_found = info.model_b_found;
-                    if (info.vae_found !== undefined) node._weExtracted.vae_found = info.vae_found;
+                node._weWorkflowLoras = {
+                    a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
+                    b: [...(info.workflow_loras_b || info.loras_b || oldWl.b || [])],
+                };
+                node._weInputLoras = {
+                    a: [...(info.input_loras_a || oldIl.a || [])],
+                    b: [...(info.input_loras_b || oldIl.b || [])],
+                };
+
+                const newSig = [node._weWorkflowLoras.a, node._weWorkflowLoras.b,
+                    node._weInputLoras.a, node._weInputLoras.b]
+                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                const lorasLocked = !!(node._weSectionLocks?.loras);
+                if (!lorasLocked || oldSig !== newSig) node._weLoraState = {};
+
+                // Always refresh extracted state from latest execution so
+                // workflow_data inputs drive UI every queue run.
+                node._weExtracted = {
+                    ...(node._weExtracted || {}),
+                    ...info,
+                };
+                node._wePopulated = true;
+
+                if (info.model_family && node._weFamilySel) {
+                    const fam = info.model_family;
+                    if (![...node._weFamilySel.options].some(o => o.value === fam)) {
+                        const o = document.createElement("option");
+                        o.value = fam; o.textContent = info.model_family_label || fam;
+                        node._weFamilySel.appendChild(o);
+                    }
+                }
+
+                const uiReady = updateUI(node);
+                if (uiReady && typeof uiReady.then === "function") {
+                    uiReady.finally(() => {
+                        node.properties = node.properties || {};
+                        node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
+                    });
+                } else {
                     node.properties = node.properties || {};
                     node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
-                    updateLoras(node);
                 }
 
                 // Show connected prompt values in ghosted textareas
@@ -2625,58 +2804,50 @@ app.registerExtension({
             // generation).  Only run here as a fallback if send_sync failed.
             const info = wfInfo?.extracted;
             if (info && !this._preUpdateApplied) {
-                if (!this._weExtracted) {
-                    this._weExtracted = info;
-                    this._wePopulated = true;
-                    this._weWorkflowLoras = {
-                        a: [...(info.workflow_loras_a || info.loras_a || [])],
-                        b: [...(info.workflow_loras_b || info.loras_b || [])],
-                    };
-                    this._weInputLoras = {
-                        a: [...(info.input_loras_a || [])],
-                        b: [...(info.input_loras_b || [])],
-                    };
-                    this.properties = this.properties || {};
-                    this.properties.we_extracted_cache = JSON.stringify(info);
-                    if (info.model_family && this._weFamilySel) {
-                        const fam = info.model_family;
-                        if (![...this._weFamilySel.options].some(o => o.value === fam)) {
-                            const o = document.createElement("option");
-                            o.value = fam; o.textContent = info.model_family_label || fam;
-                            this._weFamilySel.appendChild(o);
-                        }
-                        this._weFamilySel.value = fam;
-                        this._weFamily = fam;
-                    }
-                    updateWanVisibility(this);
-                } else {
-                    // Subsequent runs — always update LoRAs from execution
-                    const oldWl = this._weWorkflowLoras || { a: [], b: [] };
-                    const oldIl = this._weInputLoras || { a: [], b: [] };
-                    const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
-                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
-                    this._weWorkflowLoras = {
-                        a: [...(info.workflow_loras_a || oldWl.a)],
-                        b: [...(info.workflow_loras_b || oldWl.b)],
-                    };
-                    this._weInputLoras = {
-                        a: [...(info.input_loras_a || [])],
-                        b: [...(info.input_loras_b || [])],
-                    };
-                    const newSig = [this._weWorkflowLoras.a, this._weWorkflowLoras.b,
-                        this._weInputLoras.a, this._weInputLoras.b]
-                        .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
-                    this._weExtracted.loras_a = info.loras_a || [];
-                    this._weExtracted.loras_b = info.loras_b || [];
-                    if (oldSig !== newSig) this._weLoraState = {};
+                const oldWl = this._weWorkflowLoras || { a: [], b: [] };
+                const oldIl = this._weInputLoras || { a: [], b: [] };
+                const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
+                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
 
-                    if (info.lora_availability) this._weExtracted.lora_availability = info.lora_availability;
-                    if (info.model_a_found !== undefined) this._weExtracted.model_a_found = info.model_a_found;
-                    if (info.model_b_found !== undefined) this._weExtracted.model_b_found = info.model_b_found;
-                    if (info.vae_found !== undefined) this._weExtracted.vae_found = info.vae_found;
+                this._weWorkflowLoras = {
+                    a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
+                    b: [...(info.workflow_loras_b || info.loras_b || oldWl.b || [])],
+                };
+                this._weInputLoras = {
+                    a: [...(info.input_loras_a || oldIl.a || [])],
+                    b: [...(info.input_loras_b || oldIl.b || [])],
+                };
+
+                const newSig = [this._weWorkflowLoras.a, this._weWorkflowLoras.b,
+                    this._weInputLoras.a, this._weInputLoras.b]
+                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                const lorasLocked = !!(this._weSectionLocks?.loras);
+                if (!lorasLocked || oldSig !== newSig) this._weLoraState = {};
+
+                this._weExtracted = {
+                    ...(this._weExtracted || {}),
+                    ...info,
+                };
+                this._wePopulated = true;
+
+                if (info.model_family && this._weFamilySel) {
+                    const fam = info.model_family;
+                    if (![...this._weFamilySel.options].some(o => o.value === fam)) {
+                        const o = document.createElement("option");
+                        o.value = fam; o.textContent = info.model_family_label || fam;
+                        this._weFamilySel.appendChild(o);
+                    }
+                }
+
+                const uiReady = updateUI(this);
+                if (uiReady && typeof uiReady.then === "function") {
+                    uiReady.finally(() => {
+                        this.properties = this.properties || {};
+                        this.properties.we_extracted_cache = JSON.stringify(this._weExtracted);
+                    });
+                } else {
                     this.properties = this.properties || {};
                     this.properties.we_extracted_cache = JSON.stringify(this._weExtracted);
-                    updateLoras(this);
                 }
             }
             // Reset flag for next execution
@@ -2825,7 +2996,8 @@ app.registerExtension({
             // Show/hide Update Workflow button based on workflow_data connection
             const wfSlot = node.inputs?.find(i => i.name === "workflow_data");
             if (node._weUpdateBtn) {
-                node._weUpdateBtn.style.display = (wfSlot?.link != null) ? "" : "none";
+                if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
+                if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
             }
         };
     },

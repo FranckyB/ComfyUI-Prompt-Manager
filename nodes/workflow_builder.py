@@ -728,30 +728,49 @@ class WorkflowBuilder:
         except json.JSONDecodeError:
             lora_overrides = {}
 
+        section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
+        has_workflow_input = wf_data is not None
+
+        def _allow_override(section_name):
+            # If workflow_data is connected, only locked sections keep local UI overrides.
+            if has_workflow_input:
+                return bool(section_locks.get(section_name, False))
+            # Standalone mode (no workflow_data): local UI overrides apply normally.
+            return True
+
         # ── Apply overrides ──────────────────────────────────────────────
-        pos_text = overrides.get('positive_prompt', extracted['positive_prompt'])
-        neg_text = overrides.get('negative_prompt', extracted['negative_prompt'])
+        pos_text = extracted['positive_prompt']
+        neg_text = extracted['negative_prompt']
+        if _allow_override('positive'):
+            pos_text = overrides.get('positive_prompt', pos_text)
+        if _allow_override('negative'):
+            neg_text = overrides.get('negative_prompt', neg_text)
 
         # ── Prompt input override (if connected, use them) ─────────────
         if positive_prompt is not None:
             pos_text = positive_prompt
         if negative_prompt is not None:
             neg_text = negative_prompt
-        model_name_a    = overrides.get('model_a', extracted['model_a'])
-        model_name_b    = overrides.get('model_b', extracted['model_b'])
-        vae_name        = overrides.get('vae', extracted['vae']['name'])
+        model_name_a = extracted['model_a']
+        model_name_b = extracted['model_b']
+        vae_name = extracted['vae']['name']
+        if _allow_override('model'):
+            model_name_a = overrides.get('model_a', model_name_a)
+            model_name_b = overrides.get('model_b', model_name_b)
+            vae_name = overrides.get('vae', vae_name)
 
         sampler_params = extracted['sampler'].copy()
-        for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
-            if key in overrides:
-                val = overrides[key]
-                # Guard: overrides could carry a stale list from a corrupt
-                # override_data blob — coerce numeric fields to scalar.
-                if key in ('steps_a', 'steps_b', 'seed_a', 'seed_b') and isinstance(val, list):
-                    val = 0
-                elif key == 'cfg' and isinstance(val, list):
-                    val = 5.0
-                sampler_params[key] = val
+        if _allow_override('sampler'):
+            for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
+                if key in overrides:
+                    val = overrides[key]
+                    # Guard: overrides could carry a stale list from a corrupt
+                    # override_data blob — coerce numeric fields to scalar.
+                    if key in ('steps_a', 'steps_b', 'seed_a', 'seed_b') and isinstance(val, list):
+                        val = 0
+                    elif key == 'cfg' and isinstance(val, list):
+                        val = 5.0
+                    sampler_params[key] = val
         # Also ensure extracted sampler seed/steps are never lists
         for key, default in (('seed_a', 0), ('seed_b', None), ('steps_a', 20), ('steps_b', None), ('cfg', 5.0)):
             if isinstance(sampler_params.get(key), list):
@@ -763,7 +782,7 @@ class WorkflowBuilder:
         #           3. wf_data['family'] (from PE or previous run — may be stale)
         #           4. extracted['model_family'] (fallback)
         # The JS dropdown is the user's deliberate choice and must win.
-        js_family = overrides.get('_family') or None
+        js_family = (overrides.get('_family') or None) if _allow_override('model') else None
         wf_family = wf_data.get('family', '') if wf_data else ''
         model_detected_family = None
         if model_name_a:
@@ -800,8 +819,19 @@ class WorkflowBuilder:
         # This ensures the JS UI is always populated, even if generation
         # fails (e.g. model not found).  The user can then edit settings
         # and re-queue.
-        wf_overrides = dict(overrides)
-        wf_overrides['_source'] = 'WorkflowBuilder'
+        wf_overrides = {'_source': 'WorkflowBuilder'}
+        if _allow_override('model'):
+            for key in ('model_a', 'model_b', 'vae', 'clip_names', '_family'):
+                if key in overrides:
+                    wf_overrides[key] = overrides[key]
+        if _allow_override('sampler'):
+            for key in ('steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'):
+                if key in overrides:
+                    wf_overrides[key] = overrides[key]
+        if _allow_override('resolution'):
+            for key in ('width', 'height', 'batch_size', 'length'):
+                if key in overrides:
+                    wf_overrides[key] = overrides[key]
         # Inject prompt input overrides so build_simplified_workflow_data uses them
         wf_overrides['positive_prompt'] = pos_text
         wf_overrides['negative_prompt'] = neg_text
@@ -812,6 +842,9 @@ class WorkflowBuilder:
         # Keep ALL loras (like PMA) but mark inactive ones with active=False.
         # Only _apply_loras filters out inactive when actually loading models.
         has_both = bool(extracted.get('loras_a')) and bool(extracted.get('loras_b'))
+        if has_workflow_input and not bool(section_locks.get('loras', False)):
+            lora_overrides = {}
+
         for stack_key, list_key in [('a', 'loras_a'), ('b', 'loras_b')]:
             sk = stack_key if has_both else ''
             updated_list = []
@@ -820,7 +853,8 @@ class WorkflowBuilder:
                 state_key = f"{sk}:{lora_name}" if sk else lora_name
                 lora_st = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
                 updated = dict(lora)
-                updated['active'] = lora_st.get('active', True) is not False
+                # Preserve incoming active state unless user explicitly toggled it in UI.
+                updated['active'] = lora_st.get('active', lora.get('active', True)) is not False
                 if 'model_strength' in lora_st:
                     updated['model_strength'] = float(lora_st['model_strength'])
                 if 'clip_strength' in lora_st:
@@ -961,6 +995,14 @@ class WorkflowBuilder:
                             fixed_clips.append(name)
                     simplified_wf['clip'] = fixed_clips
 
+        # Preserve runtime passthrough objects from incoming workflow_data.
+        # This lets Builder -> Context/Builder chains keep loaded objects and
+        # resolved text conditioning without requiring re-render in-between.
+        if isinstance(wf_data, dict):
+            for key in ("MODEL_A", "MODEL_B", "CLIP", "VAE", "POSITIVE", "NEGATIVE"):
+                if key in wf_data:
+                    simplified_wf[key] = wf_data.get(key)
+
         # Keep not-found LoRAs in workflow_data so Builder->Builder chaining
         # preserves the full authored stack. Renderer already skips missing
         # LoRAs at load time via resolve_lora_path.
@@ -977,21 +1019,23 @@ class WorkflowBuilder:
         # pre-update handler sees what the user actually has set and does
         # NOT mistakenly treat it as a source change that clears all fields.
         effective_sampler = dict(extracted['sampler'])
-        for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'sampler_name', 'scheduler']:
-            if key in overrides:
-                effective_sampler[key] = overrides[key]
+        if _allow_override('sampler'):
+            for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'sampler_name', 'scheduler']:
+                if key in overrides:
+                    effective_sampler[key] = overrides[key]
 
         effective_resolution = dict(extracted['resolution'])
-        for key in ['width', 'height', 'batch_size', 'length']:
-            if key in overrides:
-                effective_resolution[key] = overrides[key]
+        if _allow_override('resolution'):
+            for key in ['width', 'height', 'batch_size', 'length']:
+                if key in overrides:
+                    effective_resolution[key] = overrides[key]
 
         effective_vae = extracted['vae']
-        if overrides.get('vae'):
+        if _allow_override('model') and overrides.get('vae'):
             effective_vae = {'name': overrides['vae'], 'source': 'override'}
 
         effective_clip = extracted['clip']
-        if overrides.get('clip_names'):
+        if _allow_override('model') and overrides.get('clip_names'):
             effective_clip = {'names': overrides['clip_names'], 'type': '', 'source': 'override'}
 
         ui_info = {
@@ -1042,7 +1086,7 @@ class WorkflowBuilder:
                         # Read active state from JS lora_overrides
                         key = f"{stack_prefix}:{name}" if stack_prefix else name
                         ov = overrides_map.get(key, {})
-                        active = ov.get('active', True) if ov else True
+                        active = ov.get('active', lora.get('active', True)) if ov else lora.get('active', True)
                         enriched.append({
                             'name': name,
                             'path': lora.get('path', name),

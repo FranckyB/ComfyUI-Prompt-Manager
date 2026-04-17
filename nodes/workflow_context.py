@@ -25,10 +25,12 @@ class WorkflowContext:
                 }),
             },
             "optional": {
-                "model_a":         ("MODEL",   {"tooltip": "Pass-through Model A"}),
-                "model_b":         ("MODEL",   {"tooltip": "Pass-through Model B"}),
-                "clip":            ("CLIP",    {"tooltip": "Pass-through CLIP"}),
-                "vae":             ("VAE",     {"tooltip": "Pass-through VAE"}),
+                "model_a":         ("MODEL",        {"tooltip": "Pass-through Model A"}),
+                "model_b":         ("MODEL",        {"tooltip": "Pass-through Model B"}),
+                "clip":            ("CLIP",         {"tooltip": "Pass-through CLIP"}),
+                "positive":        ("CONDITIONING", {"tooltip": "Pass-through positive conditioning"}),
+                "negative":        ("CONDITIONING", {"tooltip": "Pass-through negative conditioning"}),
+                "vae":             ("VAE",          {"tooltip": "Pass-through VAE"}),
                 "positive_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override positive prompt"}),
                 "negative_prompt": ("STRING",  {"forceInput": True, "tooltip": "Override negative prompt"}),
                 "lora_stack_a":    ("LORA_STACK", {"tooltip": "Override LoRA stack A"}),
@@ -49,7 +51,7 @@ class WorkflowContext:
 
     RETURN_TYPES = (
         "WORKFLOW_DATA",
-        "MODEL", "MODEL", "CLIP", "VAE",
+        "MODEL", "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE",
         "STRING", "STRING",
         "LORA_STACK", "LORA_STACK",
         "INT", "INT", "INT", "INT",
@@ -58,7 +60,7 @@ class WorkflowContext:
     )
     RETURN_NAMES = (
         "workflow_data",
-        "model_a", "model_b", "clip", "vae",
+        "model_a", "model_b", "clip", "positive", "negative", "vae",
         "positive_prompt", "negative_prompt",
         "lora_stack_a", "lora_stack_b",
         "width", "height", "batch_size", "length",
@@ -142,6 +144,14 @@ class WorkflowContext:
         if vae is None:
             vae = wf.get('VAE')
 
+        positive = kwargs.get('positive')
+        if positive is None:
+            positive = wf.get('POSITIVE')
+
+        negative = kwargs.get('negative')
+        if negative is None:
+            negative = wf.get('NEGATIVE')
+
         if model_a is not None:
             wf['MODEL_A'] = model_a
         if model_b is not None:
@@ -150,6 +160,10 @@ class WorkflowContext:
             wf['CLIP'] = clip
         if vae is not None:
             wf['VAE'] = vae
+        if positive is not None:
+            wf['POSITIVE'] = positive
+        if negative is not None:
+            wf['NEGATIVE'] = negative
 
         # ── Build lora stacks as tuples for LORA_STACK output ────────
         # Filter not-found LoRAs here so downstream nodes receiving
@@ -192,7 +206,7 @@ class WorkflowContext:
 
         return (
             wf,
-            model_a, model_b, clip, vae,
+            model_a, model_b, clip, positive, negative, vae,
             wf.get('positive_prompt', ''),
             wf.get('negative_prompt', ''),
             lora_stack_a,
