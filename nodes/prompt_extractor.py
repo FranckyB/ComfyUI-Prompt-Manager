@@ -3481,17 +3481,16 @@ class PromptExtractor:
                     _clip     = extract_clip_info(prompt_data, _raw_wf)
                     _res      = extract_resolution(prompt_data, _raw_wf)
 
-                    # If resolution came from node-refs (runtime values unknown at
-                    # parse time), or is still the bare 512 default, use the actual
-                    # image/video frame dimensions instead.
+                    # If extracted resolution is still the bare 512 default,
+                    # use the actual image/video frame dimensions instead.
                     # image_tensor shape is [B, H, W, C].
                     if image_tensor is not None and hasattr(image_tensor, 'shape'):
                         src_h = int(image_tensor.shape[1])
                         src_w = int(image_tensor.shape[2])
                         if src_w > 0 and src_h > 0:
-                            if _res.get('_width_from_node_ref') or _res['width'] == 512:
+                            if _res['width'] == 512:
                                 _res['width'] = src_w
-                            if _res.get('_height_from_node_ref') or _res['height'] == 512:
+                            if _res['height'] == 512:
                                 _res['height'] = src_h
 
                     # A1111 images embed sampler/resolution in the parameters

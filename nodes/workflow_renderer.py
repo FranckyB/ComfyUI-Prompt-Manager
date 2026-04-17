@@ -46,6 +46,20 @@ try:
 except Exception:
     _load_gguf_unet_shared = None
 
+# Keep renderer fallback sampler defaults aligned with Workflow Builder family defaults.
+_FAMILY_SAMPLER_DEFAULTS = {
+    "sdxl": {"steps_a": 20, "cfg": 5.0, "sampler": "dpmpp_2m_sde", "scheduler": "karras"},
+    "sd15": {"steps_a": 20, "cfg": 6.0, "sampler": "euler", "scheduler": "normal"},
+    "flux1": {"steps_a": 20, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+    "flux2": {"steps_a": 4, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+    "zimage": {"steps_a": 9, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+    "ltxv": {"steps_a": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+    "wan_image": {"steps_a": 10, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple"},
+    "wan_video_t2v": {"steps_a": 3, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 3},
+    "wan_video_i2v": {"steps_a": 3, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 3},
+    "qwen_image": {"steps_a": 10, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+}
+
 class WorkflowRenderer:
     """
     Render-only generation node.
@@ -64,6 +78,10 @@ class WorkflowRenderer:
                 "workflow_data": ("WORKFLOW_DATA", {
                     "forceInput": True,
                     "tooltip": "Connect workflow_data from Workflow Builder or PromptExtractor",
+                }),
+                "clear_cache_after_render": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Clear WorkflowRenderer model cache and request memory cleanup after rendering completes.",
                 }),
             },
             "optional": {
@@ -89,18 +107,49 @@ class WorkflowRenderer:
     @classmethod
     def IS_CHANGED(cls, workflow_data, source_image=None, **kwargs):
         """Return a stable fingerprint so ComfyUI skips re-execution when nothing changed."""
-        import hashlib, json as _json
+        import hashlib, json as _json, time
         h = hashlib.sha256()
         if isinstance(workflow_data, dict):
             h.update(_json.dumps(workflow_data, sort_keys=True, default=str).encode())
         elif isinstance(workflow_data, str):
             h.update(workflow_data.encode())
+        clear_cache_after_render = bool(kwargs.get("clear_cache_after_render", False))
+        h.update(str(clear_cache_after_render).encode())
         if source_image is not None:
             h.update(str(source_image.shape).encode())
             h.update(str(source_image.sum().item()).encode())
+        if clear_cache_after_render:
+            # Force execution when post-render clear is enabled so purge always runs.
+            return f"{h.hexdigest()}::{time.time_ns()}"
         return h.hexdigest()
 
-    def execute(self, workflow_data, source_image=None, unique_id=None):
+    @classmethod
+    def _clear_cached_models(cls):
+        cleared = len(cls._class_model_cache)
+        cls._class_model_cache.clear()
+        print(f"[WorkflowRenderer] Cleared class model cache entries: {cleared}")
+
+        try:
+            comfy.model_management.soft_empty_cache()
+            print("[WorkflowRenderer] Requested ComfyUI cache cleanup.")
+        except Exception as e:
+            print(f"[WorkflowRenderer] Cache cleanup call failed: {e}")
+
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                print("[WorkflowRenderer] Requested CUDA empty_cache().")
+        except Exception as e:
+            print(f"[WorkflowRenderer] CUDA cache clear failed: {e}")
+
+    def execute(self, workflow_data, clear_cache_after_render=False, source_image=None, unique_id=None):
+
         # ── Parse workflow_data ───────────────────────────────────────────
         if isinstance(workflow_data, dict):
             wf = workflow_data
@@ -129,16 +178,6 @@ class WorkflowRenderer:
         loras_a = wf.get("loras_a", [])
         loras_b = wf.get("loras_b", [])
 
-        # Sampler params
-        sampler_params = {
-            "steps": int(wf_sampler.get("steps_a", wf_sampler.get("steps", 20))),
-            "cfg": float(wf_sampler.get("cfg", 5.0)),
-            "seed_a": int(wf_sampler.get("seed_a", wf_sampler.get("seed", 0))),
-            "sampler_name": wf_sampler.get("sampler_name", "euler"),
-            "scheduler": wf_sampler.get("scheduler", "simple"),
-        }
-        seed_b = wf_sampler.get("seed_b")
-
         # Resolution
         width = int(wf_res.get("width", 768))
         height = int(wf_res.get("height", 1280))
@@ -155,6 +194,24 @@ class WorkflowRenderer:
         from ..py.workflow_families import MODEL_FAMILIES
         _family_spec = MODEL_FAMILIES.get(family_key, {})
         _family_is_ckpt = _family_spec.get('checkpoint', False)
+
+        family_defaults = _FAMILY_SAMPLER_DEFAULTS.get(
+            family_key,
+            {"steps_a": 20, "cfg": 5.0, "sampler": "euler", "scheduler": "simple"},
+        )
+        sampler_params = {
+            "steps": int(wf_sampler.get("steps_a", wf_sampler.get("steps", family_defaults.get("steps_a", 20)))),
+            "cfg": float(wf_sampler.get("cfg", family_defaults.get("cfg", 5.0))),
+            "seed_a": int(wf_sampler.get("seed_a", wf_sampler.get("seed", 0))),
+            "sampler_name": wf_sampler.get("sampler_name", family_defaults.get("sampler", "euler")),
+            "scheduler": wf_sampler.get("scheduler", family_defaults.get("scheduler", "simple")),
+        }
+        seed_b = wf_sampler.get("seed_b")
+
+        # Only WAN video families use dual-model sampling. Ignore stale model_b
+        # values for image families so logs and state remain unambiguous.
+        if family_key not in ("wan_video_t2v", "wan_video_i2v"):
+            model_name_b = None
 
         print(f"[WorkflowRenderer] Family: {get_family_label(family_key)} "
               f"(strategy={strategy}), model_a={model_name_a}, "
@@ -338,6 +395,26 @@ class WorkflowRenderer:
                 f"No render function available."
             )
 
+        # Defensive guard: some Flux setups can decode at 2x the requested
+        # size due to latent/vae scale mismatches in upstream backends.
+        # Normalize to requested resolution so Builder->Renderer is stable.
+        if isinstance(decoded, torch.Tensor) and decoded.ndim == 4:
+            out_h = int(decoded.shape[1])
+            out_w = int(decoded.shape[2])
+            if family_key in ("flux1", "flux2") and out_w == width * 2 and out_h == height * 2:
+                print(
+                    f"[WorkflowRenderer] Flux decode size {out_w}x{out_h} is 2x requested "
+                    f"{width}x{height}; resizing output to requested resolution."
+                )
+                decoded_nchw = decoded.permute(0, 3, 1, 2)
+                decoded_nchw = torch.nn.functional.interpolate(
+                    decoded_nchw,
+                    size=(height, width),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                decoded = decoded_nchw.permute(0, 2, 3, 1).contiguous()
+
         def _short_display_name(name):
             raw = str(name or "").strip()
             if not raw:
@@ -358,6 +435,9 @@ class WorkflowRenderer:
         wf_out["LATENT"] = out_latent
         wf_out["IMAGE"] = decoded
         wf_out["model_name"] = _short_display_name(resolved_a or model_name_a)
+
+        if clear_cache_after_render:
+            self._clear_cached_models()
 
         return (wf_out, decoded)
 
@@ -603,14 +683,17 @@ def _make_latent(channels, width, height, batch=1, frames=None, spacial_ratio=No
     """
     import comfy
 
+    scale = int(spacial_ratio) if spacial_ratio else 8
+    scale = max(1, scale)
+
     if frames is None:
         samples = torch.zeros(
-            [batch, channels, height // 8, width // 8],
+            [batch, channels, height // scale, width // scale],
             device=comfy.model_management.intermediate_device(),
         )
     else:
         samples = torch.zeros(
-            [batch, channels, frames, height // 8, width // 8],
+            [batch, channels, frames, height // scale, width // scale],
             device=comfy.model_management.intermediate_device(),
         )
 
@@ -724,7 +807,7 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
 
     model_b = _patch_model_sampling_sd3(model_b, shift=5.0)
 
-    steps_high  = int(sampler_params.get("steps_high", 2))
+    steps_high  = int(sampler_params.get("steps_high", 3))
     steps_low   = int(sampler_params.get("steps_low", steps_high))
     total_steps = steps_high + steps_low
 
@@ -884,7 +967,7 @@ def _render_flux1(model, clip, vae, pos_prompt, neg_prompt,
     cond_pos = node_helpers.conditioning_set_values(cond_pos, {"guidance": 3.5})
     (cond_neg,) = ConditioningZeroOut().zero_out(cond_neg)
 
-    latent = _make_latent(16, width, height, batch=batch)
+    latent = _make_latent(16, width, height, batch=batch, spacial_ratio=16)
     latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
     decoded = _decode_latent_output(vae, latent_out, tag="_render_flux1")
     return decoded, latent_out
@@ -912,13 +995,13 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
     tokens_neg = clip.tokenize(neg_prompt)
     cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
 
-    latent = _make_latent(16, width, height, batch=batch)
+    latent = _make_latent(16, width, height, batch=batch, spacial_ratio=16)
 
-    steps        = int(sampler_params.get("steps", 20))
-    cfg          = float(sampler_params.get("cfg", 5.0))
+    steps        = int(sampler_params.get("steps", 4))
+    cfg          = float(sampler_params.get("cfg", 1.0))
     seed         = int(sampler_params.get("seed_a", sampler_params.get("seed", 0)))
     sampler_name = sampler_params.get("sampler_name", "euler")
-    scheduler    = sampler_params.get("scheduler", "beta")
+    scheduler    = sampler_params.get("scheduler", "simple")
 
     guider = _extract_node_outputs(CFGGuider.execute(model, cond_pos, cond_neg, cfg))[0]
     sampler = _extract_node_outputs(KSamplerSelect.execute(sampler_name))[0]

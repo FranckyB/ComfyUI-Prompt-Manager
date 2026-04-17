@@ -217,9 +217,18 @@ function cleanModelName(fullPath) {
 
 // --- Group models by folder path for dropdown ---
 function groupModelOptions(models) {
+    const sorted = Array.isArray(models)
+        ? [...models].sort((a, b) =>
+            normalizeModelPath(a).localeCompare(
+                normalizeModelPath(b),
+                undefined,
+                { numeric: true, sensitivity: "base" }
+            )
+        )
+        : [];
     const groups = new Map();
     const ungrouped = [];
-    for (const m of models) {
+    for (const m of sorted) {
         const normalized = m.replace(/\\/g, "/");
         const lastSlash = normalized.lastIndexOf("/");
         if (lastSlash < 0) {
@@ -327,37 +336,50 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
         }
     }
     let _loaded = false;
+    let _loadingPromise = null;
     _recolor = () => {
         const cur = sel.value;
         const opt = [...sel.options].find(o => o.value === cur);
         sel.style.color = (opt && opt.dataset.missing) ? C.error : C.text;
     };
-    sel.onfocus = async () => {
+    const _ensureLoaded = async () => {
         if (_loaded) return;
-        _loaded = true;
-        const options = await lazyFetch();
-        const currentVal = sel.value;
-        sel.innerHTML = "";
-        if (includeEmptyOption) {
-            const defOpt = document.createElement("option");
-            defOpt.value = ""; defOpt.textContent = grouped ? "(none)" : "(Default)";
-            sel.appendChild(defOpt);
-        }
-        if (grouped) {
-            populateGroupedSelect(sel, options, true);
-        } else {
-            for (const opt of options) {
-                const o = document.createElement("option"); o.value = opt; o.textContent = opt;
-                o.style.color = C.text;
-                sel.appendChild(o);
+        if (_loadingPromise) return _loadingPromise;
+
+        _loadingPromise = (async () => {
+            const options = await lazyFetch();
+            const currentVal = sel.value;
+            sel.innerHTML = "";
+            if (includeEmptyOption) {
+                const defOpt = document.createElement("option");
+                defOpt.value = ""; defOpt.textContent = grouped ? "(none)" : "(Default)";
+                sel.appendChild(defOpt);
             }
+            if (grouped) {
+                populateGroupedSelect(sel, options, true);
+            } else {
+                for (const opt of options) {
+                    const o = document.createElement("option"); o.value = opt; o.textContent = opt;
+                    o.style.color = C.text;
+                    sel.appendChild(o);
+                }
+            }
+            if (_origVal && ![...sel.options].some(o => o.value === _origVal)) {
+                resetBtn.style.visibility = "visible";
+            }
+            sel.value = currentVal || sel.options[0]?.value || "";
+            _recolor();
+            _loaded = true;
+        })();
+
+        try {
+            await _loadingPromise;
+        } finally {
+            _loadingPromise = null;
         }
-        if (_origVal && ![...sel.options].some(o => o.value === _origVal)) {
-            resetBtn.style.visibility = "visible";
-        }
-        sel.value = currentVal || sel.options[0]?.value || "";
-        _recolor();
     };
+
+    sel.onfocus = _ensureLoaded;
     sel.onchange = () => {
         resetBtn.style.visibility = sel.value !== _origVal ? "visible" : "hidden";
         _recolor();
@@ -370,6 +392,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
     row._setOriginal = (v, found) => {
         _origVal = v || "";
         _loaded = false;
+        _loadingPromise = null;
         sel.innerHTML = "";
         if (includeEmptyOption) {
             const defOpt = document.createElement("option");
@@ -392,6 +415,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
     };
     row._getValue = () => sel.value;
     row._resetLoaded = () => { _loaded = false; };
+    row._ensureLoaded = _ensureLoaded;
     return row;
 }
 
@@ -741,7 +765,7 @@ const FAMILY_DEFAULTS = {
     flux1:         { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
     flux2:         { steps_a: 4,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
     zimage:        { steps_a: 9,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    ltxv:          { steps_a: 8,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    // ltxv:       { steps_a: 8,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
     wan_image:     { steps_a: 10, cfg: 1.0,  sampler: "lcm",           scheduler: "simple" },
     wan_video_t2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",           scheduler: "simple",
                      steps_b: 3 },
@@ -749,6 +773,13 @@ const FAMILY_DEFAULTS = {
                      steps_b: 3 },
     qwen_image:    { steps_a: 10, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
 };
+
+const BLOCKED_FAMILIES = new Set(["ltxv"]);
+function normalizeSelectableFamily(family, fallback = "sdxl") {
+    const f = String(family || "").trim();
+    if (!f || BLOCKED_FAMILIES.has(f)) return fallback;
+    return f;
+}
 
 // --- Separator helper ---
 function makeSeparator() {
@@ -777,7 +808,7 @@ async function updateUI(node) {
 
     // Family — must be set FIRST and dropdowns reloaded before setting
     // model/VAE/CLIP values, otherwise the wrong family's options are shown.
-    const newFamily = d.model_family || d.family || null;
+    const newFamily = normalizeSelectableFamily(d.model_family || d.family || null, "sdxl");
     console.log("[updateUI] incoming family:", newFamily, "current:", node._weFamily);
     const familyChanged = !modelLocked && newFamily && newFamily !== node._weFamily;
     if (!modelLocked && node._weFamilySel) {
@@ -789,7 +820,9 @@ async function updateUI(node) {
             try {
                 const r = await fetch("/workflow-extractor/list-families");
                 const fd = await r.json();
-                const families = fd.families || {};
+                const families = Object.fromEntries(
+                    Object.entries(fd.families || {}).filter(([k]) => !BLOCKED_FAMILIES.has(k))
+                );
                 const curVal = sel.value;
                 sel.innerHTML = "";
                 const keys = Object.keys(families).sort((a, b) => {
@@ -809,13 +842,13 @@ async function updateUI(node) {
             }
         }
         // If the target family still isn't in the list (server gap), add it.
-        if (newFamily && ![...sel.options].some(o => o.value === newFamily)) {
+        if (newFamily && !BLOCKED_FAMILIES.has(newFamily) && ![...sel.options].some(o => o.value === newFamily)) {
             const o = document.createElement("option");
             o.value = newFamily; o.textContent = d.model_family_label || newFamily;
             sel.appendChild(o);
         }
-        sel.value = newFamily || "sdxl";
-        node._weFamily = newFamily;
+        sel.value = normalizeSelectableFamily(newFamily, "sdxl");
+        node._weFamily = normalizeSelectableFamily(newFamily, "sdxl");
         console.log("[updateUI] familySel set to:", sel.value, "options:", [...sel.options].map(o => o.value));
     }
 
@@ -1239,8 +1272,8 @@ function syncHidden(node) {
     if (node._weInputLoras) node.properties.we_input_loras = JSON.stringify(node._weInputLoras);
     if (node._weWorkflowPrompts) node.properties.we_workflow_prompts = JSON.stringify(node._weWorkflowPrompts);
 
-    // If no extracted cache yet (user edited manually before first execute),
-    // build a minimal one from overrides so onConfigure can restore the UI.
+    // Keep a lightweight extracted snapshot for runtime features (e.g. Builder->Builder
+    // Update Workflow cache). Restore uses UI state (we_ui_state/override_data), not this.
     if (!node._weExtracted && Object.keys(ov).length > 0) {
         const isVideo = ["wan_video_t2v", "wan_video_i2v"].includes(ov._family);
         node._weExtracted = {
@@ -1316,13 +1349,14 @@ function applyOverrides(node, ovJson, lsJson) {
     // Restore family
     if (ov._family && node._weFamilySel) {
         const sel = node._weFamilySel;
-        if (![...sel.options].some(o => o.value === ov._family)) {
+        const targetFamily = normalizeSelectableFamily(ov._family, "sdxl");
+        if (!BLOCKED_FAMILIES.has(targetFamily) && ![...sel.options].some(o => o.value === targetFamily)) {
             const o = document.createElement("option");
-            o.value = ov._family; o.textContent = ov._family;
+            o.value = targetFamily; o.textContent = targetFamily;
             sel.appendChild(o);
         }
-        sel.value = ov._family;
-        node._weFamily = ov._family;
+        sel.value = targetFamily;
+        node._weFamily = targetFamily;
     }
 
     if (Object.prototype.hasOwnProperty.call(ov, "_show_all_models")) {
@@ -2158,30 +2192,51 @@ app.registerExtension({
             });
             const _eyeIconSvg = (color) => (`<svg width="18" height="14" viewBox="0 0 18 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M1 7C2.9 3.8 5.7 2 9 2C12.3 2 15.1 3.8 17 7C15.1 10.2 12.3 12 9 12C5.7 12 2.9 10.2 1 7Z" stroke="${color}" stroke-width="${UI_ICON_STROKE}" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="7" r="1.5" fill="${color}"/></svg>`);
             let _familiesLoaded = false;
-            familySel.onfocus = async () => {
+            let _familiesLoadingPromise = null;
+            const _ensureFamiliesLoaded = async () => {
                 if (_familiesLoaded || familySel._familiesLoaded) return;
-                _familiesLoaded = true;
-                familySel._familiesLoaded = true;
+                if (_familiesLoadingPromise) return _familiesLoadingPromise;
+
+                _familiesLoadingPromise = (async () => {
+                    try {
+                        const r = await fetch("/workflow-extractor/list-families");
+                        const d = await r.json();
+                        const families = d.families || {};
+                        const curVal = familySel.value || node._weFamily || "sdxl";
+                        familySel.innerHTML = "";
+                        // Sort alphabetically, SDXL first
+                        const keys = Object.keys(families).sort((a, b) => {
+                            if (a === "sdxl") return -1;
+                            if (b === "sdxl") return 1;
+                            return families[a].localeCompare(families[b]);
+                        });
+                        for (const key of keys) {
+                            const o = document.createElement("option");
+                            o.value = key; o.textContent = families[key];
+                            familySel.appendChild(o);
+                        }
+                        if (!familySel.options.length) {
+                            const o = document.createElement("option");
+                            o.value = "sdxl";
+                            o.textContent = "SDXL";
+                            familySel.appendChild(o);
+                        }
+                        familySel.value = [...familySel.options].some((o) => o.value === curVal)
+                            ? curVal
+                            : (familySel.options[0]?.value || "sdxl");
+                        _familiesLoaded = true;
+                        familySel._familiesLoaded = true;
+                    } catch (e) { /* ignore */ }
+                })();
+
                 try {
-                    const r = await fetch("/workflow-extractor/list-families");
-                    const d = await r.json();
-                    const families = d.families || {};
-                    const curVal = familySel.value;
-                    familySel.innerHTML = "";
-                    // Sort alphabetically, SDXL first
-                    const keys = Object.keys(families).sort((a, b) => {
-                        if (a === "sdxl") return -1;
-                        if (b === "sdxl") return 1;
-                        return families[a].localeCompare(families[b]);
-                    });
-                    for (const key of keys) {
-                        const o = document.createElement("option");
-                        o.value = key; o.textContent = families[key];
-                        familySel.appendChild(o);
-                    }
-                    familySel.value = curVal;
-                } catch (e) { /* ignore */ }
+                    await _familiesLoadingPromise;
+                } finally {
+                    _familiesLoadingPromise = null;
+                }
             };
+
+            familySel.onfocus = _ensureFamiliesLoaded;
             // Add SDXL as initial option
             {
                 const o = document.createElement("option");
@@ -2189,6 +2244,9 @@ app.registerExtension({
                 familySel.appendChild(o);
                 familySel.value = "sdxl";
             }
+            requestAnimationFrame(() => {
+                _ensureFamiliesLoaded().catch(() => { /* ignore */ });
+            });
             familySel.onchange = () => {
                 // Persist family immediately so fast tab-switches do not lose it.
                 node._weFamily = familySel.value || "sdxl";
@@ -2353,6 +2411,12 @@ app.registerExtension({
             modelSec._body.appendChild(modelRow);
             node._weModelRow = modelRow;
             applyModelFilterTooltip(modelRow._sel);
+
+            // Preload model options once after mount so the first dropdown open
+            // does not race with async option rebuilding.
+            requestAnimationFrame(() => {
+                node._weModelRow?._ensureLoaded?.().catch(() => { /* ignore */ });
+            });
 
             // Model B row (hidden by default, shown by updateWanVisibility for WAN Video)
             const modelBRow = makeSelectRow("Model B", "", fetchModelsB,
@@ -3129,29 +3193,7 @@ app.registerExtension({
                     _finishHydration();
                 }
             } else {
-                // No override/UI state available: keep default UI.
-                const hasOverrides = savedOv && savedOv !== "{}";
-                if (hasOverrides) {
-                    try {
-                        node._weExtracted = buildExtractedFromOverrides(ovObj, {});
-                        node._wePopulated = true;
-                        const uiReady = updateUI(node);
-                        if (uiReady && typeof uiReady.then === "function") {
-                            uiReady.then(() => {
-                                applyOverrides(node, savedOv, savedLs);
-                                if (node._updatePromptGhosting) node._updatePromptGhosting();
-                                node.setDirtyCanvas(true, true);
-                            }).finally(() => _finishHydration());
-                        } else {
-                            applyOverrides(node, savedOv, savedLs);
-                            if (node._updatePromptGhosting) node._updatePromptGhosting();
-                            node.setDirtyCanvas(true, true);
-                            _finishHydration();
-                        }
-                    } catch {
-                        // Fall through to basic restore
-                    }
-                }
+                // No usable UI-state overrides available: keep default UI.
                 if (node._updatePromptGhosting) node._updatePromptGhosting();
                 node.setDirtyCanvas(true, true);
                 _finishHydration();

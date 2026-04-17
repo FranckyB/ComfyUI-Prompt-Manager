@@ -266,7 +266,8 @@ def get_compatible_families(family):
 
 def get_all_family_labels():
     """Return a dict of {family_key: label} for all known families."""
-    return {k: v.get("label", k) for k, v in MODEL_FAMILIES.items()}
+    hidden = {"ltxv"}
+    return {k: v.get("label", k) for k, v in MODEL_FAMILIES.items() if k not in hidden}
 
 
 # ─── Model listing ───────────────────────────────────────────────────────────

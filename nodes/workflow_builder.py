@@ -275,7 +275,9 @@ async def api_video_frame(request):
 async def api_list_families(request):
     """List all known model families for the type selector."""
     try:
-        return server.web.json_response({"families": get_all_family_labels()})
+        families = get_all_family_labels() or {}
+        families.pop("ltxv", None)
+        return server.web.json_response({"families": families})
     except Exception as e:
         return server.web.json_response({"families": {}, "error": str(e)})
 
@@ -355,15 +357,13 @@ async def api_process_extracted(request):
         else:
             clip = {'names': [], 'type': '', 'source': 'unknown'}
 
-        # ── Normalize resolution: preserve ALL keys ─────────────────────
+        # ── Normalize resolution ────────────────────────────────────────
         raw_res = raw.get('resolution', {})
         resolution = {
             'width': raw_res.get('width', 768),
             'height': raw_res.get('height', 1280),
             'batch_size': raw_res.get('batch_size', 1),
             'length': raw_res.get('length'),
-            '_width_from_node_ref': raw_res.get('_width_from_node_ref', False),
-            '_height_from_node_ref': raw_res.get('_height_from_node_ref', False),
         }
 
         extracted = {
@@ -656,8 +656,6 @@ class WorkflowBuilder:
                     'height': wf_res.get('height', 1280),
                     'batch_size': wf_res.get('batch_size', 1),
                     'length': wf_res.get('length'),
-                    '_width_from_node_ref':  wf_res.get('_width_from_node_ref',  False),
-                    '_height_from_node_ref': wf_res.get('_height_from_node_ref', False),
                 },
                 'is_video': wf_res.get('length') is not None,
                 'model_family': wf_data.get('family', ''),
