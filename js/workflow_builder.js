@@ -736,18 +736,18 @@ const CONTROL_MODES = ["fixed", "increment", "decrement", "randomize"];
 // --- Per-family sampler defaults (applied on manual family switch) ---
 // Edit values here to change what each family starts with.
 const FAMILY_DEFAULTS = {
-    sdxl:          { steps_a: 20, cfg: 6.0,  sampler: "euler",         scheduler: "normal" },
+    sdxl:          { steps_a: 20, cfg: 5.0,  sampler: "dpmpp_2m_sde",  scheduler: "karras" },
     sd15:          { steps_a: 20, cfg: 6.0,  sampler: "euler",         scheduler: "normal" },
     flux1:         { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    flux2:         { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    zimage:        { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    ltxv:          { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    wan_image:     { steps_a: 30, cfg: 1.0,  sampler: "lcm",           scheduler: "simple" },
+    flux2:         { steps_a: 4,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    zimage:        { steps_a: 9,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    ltxv:          { steps_a: 8,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    wan_image:     { steps_a: 10, cfg: 1.0,  sampler: "lcm",           scheduler: "simple" },
     wan_video_t2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",           scheduler: "simple",
                      steps_b: 3 },
     wan_video_i2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",           scheduler: "simple",
                      steps_b: 3 },
-    qwen_image:    { steps_a: 20, cfg: 5.0,  sampler: "euler",         scheduler: "simple" },
+    qwen_image:    { steps_a: 10, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
 };
 
 // --- Separator helper ---
@@ -1497,6 +1497,7 @@ app.registerExtension({
             // -- Top-right help icon on node frame (canvas-drawn) --
             node._weHelpText = [
                 "Workflow Builder quick help:",
+                "- In Builder chains, first Builder drives downstream Builders.",
                 "- Connect workflow_data to drive this node from upstream data.",
                 "- Update Workflow appears only for extractor sources.",
                 "- For normal workflow_data sources, execute queue to refresh UI.",
@@ -1619,8 +1620,15 @@ app.registerExtension({
 
                 node._weUpdateBtn.title = "Pull and refresh from connected extractor source.";
             };
+            const _isConnectedWorkflowDataExtractor = () => {
+                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                if (wfInput?.link == null) return false;
+                const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
+                return _isExtractorSourceHint(upstream);
+            };
             node._weRefreshUpdateWorkflowTooltip = _refreshUpdateWorkflowTooltip;
             node._weRefreshUpdateWorkflowButtonVisibility = _refreshUpdateWorkflowButtonVisibility;
+            node._weIsConnectedWorkflowDataExtractor = _isConnectedWorkflowDataExtractor;
             _refreshUpdateWorkflowButtonVisibility();
             _refreshUpdateWorkflowTooltip();
 
@@ -2713,6 +2721,10 @@ app.registerExtension({
                 const info = event.detail?.info?.extracted;
                 if (!info) return;
 
+                // Extractor-connected mode is manual-refresh only.
+                // Keep user tweaks unless Update Workflow is clicked.
+                if (node._weIsConnectedWorkflowDataExtractor?.()) return;
+
                 // Clear any previous error banner
                 _showError(node, null);
 
@@ -2803,7 +2815,8 @@ app.registerExtension({
             // UI population is handled by pre-update listener (fires before
             // generation).  Only run here as a fallback if send_sync failed.
             const info = wfInfo?.extracted;
-            if (info && !this._preUpdateApplied) {
+            const isExtractorConnected = this._weIsConnectedWorkflowDataExtractor?.() === true;
+            if (info && !this._preUpdateApplied && !isExtractorConnected) {
                 const oldWl = this._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = this._weInputLoras || { a: [], b: [] };
                 const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]

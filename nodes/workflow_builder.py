@@ -730,9 +730,16 @@ class WorkflowBuilder:
 
         section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
         has_workflow_input = wf_data is not None
+        upstream_source = str((wf_data or {}).get('_source', '')).strip().lower() if isinstance(wf_data, dict) else ""
+        extractor_sourced_input = upstream_source in ("promptextractor", "workflowextractor")
 
         def _allow_override(section_name):
-            # If workflow_data is connected, only locked sections keep local UI overrides.
+            # Extractor-sourced workflow_data keeps WB in manual-edit mode.
+            # Non-extractor workflow_data chains are lock-gated to stay in sync.
+            if has_workflow_input and extractor_sourced_input:
+                return True
+            # If workflow_data is connected from non-extractor sources,
+            # only locked sections keep local UI overrides.
             if has_workflow_input:
                 return bool(section_locks.get(section_name, False))
             # Standalone mode (no workflow_data): local UI overrides apply normally.
@@ -842,7 +849,7 @@ class WorkflowBuilder:
         # Keep ALL loras (like PMA) but mark inactive ones with active=False.
         # Only _apply_loras filters out inactive when actually loading models.
         has_both = bool(extracted.get('loras_a')) and bool(extracted.get('loras_b'))
-        if has_workflow_input and not bool(section_locks.get('loras', False)):
+        if has_workflow_input and not extractor_sourced_input and not bool(section_locks.get('loras', False)):
             lora_overrides = {}
 
         for stack_key, list_key in [('a', 'loras_a'), ('b', 'loras_b')]:

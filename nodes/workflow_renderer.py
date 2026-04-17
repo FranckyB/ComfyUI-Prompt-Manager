@@ -12,6 +12,7 @@ import os
 import torch
 import folder_paths
 import comfy.model_management
+import comfy.sd
 
 # ── Optional GGUF support ────────────────────────────────────────────────────
 try:
@@ -38,6 +39,12 @@ from ..py.workflow_extraction_utils import (
     resolve_clip_names,
 )
 from ..py.lora_utils import resolve_lora_path
+
+# Reuse the robust GGUF loading helper used by WorkflowModelLoader when available.
+try:
+    from .workflow_model_loader import _load_gguf_unet as _load_gguf_unet_shared
+except Exception:
+    _load_gguf_unet_shared = None
 
 class WorkflowRenderer:
     """
@@ -388,7 +395,14 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path, famil
     family_is_checkpoint: if explicitly False, load as diffusion model even if
     the file is in the checkpoints folder (e.g. Z-Image models stored there).
     """
-    is_gguf       = resolved_path.lower().endswith('.gguf')
+    resolved_path_l = str(resolved_path or "").lower()
+    full_path_l = str(full_model_path or "").lower()
+    folder_l = str(resolved_folder or "").lower()
+    is_gguf = any([
+        resolved_path_l.endswith('.gguf'),
+        full_path_l.endswith('.gguf'),
+        folder_l == 'unet_gguf',
+    ])
     # Family spec overrides folder-based heuristic when provided
     if family_is_checkpoint is not None:
         is_checkpoint = family_is_checkpoint
@@ -397,9 +411,17 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path, famil
 
     model = clip = vae = None
 
-    if is_gguf and GGUF_SUPPORT and _load_gguf_unet:
+    if is_gguf:
         print(f"[WorkflowRenderer] Loading GGUF model: {resolved_path}")
-        model = _load_gguf_unet(full_model_path)
+        if _load_gguf_unet_shared is not None:
+            model = _load_gguf_unet_shared(full_model_path)
+        elif GGUF_SUPPORT and _load_gguf_unet:
+            model = _load_gguf_unet(full_model_path)
+        else:
+            raise RuntimeError(
+                "[WorkflowRenderer] GGUF model selected but no GGUF loader is available. "
+                "Install/enable ComfyUI-GGUF (UnetLoaderGGUF)."
+            )
     elif is_checkpoint:
         print(f"[WorkflowRenderer] Loading checkpoint: {resolved_path}")
         out   = comfy.sd.load_checkpoint_guess_config(
