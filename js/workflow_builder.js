@@ -852,6 +852,11 @@ async function updateUI(node) {
         }
     }
 
+    // Guard: never leave Model A visually empty when models are available.
+    if (node._weEnsureModelSelection) {
+        await node._weEnsureModelSelection({ reloadIfEmpty: true, sync: false });
+    }
+
     // Sampler
     const s = d.sampler || {};
     if (!samplerLocked && node._weSamplerRows) {
@@ -1201,8 +1206,17 @@ function syncHidden(node) {
     if (node._weRatioLandscape) ov._ratio_landscape = true;
     if (sectionLocks.resolution || node._weResLocked) ov._res_locked = true;
     else delete ov._res_locked;
-    if (node._wePosBox) ov.positive_prompt = node._wePosBox.value;
-    if (node._weNegBox) ov.negative_prompt = node._weNegBox.value;
+    // Persist prompts robustly: if textarea is empty but we have remembered
+    // workflow prompts (e.g. connected prompt source), keep that text.
+    const rememberedPrompts = node._weWorkflowPrompts || { positive: "", negative: "" };
+    if (node._wePosBox) {
+        const pos = node._wePosBox.value || rememberedPrompts.positive || "";
+        ov.positive_prompt = pos;
+    }
+    if (node._weNegBox) {
+        const neg = node._weNegBox.value || rememberedPrompts.negative || "";
+        ov.negative_prompt = neg;
+    }
     if (node._weFamily) ov._family = node._weFamily;
     if (node._weShowAllModels) ov._show_all_models = true;
     else delete ov._show_all_models;
@@ -1218,6 +1232,8 @@ function syncHidden(node) {
     // Persist to node.properties for tab-switch survival
     node.properties = node.properties || {};
     node.properties.we_override_data = JSON.stringify(ov);
+    // Canonical saved UI state for workflow reload restore.
+    node.properties.we_ui_state = JSON.stringify(ov);
     node.properties.we_lora_state = JSON.stringify(node._weLoraState || {});
     if (node._weWorkflowLoras) node.properties.we_workflow_loras = JSON.stringify(node._weWorkflowLoras);
     if (node._weInputLoras) node.properties.we_input_loras = JSON.stringify(node._weInputLoras);
@@ -1456,9 +1472,15 @@ app.registerExtension({
                 negative: false,
                 loras: false,
             };
+            // During graph/tab rehydrate, callbacks like onConnectionsChange can
+            // fire before restore completes. Guard sync writes until hydration ends.
+            node._weHydrating = true;
             this.serialize_widgets = true;
 
-            const _syncS = () => syncHidden(node);
+            const _syncS = ({ force = false } = {}) => {
+                if (node._weHydrating && !force) return;
+                syncHidden(node);
+            };
             node._weSetSectionLock = (sectionName, locked, { sync = true } = {}) => {
                 const key = String(sectionName || "");
                 if (!key) return;
@@ -1471,6 +1493,16 @@ app.registerExtension({
                     if (node._weSetResDisabled) node._weSetResDisabled(val);
                 }
                 if (sync) _syncS();
+            };
+
+            // Ensure latest UI state is captured in hidden widgets/properties
+            // when the graph is serialized (save/export), even if some controls
+            // haven't emitted their final change event yet.
+            const origOnSerialize = node.onSerialize;
+            node.onSerialize = function (o) {
+                try { syncHidden(node); } catch { /* non-fatal */ }
+                if (origOnSerialize) return origOnSerialize.apply(this, arguments);
+                return o;
             };
 
             // ============================================================
@@ -2157,7 +2189,14 @@ app.registerExtension({
                 familySel.appendChild(o);
                 familySel.value = "sdxl";
             }
-            familySel.onchange = () => onFamilyChanged(familySel.value);
+            familySel.onchange = () => {
+                // Persist family immediately so fast tab-switches do not lose it.
+                node._weFamily = familySel.value || "sdxl";
+                node._weOverrides = node._weOverrides || {};
+                node._weOverrides._family = node._weFamily;
+                _syncS();
+                onFamilyChanged(familySel.value);
+            };
             familyRow.appendChild(familySel);
             familyRow.appendChild(modelFilterIcon);
             modelSec._body.appendChild(familyRow);
@@ -2239,6 +2278,38 @@ app.registerExtension({
                     reloadGroupedSelect(node._weModelRow, fetchModelsForFamilyA, true, null, false),
                     reloadGroupedSelect(node._weModelBRow, fetchModelsForFamilyB, true, null, false),
                 ]);
+            };
+
+            node._weEnsureModelSelection = async ({ reloadIfEmpty = false, sync = true } = {}) => {
+                const sel = node._weModelRow?._sel;
+                if (!sel) return false;
+
+                const pickFirst = () => {
+                    const first = [...sel.options].find(o => o.value);
+                    if (!first) return false;
+                    sel.value = first.value;
+                    node._weOverrides = node._weOverrides || {};
+                    node._weOverrides.model_a = first.value;
+                    if (node._weExtracted) node._weExtracted.model_a = first.value;
+                    return true;
+                };
+
+                if (sel.value) return true;
+                if (pickFirst()) {
+                    if (sync) _syncS();
+                    return true;
+                }
+
+                if (reloadIfEmpty) {
+                    const fam = node._weFamily || node._weFamilySel?.value || "sdxl";
+                    await reloadModelRowsForFamily(fam);
+                    if (pickFirst()) {
+                        if (sync) _syncS();
+                        return true;
+                    }
+                }
+
+                return false;
             };
 
             modelFilterIcon.onclick = async () => {
@@ -2336,6 +2407,10 @@ app.registerExtension({
             // _setOriginal and _syncS itself right after, with the correct values.
             const onFamilyChanged = async (familyKey, { fromUpdateUI = false } = {}) => {
                 node._weFamily = familyKey;
+                // Persist early before async reloads complete.
+                node._weOverrides = node._weOverrides || {};
+                node._weOverrides._family = familyKey;
+                _syncS();
                 applyModelFilterTooltip(node._weModelRow?._sel);
                 applyModelFilterTooltip(node._weModelBRow?._sel);
                 // Reset VAE/CLIP overrides — new family means old selections are invalid
@@ -2361,6 +2436,7 @@ app.registerExtension({
                     reloadVae(),
                     reloadClip(),
                 ]);
+                await node._weEnsureModelSelection({ reloadIfEmpty: false, sync: false });
                 if (!fromUpdateUI) {
                     // Manual family change — auto-select first model and sync.
                     // updateUI calls _setOriginal itself so we skip this.
@@ -2644,6 +2720,13 @@ app.registerExtension({
             node.onConnectionsChange = function () {
                 if (origConnInput) origConnInput.apply(this, arguments);
 
+                // Ignore persistence writes during hydration to avoid clobbering
+                // restored values with defaults (e.g. SDXL).
+                if (node._weHydrating) {
+                    _updatePromptGhosting();
+                    return;
+                }
+
                 _updatePromptGhosting();
                 syncHidden(node);
 
@@ -2679,6 +2762,9 @@ app.registerExtension({
             };
             // Apply initial ghosting state
             _updatePromptGhosting();
+            // Persist an initial baseline snapshot so tab switching can
+            // restore even before the first execute/save.
+            _syncS();
 
             // -- Seed control after generate --
             node._onExecutedSeed = function () {
@@ -2880,6 +2966,26 @@ app.registerExtension({
             origConfigure?.apply(this, arguments);
             const node = this;
             node._configuredFromWorkflow = true;
+            node._weHydrating = true;
+            const _finishHydration = () => {
+                node._weHydrating = false;
+                if (node._updatePromptGhosting) node._updatePromptGhosting();
+                syncHidden(node);
+            };
+
+            const getInfoWidgetVal = (name, fallback = undefined) => {
+                try {
+                    if (!Array.isArray(info?.widgets_values) || !Array.isArray(node.widgets)) {
+                        return fallback;
+                    }
+                    const idx = node.widgets.findIndex(w => w?.name === name);
+                    if (idx < 0) return fallback;
+                    const v = info.widgets_values[idx];
+                    return (v !== undefined && v !== null) ? v : fallback;
+                } catch {
+                    return fallback;
+                }
+            };
 
             // ── Migration: remove stale inputs/outputs from old workflows ──
             // LiteGraph restores slots from saved JSON; if INPUT_TYPES or
@@ -2927,18 +3033,80 @@ app.registerExtension({
 
             // Read saved state from node.properties
             const props = node.properties || {};
-            const savedOv = props.we_override_data;
-            const savedLs = props.we_lora_state;
-            const savedCache = props.we_extracted_cache;
+            const getWidgetVal = (name, fallback = undefined) => {
+                const w = node.widgets?.find(x => x.name === name);
+                return w?.value ?? fallback;
+            };
+            const savedUiState = props.we_ui_state ?? "";
+            const savedOvFromInfo = getInfoWidgetVal("override_data", "{}");
+            const savedLsFromInfo = getInfoWidgetVal("lora_state", "{}");
+            const savedOv = (savedUiState && savedUiState !== "{}")
+                ? savedUiState
+                : (props.we_override_data ?? getWidgetVal("override_data", savedOvFromInfo));
+            const savedLs = props.we_lora_state ?? getWidgetVal("lora_state", savedLsFromInfo);
             const savedWl = props.we_workflow_loras;
             const savedIl = props.we_input_loras;
 
-            let cached = null;
-            try { cached = JSON.parse(savedCache || "{}"); } catch { cached = null; }
-            const hasCache = cached && Object.keys(cached).length > 0;
+            let ovObj = {};
+            try { ovObj = JSON.parse(savedOv || "{}"); } catch { ovObj = {}; }
+            // Prompt fallback: old saves may have prompts only in we_workflow_prompts.
+            let savedWp = null;
+            try { savedWp = JSON.parse(props.we_workflow_prompts || "null"); } catch { savedWp = null; }
+            if (savedWp && typeof savedWp === "object") {
+                if ((!ovObj.positive_prompt || ovObj.positive_prompt === "") && savedWp.positive) {
+                    ovObj.positive_prompt = savedWp.positive;
+                }
+                if ((!ovObj.negative_prompt || ovObj.negative_prompt === "") && savedWp.negative) {
+                    ovObj.negative_prompt = savedWp.negative;
+                }
+            }
+            const hasAuthoritativeOverrides = !!(ovObj && Object.keys(ovObj).length > 0);
 
-            if (hasCache) {
-                node._weExtracted = cached;
+            const buildExtractedFromOverrides = (ov, fallback = {}) => {
+                const fam = ov?._family || fallback.model_family || "sdxl";
+                const isVideo = ["wan_video_t2v", "wan_video_i2v"].includes(fam);
+                const fbSampler = fallback.sampler || {};
+                const fbRes = fallback.resolution || {};
+                return {
+                    positive_prompt: (ov?.positive_prompt != null) ? ov.positive_prompt : (fallback.positive_prompt || ""),
+                    negative_prompt: (ov?.negative_prompt != null) ? ov.negative_prompt : (fallback.negative_prompt || ""),
+                    model_a: (ov?.model_a != null) ? ov.model_a : (fallback.model_a || ""),
+                    model_b: (ov?.model_b != null) ? ov.model_b : (fallback.model_b || ""),
+                    model_family: fam,
+                    model_family_label: fallback.model_family_label || "",
+                    vae: {
+                        name: (ov?.vae != null) ? ov.vae : (fallback.vae?.name || ""),
+                        source: "manual",
+                    },
+                    clip: {
+                        names: (Array.isArray(ov?.clip_names) ? ov.clip_names : (fallback.clip?.names || [])),
+                        type: fallback.clip?.type || "",
+                        source: "manual",
+                    },
+                    sampler: {
+                        steps_a: (ov?.steps_a != null) ? ov.steps_a : (fbSampler.steps_a ?? 20),
+                        steps_b: (ov?.steps_b != null) ? ov.steps_b : (fbSampler.steps_b ?? null),
+                        cfg: (ov?.cfg != null) ? ov.cfg : (fbSampler.cfg ?? 5.0),
+                        seed_a: (ov?.seed_a != null) ? ov.seed_a : (fbSampler.seed_a ?? 0),
+                        seed_b: (ov?.seed_b != null) ? ov.seed_b : (fbSampler.seed_b ?? null),
+                        sampler_name: (ov?.sampler_name != null) ? ov.sampler_name : (fbSampler.sampler_name || "euler"),
+                        scheduler: (ov?.scheduler != null) ? ov.scheduler : (fbSampler.scheduler || "simple"),
+                    },
+                    resolution: {
+                        width: (ov?.width != null) ? ov.width : (fbRes.width ?? 768),
+                        height: (ov?.height != null) ? ov.height : (fbRes.height ?? 1280),
+                        batch_size: (ov?.batch_size != null) ? ov.batch_size : (fbRes.batch_size ?? 1),
+                        length: (ov?.length != null) ? ov.length : (isVideo ? (fbRes.length ?? 81) : undefined),
+                    },
+                    loras_a: Array.isArray(fallback.loras_a) ? fallback.loras_a : [],
+                    loras_b: Array.isArray(fallback.loras_b) ? fallback.loras_b : [],
+                    is_video: isVideo,
+                };
+            };
+            if (hasAuthoritativeOverrides) {
+                // UI state is the sole source of truth on restore.
+                // Intentionally ignore we_extracted_cache because it may be stale.
+                node._weExtracted = buildExtractedFromOverrides(ovObj, {});
                 node._wePopulated = true;
                 node._weLoraState = {};
                 node._weOverrides = {};
@@ -2949,46 +3117,23 @@ app.registerExtension({
                 if (uiReady && typeof uiReady.then === "function") {
                     uiReady.then(() => {
                         applyOverrides(node, savedOv, savedLs);
+                        syncHidden(node);
                         if (node._updatePromptGhosting) node._updatePromptGhosting();
                         node.setDirtyCanvas(true, true);
-                    });
+                    }).finally(() => _finishHydration());
                 } else {
                     applyOverrides(node, savedOv, savedLs);
+                    syncHidden(node);
                     if (node._updatePromptGhosting) node._updatePromptGhosting();
                     node.setDirtyCanvas(true, true);
+                    _finishHydration();
                 }
             } else {
-                // No extracted cache — but user may have entered values manually
-                // before executing. Try to restore from override data alone.
+                // No override/UI state available: keep default UI.
                 const hasOverrides = savedOv && savedOv !== "{}";
                 if (hasOverrides) {
                     try {
-                        const ov = JSON.parse(savedOv);
-                        const isVideo = ["wan_video_t2v", "wan_video_i2v"].includes(ov._family);
-                        node._weExtracted = {
-                            positive_prompt: ov.positive_prompt || "",
-                            negative_prompt: ov.negative_prompt || "",
-                            model_a: ov.model_a || "",
-                            model_b: ov.model_b || "",
-                            model_family: ov._family || "sdxl",
-                            model_family_label: "",
-                            vae: { name: ov.vae || "", source: "manual" },
-                            clip: { names: ov.clip_names || [], type: "", source: "manual" },
-                            sampler: {
-                                steps_a: ov.steps_a || 20, cfg: ov.cfg || 5.0,
-                                seed_a: ov.seed_a || 0, seed_b: ov.seed_b,
-                                sampler_name: ov.sampler_name || "euler",
-                                scheduler: ov.scheduler || "simple",
-                                steps_b: ov.steps_b,
-                            },
-                            resolution: {
-                                width: ov.width || 768, height: ov.height || 1280,
-                                batch_size: ov.batch_size || 1,
-                                length: isVideo ? (ov.length || 81) : undefined,
-                            },
-                            loras_a: [], loras_b: [],
-                            is_video: isVideo,
-                        };
+                        node._weExtracted = buildExtractedFromOverrides(ovObj, {});
                         node._wePopulated = true;
                         const uiReady = updateUI(node);
                         if (uiReady && typeof uiReady.then === "function") {
@@ -2996,11 +3141,12 @@ app.registerExtension({
                                 applyOverrides(node, savedOv, savedLs);
                                 if (node._updatePromptGhosting) node._updatePromptGhosting();
                                 node.setDirtyCanvas(true, true);
-                            });
+                            }).finally(() => _finishHydration());
                         } else {
                             applyOverrides(node, savedOv, savedLs);
                             if (node._updatePromptGhosting) node._updatePromptGhosting();
                             node.setDirtyCanvas(true, true);
+                            _finishHydration();
                         }
                     } catch {
                         // Fall through to basic restore
@@ -3008,6 +3154,7 @@ app.registerExtension({
                 }
                 if (node._updatePromptGhosting) node._updatePromptGhosting();
                 node.setDirtyCanvas(true, true);
+                _finishHydration();
             }
 
             // Show/hide Update Workflow button based on workflow_data connection
