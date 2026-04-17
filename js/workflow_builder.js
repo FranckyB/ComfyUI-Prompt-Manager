@@ -1324,14 +1324,13 @@ function _showInfo(node, infoMsg) {
         fontSize: "12px",
         lineHeight: "1.4",
         marginBottom: "4px",
-        whiteSpace: "pre-line",
+        whiteSpace: "pre-wrap",
         wordBreak: "break-word",
     });
     banner.className = "we-info-banner";
 
-    const icon = makeEl("span", { marginRight: "6px", fontSize: "13px" }, "\u2139\uFE0F");
     const text = makeEl("span", {}, infoMsg);
-    banner.append(icon, text);
+    banner.append(text);
     root.insertBefore(banner, root.firstChild);
 }
 
@@ -1719,13 +1718,14 @@ app.registerExtension({
 
             // -- Top-right help icon on node frame (canvas-drawn) --
             node._weHelpText = [
-                "Workflow Builder quick help:",
-                "- In Builder chains, first Builder drives downstream Builders.",
-                "- Connect workflow_data to drive this node from upstream data.",
-                "- Update Workflow appears only for extractor sources.",
-                "- For normal workflow_data sources, execute queue to refresh UI.",
-                `- Model family filtering can be toggled with ${FILTER_ICON_GLYPH}.`,
-                "- Lock a section to keep those values unchanged.",
+                "Use with an extractor node to get an 'Update Workflow' button.",
+                "- In this mode, data is only pulled at the press of that button.",
+                "Builder can also be used standalone or chained in a workflow.",
+                "- If chaining, first Builder drives downstream Builders.",
+                "- Chained Builders update their UI at execution.",
+                "- Builders can be executed by pressing their Comfy ▶️ button.",
+                `Model family filtering can be toggled with ${FILTER_ICON_GLYPH}.`,
+                "Lock any section to prevent changes when executing the workflow.",
             ].join("\n");
             node._weHelpVisible = false;
             node._weHelpIconRect = null;
@@ -1780,7 +1780,7 @@ app.registerExtension({
                 borderRadius: "4px", cursor: "pointer",
                 fontWeight: "bold", fontSize: "13px",
                 fontFamily: "inherit", marginBottom: "2px",
-            }, "\u{1F504} Update Workflow");
+            }, "Update Workflow");
             node._weUpdateBtn = updateBtn;
 
             const _isExtractorSourceHint = (n) => {
@@ -1913,7 +1913,7 @@ app.registerExtension({
                 }
 
                 updateBtn.disabled = true;
-                updateBtn.textContent = "\u23F3 Fetching\u2026";
+                updateBtn.textContent = "Fetching...";
                 try {
                     let extracted = null;
                     const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
@@ -2215,7 +2215,7 @@ app.registerExtension({
                     _showError(node, "Failed to refresh workflow data from the connected source.");
                 } finally {
                     updateBtn.disabled = false;
-                    updateBtn.textContent = "\u{1F504} Update Workflow";
+                    updateBtn.textContent = "Update Workflow";
                 }
             };
             root.appendChild(updateBtn);
