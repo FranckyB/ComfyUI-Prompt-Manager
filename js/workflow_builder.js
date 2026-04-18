@@ -844,8 +844,6 @@ function _refreshSelectOptions(selectEl, options) {
     // Restore previous value if it still exists, otherwise keep first
     if (options.includes(cur)) selectEl.value = cur;
 }
-const CONTROL_MODES = ["fixed", "increment", "decrement", "randomize"];
-
 // --- Per-family sampler defaults (applied on manual family switch) ---
 // Edit values here to change what each family starts with.
 const FAMILY_DEFAULTS = {
@@ -999,12 +997,16 @@ async function updateUI(node) {
     const s = d.sampler || {};
     if (!samplerLocked && node._weSamplerRows) {
         const rows = node._weSamplerRows;
+        const seedAInputConn = node.inputs?.find(i => i.name === "seed_a");
+        const seedBInputConn = node.inputs?.find(i => i.name === "seed_b");
+        const seedALinked = seedAInputConn?.link != null;
+        const seedBLinked = seedBInputConn?.link != null;
         if (rows.steps_a?._setOriginal) rows.steps_a._setOriginal(s.steps_a ?? s.steps ?? 20);
         if (rows.cfg?._setOriginal) rows.cfg._setOriginal(s.cfg ?? 5.0);
         if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
         if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "simple");
-        if (rows.seed_a?._setOriginal) rows.seed_a._setOriginal(s.seed_a ?? s.seed ?? 0);
-        if (rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed_a ?? s.seed ?? 0);
+        if (!seedALinked && rows.seed_a?._setOriginal) rows.seed_a._setOriginal(s.seed_a ?? s.seed ?? 0);
+        if (!seedBLinked && rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed_a ?? s.seed ?? 0);
         // WAN Video dual steps
         if (rows.steps_b?._setOriginal) rows.steps_b._setOriginal(s.steps_b ?? s.steps_a ?? s.steps ?? 3);
     }
@@ -1101,6 +1103,7 @@ async function updateUI(node) {
 
     // Update WAN-specific visibility
     updateWanVisibility(node);
+    if (node._updateSeedGhosting) node._updateSeedGhosting();
 
     syncHidden(node);
 
@@ -1296,6 +1299,7 @@ function setFieldsFrozen(node, frozen) {
     }
     // Re-apply prompt ghosting so it uses its own single opacity
     if (node._updatePromptGhosting) node._updatePromptGhosting();
+    if (node._updateSeedGhosting) node._updateSeedGhosting();
 }
 
 // --- Error banner on node ---
@@ -1468,11 +1472,6 @@ function syncHidden(node) {
         }
     }
 
-    // Control after generate
-    if (node._weControlMode) {
-        ov._control_after_generate = node._weControlMode._inp?.value || "randomize";
-    }
-
     wSet("override_data", JSON.stringify(ov));
     wSet("lora_state", JSON.stringify(node._weLoraState || {}));
 
@@ -1641,11 +1640,6 @@ function applyOverrides(node, ovJson, lsJson) {
     }
     if (ov.positive_prompt != null && node._wePosBox) node._wePosBox.value = ov.positive_prompt;
     if (ov.negative_prompt != null && node._weNegBox) node._weNegBox.value = ov.negative_prompt;
-
-    // Control after generate
-    if (ov._control_after_generate && node._weControlMode?._inp) {
-        node._weControlMode._inp.value = ov._control_after_generate;
-    }
 
     if (!isEmpty(ls)) {
         node._weLoraState = ls;
@@ -2297,8 +2291,8 @@ app.registerExtension({
                     _showError(node, null);
 
                     // If prompts are connected, preserve current prompt values
-                    const posConn = node.inputs?.find(i => i.name === "positive_prompt");
-                    const negConn = node.inputs?.find(i => i.name === "negative_prompt");
+                    const posConn = node.inputs?.find(i => i.name === "pos_prompt");
+                    const negConn = node.inputs?.find(i => i.name === "neg_prompt");
                     // Save workflow prompts before overwriting
                     const prevWorkflowPrompts = node._weWorkflowPrompts || { positive: "", negative: "" };
                     node._weWorkflowPrompts = {
@@ -2911,12 +2905,6 @@ app.registerExtension({
             sampSec._body.appendChild(seedRow);
             sampSec._body.appendChild(seedBRow);
 
-            // Control after generate
-            const controlRow = makeInput("Control after generate", "select", "fixed",
-                { options: CONTROL_MODES }, _syncS);
-            sampSec._body.appendChild(controlRow);
-            node._weControlMode = controlRow;
-
             root.appendChild(sampSec);
             node._weSamplerRows = sampRows;
 
@@ -3108,8 +3096,8 @@ app.registerExtension({
 
             // -- Auto-ghost prompt textareas when inputs are connected --
             function _updatePromptGhosting() {
-                const posConn = node.inputs?.find(i => i.name === "positive_prompt");
-                const negConn = node.inputs?.find(i => i.name === "negative_prompt");
+                const posConn = node.inputs?.find(i => i.name === "pos_prompt");
+                const negConn = node.inputs?.find(i => i.name === "neg_prompt");
                 const posLinked = posConn && posConn.link != null;
                 const negLinked = negConn && negConn.link != null;
 
@@ -3126,6 +3114,51 @@ app.registerExtension({
             }
             node._updatePromptGhosting = _updatePromptGhosting;
 
+            function _readConnectedInputValue(inputName) {
+                const conn = node.inputs?.find(i => i.name === inputName);
+                if (!conn || conn.link == null) return { linked: false, value: null };
+
+                const linkInfo = node.graph?.links?.[conn.link];
+                if (!linkInfo) return { linked: true, value: null };
+
+                const srcNode = node.graph?.getNodeById?.(linkInfo.origin_id);
+                if (!srcNode) return { linked: true, value: null };
+
+                let value = srcNode.getOutputData?.(linkInfo.origin_slot);
+                if (value === undefined && Array.isArray(srcNode.widgets)) {
+                    const widget = srcNode.widgets.find(w => {
+                        const name = String(w?.name || "").toLowerCase();
+                        return name === "value" || name === "seed" || name === "int" || name === "number";
+                    });
+                    if (widget) value = widget.value;
+                }
+
+                return { linked: true, value };
+            }
+
+            function _updateSeedGhosting() {
+                const rows = node._weSamplerRows;
+                if (!rows) return;
+
+                const applySeedState = (inputName, row) => {
+                    if (!row?._inp) return;
+                    const { linked, value } = _readConnectedInputValue(inputName);
+
+                    row._inp.readOnly = linked;
+                    row._inp.style.opacity = linked ? "0.5" : "1";
+                    row._inp.style.pointerEvents = "auto";
+
+                    if (linked && value !== undefined && value !== null) {
+                        const n = Number(value);
+                        if (Number.isFinite(n)) row._inp.value = String(Math.trunc(n));
+                    }
+                };
+
+                applySeedState("seed_a", rows.seed_a);
+                applySeedState("seed_b", rows.seed_b);
+            }
+            node._updateSeedGhosting = _updateSeedGhosting;
+
             // Update ghosting and LoRA inputs when connections change
             const origConnInput = node.onConnectionsChange;
             node.onConnectionsChange = function () {
@@ -3135,10 +3168,12 @@ app.registerExtension({
                 // restored values with defaults (e.g. SDXL).
                 if (node._weHydrating) {
                     _updatePromptGhosting();
+                    _updateSeedGhosting();
                     return;
                 }
 
                 _updatePromptGhosting();
+                _updateSeedGhosting();
                 syncHidden(node);
 
                 // Show/hide Update Workflow button based on workflow_data connection
@@ -3173,29 +3208,10 @@ app.registerExtension({
             };
             // Apply initial ghosting state
             _updatePromptGhosting();
+            _updateSeedGhosting();
             // Persist an initial baseline snapshot so tab switching can
             // restore even before the first execute/save.
             _syncS();
-
-            // -- Seed control after generate --
-            node._onExecutedSeed = function () {
-                const mode = node._weControlMode?._inp?.value || "fixed";
-                const applyMode = (row) => {
-                    if (!row?._inp || row.style.display === "none") return;
-                    const cur = parseInt(row._inp.value) || 0;
-                    if (mode === "randomize") {
-                        row._inp.value = Math.floor(Math.random() * 2147483647);
-                    } else if (mode === "increment") {
-                        row._inp.value = cur + 1;
-                    } else if (mode === "decrement") {
-                        row._inp.value = Math.max(0, cur - 1);
-                    }
-                };
-                applyMode(node._weSamplerRows?.seed_a);
-                applyMode(node._weSamplerRows?.seed_b);
-                // "fixed" -- do nothing
-                _syncS();
-            };
 
             // -- Pre-generation UI update (via send_sync from Python) --
             // Fires before model loading / sampling so UI feels instant.
@@ -3206,16 +3222,29 @@ app.registerExtension({
 
                 // Always mirror connected prompt inputs into textareas,
                 // even when extractor-connected mode skips full UI refresh.
-                const posInputConn = node.inputs?.find(i => i.name === "positive_prompt");
-                const negInputConn = node.inputs?.find(i => i.name === "negative_prompt");
+                const posInputConn = node.inputs?.find(i => i.name === "pos_prompt");
+                const negInputConn = node.inputs?.find(i => i.name === "neg_prompt");
                 if (posInputConn?.link != null && info.positive_prompt != null && node._wePosBox) {
                     node._wePosBox.value = info.positive_prompt;
                 }
                 if (negInputConn?.link != null && info.negative_prompt != null && node._weNegBox) {
                     node._weNegBox.value = info.negative_prompt;
                 }
+                const seedAInputConn = node.inputs?.find(i => i.name === "seed_a");
+                const seedBInputConn = node.inputs?.find(i => i.name === "seed_b");
+                const samplerInfo = info.sampler || {};
+                if (seedAInputConn?.link != null && samplerInfo.seed_a != null && node._weSamplerRows?.seed_a?._inp) {
+                    node._weSamplerRows.seed_a._inp.value = String(Math.trunc(Number(samplerInfo.seed_a) || 0));
+                }
+                if (seedBInputConn?.link != null && samplerInfo.seed_b != null && node._weSamplerRows?.seed_b?._inp) {
+                    node._weSamplerRows.seed_b._inp.value = String(Math.trunc(Number(samplerInfo.seed_b) || 0));
+                }
                 if ((posInputConn?.link != null || negInputConn?.link != null) && node._updatePromptGhosting) {
                     node._updatePromptGhosting();
+                    syncHidden(node);
+                }
+                if ((seedAInputConn?.link != null || seedBInputConn?.link != null) && node._updateSeedGhosting) {
+                    node._updateSeedGhosting();
                     syncHidden(node);
                 }
 
@@ -3299,8 +3328,8 @@ app.registerExtension({
             // Always mirror connected prompt inputs into textareas so users
             // can see generated prompts immediately.
             const info = wfInfo?.extracted;
-            const posConn = this.inputs?.find(i => i.name === "positive_prompt");
-            const negConn = this.inputs?.find(i => i.name === "negative_prompt");
+            const posConn = this.inputs?.find(i => i.name === "pos_prompt");
+            const negConn = this.inputs?.find(i => i.name === "neg_prompt");
             if (info) {
                 if (posConn?.link != null && info.positive_prompt != null && this._wePosBox) {
                     this._wePosBox.value = info.positive_prompt;
@@ -3308,8 +3337,21 @@ app.registerExtension({
                 if (negConn?.link != null && info.negative_prompt != null && this._weNegBox) {
                     this._weNegBox.value = info.negative_prompt;
                 }
+                const seedAConn = this.inputs?.find(i => i.name === "seed_a");
+                const seedBConn = this.inputs?.find(i => i.name === "seed_b");
+                const samplerInfo = info.sampler || {};
+                if (seedAConn?.link != null && samplerInfo.seed_a != null && this._weSamplerRows?.seed_a?._inp) {
+                    this._weSamplerRows.seed_a._inp.value = String(Math.trunc(Number(samplerInfo.seed_a) || 0));
+                }
+                if (seedBConn?.link != null && samplerInfo.seed_b != null && this._weSamplerRows?.seed_b?._inp) {
+                    this._weSamplerRows.seed_b._inp.value = String(Math.trunc(Number(samplerInfo.seed_b) || 0));
+                }
                 if ((posConn?.link != null || negConn?.link != null) && this._updatePromptGhosting) {
                     this._updatePromptGhosting();
+                    syncHidden(this);
+                }
+                if ((seedAConn?.link != null || seedBConn?.link != null) && this._updateSeedGhosting) {
+                    this._updateSeedGhosting();
                     syncHidden(this);
                 }
             }
@@ -3366,9 +3408,6 @@ app.registerExtension({
             }
             // Reset flag for next execution
             this._preUpdateApplied = false;
-
-            // Advance seed per control mode
-            if (this._onExecutedSeed) this._onExecutedSeed();
         };
 
         // -- onConfigure (graph load / paste / tab return) --
@@ -3381,6 +3420,7 @@ app.registerExtension({
             const _finishHydration = () => {
                 node._weHydrating = false;
                 if (node._updatePromptGhosting) node._updatePromptGhosting();
+                if (node._updateSeedGhosting) node._updateSeedGhosting();
                 syncHidden(node);
             };
 
@@ -3403,9 +3443,20 @@ app.registerExtension({
             // RETURN_TYPES changed between versions, phantom slots persist.
             const VALID_INPUTS = new Set([
                 "workflow_data",
+                "pos_prompt", "neg_prompt",
+                // Legacy names: accepted during migration then normalized.
                 "positive_prompt", "negative_prompt",
+                "seed_a", "seed_b",
                 "lora_stack_a", "lora_stack_b",
             ]);
+            // Normalize legacy prompt input slot names on load.
+            if (node.inputs) {
+                for (const inp of node.inputs) {
+                    if (!inp || !inp.name) continue;
+                    if (inp.name === "positive_prompt") inp.name = "pos_prompt";
+                    if (inp.name === "negative_prompt") inp.name = "neg_prompt";
+                }
+            }
             if (node.inputs) {
                 for (let i = node.inputs.length - 1; i >= 0; i--) {
                     if (!VALID_INPUTS.has(node.inputs[i].name)) {
@@ -3567,18 +3618,21 @@ app.registerExtension({
                         applyOverrides(node, savedOv, savedLs);
                         syncHidden(node);
                         if (node._updatePromptGhosting) node._updatePromptGhosting();
+                        if (node._updateSeedGhosting) node._updateSeedGhosting();
                         node.setDirtyCanvas(true, true);
                     }).finally(() => _finishHydration());
                 } else {
                     applyOverrides(node, savedOv, savedLs);
                     syncHidden(node);
                     if (node._updatePromptGhosting) node._updatePromptGhosting();
+                    if (node._updateSeedGhosting) node._updateSeedGhosting();
                     node.setDirtyCanvas(true, true);
                     _finishHydration();
                 }
             } else {
                 // No usable UI-state overrides available: keep default UI.
                 if (node._updatePromptGhosting) node._updatePromptGhosting();
+                if (node._updateSeedGhosting) node._updateSeedGhosting();
                 node.setDirtyCanvas(true, true);
                 _finishHydration();
             }

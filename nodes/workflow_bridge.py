@@ -75,8 +75,8 @@ class WorkflowBridge:
                 "cfg":             ("FLOAT",   {"forceInput": True, "tooltip": "Override CFG scale"}),
                 "sampler_name":    (cls._SAMPLER_ENUM, {"forceInput": True, "tooltip": "Override sampler name"}),
                 "scheduler":       (cls._SCHEDULER_ENUM, {"forceInput": True, "tooltip": "Override scheduler"}),
-                "pos_text":        ("STRING",  {"forceInput": True, "tooltip": "Override positive prompt"}),
-                "neg_text":        ("STRING",  {"forceInput": True, "tooltip": "Override negative prompt"}),
+                "pos_prompt":      ("STRING",  {"forceInput": True, "tooltip": "Override positive prompt"}),
+                "neg_prompt":      ("STRING",  {"forceInput": True, "tooltip": "Override negative prompt"}),
                 "lora_stack_a":    ("LORA_STACK", {"tooltip": "Override LoRA stack A"}),
                 "lora_stack_b":    ("LORA_STACK", {"tooltip": "Override LoRA stack B"}),
                 "width":           ("INT",     {"forceInput": True, "tooltip": "Override width"}),
@@ -101,7 +101,7 @@ class WorkflowBridge:
         "model_a", "model_b", "clip", "positive", "negative", "vae", "latent", "image",
         "seed_a", "seed_b", "steps_a", "steps_b", "cfg",
         "sampler_name", "scheduler",
-        "pos_text", "neg_text",
+        "pos_prompt", "neg_prompt",
         "lora_stack_a", "lora_stack_b",
         "width", "height", "batch_size", "length",
         "model_name",
@@ -137,11 +137,17 @@ class WorkflowBridge:
         resolution = dict(wf.get('resolution', {}))
 
         # -- Apply top-level overrides -------------------------------
-        pos_text = kwargs.get('pos_text')
+        pos_text = kwargs.get('pos_prompt')
+        if pos_text is None:
+            # Legacy workflow compatibility
+            pos_text = kwargs.get('pos_text')
         if pos_text is not None:
             wf['positive_prompt'] = pos_text
 
-        neg_text = kwargs.get('neg_text')
+        neg_text = kwargs.get('neg_prompt')
+        if neg_text is None:
+            # Legacy workflow compatibility
+            neg_text = kwargs.get('neg_text')
         if neg_text is not None:
             wf['negative_prompt'] = neg_text
 

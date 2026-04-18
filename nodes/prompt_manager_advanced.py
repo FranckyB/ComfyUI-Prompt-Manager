@@ -4,6 +4,7 @@ Saves prompts along with associated LoRA configurations
 """
 import os
 import json
+import shutil
 import base64
 from io import BytesIO
 import folder_paths
@@ -223,6 +224,25 @@ class PromptManagerAdvanced:
                     return json.load(f)
             except Exception as e:
                 print(f"[PromptManagerAdvanced] Error loading user prompts: {e}")
+                # Try backup variants before falling back to defaults.
+                # Never overwrite a user file just because parsing failed.
+                backup_candidates = [
+                    user_path + ".bak",
+                    user_path + ".backup",
+                    user_path + ".tmp",
+                ]
+                for backup_path in backup_candidates:
+                    if not os.path.exists(backup_path):
+                        continue
+                    try:
+                        with open(backup_path, 'r', encoding='utf-8') as f:
+                            backup_data = json.load(f)
+                        print(f"[PromptManagerAdvanced] Recovered prompts from backup: {backup_path}")
+                        return backup_data
+                    except Exception as be:
+                        print(f"[PromptManagerAdvanced] Backup load failed ({backup_path}): {be}")
+                print("[PromptManagerAdvanced] User prompt file exists but could not be parsed; not overwriting with defaults.")
+                return {}
 
         if os.path.exists(default_path):
             try:
@@ -259,13 +279,26 @@ class PromptManagerAdvanced:
         """Save prompts to user folder"""
         user_path = cls.get_prompts_path()
         sorted_data = cls.sort_prompts_data(data)
+        tmp_path = user_path + ".tmp"
+        bak_path = user_path + ".bak"
 
         try:
             os.makedirs(os.path.dirname(user_path), exist_ok=True)
-            with open(user_path, 'w', encoding='utf-8') as f:
+            # Keep a rolling backup of the previous file before replacing it.
+            if os.path.exists(user_path):
+                shutil.copy2(user_path, bak_path)
+
+            # Atomic write: write temp then replace to avoid truncated/corrupt files.
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(sorted_data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, user_path)
         except Exception as e:
             print(f"[PromptManagerAdvanced] Error saving prompts: {e}")
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
 
     def _merge_lora_stacks(self, preset_stack, connected_stack):
         """
@@ -475,26 +508,42 @@ class PromptManagerAdvanced:
         # CONTINUE WITH NORMAL PROCESSING
         # ========================================
 
-        # Resolve workflow payload from connected input first, then saved prompt data.
-        # This allows PMA-saved workflow_data to be used even without a live upstream connection.
-        resolved_workflow_data = None
+        # Resolve workflow payload candidates.
+        # IMPORTANT: when use_workflow_data is OFF, do not pass through live
+        # upstream workflow_data updates to this node's workflow_data output.
+        prompts_data = self.load_prompts()
+        prompt_entry = prompts_data.get(category, {}).get(name, {}) if isinstance(prompts_data, dict) else {}
+        stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
+
+        live_workflow_data = None
         if isinstance(workflow_data, dict):
-            resolved_workflow_data = workflow_data
+            live_workflow_data = workflow_data
         elif isinstance(workflow_data, str) and workflow_data.strip():
             try:
                 parsed = json.loads(workflow_data)
                 if isinstance(parsed, dict):
-                    resolved_workflow_data = parsed
+                    live_workflow_data = parsed
             except (json.JSONDecodeError, TypeError):
-                resolved_workflow_data = None
+                live_workflow_data = None
 
-        if resolved_workflow_data is None and isinstance(saved_workflow_data, str) and saved_workflow_data.strip():
+        hidden_saved_wf = None
+        if isinstance(saved_workflow_data, str) and saved_workflow_data.strip():
             try:
                 parsed_saved = json.loads(saved_workflow_data)
                 if isinstance(parsed_saved, dict):
-                    resolved_workflow_data = parsed_saved
+                    hidden_saved_wf = parsed_saved
             except (json.JSONDecodeError, TypeError):
-                resolved_workflow_data = None
+                hidden_saved_wf = None
+
+        if use_workflow_data:
+            # Workflow mode ON: prefer live upstream, then hidden saved widget,
+            # then prompt-stored workflow_data.
+            resolved_workflow_data = live_workflow_data or hidden_saved_wf
+            if resolved_workflow_data is None and isinstance(stored_prompt_wf, dict):
+                resolved_workflow_data = stored_prompt_wf
+        else:
+            # Workflow mode OFF: never source from connected/hidden live payload.
+            resolved_workflow_data = stored_prompt_wf if isinstance(stored_prompt_wf, dict) else None
 
         # Choose which text to use based on the toggles
         # Priority: use_prompt_input > use_workflow_data > internal text
@@ -1166,6 +1215,12 @@ async def save_prompt_advanced(request):
 
         if wf_to_save:
             prompt_data["workflow_data"] = wf_to_save
+        else:
+            # Preserve previously saved workflow_data when user saves prompt/LoRA
+            # edits without a currently connected workflow_data source.
+            existing_wf = existing_prompt.get("workflow_data")
+            if isinstance(existing_wf, dict):
+                prompt_data["workflow_data"] = existing_wf
 
         if thumbnail:
             prompt_data["thumbnail"] = thumbnail

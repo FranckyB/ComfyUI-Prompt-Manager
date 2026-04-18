@@ -2,7 +2,7 @@
 Workflow Renderer — render-only node.
 
 Accepts WORKFLOW_DATA (JSON string from Workflow Builder or PromptExtractor),
-loads models, samples, decodes, and outputs IMAGE.
+loads models, samples, decodes, and outputs IMAGE + LATENT.
 
 No UI, no extraction — purely a render engine.
 """
@@ -66,7 +66,7 @@ class WorkflowRenderer:
 
     Takes WORKFLOW_DATA (from Workflow Builder or PromptExtractor),
     loads models, applies LoRAs, samples, decodes.
-    Outputs IMAGE.
+    Outputs IMAGE + LATENT.
     """
 
     _class_model_cache: dict = {}
@@ -94,14 +94,15 @@ class WorkflowRenderer:
             },
         }
 
-    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE")
-    RETURN_NAMES = ("workflow_data", "output_image")
+    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE", "LATENT")
+    RETURN_NAMES = ("workflow_data", "output_image", "output_latent")
     FUNCTION = "execute"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = False
     DESCRIPTION = (
         "Render-only node. Accepts workflow_data, loads models, samples, "
-        "and decodes. Outputs IMAGE + WORKFLOW_DATA (with MODEL/CLIP/VAE passthrough)."
+        "and decodes. Outputs IMAGE + LATENT + WORKFLOW_DATA "
+        "(with MODEL/CLIP/VAE passthrough)."
     )
 
     @classmethod
@@ -439,7 +440,7 @@ class WorkflowRenderer:
         if clear_cache_after_render:
             self._clear_cached_models()
 
-        return (wf_out, decoded)
+        return (wf_out, decoded, out_latent)
 
 
 def _encode_text_conditioning(clip, positive_prompt, negative_prompt):

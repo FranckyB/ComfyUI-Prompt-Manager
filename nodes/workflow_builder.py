@@ -569,13 +569,21 @@ class WorkflowBuilder:
                     "tooltip": "Connect workflow_data from PromptExtractor. "
                                "Used by the Update Workflow button.",
                 }),
-                "positive_prompt": ("STRING", {
+                "pos_prompt": ("STRING", {
                     "forceInput": True,
                     "tooltip": "Positive prompt text. When connected, overrides and ghosts the prompt textarea.",
                 }),
-                "negative_prompt": ("STRING", {
+                "neg_prompt": ("STRING", {
                     "forceInput": True,
                     "tooltip": "Negative prompt text. When connected, overrides and ghosts the prompt textarea.",
+                }),
+                "seed_a": ("INT", {
+                    "forceInput": True,
+                    "tooltip": "Seed A input. When connected, overrides Sampler Seed A.",
+                }),
+                "seed_b": ("INT", {
+                    "forceInput": True,
+                    "tooltip": "Seed B input. When connected, overrides Sampler Seed B.",
                 }),
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
@@ -602,7 +610,8 @@ class WorkflowBuilder:
 
     def execute(self,
                 workflow_data=None,
-                positive_prompt=None, negative_prompt=None,
+                pos_prompt=None, neg_prompt=None,
+                seed_a=None, seed_b=None,
                 lora_stack_a=None, lora_stack_b=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
@@ -752,10 +761,10 @@ class WorkflowBuilder:
             neg_text = overrides.get('negative_prompt', neg_text)
 
         # ── Prompt input override (if connected, use them) ─────────────
-        if positive_prompt is not None:
-            pos_text = positive_prompt
-        if negative_prompt is not None:
-            neg_text = negative_prompt
+        if pos_prompt is not None:
+            pos_text = pos_prompt
+        if neg_prompt is not None:
+            neg_text = neg_prompt
         model_name_a = extracted['model_a']
         model_name_b = extracted['model_b']
         vae_name = extracted['vae']['name']
@@ -780,6 +789,19 @@ class WorkflowBuilder:
         for key, default in (('seed_a', 0), ('seed_b', None), ('steps_a', 20), ('steps_b', None), ('cfg', 5.0)):
             if isinstance(sampler_params.get(key), list):
                 sampler_params[key] = default
+
+        # Connected seed inputs always override local sampler seed controls,
+        # similar to connected prompt inputs overriding prompt textareas.
+        if seed_a is not None:
+            try:
+                sampler_params['seed_a'] = int(seed_a)
+            except (TypeError, ValueError):
+                pass
+        if seed_b is not None:
+            try:
+                sampler_params['seed_b'] = int(seed_b)
+            except (TypeError, ValueError):
+                pass
 
         # Family + strategy
         # Priority: 1. JS override '_family' (user's explicit dropdown selection)
@@ -1039,11 +1061,23 @@ class WorkflowBuilder:
         # Echo back the *effective* values (overrides applied) so the JS
         # pre-update handler sees what the user actually has set and does
         # NOT mistakenly treat it as a source change that clears all fields.
-        effective_sampler = dict(extracted['sampler'])
+        effective_sampler = dict(sampler_params)
         if _allow_override('sampler'):
-            for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'sampler_name', 'scheduler']:
+            for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
                 if key in overrides:
                     effective_sampler[key] = overrides[key]
+
+        # Ensure UI info mirrors connected seed inputs too.
+        if seed_a is not None:
+            try:
+                effective_sampler['seed_a'] = int(seed_a)
+            except (TypeError, ValueError):
+                pass
+        if seed_b is not None:
+            try:
+                effective_sampler['seed_b'] = int(seed_b)
+            except (TypeError, ValueError):
+                pass
 
         effective_resolution = dict(extracted['resolution'])
         if _allow_override('resolution'):
