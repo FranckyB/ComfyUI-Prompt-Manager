@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 
 /**
  * PromptManagerAdvanced Extension for ComfyUI
@@ -5031,7 +5032,7 @@ function showNewCategoryDialog() {
     });
 }
 
-function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c00") {
+function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c00", useOverlay = true) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -5072,7 +5073,9 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
         const cancelBtn = dialog.querySelector(".cancel-btn");
 
         const cleanup = () => {
-            document.body.removeChild(overlay);
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
             document.body.removeChild(dialog);
         };
 
@@ -5091,7 +5094,9 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
             cleanup();
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         okBtn.focus();
     });
@@ -5243,7 +5248,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.8);
+            background: ${UI.overlay};
             z-index: 9999;
         `;
 
@@ -5253,8 +5258,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: #1a1a1a;
-            border: 2px solid #444;
+            background: ${UI.panel};
+            border: 1px solid ${UI.panelBorder};
             border-radius: 12px;
             padding: 16px;
             z-index: 10000;
@@ -5276,7 +5281,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             align-items: center;
             margin-bottom: 12px;
             padding-bottom: 8px;
-            border-bottom: 1px solid #444;
+            border-bottom: 1px solid ${UI.sectionBorder};
         `;
 
         const title = document.createElement("div");
@@ -5312,7 +5317,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             gap: 8px;
             margin-bottom: 10px;
             padding-bottom: 8px;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid ${UI.sectionBorder};
         `;
 
         // Search input (fills remaining space)
@@ -5323,16 +5328,16 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             flex: 1;
             min-width: 0;
             padding: 6px 10px;
-            background: #2a2a2a;
-            border: 1px solid #444;
+            background: ${UI.inputBg};
+            border: 1px solid ${UI.inputBorder};
             border-radius: 4px;
             color: #fff;
             font-size: 13px;
             box-sizing: border-box;
             outline: none;
         `;
-        searchInput.onfocus = () => searchInput.style.borderColor = "#666";
-        searchInput.onblur = () => searchInput.style.borderColor = "#444";
+        searchInput.onfocus = () => searchInput.style.borderColor = UI.accent;
+        searchInput.onblur = () => searchInput.style.borderColor = UI.inputBorder;
 
         // Wrap search input in a container with clear button
         const searchWrapper = document.createElement("div");
@@ -5379,8 +5384,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         let hideNSFWState = getHideNSFW();
         const nsfwBtn = document.createElement("button");
         const btnStyle = `
-            background: #2a2a2a;
-            border: 1px solid #444;
+            background: ${UI.buttonBg};
+            border: 1px solid ${UI.inputBorder};
             color: #aaa;
             padding: 4px 10px;
             border-radius: 4px;
@@ -5391,7 +5396,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         const updateNsfwBtn = () => {
             if (hideNSFWState) {
                 nsfwBtn.textContent = "NSFW: Hidden";
-                nsfwBtn.style.cssText = btnStyle + `background: #3a2020; border-color: #744; color: #c88;`;
+                nsfwBtn.style.cssText = btnStyle + `background: #453339; border-color: #9b727b; color: #d2a8b0;`;
             } else {
                 nsfwBtn.textContent = "NSFW: Visible";
                 nsfwBtn.style.cssText = btnStyle;
@@ -5399,8 +5404,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             nsfwBtn.title = hideNSFWState ? "NSFW content is hidden — click to show" : "NSFW content is visible — click to hide";
         };
         updateNsfwBtn();
-        nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#3a3a3a'; nsfwBtn.style.color = '#fff'; } };
-        nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#2a2a2a'; nsfwBtn.style.color = '#aaa'; } };
+        nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#38414c'; nsfwBtn.style.color = '#fff'; } };
+        nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#313843'; nsfwBtn.style.color = '#aaa'; } };
 
         // View mode toggle button
         let currentViewMode = getViewMode();
@@ -5410,8 +5415,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             viewModeBtn.title = currentViewMode === "thumbnails" ? "Switch to list view" : "Switch to grid view";
         };
         viewModeBtn.style.cssText = btnStyle;
-        viewModeBtn.onmouseover = () => { viewModeBtn.style.background = '#3a3a3a'; viewModeBtn.style.color = '#fff'; };
-        viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#2a2a2a'; viewModeBtn.style.color = '#aaa'; };
+        viewModeBtn.onmouseover = () => { viewModeBtn.style.background = '#38414c'; viewModeBtn.style.color = '#fff'; };
+        viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#313843'; viewModeBtn.style.color = '#aaa'; };
         updateViewModeBtn();
 
         controlsBar.appendChild(searchWrapper);
@@ -5425,7 +5430,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             gap: 6px;
             margin-bottom: 10px;
             padding-bottom: 10px;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid ${UI.sectionBorder};
             flex-wrap: wrap;
         `;
 
@@ -5475,6 +5480,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 btn.style.display = "";
 
                 btn.style.background = isSelected ? '#4a8ad4' : '#2a2a2a';
+                btn.style.background = isSelected ? UI.accentSoft : UI.buttonBg;
                 btn.style.color = isSelected ? '#fff' : '#aaa';
 
                 // NSFW categories get a red border, otherwise normal
@@ -5674,12 +5680,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     return;
                 }
 
-                // Ensure checkpoint is selected upfront
-                if (!_thumbnailCheckpoint) {
-                    _thumbnailCheckpoint = await showCheckpointPicker();
-                    if (!_thumbnailCheckpoint) return;
-                    app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", _thumbnailCheckpoint);
-                }
+                // Ensure renderer selection is ready for prompts without saved workflow_data.
+                const renderSelection = await ensureThumbnailRenderSelection();
+                if (!renderSelection) return;
+
+                // Resolve family-compatible defaults once for the batch.
+                const fallbackBase = await resolveThumbnailFallbackBase(renderSelection);
 
                 // Progress indicator
                 const progress = document.createElement("div");
@@ -5709,7 +5715,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     try {
                         await generateThumbnailForPrompt(node, cat, pName, () => {
                             renderContent(searchInput.value);
-                        }, { silent: true });
+                        }, {
+                            silent: true,
+                            renderSelection,
+                            fallbackBase,
+                        });
                         generated++;
                     } catch (e) {
                         console.error(`[ThumbnailGen] Failed for "${pName}":`, e);
@@ -5747,8 +5757,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 btn.style.cssText = `
                     padding: 6px 14px;
                     border-radius: 6px;
-                    border: 1px solid #444;
-                    background: #2a2a2a;
+                    border: 1px solid ${UI.inputBorder};
+                    background: ${UI.buttonBg};
                     color: #aaa;
                     cursor: pointer;
                     font-size: 13px;
@@ -5779,15 +5789,15 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             addBtn.style.cssText = `
                 padding: 6px 14px;
                 border-radius: 6px;
-                border: 1px solid #444;
-                background: #2a2a2a;
+                border: 1px solid #5f6773;
+                background: #313843;
                 color: #aaa;
                 cursor: pointer;
                 font-size: 13px;
                 transition: all 0.15s ease;
             `;
-            addBtn.onmouseover = () => { addBtn.style.background = '#3a3a3a'; addBtn.style.color = '#fff'; };
-            addBtn.onmouseout = () => { addBtn.style.background = '#2a2a2a'; addBtn.style.color = '#aaa'; };
+            addBtn.onmouseover = () => { addBtn.style.background = '#38414c'; addBtn.style.color = '#fff'; };
+            addBtn.onmouseout = () => { addBtn.style.background = '#313843'; addBtn.style.color = '#aaa'; };
             addBtn.onclick = async () => {
                 const result = await showNewCategoryDialog();
                 if (result && result.name && result.name.trim()) {
@@ -5914,8 +5924,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     flex-direction: column;
                     align-items: center;
                     padding: 8px;
-                    background: ${isSelected ? '#2a4a6a' : '#2a2a2a'};
-                    border: 2px solid ${isSelected ? '#4a8ad4' : '#3a3a3a'};
+                    background: ${isSelected ? UI.accentSoft : UI.cardBg};
+                    border: 2px solid ${isSelected ? UI.accentBorder : UI.cardBorder};
                     border-radius: 8px;
                     cursor: pointer;
                     transition: all 0.15s ease;
@@ -5924,14 +5934,14 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
                 card.onmouseenter = () => {
                     if (!isSelected) {
-                        card.style.background = '#3a3a3a';
-                        card.style.borderColor = '#555';
+                        card.style.background = UI.accentSoft;
+                        card.style.borderColor = UI.accentBorder;
                     }
                 };
                 card.onmouseleave = () => {
                     if (!isSelected) {
-                        card.style.background = '#2a2a2a';
-                        card.style.borderColor = '#3a3a3a';
+                        card.style.background = UI.cardBg;
+                        card.style.borderColor = UI.cardBorder;
                     }
                 };
 
@@ -6113,7 +6123,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 grid-template-columns: 44px 1fr 70px 70px 70px;
                 gap: 8px;
                 padding: 4px 8px 6px 8px;
-                border-bottom: 1px solid #444;
+                    border-bottom: 1px solid rgba(148,163,184,0.2);
                 margin-bottom: 4px;
                 align-items: center;
             `;
@@ -6155,7 +6165,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     grid-template-columns: 44px 1fr 70px 70px 70px;
                     gap: 8px;
                     padding: 4px 8px;
-                    background: ${isSelected ? '#2a4a6a' : 'transparent'};
+                    background: ${isSelected ? UI.accentSoft : 'transparent'};
                     border-radius: 4px;
                     cursor: pointer;
                     align-items: center;
@@ -6346,7 +6356,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     pointer-events: none;
                     z-index: 10001;
                     display: none;
-                    border: 2px solid #666;
+                    border: 2px solid ${UI.inputBorder};
                     border-radius: 8px;
                     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
                     background-color: #1a1a1a;
@@ -6502,7 +6512,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     "Overwrite Prompt",
                     `Prompt "${name}" already exists in category "${category}". Do you want to replace it?`,
                     "Replace",
-                    "#c44"
+                    "#c44",
+                    false
                 );
                 if (!overwrite) {
                     return;
@@ -6542,7 +6553,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             margin-top: 4px;
             margin-bottom: -8px;
             padding-top: 6px;
-            border-top: 1px solid #444;
+            border-top: 1px solid ${UI.sectionBorder};
             font-size: 11px;
             color: #666;
             text-align: center;
@@ -6559,7 +6570,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 align-items: center;
                 margin-top: 8px;
                 padding-top: 8px;
-                border-top: 1px solid #444;
+                border-top: 1px solid ${UI.sectionBorder};
             `;
 
             saveNameInput = document.createElement("input");
@@ -6570,16 +6581,16 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 flex: 1;
                 min-width: 0;
                 padding: 7px 10px;
-                background: #2a2a2a;
-                border: 1px solid #444;
+                background: ${UI.inputBg};
+                border: 1px solid ${UI.inputBorder};
                 border-radius: 4px;
                 color: #fff;
                 font-size: 13px;
                 box-sizing: border-box;
                 outline: none;
             `;
-            saveNameInput.onfocus = () => saveNameInput.style.borderColor = "#666";
-            saveNameInput.onblur = () => saveNameInput.style.borderColor = "#444";
+            saveNameInput.onfocus = () => saveNameInput.style.borderColor = UI.accent;
+            saveNameInput.onblur = () => saveNameInput.style.borderColor = UI.inputBorder;
             saveNameInput.onkeydown = async (e) => {
                 if (e.key === "Enter") {
                     e.preventDefault();
@@ -6591,8 +6602,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             saveActionButton = document.createElement("button");
             saveActionButton.textContent = saveButtonText;
             saveActionButton.style.cssText = `
-                background: #2f7a3d;
-                border: 1px solid #4b9a5a;
+                background: #2b6d3a;
+                border: 1px solid #4a9158;
                 color: #fff;
                 padding: 7px 14px;
                 border-radius: 4px;
@@ -6607,8 +6618,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             cancelSaveButton = document.createElement("button");
             cancelSaveButton.textContent = "Cancel";
             cancelSaveButton.style.cssText = `
-                background: #3a3a3a;
-                border: 1px solid #555;
+                background: #313843;
+                border: 1px solid #5f6773;
                 color: #ccc;
                 padding: 7px 12px;
                 border-radius: 4px;
@@ -6622,8 +6633,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             };
 
             saveBar.appendChild(saveNameInput);
-            saveBar.appendChild(saveActionButton);
             saveBar.appendChild(cancelSaveButton);
+            saveBar.appendChild(saveActionButton);
         }
 
         dialog.appendChild(header);
@@ -6707,220 +6718,510 @@ export async function openPromptBrowserForSave(options = {}) {
 // Thumbnail Generation System
 // ========================
 
-// Cached checkpoint selection for thumbnail generation (persisted in ComfyUI settings)
-let _thumbnailCheckpoint = null;
+const THUMB_RENDER_WIDTH = 768;
+const THUMB_RENDER_HEIGHT = 1024;
+const THUMB_RENDER_BATCH = 1;
+const THUMB_RENDER_LENGTH = 1;
+const THUMB_DEFAULT_NEGATIVE = "blurry, bad quality, worst quality, low resolution, watermark, text, logo, deformed, ugly, disfigured";
 
-// Load saved checkpoint from preferences on init
+let _thumbnailRenderFamily = null;
+let _thumbnailRenderModel = null;
+let _thumbnailLegacyModel = null;
+let _thumbnailShowAllModels = false;
+
 try {
-    const saved = app.ui.settings.getSettingValue("PromptManager.ThumbnailCheckpoint");
-    if (saved) _thumbnailCheckpoint = saved;
+    const savedFamily = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderFamily");
+    const savedModel = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderModel");
+    if (typeof savedFamily === "string" && savedFamily.trim()) {
+        _thumbnailRenderFamily = savedFamily;
+    }
+    if (typeof savedModel === "string" && savedModel.trim()) {
+        _thumbnailRenderModel = savedModel;
+    }
+    _thumbnailShowAllModels = app.ui.settings.getSettingValue("PromptManager.ThumbnailShowAllModels") === true;
+
+    // Backward compatibility with old checkpoint-only preference:
+    // keep it only as an initial picker prefill, do not auto-select family/model.
+    if (!_thumbnailRenderModel) {
+        const legacyCheckpoint = app.ui.settings.getSettingValue("PromptManager.ThumbnailCheckpoint");
+        if (typeof legacyCheckpoint === "string" && legacyCheckpoint.trim()) {
+            _thumbnailLegacyModel = legacyCheckpoint;
+        }
+    }
 } catch (e) { /* settings not ready yet, will be loaded on first use */ }
 
-/**
- * Show a checkpoint picker dialog for thumbnail generation
- * @returns {Promise<string|null>} Selected checkpoint path or null if cancelled
- */
-async function showCheckpointPicker(preselected = null) {
-    const resp = await fetch("/prompt-manager-advanced/list-checkpoints");
+function withThumbnailModelFilteringPreference(url, showAllModels) {
+    if (!showAllModels) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}show_all=1`;
+}
+
+function _thumbnailLeafName(modelPath) {
+    const p = String(modelPath || "");
+    if (!p) return "";
+    const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    const leaf = idx >= 0 ? p.substring(idx + 1) : p;
+    return leaf.replace(/\.safetensors$/i, "");
+}
+
+function _thumbnailDisplayName(modelPath, maxLength = 68) {
+    const leaf = _thumbnailLeafName(modelPath);
+    if (leaf.length <= maxLength) return leaf;
+    return `${leaf.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function applyThumbnailResolution(workflowData) {
+    const wfForThumb = JSON.parse(JSON.stringify(workflowData || {}));
+    const baseResolution = (wfForThumb.resolution && typeof wfForThumb.resolution === "object")
+        ? wfForThumb.resolution
+        : {};
+    wfForThumb.resolution = {
+        ...baseResolution,
+        width: THUMB_RENDER_WIDTH,
+        height: THUMB_RENDER_HEIGHT,
+        batch_size: THUMB_RENDER_BATCH,
+        length: THUMB_RENDER_LENGTH,
+    };
+    return wfForThumb;
+}
+
+function normalizeLorasForRenderer(loraList) {
+    if (!Array.isArray(loraList)) return [];
+    return loraList
+        .filter((lora) => lora && typeof lora === "object" && lora.active !== false)
+        .map((lora) => {
+            const modelStrength = Number(lora.model_strength ?? lora.strength ?? 1.0);
+            const clipStrength = Number(lora.clip_strength ?? lora.strength ?? modelStrength);
+            return {
+                name: String(lora.name || lora.path || "").trim(),
+                model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
+                clip_strength: Number.isFinite(clipStrength) ? clipStrength : (Number.isFinite(modelStrength) ? modelStrength : 1.0),
+                active: true,
+            };
+        })
+        .filter((lora) => lora.name.length > 0);
+}
+
+function getThumbnailFamilySamplerDefaults(familyKey) {
+    const key = String(familyKey || "").trim().toLowerCase();
+    const byFamily = {
+        sdxl: { steps_a: 20, steps_b: null, cfg: 5, sampler_name: "dpmpp_2m_sde", scheduler: "karras" },
+        sd15: { steps_a: 20, steps_b: null, cfg: 6, sampler_name: "euler", scheduler: "normal" },
+        flux1: { steps_a: 20, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        flux2: { steps_a: 4, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        zimage: { steps_a: 9, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        ltxv: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        wan_image: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+        wan_video_t2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+        wan_video_i2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+        qwen_image: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+    };
+    const d = byFamily[key] || byFamily.sdxl;
+    return {
+        steps_a: d.steps_a,
+        steps_b: d.steps_b,
+        cfg: d.cfg,
+        seed_a: 0,
+        sampler_name: d.sampler_name,
+        scheduler: d.scheduler,
+        seed_b: null,
+    };
+}
+
+async function buildRendererFallbackWorkflowData(promptText, promptData, renderSelection) {
+    const familySamplerDefaults = getThumbnailFamilySamplerDefaults(renderSelection.family);
+    const baseRaw = {
+        model_family: renderSelection.family,
+        model_a: renderSelection.model,
+        model_b: "",
+        positive_prompt: String(promptText || ""),
+        negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
+        loras_a: normalizeLorasForRenderer(promptData?.loras_a),
+        loras_b: normalizeLorasForRenderer(promptData?.loras_b),
+        vae: { name: "", source: "unknown" },
+        clip: { names: [], type: "", source: "unknown" },
+        sampler: familySamplerDefaults,
+        resolution: {
+            width: THUMB_RENDER_WIDTH,
+            height: THUMB_RENDER_HEIGHT,
+            batch_size: THUMB_RENDER_BATCH,
+            length: THUMB_RENDER_LENGTH,
+        },
+        is_video: false,
+    };
+
+    let normalized = null;
+    try {
+        const processResp = await fetch("/workflow-builder/process-extracted", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                extracted: baseRaw,
+                family_override: renderSelection.family,
+            }),
+        });
+        const processData = await processResp.json();
+        if (processResp.ok && processData?.extracted && typeof processData.extracted === "object") {
+            normalized = processData.extracted;
+        }
+    } catch (e) {
+        console.warn("[ThumbnailGen] Failed to normalize fallback workflow_data via WorkflowBuilder:", e);
+    }
+
+    const clipNames = Array.isArray(normalized?.clip?.names)
+        ? normalized.clip.names.filter((x) => !!x)
+        : [];
+
+    const base = {
+        family: normalized?.model_family || renderSelection.family,
+        model_a: normalized?.model_a || renderSelection.model,
+        model_b: normalized?.model_b || "",
+        positive_prompt: String(normalized?.positive_prompt ?? baseRaw.positive_prompt),
+        negative_prompt: String(normalized?.negative_prompt ?? baseRaw.negative_prompt),
+        loras_a: Array.isArray(normalized?.loras_a) ? normalized.loras_a : baseRaw.loras_a,
+        loras_b: Array.isArray(normalized?.loras_b) ? normalized.loras_b : baseRaw.loras_b,
+        vae: String(normalized?.vae?.name || ""),
+        clip: clipNames,
+        clip_type: String(normalized?.clip?.type || ""),
+        loader_type: String(normalized?.loader_type || ""),
+        sampler: normalized?.sampler && typeof normalized.sampler === "object"
+            ? normalized.sampler
+            : baseRaw.sampler,
+        _source: "PromptManagerAdvancedThumbnail",
+    };
+    return applyThumbnailResolution(base);
+}
+
+async function resolveThumbnailFallbackBase(renderSelection) {
+    const familySamplerDefaults = getThumbnailFamilySamplerDefaults(renderSelection.family);
+    const baseRaw = {
+        model_family: renderSelection.family,
+        model_a: renderSelection.model,
+        model_b: "",
+        positive_prompt: "",
+        negative_prompt: THUMB_DEFAULT_NEGATIVE,
+        loras_a: [],
+        loras_b: [],
+        vae: { name: "", source: "unknown" },
+        clip: { names: [], type: "", source: "unknown" },
+        sampler: familySamplerDefaults,
+        resolution: {
+            width: THUMB_RENDER_WIDTH,
+            height: THUMB_RENDER_HEIGHT,
+            batch_size: THUMB_RENDER_BATCH,
+            length: THUMB_RENDER_LENGTH,
+        },
+        is_video: false,
+    };
+
+    let normalized = null;
+    try {
+        const processResp = await fetch("/workflow-builder/process-extracted", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                extracted: baseRaw,
+                family_override: renderSelection.family,
+            }),
+        });
+        const processData = await processResp.json();
+        if (processResp.ok && processData?.extracted && typeof processData.extracted === "object") {
+            normalized = processData.extracted;
+        }
+    } catch (e) {
+        console.warn("[ThumbnailGen] Failed to pre-resolve batch fallback base:", e);
+    }
+
+    return { normalized, renderSelection };
+}
+
+async function buildRendererFallbackWorkflowDataWithBase(promptText, promptData, renderSelection, fallbackBase = null) {
+    if (!fallbackBase?.normalized) {
+        return buildRendererFallbackWorkflowData(promptText, promptData, renderSelection);
+    }
+
+    const normalized = fallbackBase.normalized;
+    const clipNames = Array.isArray(normalized?.clip?.names)
+        ? normalized.clip.names.filter((x) => !!x)
+        : [];
+
+    const wf = {
+        family: normalized?.model_family || renderSelection.family,
+        model_a: normalized?.model_a || renderSelection.model,
+        model_b: normalized?.model_b || "",
+        positive_prompt: String(promptText || ""),
+        negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
+        loras_a: normalizeLorasForRenderer(promptData?.loras_a),
+        loras_b: normalizeLorasForRenderer(promptData?.loras_b),
+        vae: String(normalized?.vae?.name || ""),
+        clip: clipNames,
+        clip_type: String(normalized?.clip?.type || ""),
+        loader_type: String(normalized?.loader_type || ""),
+        sampler: normalized?.sampler && typeof normalized.sampler === "object"
+            ? normalized.sampler
+            : getThumbnailFamilySamplerDefaults(renderSelection.family),
+        _source: "PromptManagerAdvancedThumbnail",
+    };
+    return applyThumbnailResolution(wf);
+}
+
+async function fetchRendererFamilies() {
+    const resp = await fetch("/workflow-extractor/list-families");
     const data = await resp.json();
-    if (!data.success || !data.checkpoints?.length) {
-        await showInfo("No Checkpoints", "No checkpoints found in your ComfyUI models folder.");
+    const familiesObj = data?.families && typeof data.families === "object" ? data.families : {};
+    return Object.entries(familiesObj)
+        .map(([key, label]) => ({ key, label: String(label || key) }))
+        .sort((a, b) => {
+            if (a.key === "sdxl") return -1;
+            if (b.key === "sdxl") return 1;
+            return a.label.localeCompare(b.label);
+        });
+}
+
+async function fetchRendererModelsForFamily(familyKey, showAllModels = false) {
+    const baseUrl = familyKey
+        ? `/workflow-extractor/list-models?family=${encodeURIComponent(familyKey)}`
+        : `/workflow-extractor/list-models`;
+    const url = withThumbnailModelFilteringPreference(baseUrl, showAllModels);
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (!Array.isArray(data?.models)) return [];
+    return [...data.models].sort((a, b) => a.localeCompare(b));
+}
+
+function saveThumbnailRenderSelection(selection) {
+    if (!selection?.family || !selection?.model) return;
+    _thumbnailRenderFamily = selection.family;
+    _thumbnailRenderModel = selection.model;
+    _thumbnailLegacyModel = null;
+    try {
+        app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderFamily", selection.family);
+        app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderModel", selection.model);
+    } catch (e) {
+        console.warn("[ThumbnailGen] Could not persist thumbnail render selection:", e);
+    }
+}
+
+async function showThumbnailRenderPicker(preselectedFamily = null, preselectedModel = null) {
+    let families = [];
+    try {
+        families = await fetchRendererFamilies();
+    } catch (e) {
+        console.error("[ThumbnailGen] Failed loading model families:", e);
+        await showInfo("Model Picker Error", "Could not load renderer families.");
         return null;
     }
 
-    const checkpoints = data.checkpoints.sort((a, b) => a.localeCompare(b));
+    if (!families.length) {
+        await showInfo("No Families", "No model families were found for Workflow Renderer.");
+        return null;
+    }
+
+    const validFamily = families.some((f) => f.key === preselectedFamily)
+        ? preselectedFamily
+        : families[0].key;
 
     return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 9999;`;
-
         const dialog = document.createElement("div");
         dialog.style.cssText = `
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: #222; border: 2px solid #444; border-radius: 8px;
-            padding: 20px; z-index: 10000; min-width: 400px; max-width: 500px;
+            background: ${UI.panel}; border: 1px solid ${UI.panelBorder}; border-radius: 10px;
+            padding: 18px; z-index: 10000; width: 634px; min-width: 634px; max-width: 634px;
+            font-family: inherit; font-size: 13px;
+            box-sizing: border-box; overflow: hidden;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         `;
 
-        // Build option list
-        const optionsHtml = checkpoints.map(c => {
-            const shortName = c.includes("\\") ? c.split("\\").pop() : c.includes("/") ? c.split("/").pop() : c;
-            const selected = c === preselected ? ' selected' : '';
-            // Sanitize for HTML attribute
-            const escaped = c.replace(/"/g, '&quot;');
-            return `<option value="${escaped}"${selected}>${shortName}</option>`;
-        }).join('');
-
         dialog.innerHTML = `
-            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">Select Checkpoint</div>
-            <div style="margin-bottom: 10px; color: #aaa; font-size: 13px;">Choose the checkpoint model for generating thumbnails:</div>
-            <input type="text" placeholder="Filter checkpoints..." style="width: 100%; padding: 8px; margin-bottom: 8px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; box-sizing: border-box;" />
-            <select size="10" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; box-sizing: border-box; margin-bottom: 15px;">
-                ${optionsHtml}
-            </select>
+            <div style="margin-bottom: 12px; font-size: 18px; font-weight: 600; color: #ddd;">Select Family + Model</div>
+            <div style="display: grid; grid-template-columns: 64px 1fr 34px; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px; font-weight: 600;">Type</label>
+                <select class="family-select" style="padding: 7px; min-width: 0; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; font-family: inherit; font-size: 13px;"></select>
+                <button class="filter-toggle" title="Model filtering ON (by family). Click to show all models." style="height: 32px; background: ${UI.buttonBg}; color: #ddd; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-size: 14px;">👁</button>
+            </div>
+            <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px;">Model</label>
+                <select class="model-select" size="13" style="width: 100%; min-width: 0; padding: 4px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
+            </div>
+            <div class="model-hint" style="min-height: 16px; margin-bottom: 12px; color: #9aa5b4; font-size: 12px;"></div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Select</button>
+                <button class="cancel-btn" style="padding: 8px 16px; background: ${UI.buttonBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: ${UI.accentSoft}; color: #fff; border: 1px solid ${UI.accentBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;">Select</button>
             </div>
         `;
 
-        const filterInput = dialog.querySelector('input[type="text"]');
-        const selectEl = dialog.querySelector('select');
+        const familySel = dialog.querySelector(".family-select");
+        const filterToggle = dialog.querySelector(".filter-toggle");
+        const modelSel = dialog.querySelector(".model-select");
+        const modelHint = dialog.querySelector(".model-hint");
         const okBtn = dialog.querySelector('.ok-btn');
         const cancelBtn = dialog.querySelector('.cancel-btn');
 
-        // Filter checkpoints as user types
-        filterInput.oninput = () => {
-            const filter = filterInput.value.toLowerCase();
-            selectEl.innerHTML = checkpoints
-                .filter(c => c.toLowerCase().includes(filter))
-                .map(c => {
-                    const shortName = c.includes("\\") ? c.split("\\").pop() : c.includes("/") ? c.split("/").pop() : c;
-                    const escaped = c.replace(/"/g, '&quot;');
-                    return `<option value="${escaped}">${shortName}</option>`;
-                }).join('');
+        let familyModels = [];
+        let showAllModels = _thumbnailShowAllModels === true;
+
+        const updateFilterToggleUi = () => {
+            filterToggle.style.color = showAllModels ? "#ffb0b0" : "#e6e6e6";
+            filterToggle.style.background = showAllModels ? "#453339" : UI.buttonBg;
+            filterToggle.style.borderColor = showAllModels ? "#9b727b" : UI.inputBorder;
+            filterToggle.title = showAllModels
+                ? "Model filtering OFF (showing all models). Click to filter by family."
+                : "Model filtering ON (by family). Click to show all models.";
+        };
+        updateFilterToggleUi();
+
+        const setHint = (text, color = "#888") => {
+            modelHint.textContent = text;
+            modelHint.style.color = color;
         };
 
+        const renderModelOptions = (preferredValue = "") => {
+            const filtered = familyModels;
+
+            modelSel.innerHTML = "";
+            filtered.forEach((modelPath) => {
+                const opt = document.createElement("option");
+                opt.value = modelPath;
+                opt.textContent = _thumbnailDisplayName(modelPath);
+                opt.title = modelPath;
+                modelSel.appendChild(opt);
+            });
+
+            if (!filtered.length) {
+                setHint("No compatible models for this family.", "#c66");
+                return;
+            }
+
+            const selectValue = filtered.find((m) => m === preferredValue)
+                || filtered.find((m) => m === preselectedModel)
+                || filtered[0];
+            if (selectValue) {
+                modelSel.value = selectValue;
+            }
+            const famText = familySel.selectedOptions?.[0]?.textContent || familySel.value || "selected family";
+            const modeText = showAllModels
+                ? `Showing all models on disk. Family (${famText}) still controls renderer pipeline.`
+                : `Showing models filtered for family: ${famText}.`;
+            setHint(`${filtered.length} model(s) available. ${modeText}`);
+        };
+
+        const loadFamilyModels = async (familyKey, preferredValue = "") => {
+            setHint("Loading models...");
+            modelSel.innerHTML = "";
+            try {
+                familyModels = await fetchRendererModelsForFamily(familyKey, showAllModels);
+                renderModelOptions(preferredValue);
+            } catch (e) {
+                familyModels = [];
+                setHint("Failed to load models for selected family.", "#c66");
+                console.error("[ThumbnailGen] Error loading family models:", e);
+            }
+        };
+
+        familySel.innerHTML = families
+            .map((f) => `<option value="${f.key}">${f.label}</option>`)
+            .join("");
+        familySel.value = validFamily;
+
         const cleanup = () => {
-            document.body.removeChild(overlay);
-            document.body.removeChild(dialog);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        familySel.onchange = async () => {
+            await loadFamilyModels(familySel.value, "");
+        };
+        filterToggle.onclick = async () => {
+            showAllModels = !showAllModels;
+            _thumbnailShowAllModels = showAllModels;
+            try {
+                app.ui.settings.setSettingValue("PromptManager.ThumbnailShowAllModels", showAllModels);
+            } catch (e) {
+                console.warn("[ThumbnailGen] Could not persist show-all setting:", e);
+            }
+            updateFilterToggleUi();
+            await loadFamilyModels(familySel.value, modelSel.value);
         };
 
         okBtn.onclick = () => {
-            const val = selectEl.value;
-            if (val) { resolve(val); cleanup(); }
+            const family = familySel.value;
+            const model = modelSel.value;
+            if (!family || !model) {
+                setHint("Please select a model before continuing.", "#c66");
+                return;
+            }
+            resolve({ family, model });
+            cleanup();
         };
         cancelBtn.onclick = () => { resolve(null); cleanup(); };
-        overlay.onclick = () => { resolve(null); cleanup(); };
 
-        // Enter to select, Escape to cancel
         dialog.onkeydown = (e) => {
-            if (e.key === 'Enter') { okBtn.click(); }
-            else if (e.key === 'Escape') { cancelBtn.click(); }
+            if (e.key === "Enter") {
+                e.preventDefault();
+                okBtn.click();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelBtn.click();
+            }
         };
 
-        // Double-click to select immediately
-        selectEl.ondblclick = () => { okBtn.click(); };
+        modelSel.ondblclick = () => okBtn.click();
 
-        document.body.appendChild(overlay);
         document.body.appendChild(dialog);
-        filterInput.focus();
+        loadFamilyModels(validFamily, preselectedModel || "");
+        modelSel.focus();
     });
 }
 
-/**
- * Build and queue a thumbnail generation workflow
- * @param {string} promptText - The positive prompt text
- * @param {string} checkpoint - The checkpoint path
- * @param {Array} loras - Array of {path, strength, clip_strength}
- * @returns {Promise<string|null>} Generated image filename or null
- */
-async function generateThumbnailWorkflow(promptText, checkpoint, loras) {
-    const negativePrompt = "blurry, bad quality, worst quality, low resolution, watermark, text, logo, deformed, ugly, disfigured";
+async function ensureThumbnailRenderSelection({ force = false } = {}) {
+    if (!force && _thumbnailRenderFamily && _thumbnailRenderModel) {
+        return { family: _thumbnailRenderFamily, model: _thumbnailRenderModel };
+    }
+    const picked = await showThumbnailRenderPicker(
+        _thumbnailRenderFamily,
+        _thumbnailRenderModel || _thumbnailLegacyModel || null
+    );
+    if (!picked) return null;
+    saveThumbnailRenderSelection(picked);
+    return picked;
+}
 
-    // Build the API workflow
+/**
+ * Build and queue a thumbnail generation workflow using WorkflowRenderer.
+ * Falls back to the basic thumbnail workflow when this path cannot run.
+ * @param {Object} workflowData - Saved workflow_data payload
+ * @returns {Promise<string|null>} Base64 thumbnail data URL or null
+ */
+async function generateThumbnailWorkflowFromWorkflowData(workflowData) {
+    if (!workflowData || typeof workflowData !== "object") {
+        return null;
+    }
+
+    // Enforce thumbnail-safe render sizing before queueing.
+    const wfForThumb = applyThumbnailResolution(workflowData);
+
     const workflow = {};
     let nodeId = 1;
 
-    // 1. Checkpoint loader
-    const checkpointId = String(nodeId++);
-    workflow[checkpointId] = {
-        class_type: "CheckpointLoaderSimple",
-        inputs: { ckpt_name: checkpoint }
-    };
-
-    // Track current model/clip outputs (may chain through LoRAs)
-    let modelOutput = [checkpointId, 0];
-    let clipOutput = [checkpointId, 1];
-
-    // 2. LoRA loaders (chained)
-    for (const lora of loras) {
-        const loraId = String(nodeId++);
-        workflow[loraId] = {
-            class_type: "LoraLoader",
-            inputs: {
-                lora_name: lora.path,
-                strength_model: lora.strength,
-                strength_clip: lora.clip_strength,
-                model: modelOutput,
-                clip: clipOutput
-            }
-        };
-        modelOutput = [loraId, 0];
-        clipOutput = [loraId, 1];
-    }
-
-    // 3. Positive CLIP encode
-    const positiveId = String(nodeId++);
-    workflow[positiveId] = {
-        class_type: "CLIPTextEncode",
+    const rendererId = String(nodeId++);
+    workflow[rendererId] = {
+        class_type: "WorkflowRenderer",
         inputs: {
-            text: promptText,
-            clip: clipOutput
+            workflow_data: wfForThumb,
+            clear_cache_after_render: false,
         }
     };
 
-    // 4. Negative CLIP encode
-    const negativeId = String(nodeId++);
-    workflow[negativeId] = {
-        class_type: "CLIPTextEncode",
-        inputs: {
-            text: negativePrompt,
-            clip: clipOutput
-        }
-    };
-
-    // 5. Empty latent image (768x768)
-    const latentId = String(nodeId++);
-    workflow[latentId] = {
-        class_type: "EmptyLatentImage",
-        inputs: { width: 768, height: 1024, batch_size: 1 }
-    };
-
-    // 6. KSampler with random seed
-    const seed = Math.floor(Math.random() * 2147483647);
-    const samplerId = String(nodeId++);
-    workflow[samplerId] = {
-        class_type: "KSampler",
-        inputs: {
-            seed: seed,
-            steps: 30,
-            cfg: 6.0,
-            sampler_name: "euler",
-            scheduler: "normal",
-            denoise: 1.0,
-            model: modelOutput,
-            positive: [positiveId, 0],
-            negative: [negativeId, 0],
-            latent_image: [latentId, 0]
-        }
-    };
-
-    // 7. VAE Decode
-    const decodeId = String(nodeId++);
-    workflow[decodeId] = {
-        class_type: "VAEDecode",
-        inputs: {
-            samples: [samplerId, 0],
-            vae: [checkpointId, 2]
-        }
-    };
-
-    // 8. Save image to temp
     const saveId = String(nodeId++);
     workflow[saveId] = {
         class_type: "SaveImage",
         inputs: {
-            filename_prefix: "_thumb_gen_",
-            images: [decodeId, 0]
+            filename_prefix: "_thumb_wf_",
+            images: [rendererId, 1]
         }
     };
 
-    // Queue the workflow via ComfyUI API
-    const promptId = await queueThumbnailPrompt(workflow);
+    // Quiet mode: this path is an enhancement and should silently fall back.
+    const promptId = await queueThumbnailPrompt(workflow, { quiet: true });
     if (!promptId) return null;
-
-    // Wait for completion and get the image
     return await waitForThumbnailResult(promptId, saveId);
 }
 
@@ -6928,7 +7229,8 @@ async function generateThumbnailWorkflow(promptText, checkpoint, loras) {
  * Queue a workflow via ComfyUI's /prompt API
  * @returns {Promise<string|null>} prompt_id or null
  */
-async function queueThumbnailPrompt(workflow) {
+async function queueThumbnailPrompt(workflow, options = {}) {
+    const quiet = options?.quiet === true;
     try {
         const body = {
             prompt: workflow,
@@ -6944,7 +7246,7 @@ async function queueThumbnailPrompt(workflow) {
             return data.prompt_id;
         }
         console.error("[ThumbnailGen] Queue failed:", data);
-        if (data.error) {
+        if (!quiet && data.error) {
             const detail = data.node_errors ? Object.values(data.node_errors).map(e => e.errors?.map(err => err.message).join(', ')).join('; ') : data.error;
             await showInfo("Generation Failed", `Could not queue thumbnail: ${detail}`);
         }
@@ -7047,52 +7349,18 @@ async function fetchThumbnailImage(filename, subfolder, type) {
 
 /**
  * Main entry point: generate a thumbnail for a prompt
- * Handles checkpoint selection, LoRA resolution, workflow building, and saving
+ * Uses WorkflowRenderer from saved workflow_data when available, otherwise
+ * builds a renderer-compatible workflow_data payload from prompt + selected model.
  */
-async function generateThumbnailForPrompt(node, category, promptName, onUpdate, { silent = false } = {}) {
+async function generateThumbnailForPrompt(node, category, promptName, onUpdate, options = {}) {
+    const { silent = false, renderSelection: providedRenderSelection = null, fallbackBase = null } = options || {};
     const promptData = node.prompts[category]?.[promptName];
     if (!promptData) {
         if (!silent) await showInfo("Error", "Prompt data not found.");
         return;
     }
 
-    // Ensure a checkpoint is selected
-    if (!_thumbnailCheckpoint) {
-        _thumbnailCheckpoint = await showCheckpointPicker();
-        if (!_thumbnailCheckpoint) return; // User cancelled
-        app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", _thumbnailCheckpoint);
-    }
-
     const promptText = promptData.prompt || promptName;
-
-    // Resolve LoRAs — combine A and B stacks, only active ones
-    const allLoras = [
-        ...(promptData.loras_a || []).filter(l => l.active !== false),
-        ...(promptData.loras_b || []).filter(l => l.active !== false)
-    ];
-
-    let resolvedLoras = [];
-    if (allLoras.length > 0) {
-        try {
-            const resp = await fetch("/prompt-manager-advanced/resolve-loras", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    lora_names: allLoras.map(l => ({
-                        name: l.name,
-                        strength: l.strength ?? 1.0,
-                        clip_strength: l.clip_strength ?? l.strength ?? 1.0
-                    }))
-                })
-            });
-            const data = await resp.json();
-            if (data.success) {
-                resolvedLoras = data.loras;
-            }
-        } catch (e) {
-            console.warn("[ThumbnailGen] Could not resolve LoRAs, continuing without:", e);
-        }
-    }
 
     // Show generating indicator (only in non-silent/single mode)
     let indicator = null;
@@ -7115,7 +7383,46 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
     }
 
     try {
-        const thumbnail = await generateThumbnailWorkflow(promptText, _thumbnailCheckpoint, resolvedLoras);
+        let thumbnail = null;
+
+        // Preferred path: render from saved workflow_data using WorkflowRenderer.
+        const rawWorkflowData = promptData.workflow_data;
+        let parsedWorkflowData = null;
+        if (rawWorkflowData && typeof rawWorkflowData === "object") {
+            parsedWorkflowData = rawWorkflowData;
+        } else if (typeof rawWorkflowData === "string" && rawWorkflowData.trim()) {
+            try {
+                const maybeObj = JSON.parse(rawWorkflowData);
+                if (maybeObj && typeof maybeObj === "object") {
+                    parsedWorkflowData = maybeObj;
+                }
+            } catch {
+                parsedWorkflowData = null;
+            }
+        }
+
+        if (parsedWorkflowData) {
+            try {
+                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData);
+            } catch (e) {
+                console.warn("[ThumbnailGen] WorkflowRenderer thumbnail path failed, falling back:", e);
+                thumbnail = null;
+            }
+        }
+
+        // Fallback path: build renderer workflow_data from prompt + selected family/model.
+        if (!thumbnail) {
+            const renderSelection = providedRenderSelection || await ensureThumbnailRenderSelection();
+            if (!renderSelection) return; // User cancelled
+
+            const fallbackWorkflowData = await buildRendererFallbackWorkflowDataWithBase(
+                promptText,
+                promptData,
+                renderSelection,
+                fallbackBase
+            );
+            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData);
+        }
 
         if (thumbnail) {
             await saveThumbnail(node, category, promptName, thumbnail);
@@ -7228,15 +7535,14 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
         await generateThumbnailForPrompt(node, category, promptName, onUpdate);
     }));
 
-    // Change Thumbnail Model
-    const modelLabel = _thumbnailCheckpoint
-        ? `🔧 Model: ${_thumbnailCheckpoint.split(/[/\\]/).pop()}`
-        : "🔧 Select Thumbnail Model";
+    // Change Thumbnail Family/Model
+    const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
+        ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}`
+        : "🔧 Select Thumbnail Family + Model";
     menu.appendChild(createMenuItem(modelLabel, async () => {
-        const picked = await showCheckpointPicker(_thumbnailCheckpoint);
+        const picked = await showThumbnailRenderPicker(_thumbnailRenderFamily, _thumbnailRenderModel);
         if (picked) {
-            _thumbnailCheckpoint = picked;
-            app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", picked);
+            saveThumbnailRenderSelection(picked);
         }
     }));
 

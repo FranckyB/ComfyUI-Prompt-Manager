@@ -2,6 +2,7 @@
  * File Browser Modal for PromptExtractor
  * Shows thumbnails of files in input directory
  */
+import { PM_UI_PALETTE as UI } from './ui_palette.js';
 
 // Track current subfolder for navigation
 let currentSubfolder = '';
@@ -27,7 +28,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
         left: 0;
         width: 100%;
         height: 100%;
-        background: rgba(0, 0, 0, 0.8);
+        background: ${UI.overlay};
         display: flex;
         align-items: center;
         justify-content: center;
@@ -38,8 +39,8 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const modal = document.createElement('div');
     modal.className = 'prompt-extractor-browser-modal';
     modal.style.cssText = `
-        background: rgba(40, 44, 52, 0.98);
-        border: 1px solid rgba(255,255,255,0.1);
+        background: ${UI.panel};
+        border: 1px solid ${UI.panelBorder};
         border-radius: 6px;
         width: 90%;
         max-width: 1200px;
@@ -54,7 +55,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const header = document.createElement('div');
     header.style.cssText = `
         padding: 15px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+        border-bottom: 1px solid ${UI.sectionBorder};
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -63,11 +64,11 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const topRow = document.createElement('div');
     topRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
     topRow.innerHTML = `
-        <h3 style="margin: 0; color: #aaa;">Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder</h3>
+        <h3 style="margin: 0; color: #d3d7de;">Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder</h3>
         <div style="display: flex; gap: 10px; align-items: center;">
             <button class="regenerate-cache-btn" style="
-                background: #333;
-                border: 1px solid #555;
+                background: ${UI.buttonBg};
+                border: 1px solid ${UI.inputBorder};
                 border-radius: 6px;
                 color: #ccc;
                 padding: 5px 12px;
@@ -89,7 +90,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     
     const breadcrumb = document.createElement('div');
     breadcrumb.className = 'folder-breadcrumb';
-    breadcrumb.style.cssText = 'font-size: 12px; color: #888; cursor: pointer;';
+    breadcrumb.style.cssText = `font-size: 12px; color: ${UI.textHint}; cursor: pointer;`;
     breadcrumb.textContent = `${currentSourceFolder}/`;
     breadcrumb.onclick = () => {
         if (currentSubfolder) {
@@ -105,7 +106,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const filterBar = document.createElement('div');
     filterBar.style.cssText = `
         padding: 10px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+        border-bottom: 1px solid ${UI.sectionBorder};
         display: flex;
         gap: 10px;
     `;
@@ -113,15 +114,15 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
         <input type="text" placeholder="Search files..." class="search-input" style="
             flex: 1;
             padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
+            background: ${UI.inputBg};
+            border: 1px solid ${UI.inputBorder};
             border-radius: 6px;
             color: #ccc;
         ">
         <select class="filter-type" style="
             padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
+            background: ${UI.inputBg};
+            border: 1px solid ${UI.inputBorder};
             border-radius: 6px;
             color: #ccc;
         ">
@@ -281,8 +282,8 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
     const item = document.createElement('div');
     item.className = 'folder-item';
     item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid rgba(226, 232, 240, 0.2);
+        background: ${UI.cardBg};
+        border: 1px solid ${UI.panelBorder};
         border-radius: 6px;
         padding: 8px;
         cursor: pointer;
@@ -296,7 +297,7 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
     preview.style.cssText = `
         width: 100%;
         height: 150px;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgba(16, 18, 22, 0.6);
         border-radius: 4px;
         display: flex;
         align-items: center;
@@ -317,14 +318,14 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
     item.appendChild(label);
     
     item.onmouseenter = () => {
-        item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+        item.style.borderColor = UI.accentBorder;
         item.style.transform = 'translateY(-2px)';
-        item.style.background = 'rgba(50, 112, 163, 0.5)';
+        item.style.background = UI.accentSoft;
     };
     item.onmouseleave = () => {
-        item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
+        item.style.borderColor = UI.panelBorder;
         item.style.transform = 'translateY(0)';
-        item.style.background = 'rgba(45, 55, 72, 0.7)';
+        item.style.background = UI.cardBg;
     };
     
     item.onclick = () => {
@@ -410,8 +411,8 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     const isSelected = filename === currentFile;
     
     item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid ${isSelected ? 'rgba(66, 153, 225, 0.9)' : 'rgba(226, 232, 240, 0.2)'};
+        background: ${UI.cardBg};
+        border: 1px solid ${isSelected ? UI.accent : UI.panelBorder};
         border-radius: 6px;
         padding: 8px;
         cursor: pointer;
@@ -426,7 +427,7 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     preview.style.cssText = `
         width: 100%;
         height: 150px;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgba(16, 18, 22, 0.6);
         border-radius: 4px;
         display: flex;
         align-items: center;
@@ -493,16 +494,16 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     // Hover effect
     item.onmouseenter = () => {
         if (!isSelected) {
-            item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+            item.style.borderColor = UI.accentBorder;
             item.style.transform = 'translateY(-2px)';
-            item.style.background = 'rgba(50, 112, 163, 0.5)';
+            item.style.background = UI.accentSoft;
         }
     };
     item.onmouseleave = () => {
         if (!isSelected) {
-            item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
+            item.style.borderColor = UI.panelBorder;
             item.style.transform = 'translateY(0)';
-            item.style.background = 'rgba(45, 55, 72, 0.7)';
+            item.style.background = UI.cardBg;
         }
     };
 
@@ -557,8 +558,8 @@ function showThumbnailContextMenu(event, filename, previewElement) {
         position: fixed;
         left: ${event.pageX}px;
         top: ${event.pageY}px;
-        background: rgba(30, 30, 30, 0.98);
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: ${UI.panel};
+        border: 1px solid ${UI.panelBorder};
         border-radius: 6px;
         padding: 4px;
         z-index: 10001;
@@ -578,7 +579,7 @@ function showThumbnailContextMenu(event, filename, previewElement) {
         transition: background 0.15s ease;
     `;
     refreshBtn.onmouseenter = () => {
-        refreshBtn.style.background = 'rgba(66, 153, 225, 0.3)';
+        refreshBtn.style.background = UI.accentSoft;
     };
     refreshBtn.onmouseleave = () => {
         refreshBtn.style.background = 'transparent';
@@ -815,8 +816,8 @@ export async function createWorkflowSaveBrowserModal(nodeId, options = {}) {
 
     const modal = document.createElement('div');
     modal.style.cssText = `
-        background: rgba(28, 32, 38, 0.98);
-        border: 1px solid rgba(255,255,255,0.12);
+        background: ${UI.panel};
+        border: 1px solid ${UI.panelBorder};
         border-radius: 12px;
         width: 92%;
         max-width: 1000px;
@@ -828,54 +829,54 @@ export async function createWorkflowSaveBrowserModal(nodeId, options = {}) {
     `;
 
     const header = document.createElement('div');
-    header.style.cssText = 'padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: space-between;';
+    header.style.cssText = `padding: 12px 16px; border-bottom: 1px solid ${UI.sectionBorder}; display: flex; align-items: center; justify-content: space-between;`;
     const title = document.createElement('h3');
     title.textContent = 'Save Workflow Snapshot';
-    title.style.cssText = 'margin: 0; color: #ddd; font-size: 30px;';
+    title.style.cssText = `margin: 0; color: ${UI.textHeading}; font-size: 20px; font-weight: 600;`;
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '×';
-    closeBtn.style.cssText = 'background:none;border:none;color:#aaa;font-size:28px;cursor:pointer;width:32px;height:32px;';
+    closeBtn.style.cssText = 'background:none;border:none;color:#aaa;font-size:24px;cursor:pointer;width:32px;height:32px;';
     header.appendChild(title);
     header.appendChild(closeBtn);
 
     const controls = document.createElement('div');
-    controls.style.cssText = 'padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; gap: 10px; align-items: center;';
+    controls.style.cssText = `padding: 10px 16px; border-bottom: 1px solid ${UI.sectionBorder}; display: flex; gap: 10px; align-items: center;`;
 
     const searchInput = document.createElement('input');
     searchInput.placeholder = 'Search prompts...';
-    searchInput.style.cssText = 'flex:1; padding:8px 10px; background: rgba(45,55,72,0.7); border:1px solid rgba(255,255,255,0.18); border-radius:6px; color:#ddd;';
+    searchInput.style.cssText = `flex:1; padding:8px 10px; background:${UI.inputBg}; border:1px solid ${UI.inputBorder}; border-radius:8px; color:#ddd;`;
 
     const categoryInput = document.createElement('input');
     categoryInput.placeholder = 'Category';
     categoryInput.value = selectedCategory;
-    categoryInput.style.cssText = 'width: 220px; padding:8px 10px; background: rgba(45,55,72,0.7); border:1px solid rgba(255,255,255,0.18); border-radius:6px; color:#ddd;';
+    categoryInput.style.cssText = `width: 220px; padding:8px 10px; background:${UI.inputBg}; border:1px solid ${UI.inputBorder}; border-radius:8px; color:#ddd;`;
 
     controls.appendChild(searchInput);
     controls.appendChild(categoryInput);
 
     const categoryBar = document.createElement('div');
-    categoryBar.style.cssText = 'padding: 8px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display:flex; gap:8px; flex-wrap:wrap;';
+    categoryBar.style.cssText = `padding: 8px 16px; border-bottom: 1px solid ${UI.sectionBorder}; display:flex; gap:8px; flex-wrap:wrap;`;
 
     const grid = document.createElement('div');
-    grid.style.cssText = 'flex:1; overflow:auto; padding:14px 16px; display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:12px; align-content:start;';
+    grid.style.cssText = 'flex:1; overflow:auto; padding:14px 16px; display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:12px; align-content:start; background: rgba(58,66,78,0.28);';
 
     const footer = document.createElement('div');
-    footer.style.cssText = 'padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.1); display:flex; gap:8px; align-items:center;';
+    footer.style.cssText = `padding: 12px 16px; border-top: 1px solid ${UI.sectionBorder}; display:flex; gap:8px; align-items:center;`;
 
     const nameInput = document.createElement('input');
     nameInput.placeholder = 'Prompt name';
-    nameInput.style.cssText = 'flex:1; padding:9px 10px; background: rgba(45,55,72,0.7); border:1px solid rgba(255,255,255,0.18); border-radius:6px; color:#ddd;';
+    nameInput.style.cssText = `flex:1; padding:9px 10px; background:${UI.inputBg}; border:1px solid ${UI.inputBorder}; border-radius:8px; color:#ddd;`;
 
     const okBtn = document.createElement('button');
     okBtn.textContent = 'OK';
-    okBtn.style.cssText = 'padding:8px 14px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:#2563eb; color:white; cursor:pointer;';
+    okBtn.style.cssText = `padding:8px 14px; border-radius:8px; border:1px solid ${UI.accentBorder}; background: ${UI.accentSoft}; color:white; cursor:pointer;`;
     const cancelBtn = document.createElement('button');
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.style.cssText = 'padding:8px 14px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:#374151; color:white; cursor:pointer;';
+    cancelBtn.style.cssText = `padding:8px 14px; border-radius:8px; border:1px solid ${UI.panelBorder}; background:${UI.buttonBg}; color:#ddd; cursor:pointer;`;
 
     footer.appendChild(nameInput);
-    footer.appendChild(okBtn);
     footer.appendChild(cancelBtn);
+    footer.appendChild(okBtn);
 
     modal.appendChild(header);
     modal.appendChild(controls);
@@ -913,9 +914,9 @@ export async function createWorkflowSaveBrowserModal(nodeId, options = {}) {
             chip.textContent = cat;
             chip.style.cssText = `
                 padding: 6px 10px;
-                border-radius: 7px;
-                border: 1px solid ${isActive ? 'rgba(96,165,250,0.9)' : 'rgba(255,255,255,0.18)'};
-                background: ${isActive ? 'rgba(37,99,235,0.35)' : 'rgba(55,65,81,0.5)'};
+                border-radius: 8px;
+                border: 1px solid ${isActive ? UI.accentBorder : UI.panelBorder};
+                background: ${isActive ? UI.accentSoft : UI.buttonBg};
                 color: #ddd;
                 cursor: pointer;
                 font-size: 12px;
@@ -933,8 +934,8 @@ export async function createWorkflowSaveBrowserModal(nodeId, options = {}) {
     function createCard(entry) {
         const card = document.createElement('div');
         card.style.cssText = `
-            background: rgba(45,55,72,0.7);
-            border: 1px solid ${entry.name === selectedName ? 'rgba(96,165,250,0.95)' : 'rgba(255,255,255,0.18)'};
+            background: ${UI.cardBg};
+            border: 1px solid ${entry.name === selectedName ? UI.accentBorder : UI.panelBorder};
             border-radius: 8px;
             padding: 8px;
             cursor: pointer;

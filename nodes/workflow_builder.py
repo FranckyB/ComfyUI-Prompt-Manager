@@ -704,24 +704,62 @@ class WorkflowBuilder:
                 by_name[lst.get('name', '')] = lst
             return list(by_name.values())
 
-        if lora_stack_a:
-            input_loras_a = [
-                {'name': strip_lora_extension(os.path.basename(name)),
-                 'path': name,
-                 'model_strength': ms, 'clip_strength': cs,
-                 'active': True}
-                for name, ms, cs in lora_stack_a
-            ]
-            extracted['loras_a'] = _merge_lora_lists(workflow_loras_a, input_loras_a)
-        if lora_stack_b:
-            input_loras_b = [
-                {'name': strip_lora_extension(os.path.basename(name)),
-                 'path': name,
-                 'model_strength': ms, 'clip_strength': cs,
-                 'active': True}
-                for name, ms, cs in lora_stack_b
-            ]
-            extracted['loras_b'] = _merge_lora_lists(workflow_loras_b, input_loras_b)
+        def _normalize_input_lora_stack(raw_stack):
+            normalized = []
+            if not raw_stack:
+                return normalized
+
+            for entry in raw_stack:
+                name = None
+                model_strength = 1.0
+                clip_strength = 1.0
+
+                if isinstance(entry, (list, tuple)) and len(entry) >= 1:
+                    name = entry[0]
+                    if len(entry) >= 2:
+                        try:
+                            model_strength = float(entry[1])
+                        except Exception:
+                            model_strength = 1.0
+                    if len(entry) >= 3:
+                        try:
+                            clip_strength = float(entry[2])
+                        except Exception:
+                            clip_strength = model_strength
+                    else:
+                        clip_strength = model_strength
+                elif isinstance(entry, dict):
+                    name = entry.get('path') or entry.get('name')
+                    try:
+                        model_strength = float(entry.get('model_strength', entry.get('strength', 1.0)))
+                    except Exception:
+                        model_strength = 1.0
+                    try:
+                        clip_strength = float(entry.get('clip_strength', model_strength))
+                    except Exception:
+                        clip_strength = model_strength
+                else:
+                    name = entry
+
+                if not name:
+                    continue
+
+                path_name = str(name)
+                norm_name = strip_lora_extension(os.path.basename(path_name))
+                normalized.append({
+                    'name': norm_name,
+                    'path': path_name,
+                    'model_strength': model_strength,
+                    'clip_strength': clip_strength,
+                    'active': True,
+                })
+
+            return normalized
+
+        input_loras_a = _normalize_input_lora_stack(lora_stack_a)
+        input_loras_b = _normalize_input_lora_stack(lora_stack_b)
+        extracted['loras_a'] = _merge_lora_lists(workflow_loras_a, input_loras_a)
+        extracted['loras_b'] = _merge_lora_lists(workflow_loras_b, input_loras_b)
 
         # ── Parse overrides from JS ──────────────────────────────────────
         try:

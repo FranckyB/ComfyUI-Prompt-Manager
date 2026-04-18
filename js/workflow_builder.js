@@ -1235,6 +1235,33 @@ function _mergeLoraLists(listA, listB) {
     return _sortLorasByName([...byName.values()]);
 }
 
+function _loraListSignature(list) {
+    const src = Array.isArray(list) ? list : [];
+    return src
+        .map((item) => {
+            const l = item || {};
+            const name = String(l.name || "").trim();
+            const path = String(l.path || "").trim();
+            const ms = Number(l.model_strength ?? l.strength ?? 1);
+            const cs = Number(l.clip_strength ?? l.model_strength ?? l.strength ?? 1);
+            const active = (l.active !== false) ? "1" : "0";
+            return `${name}|${path}|${ms}|${cs}|${active}`;
+        })
+        .sort()
+        .join(",");
+}
+
+function _loraStacksSignature(workflowLoras, inputLoras) {
+    const wl = workflowLoras || { a: [], b: [] };
+    const il = inputLoras || { a: [], b: [] };
+    return [
+        _loraListSignature(wl.a),
+        _loraListSignature(wl.b),
+        _loraListSignature(il.a),
+        _loraListSignature(il.b),
+    ].join("||");
+}
+
 // --- LoRA display ---
 function updateLoras(node) {
     const containerA = node._weLoraAContainer;
@@ -1853,11 +1880,13 @@ app.registerExtension({
 
             const _isUpdateSourceHint = (n) => {
                 if (!n) return false;
-                const cc = n.comfyClass || "";
-                const ty = n.type || "";
-                return cc === "PromptExtractor" || cc === "WorkflowExtractor" ||
-                       ty === "PromptExtractor" || ty === "WorkflowExtractor" ||
-                       cc === "PromptManagerAdvanced" || ty === "PromptManagerAdvanced";
+                  const cc = String(n.comfyClass || "");
+                  const ty = String(n.type || "");
+                  const ccNorm = cc.toLowerCase().replace(/\s+/g, "");
+                  const tyNorm = ty.toLowerCase().replace(/\s+/g, "");
+                  return ccNorm === "promptextractor" || ccNorm === "workflowextractor" ||
+                      tyNorm === "promptextractor" || tyNorm === "workflowextractor" ||
+                      ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced";
             };
             const _isRerouteNodeHint = (n) => {
                 if (!n) return false;
@@ -1931,11 +1960,13 @@ app.registerExtension({
                 // Supported: PromptExtractor, WorkflowExtractor, WorkflowBuilder, WorkflowBridge.
                 const _isSupportedSource = (n) => {
                     if (!n) return false;
-                    const cc = n.comfyClass || "";
-                    const ty = n.type || "";
-                    return cc === "PromptExtractor" || cc === "WorkflowExtractor" ||
-                           ty === "PromptExtractor" || ty === "WorkflowExtractor" ||
-                           cc === "PromptManagerAdvanced" || ty === "PromptManagerAdvanced";
+                      const cc = String(n.comfyClass || "");
+                      const ty = String(n.type || "");
+                      const ccNorm = cc.toLowerCase().replace(/\s+/g, "");
+                      const tyNorm = ty.toLowerCase().replace(/\s+/g, "");
+                      return ccNorm === "promptextractor" || ccNorm === "workflowextractor" ||
+                          tyNorm === "promptextractor" || tyNorm === "workflowextractor" ||
+                          ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced";
                 };
                 const _isRerouteNode = (n) => {
                     if (!n) return false;
@@ -2538,7 +2569,7 @@ app.registerExtension({
             // Family type row
             const familyRow = makeEl("div", { ...ROW_STYLE });
             familyRow.appendChild(makeEl("span", {
-                color: C.accent, width: LABEL_W, flexShrink: "0", fontWeight: "bold",
+                color: C.text, width: LABEL_W, flexShrink: "0", fontWeight: "bold",
             }, "Type"));
             familyRow.appendChild(makeEl("span", { width: "14px", flexShrink: "0" }));
             const familySel = document.createElement("select");
@@ -3265,17 +3296,9 @@ app.registerExtension({
                     syncHidden(node);
                 }
 
-                // Extractor-connected mode is manual-refresh only.
-                // Keep user tweaks unless Update Workflow is clicked.
-                if (node._weIsConnectedWorkflowDataExtractor?.()) return;
-
-                // Clear any previous error banner
-                _showError(node, null);
-
                 const oldWl = node._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = node._weInputLoras || { a: [], b: [] };
-                const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
-                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                const oldSig = _loraStacksSignature(oldWl, oldIl);
 
                 node._weWorkflowLoras = {
                     a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
@@ -3286,17 +3309,41 @@ app.registerExtension({
                     b: [...(info.input_loras_b || oldIl.b || [])],
                 };
 
-                const newSig = [node._weWorkflowLoras.a, node._weWorkflowLoras.b,
-                    node._weInputLoras.a, node._weInputLoras.b]
-                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
-                const lorasLocked = !!(node._weSectionLocks?.loras);
-                if (!lorasLocked || oldSig !== newSig) node._weLoraState = {};
+                const mergedLorasA = _mergeLoraLists(node._weWorkflowLoras.a, node._weInputLoras.a);
+                const mergedLorasB = _mergeLoraLists(node._weWorkflowLoras.b, node._weInputLoras.b);
+
+                const newSig = _loraStacksSignature(node._weWorkflowLoras, node._weInputLoras);
+                if (oldSig !== newSig) node._weLoraState = {};
+
+                const isExtractorConnected = node._weIsConnectedWorkflowDataExtractor?.() === true;
+                if (isExtractorConnected) {
+                    // In extractor-connected mode, keep manual section behavior,
+                    // but always reflect latest merged LoRA stacks from execution.
+                    node._weExtracted = {
+                        ...(node._weExtracted || {}),
+                        loras_a: mergedLorasA,
+                        loras_b: mergedLorasB,
+                        lora_availability: info.lora_availability || node._weExtracted?.lora_availability || {},
+                    };
+                    node._wePopulated = true;
+                    updateLoras(node);
+                    syncHidden(node);
+                    node.setDirtyCanvas(true, true);
+                    app.graph.setDirtyCanvas(true, true);
+                    node._preUpdateApplied = true;
+                    return;
+                }
+
+                // Clear any previous error banner
+                _showError(node, null);
 
                 // Always refresh extracted state from latest execution so
                 // workflow_data inputs drive UI every queue run.
                 node._weExtracted = {
                     ...(node._weExtracted || {}),
                     ...info,
+                    loras_a: mergedLorasA,
+                    loras_b: mergedLorasB,
                 };
                 node._wePopulated = true;
 
@@ -3376,11 +3423,10 @@ app.registerExtension({
             // UI population is handled by pre-update listener (fires before
             // generation).  Only run here as a fallback if send_sync failed.
             const isExtractorConnected = this._weIsConnectedWorkflowDataExtractor?.() === true;
-            if (info && !this._preUpdateApplied && !isExtractorConnected) {
+            if (info && !this._preUpdateApplied) {
                 const oldWl = this._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = this._weInputLoras || { a: [], b: [] };
-                const oldSig = [oldWl.a, oldWl.b, oldIl.a, oldIl.b]
-                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
+                const oldSig = _loraStacksSignature(oldWl, oldIl);
 
                 this._weWorkflowLoras = {
                     a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
@@ -3391,15 +3437,33 @@ app.registerExtension({
                     b: [...(info.input_loras_b || oldIl.b || [])],
                 };
 
-                const newSig = [this._weWorkflowLoras.a, this._weWorkflowLoras.b,
-                    this._weInputLoras.a, this._weInputLoras.b]
-                    .map(l => (l || []).map(x => x.name).sort().join(",")).join("|");
-                const lorasLocked = !!(this._weSectionLocks?.loras);
-                if (!lorasLocked || oldSig !== newSig) this._weLoraState = {};
+                const mergedLorasA = _mergeLoraLists(this._weWorkflowLoras.a, this._weInputLoras.a);
+                const mergedLorasB = _mergeLoraLists(this._weWorkflowLoras.b, this._weInputLoras.b);
+
+                const newSig = _loraStacksSignature(this._weWorkflowLoras, this._weInputLoras);
+                if (oldSig !== newSig) this._weLoraState = {};
+
+                if (isExtractorConnected) {
+                    this._weExtracted = {
+                        ...(this._weExtracted || {}),
+                        loras_a: mergedLorasA,
+                        loras_b: mergedLorasB,
+                        lora_availability: info.lora_availability || this._weExtracted?.lora_availability || {},
+                    };
+                    this._wePopulated = true;
+                    updateLoras(this);
+                    syncHidden(this);
+                    this.setDirtyCanvas(true, true);
+                    app.graph.setDirtyCanvas(true, true);
+                    this._preUpdateApplied = false;
+                    return;
+                }
 
                 this._weExtracted = {
                     ...(this._weExtracted || {}),
                     ...info,
+                    loras_a: mergedLorasA,
+                    loras_b: mergedLorasB,
                 };
                 this._wePopulated = true;
 
@@ -3472,6 +3536,32 @@ app.registerExtension({
                     if (!inp || !inp.name) continue;
                     if (inp.name === "positive_prompt") inp.name = "pos_prompt";
                     if (inp.name === "negative_prompt") inp.name = "neg_prompt";
+                }
+
+                // Deduplicate legacy duplicate inputs by name. Prefer keeping
+                // the linked slot when duplicates exist.
+                const keepIndexByName = new Map();
+                for (let i = 0; i < node.inputs.length; i++) {
+                    const inp = node.inputs[i];
+                    if (!inp || !inp.name) continue;
+                    if (!keepIndexByName.has(inp.name)) {
+                        keepIndexByName.set(inp.name, i);
+                        continue;
+                    }
+                    const keepIdx = keepIndexByName.get(inp.name);
+                    const keepInp = node.inputs[keepIdx];
+                    const curLinked = inp?.link != null;
+                    const keepLinked = keepInp?.link != null;
+                    if (curLinked && !keepLinked) {
+                        keepIndexByName.set(inp.name, i);
+                    }
+                }
+                for (let i = node.inputs.length - 1; i >= 0; i--) {
+                    const inp = node.inputs[i];
+                    if (!inp || !inp.name) continue;
+                    if (keepIndexByName.get(inp.name) !== i) {
+                        node.removeInput(i);
+                    }
                 }
             }
             if (node.inputs) {

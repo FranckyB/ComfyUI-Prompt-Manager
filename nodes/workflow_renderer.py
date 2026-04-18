@@ -32,6 +32,8 @@ from ..py.workflow_families import (
     get_family_label,
     get_family_sampler_strategy,
     get_compatible_families,
+    list_compatible_vaes,
+    list_compatible_clips,
 )
 from ..py.workflow_extraction_utils import (
     resolve_model_name,
@@ -54,11 +56,15 @@ _FAMILY_SAMPLER_DEFAULTS = {
     "flux2": {"steps_a": 4, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "zimage": {"steps_a": 9, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "ltxv": {"steps_a": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
-    "wan_image": {"steps_a": 10, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple"},
-    "wan_video_t2v": {"steps_a": 3, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 3},
-    "wan_video_i2v": {"steps_a": 3, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 3},
+    "wan_image": {"steps_a": 8, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple"},
+    "wan_video_t2v": {"steps_a": 2, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 2},
+    "wan_video_i2v": {"steps_a": 2, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 2},
     "qwen_image": {"steps_a": 10, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
 }
+
+# Runtime caches for non-checkpoint components reused across repeated renders.
+_class_vae_cache = {}
+_class_clip_cache = {}
 
 class WorkflowRenderer:
     """
@@ -128,7 +134,13 @@ class WorkflowRenderer:
     def _clear_cached_models(cls):
         cleared = len(cls._class_model_cache)
         cls._class_model_cache.clear()
+        cleared_vaes = len(_class_vae_cache)
+        _class_vae_cache.clear()
+        cleared_clips = len(_class_clip_cache)
+        _class_clip_cache.clear()
         print(f"[WorkflowRenderer] Cleared class model cache entries: {cleared}")
+        print(f"[WorkflowRenderer] Cleared VAE cache entries: {cleared_vaes}")
+        print(f"[WorkflowRenderer] Cleared CLIP cache entries: {cleared_clips}")
 
         try:
             comfy.model_management.soft_empty_cache()
@@ -195,6 +207,49 @@ class WorkflowRenderer:
         from ..py.workflow_families import MODEL_FAMILIES
         _family_spec = MODEL_FAMILIES.get(family_key, {})
         _family_is_ckpt = _family_spec.get('checkpoint', False)
+
+        # ── Family defaults for VAE/CLIP when upstream data is incomplete ──
+        clip_is_placeholder = bool(clip_names) and all(
+            (not n) or str(n).startswith('(') for n in clip_names
+        )
+
+        if _family_is_ckpt:
+            # Checkpoint families can use embedded VAE/CLIP.
+            if not vae_name or str(vae_name).startswith('('):
+                vae_name = "(from checkpoint)"
+            if not clip_names or clip_is_placeholder:
+                clip_names = ["(from checkpoint)"]
+            if not clip_type_str:
+                clip_type_str = str(_family_spec.get("clip_type", ""))
+        else:
+            # Non-checkpoint families require explicit compatible VAE/CLIP selections.
+            if not vae_name or str(vae_name).startswith('('):
+                vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
+                vae_name = rec_vae or (vaes[0] if vaes else "")
+
+            if not clip_type_str:
+                clip_type_str = str(_family_spec.get("clip_type", ""))
+
+            if not clip_names or clip_is_placeholder:
+                compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
+                selected = []
+                if compatible_clips:
+                    clip_slots = int(_family_spec.get("clip_slots", 1) or 1)
+                    clip_patterns = [p.lower() for p in _family_spec.get("clip", []) if p]
+
+                    if clip_patterns and clip_slots >= 2:
+                        for pat in clip_patterns:
+                            for c in compatible_clips:
+                                if pat in os.path.basename(str(c)).lower() and c not in selected:
+                                    selected.append(c)
+                                    break
+                            if len(selected) >= clip_slots:
+                                break
+
+                    if not selected:
+                        selected = [rec_clip] if rec_clip in compatible_clips else [compatible_clips[0]]
+
+                clip_names = selected
 
         family_defaults = _FAMILY_SAMPLER_DEFAULTS.get(
             family_key,
@@ -561,10 +616,16 @@ def _load_vae(vae_name, existing_vae=None):
     if vae_name and not vae_name.startswith('('):
         vae_path = resolve_vae_name(vae_name)
         if vae_path:
+            cache_key = os.path.realpath(vae_path)
+            cached_vae = _class_vae_cache.get(cache_key)
+            if cached_vae is not None:
+                print(f"[WorkflowRenderer] Using cached VAE: {vae_name}")
+                return cached_vae
             print(f"[WorkflowRenderer] Loading VAE: {vae_name}")
             sd, metadata = comfy.utils.load_torch_file(vae_path, return_metadata=True)
             v = comfy.sd.VAE(sd=sd, metadata=metadata)
             v.throw_exception_if_invalid()
+            _class_vae_cache[cache_key] = v
             return v
     return existing_vae
 
@@ -608,11 +669,19 @@ def _load_clip(clip_info, overrides, existing_clip=None):
 
     print(f"[WorkflowRenderer] Loading CLIP: {clip_names}")
     print(f"[WorkflowRenderer] clip_info={clip_info}, overrides={overrides}")
-    return comfy.sd.load_clip(
+    cache_key = (tuple(os.path.realpath(p) for p in valid_paths), str(clip_type))
+    cached_clip = _class_clip_cache.get(cache_key)
+    if cached_clip is not None:
+        print(f"[WorkflowRenderer] Using cached CLIP: {clip_names}")
+        return cached_clip
+
+    loaded_clip = comfy.sd.load_clip(
         ckpt_paths=valid_paths,
         embedding_directory=folder_paths.get_folder_paths("embeddings"),
         clip_type=clip_type,
     )
+    _class_clip_cache[cache_key] = loaded_clip
+    return loaded_clip
 
 
 def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):

@@ -4,7 +4,7 @@ Workflow Saver - Save workflow_data snapshots into prompt library entries.
 MVP goals:
 - Capture live workflow_data from execution.
 - Save to Prompt Manager data with optional overwrite confirmation.
-- Auto-generate thumbnail from IMAGE (input override or workflow_data['IMAGE']).
+- Auto-generate thumbnail from workflow_data['IMAGE'].
 """
 import base64
 from io import BytesIO
@@ -87,11 +87,6 @@ class WorkflowSaver:
                     "tooltip": "Connect workflow_data from WorkflowBuilder/Renderer/Bridge.",
                 }),
             },
-            "optional": {
-                "image": ("IMAGE", {
-                    "tooltip": "Optional explicit thumbnail source. If omitted, uses workflow_data['IMAGE'] when present.",
-                }),
-            },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
             },
@@ -104,7 +99,7 @@ class WorkflowSaver:
     OUTPUT_NODE = True
     DESCRIPTION = "Save-ready workflow snapshot node. Use the Save Snapshot button in node UI."
 
-    def execute(self, workflow_data, image=None, unique_id=None):
+    def execute(self, workflow_data, unique_id=None):
         if isinstance(workflow_data, dict):
             wf = workflow_data
         elif isinstance(workflow_data, str):
@@ -119,7 +114,7 @@ class WorkflowSaver:
             wf = {}
 
         wf_safe = to_json_safe_workflow_data(wf)
-        img_for_thumb = image if image is not None else wf.get("IMAGE")
+        img_for_thumb = wf.get("IMAGE")
         thumbnail = _image_to_base64_thumbnail(img_for_thumb)
 
         snapshot = {

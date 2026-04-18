@@ -276,6 +276,14 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
   - Improved model-family filtering and unsupported-family handling in Builder/Renderer
   - Improved workflow update diagnostics to simplify troubleshooting of resolution and model propagation
 
+- **Prompt Manager Advanced Save + Thumbnail Improvements**
+  - Save flow now reuses the full Advanced browser UI (same search, category tools, NSFW/filter handling, and existing prompt selection behavior)
+  - Save action terminology updated to **Save Workflow** for workflow-oriented entries
+  - Save now enforces category selection before submission to avoid uncategorized/invalid saves
+  - Workflow Saver save action now uses failure-only notifications (no success toast spam)
+  - Thumbnail generation now tries Workflow Renderer first when workflow_data is present, with automatic fallback to the basic checkpoint/LoRA thumbnail path
+  - Renderer thumbnail path now forces thumbnail-safe resolution and single-frame batch settings before queueing (consistent size, batch=1)
+
 ### version 1.22.6
 - **Prompt Extractor now extract Prompt Extractor**
   - Prompt Extractor now embeds extracted data in the worklow, so it can extract itself.
