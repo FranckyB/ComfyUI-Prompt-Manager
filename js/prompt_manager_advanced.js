@@ -2483,6 +2483,36 @@ function addButtonBar(node) {
 
             await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail, result.nsfw);
 
+            // After saving from workflow mode, immediately switch back to preset mode
+            // and show exactly what was saved. This avoids restoring stale pre-workflow
+            // snapshots that can clear LoRA displays until prompt re-selection.
+            const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+            if (useWorkflowWidget?.value === true) {
+                const clone = (v, fb) => {
+                    try {
+                        return JSON.parse(JSON.stringify(v ?? fb));
+                    } catch {
+                        return fb;
+                    }
+                };
+
+                node._preWorkflowModeState = {
+                    text: promptText || "",
+                    savedLorasA: clone(allLorasA, []),
+                    savedLorasB: clone(allLorasB, []),
+                    currentLorasA: [],
+                    currentLorasB: [],
+                    savedTriggerWords: clone(allTriggerWords, []),
+                    currentTriggerWords: [],
+                    lastWorkflowData: clone(node.lastWorkflowData, null),
+                };
+
+                useWorkflowWidget.value = false;
+                if (typeof useWorkflowWidget.callback === "function") {
+                    await useWorkflowWidget.callback(false);
+                }
+            }
+
             // Skip callback reload logic during save update
             node._skipCallbackReload = true;
 
