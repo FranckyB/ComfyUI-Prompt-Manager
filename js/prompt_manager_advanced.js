@@ -3387,6 +3387,53 @@ function setupUseWorkflowToggleHandler(node) {
     const textWidget = node.widgets?.find(w => w.name === "text");
     if (!useWorkflowWidget || !textWidget) return;
 
+    const cloneJson = (value, fallback) => {
+        try {
+            return JSON.parse(JSON.stringify(value ?? fallback));
+        } catch {
+            return fallback;
+        }
+    };
+
+    const snapshotPreWorkflowState = () => {
+        node._preWorkflowModeState = {
+            text: textWidget?.value ?? "",
+            savedLorasA: cloneJson(node.savedLorasA, []),
+            savedLorasB: cloneJson(node.savedLorasB, []),
+            currentLorasA: cloneJson(node.currentLorasA, []),
+            currentLorasB: cloneJson(node.currentLorasB, []),
+            savedTriggerWords: cloneJson(node.savedTriggerWords, []),
+            currentTriggerWords: cloneJson(node.currentTriggerWords, []),
+            lastWorkflowData: cloneJson(node.lastWorkflowData, null),
+        };
+    };
+
+    const restorePromptInputText = () => {
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
+        const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
+        if (!isLlmConnected || !textWidget) return;
+
+        const graph = app.graph;
+        const link = graph.links[promptInputConnection.link];
+        if (!link) return;
+
+        const originNode = graph.getNodeById(link.origin_id);
+        if (!originNode) return;
+
+        const outputData = originNode.getOutputData?.(link.origin_slot);
+        if (outputData !== undefined) {
+            textWidget.value = outputData;
+            return;
+        }
+
+        if (originNode.widgets) {
+            const outputWidget = originNode.widgets.find(w => w.name === "text" || w.name === "STRING");
+            if (outputWidget) {
+                textWidget.value = outputWidget.value;
+            }
+        }
+    };
+
     // Re-use the existing applyToggleState from use_prompt_input handler
     // by triggering a refresh through that widget's state
     const refreshGhosting = () => {
@@ -3419,24 +3466,58 @@ function setupUseWorkflowToggleHandler(node) {
         node._lastExecutionUpdateSig = null;
         node._lastLiveWorkflowPickupSig = null;
 
+        if (value && !node._preWorkflowModeState) {
+            snapshotPreWorkflowState();
+        }
+
         if (!value) {
-            // Treat toggle OFF as restoring the selected saved prompt state,
-            // similar to other input-toggle behavior.
+            // Restore pre-workflow state first, then re-apply active toggle behavior.
             node.lastWorkflowData = null;
             syncSavedWorkflowDataWidget(node);
 
+            const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+            const useLoraInputWidget = node.widgets?.find((w) => w.name === "use_lora_input");
+            const usePromptInput = useExternalWidget?.value === true;
+            const useLoraInput = useLoraInputWidget?.value !== false;
+
+            const pre = node._preWorkflowModeState;
+            if (pre) {
+                node.savedLorasA = cloneJson(pre.savedLorasA, []);
+                node.savedLorasB = cloneJson(pre.savedLorasB, []);
+                node.savedTriggerWords = cloneJson(pre.savedTriggerWords, []);
+
+                if (useLoraInput) {
+                    // Restore prompt stacks + connected input stacks when lora input is enabled.
+                    node.currentLorasA = cloneJson(pre.currentLorasA, []);
+                    node.currentLorasB = cloneJson(pre.currentLorasB, []);
+                    node.currentTriggerWords = cloneJson(pre.currentTriggerWords, []);
+                } else {
+                    node.currentLorasA = [];
+                    node.currentLorasB = [];
+                    node.currentTriggerWords = [];
+                }
+
+                // Intentionally do not overwrite text when use_prompt_input is OFF.
+                // Keep the current workflow text so it remains editable after un-ghosting.
+            }
+
             const categoryWidget = node.widgets?.find((w) => w.name === "category");
             const promptWidget = node.widgets?.find((w) => w.name === "name");
-            if (categoryWidget && promptWidget && promptWidget.value) {
-                await loadPromptData(node, categoryWidget.value, promptWidget.value);
-            } else {
+            if (!pre) {
                 // Fallback when no prompt is selected: only remove workflow-derived entries.
                 node.currentLorasA = (node.currentLorasA || []).filter((l) => !l.fromWorkflow);
                 node.currentLorasB = (node.currentLorasB || []).filter((l) => !l.fromWorkflow);
                 node.savedLorasA = (node.savedLorasA || []).filter((l) => !l.fromWorkflow);
                 node.savedLorasB = (node.savedLorasB || []).filter((l) => !l.fromWorkflow);
-                updateLoraDisplays(node);
             }
+
+            if (usePromptInput) {
+                restorePromptInputText();
+            }
+
+            delete node._preWorkflowModeState;
+            updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
         } else {
             // Live pickup with the same ingest path used for execution data.
             void tryLiveWorkflowPickup(node, { force: true });
