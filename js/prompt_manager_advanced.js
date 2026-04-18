@@ -124,7 +124,6 @@ app.registerExtension({
                 const result = onNodeCreated?.apply(this, arguments);
 
                 const node = this;
-                removeDeprecatedWorkflowWidget(node);
                 node.prompts = {};
                 node.currentLorasA = [];
                 node.currentLorasB = [];
@@ -165,8 +164,7 @@ app.registerExtension({
 
                 const useWorkflowWidget = this.widgets.find(w => w.name === "use_workflow_data");
                 if (useWorkflowWidget) {
-                    useWorkflowWidget.type = "hidden";
-                    useWorkflowWidget.computeSize = () => [0, -4];
+                    useWorkflowWidget.label = "use workflow input";
                 }
 
                 // Make text widget scrollable even when disabled
@@ -181,24 +179,67 @@ app.registerExtension({
                 }
 
                 // Listen for updates from backend
-                api.addEventListener("prompt-manager-advanced-update", (event) => {
+                api.addEventListener("prompt-manager-advanced-update", async (event) => {
                     if (String(event.detail.node_id) === String(this.id)) {
-                        const newLorasA = event.detail.loras_a || [];
-                        const newLorasB = event.detail.loras_b || [];
+                        const normalizeLoraForSig = (lora) => ({
+                            name: String(lora?.name || ""),
+                            strength: Number(lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+                            model_strength: Number(lora?.model_strength ?? lora?.strength ?? 1.0) || 1.0,
+                            clip_strength: Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+                            active: lora?.active !== false,
+                            available: lora?.available !== false,
+                            found: lora?.found !== false,
+                        });
+                        const normalizedLoraListSig = (list) => JSON.stringify(
+                            (Array.isArray(list) ? list : [])
+                                .map(normalizeLoraForSig)
+                                .sort((a, b) => a.name.localeCompare(b.name))
+                        );
+
+                        let newLorasA = event.detail.loras_a || [];
+                        let newLorasB = event.detail.loras_b || [];
                         const newTriggerWords = event.detail.trigger_words || [];
                         const inputLorasA = event.detail.input_loras_a || [];
                         const inputLorasB = event.detail.input_loras_b || [];
                         const wfDataEvent = event.detail.workflow_data || null;
                         const useWorkflowEvent = event.detail.use_workflow_data === true;
+                        if (useWorkflowEvent) {
+                            newLorasA = await applyLoraFoundState(newLorasA);
+                            newLorasB = await applyLoraFoundState(newLorasB);
+                        }
+
+                        // Skip expensive state churn and canvas dirtying when payload is unchanged.
+                        // Include found/available in the signature so availability refreshes still apply.
+                        const incomingSig = JSON.stringify({
+                            use_prompt_input: event.detail.use_prompt_input === true,
+                            use_workflow_data: useWorkflowEvent,
+                            use_lora_input: (this.widgets?.find(w => w.name === "use_lora_input")?.value !== false),
+                            prompt_input: String(event.detail.prompt_input || ""),
+                            workflow_prompt: String(wfDataEvent?.positive_prompt || ""),
+                            workflow_data_sig: wfDataEvent ? JSON.stringify({
+                                positive_prompt: String(wfDataEvent.positive_prompt || ""),
+                                loras_a: (Array.isArray(wfDataEvent.loras_a) ? wfDataEvent.loras_a : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
+                                loras_b: (Array.isArray(wfDataEvent.loras_b) ? wfDataEvent.loras_b : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
+                            }) : null,
+                            loras_a_sig: normalizedLoraListSig(newLorasA),
+                            loras_b_sig: normalizedLoraListSig(newLorasB),
+                            input_loras_a_sig: normalizedLoraListSig(inputLorasA),
+                            input_loras_b_sig: normalizedLoraListSig(inputLorasB),
+                            trigger_words_sig: JSON.stringify(newTriggerWords || []),
+                            unavailable_a_sig: JSON.stringify((event.detail.unavailable_loras_a || []).slice().sort()),
+                            unavailable_b_sig: JSON.stringify((event.detail.unavailable_loras_b || []).slice().sort()),
+                        });
+
+                        if (this._lastExecutionUpdateSig === incomingSig) {
+                            return;
+                        }
+                        this._lastExecutionUpdateSig = incomingSig;
+
                         const effectiveInputLorasA = useWorkflowEvent ? newLorasA : inputLorasA;
                         const effectiveInputLorasB = useWorkflowEvent ? newLorasB : inputLorasB;
                         // Explicit list of unavailable lora names from Python
                         const unavailableLorasA = new Set((event.detail.unavailable_loras_a || []).map(n => n.toLowerCase()));
                         const unavailableLorasB = new Set((event.detail.unavailable_loras_b || []).map(n => n.toLowerCase()));
-
-                        if (useWorkflowEvent) {
-                            syncWorkflowLorasForDisplay(this, wfDataEvent, newLorasA, newLorasB);
-                        }
                         
                         // Python decides if we should reset - JavaScript just obeys
                         let shouldReset = event.detail.should_reset || false;
@@ -209,6 +250,14 @@ app.registerExtension({
                             // Check if use_lora_input is enabled to know what should be displayed
                             const useLoraInputWidget = this.widgets?.find(w => w.name === "use_lora_input");
                             const useLoraInput = useLoraInputWidget?.value !== false;
+                            const currentSigA = useLoraInput
+                                ? normalizedLoraListSig(mergeLoraLists(this.currentLorasA, this.savedLorasA))
+                                : normalizedLoraListSig(this.savedLorasA || []);
+                            const currentSigB = useLoraInput
+                                ? normalizedLoraListSig(mergeLoraLists(this.currentLorasB, this.savedLorasB))
+                                : normalizedLoraListSig(this.savedLorasB || []);
+                            const pythonSigA = normalizedLoraListSig(newLorasA || []);
+                            const pythonSigB = normalizedLoraListSig(newLorasB || []);
                             
                             // Get what JavaScript would currently display
                             let currentDisplayA, currentDisplayB;
@@ -231,8 +280,10 @@ app.registerExtension({
                             // If they don't match, we're out of sync - force reset
                             const lorasOutOfSyncA = JSON.stringify(currentDisplayA) !== JSON.stringify(pythonLorasA);
                             const lorasOutOfSyncB = JSON.stringify(currentDisplayB) !== JSON.stringify(pythonLorasB);
+                            const lorasStateOutOfSyncA = currentSigA !== pythonSigA;
+                            const lorasStateOutOfSyncB = currentSigB !== pythonSigB;
                             
-                            if (lorasOutOfSyncA || lorasOutOfSyncB) {
+                            if (lorasOutOfSyncA || lorasOutOfSyncB || lorasStateOutOfSyncA || lorasStateOutOfSyncB) {
                                 console.log("[PromptManagerAdvanced] JavaScript state out of sync with Python - forcing reset");
                                 console.log("  Current A:", currentDisplayA);
                                 console.log("  Python A:", pythonLorasA);
@@ -255,8 +306,16 @@ app.registerExtension({
 
                         console.log("[PromptManagerAdvanced] Update received, shouldReset:", shouldReset);
 
+
+                        // Workflow mode: execution payload is authoritative (single ingest path).
+                        if (useWorkflowEvent) {
+                            syncWorkflowLorasForDisplay(this, wfDataEvent, newLorasA, newLorasB, { preserveUserState: false });
+                            this.currentTriggerWords = [];
+                            updateLoraDisplays(this);
+                            updateTriggerWordsDisplay(this);
+                        }
                         // Clear and reload when Python tells us to (or when we detect desync)
-                        if (shouldReset) {
+                        else if (shouldReset) {
                             console.log("[PromptManagerAdvanced] Resetting toggles as instructed by Python");
 
                             // Clear ALL loras and trigger words - we'll reload fresh
@@ -325,17 +384,13 @@ app.registerExtension({
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             this.currentTriggerWords = newConnectedTriggers;
 
-                            if (useWorkflowEvent) {
-                                syncWorkflowLorasForDisplay(this, wfDataEvent, newLorasA, newLorasB);
-                            }
-
                             // Refresh displays
                             updateLoraDisplays(this);
                             updateTriggerWordsDisplay(this);
                         } else {
                             // No major change - just update current loras if they differ
-                            const lorasAChanged = JSON.stringify(effectiveInputLorasA) !== JSON.stringify(this.currentLorasA.map(l => ({ name: l.name, strength: l.strength })));
-                            const lorasBChanged = JSON.stringify(effectiveInputLorasB) !== JSON.stringify(this.currentLorasB.map(l => ({ name: l.name, strength: l.strength })));
+                            const lorasAChanged = normalizedLoraListSig(effectiveInputLorasA) !== normalizedLoraListSig(this.currentLorasA || []);
+                            const lorasBChanged = normalizedLoraListSig(effectiveInputLorasB) !== normalizedLoraListSig(this.currentLorasB || []);
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
 
@@ -409,6 +464,8 @@ app.registerExtension({
                 addTriggerWordsDisplay(node);
                 setupCategoryChangeHandler(node);
                 setupUseExternalToggleHandler(node);
+                setupUseWorkflowToggleHandler(node);
+                setupWorkflowLivePickupHandler(node);
 
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
@@ -452,7 +509,6 @@ app.registerExtension({
                 const result = onConfigure?.apply(this, arguments);
 
                 const node = this;
-                removeDeprecatedWorkflowWidget(node);
 
                 // Flag that this node is being restored from a workflow,
                 // so onNodeCreated's async loadPromptData won't overwrite state
@@ -1122,10 +1178,26 @@ function mergeLoraLists(currentLoras, savedLoras) {
         }
     });
 
-    // Sort alphabetically by name to maintain stable order when toggling
-    merged.sort((a, b) => a.name.localeCompare(b.name));
+    // Keep available LoRAs first, then missing ones, each group alphabetical.
+    merged.sort(compareLorasMissingLast);
 
     return merged;
+}
+
+function isLoraAvailableForSort(lora) {
+    if (!lora) return true;
+    if (lora.available === false) return false;
+    if (lora.found === false) return false;
+    return true;
+}
+
+function compareLorasMissingLast(a, b) {
+    const aAvailable = isLoraAvailableForSort(a);
+    const bAvailable = isLoraAvailableForSort(b);
+    if (aAvailable !== bAvailable) {
+        return aAvailable ? -1 : 1;
+    }
+    return String(a?.name || "").localeCompare(String(b?.name || ""));
 }
 
 function renderLoraTags(container, loras, stackId, node) {
@@ -1149,7 +1221,8 @@ function renderLoraTags(container, loras, stackId, node) {
         return;
     }
 
-    loras.forEach((lora, index) => {
+    const orderedLoras = (Array.isArray(loras) ? [...loras] : []).sort(compareLorasMissingLast);
+    orderedLoras.forEach((lora, index) => {
         const tag = createLoraTag(lora, index, stackId, node);
         container.appendChild(tag);
     });
@@ -2551,18 +2624,8 @@ function addButtonBar(node) {
         }
     ]);
 
-    const pullWorkflowBtn = createButton("Pull Workflow", async () => {
-        await pullWorkflowIntoNode(node);
-    });
-
-    const clearWorkflowBtn = createButton("Clear Workflow", async () => {
-        clearPulledWorkflowFromNode(node);
-    });
-
     buttonContainer.appendChild(savePromptBtn);
     buttonContainer.appendChild(newPromptBtn);
-    buttonContainer.appendChild(pullWorkflowBtn);
-    buttonContainer.appendChild(clearWorkflowBtn);
     buttonContainer.appendChild(moreBtn);
 
     // Add button bar to node
@@ -2572,24 +2635,6 @@ function addButtonBar(node) {
     };
 
     node.buttonBarAttached = true;
-}
-
-function removeDeprecatedWorkflowWidget(node) {
-    if (!node?.widgets || !Array.isArray(node.widgets)) return;
-    const idx = node.widgets.findIndex((w) => w?.name === "use_workflow_data");
-    if (idx === -1) return;
-
-    const widget = node.widgets[idx];
-    if (widget && typeof node.removeWidget === "function") {
-        try {
-            node.removeWidget(widget);
-            return;
-        } catch {
-            // Fall back to direct array removal if removeWidget fails.
-        }
-    }
-
-    node.widgets.splice(idx, 1);
 }
 
 function setupCategoryChangeHandler(node) {
@@ -2885,7 +2930,8 @@ function mapWorkflowLorasToUi(list) {
         .filter(Boolean);
 }
 
-function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, fallbackLorasB = null) {
+function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, fallbackLorasB = null, options = null) {
+    const preserveLocal = options?.preserveUserState !== false;
     const mappedPrimaryA = Array.isArray(workflowData?.loras_a) ? mapWorkflowLorasToUi(workflowData.loras_a) : [];
     const mappedPrimaryB = Array.isArray(workflowData?.loras_b) ? mapWorkflowLorasToUi(workflowData.loras_b) : [];
     const mappedFallbackA = mapWorkflowLorasToUi(fallbackLorasA || []);
@@ -2898,12 +2944,14 @@ function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, 
             return {
                 ...lora,
                 active: (lora.active !== undefined) ? (lora.active !== false) : (fb ? (fb.active !== false) : true),
-                available: (lora.available !== undefined)
-                    ? (lora.available !== false)
-                    : (fb ? (fb.available !== false) : true),
-                found: (lora.found !== undefined)
-                    ? (lora.found !== false)
-                    : (fb ? (fb.found !== false) : true),
+                // Prefer freshly checked fallback flags when available.
+                // workflow_data can carry stale availability from prior runs.
+                available: fb
+                    ? (fb.available !== false)
+                    : ((lora.available !== undefined) ? (lora.available !== false) : true),
+                found: fb
+                    ? (fb.found !== false)
+                    : ((lora.found !== undefined) ? (lora.found !== false) : true),
             };
         });
     };
@@ -2933,8 +2981,22 @@ function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, 
         });
     };
 
-    node.savedLorasA = preserveUserState(wfLorasA, node.savedLorasA);
-    node.savedLorasB = preserveUserState(wfLorasB, node.savedLorasB);
+    const toSavedWorkflow = (list) => (list || []).map((lora) => {
+        const strength = Number(lora?.strength ?? lora?.model_strength ?? 1.0);
+        const clipStrength = Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? strength);
+        return {
+            ...lora,
+            active: lora?.active !== false,
+            strength: Number.isFinite(strength) ? strength : 1.0,
+            model_strength: Number.isFinite(strength) ? strength : 1.0,
+            clip_strength: Number.isFinite(clipStrength) ? clipStrength : (Number.isFinite(strength) ? strength : 1.0),
+            source: "saved",
+            fromWorkflow: true,
+        };
+    });
+
+    node.savedLorasA = preserveLocal ? preserveUserState(wfLorasA, node.savedLorasA) : toSavedWorkflow(wfLorasA);
+    node.savedLorasB = preserveLocal ? preserveUserState(wfLorasB, node.savedLorasB) : toSavedWorkflow(wfLorasB);
     node.currentLorasA = wfLorasA.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
     node.currentLorasB = wfLorasB.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
 }
@@ -3078,6 +3140,128 @@ function clearPulledWorkflowFromNode(node) {
     app.graph.setDirtyCanvas(true, true);
 }
 
+function refreshPmaPromptGhosting(node) {
+    const textWidget = node.widgets?.find((w) => w.name === "text");
+    const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+    const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
+    if (!textWidget || !useExternalWidget || !useWorkflowWidget) return;
+
+    const promptInputConnection = node.inputs?.find((inp) => inp.name === "prompt");
+    const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
+
+    if (useExternalWidget.value && isLlmConnected) {
+        textWidget.disabled = true;
+        if (textWidget.inputEl) {
+            textWidget.inputEl.style.pointerEvents = "auto";
+            textWidget.inputEl.readOnly = true;
+        }
+    } else if (useWorkflowWidget.value && isWorkflowConnected) {
+        textWidget.disabled = true;
+        if (textWidget.inputEl) {
+            textWidget.inputEl.style.pointerEvents = "auto";
+            textWidget.inputEl.readOnly = true;
+        }
+    } else {
+        textWidget.disabled = false;
+        if (textWidget.inputEl) {
+            textWidget.inputEl.readOnly = false;
+        }
+    }
+}
+
+function getWorkflowDataLiveSig(workflowData) {
+    if (!workflowData || typeof workflowData !== "object") return "";
+    const normalize = (lora) => ({
+        name: String(lora?.name || ""),
+        model_strength: Number(lora?.model_strength ?? lora?.strength ?? 1.0) || 1.0,
+        clip_strength: Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+        active: lora?.active !== false,
+        available: lora?.available !== false,
+        found: lora?.found !== false,
+    });
+    return JSON.stringify({
+        positive_prompt: String(workflowData.positive_prompt || ""),
+        loras_a: (Array.isArray(workflowData.loras_a) ? workflowData.loras_a : [])
+            .map(normalize)
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        loras_b: (Array.isArray(workflowData.loras_b) ? workflowData.loras_b : [])
+            .map(normalize)
+            .sort((a, b) => a.name.localeCompare(b.name)),
+    });
+}
+
+async function tryLiveWorkflowPickup(node, { force = false } = {}) {
+    const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    if (!useWorkflowWidget?.value || workflowConnection?.link == null) return false;
+
+    const wfData = (await resolveWorkflowDataForLive(node)) || resolveWorkflowDataForSave(node);
+    if (!wfData || typeof wfData !== "object") return false;
+
+    const liveSig = getWorkflowDataLiveSig(wfData);
+    if (!force && liveSig && node._lastLiveWorkflowPickupSig === liveSig) {
+        return false;
+    }
+
+    let liveA = mapWorkflowLorasToUi(wfData.loras_a || []);
+    let liveB = mapWorkflowLorasToUi(wfData.loras_b || []);
+    liveA = await applyLoraFoundState(liveA);
+    liveB = await applyLoraFoundState(liveB);
+
+    syncWorkflowLorasForDisplay(node, wfData, liveA, liveB, { preserveUserState: false });
+    node.lastWorkflowData = wfData;
+    syncSavedWorkflowDataWidget(node);
+
+    const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+    const textWidget = node.widgets?.find((w) => w.name === "text");
+    if (textWidget && !(useExternalWidget?.value === true) && wfData.positive_prompt != null) {
+        textWidget.value = String(wfData.positive_prompt);
+    }
+
+    node.currentTriggerWords = [];
+    updateLoraDisplays(node);
+    updateTriggerWordsDisplay(node);
+    refreshPmaPromptGhosting(node);
+
+    node._lastLiveWorkflowPickupSig = liveSig || null;
+    node.serialize_widgets = true;
+    app.graph.setDirtyCanvas(true, true);
+    return true;
+}
+
+function setupWorkflowLivePickupHandler(node) {
+    if (node._workflowLivePickupHandlerSetup) return;
+    node._workflowLivePickupHandlerSetup = true;
+
+    const getWorkflowInputLink = (n) => {
+        const wfInput = n.inputs?.find((inp) => inp.name === "workflow_data");
+        return wfInput?.link ?? null;
+    };
+    node._lastWorkflowInputLink = getWorkflowInputLink(node);
+
+    const originalOnConnectionsChange = node.onConnectionsChange;
+    node.onConnectionsChange = function () {
+        if (originalOnConnectionsChange) {
+            originalOnConnectionsChange.apply(this, arguments);
+        }
+
+        refreshPmaPromptGhosting(this);
+
+        // Only trigger live workflow pickup when the workflow_data input link changes.
+        // Unrelated connection edits (e.g. output preview nodes) must not overwrite
+        // user tweaks by re-ingesting upstream workflow payload.
+        const currentWorkflowLink = getWorkflowInputLink(this);
+        const workflowLinkChanged = currentWorkflowLink !== this._lastWorkflowInputLink;
+        this._lastWorkflowInputLink = currentWorkflowLink;
+        if (workflowLinkChanged) {
+            this._lastLiveWorkflowPickupSig = null;
+            void tryLiveWorkflowPickup(this);
+        }
+    };
+}
+
 function setupUseExternalToggleHandler(node) {
     const textWidget = node.widgets?.find(w => w.name === "text");
     const useExternalWidget = node.widgets?.find(w => w.name === "use_prompt_input");
@@ -3206,40 +3390,14 @@ function setupUseWorkflowToggleHandler(node) {
     // Re-use the existing applyToggleState from use_prompt_input handler
     // by triggering a refresh through that widget's state
     const refreshGhosting = () => {
-        const useExternalWidget = node.widgets?.find(w => w.name === "use_prompt_input");
-        if (!useExternalWidget) return;
-
-        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
-        const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
-        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
-        const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
-
-        if (useExternalWidget.value && isLlmConnected) {
-            // use_prompt_input takes priority — keep ghosted
-            textWidget.disabled = true;
-            if (textWidget.inputEl) {
-                textWidget.inputEl.style.pointerEvents = "auto";
-                textWidget.inputEl.readOnly = true;
-            }
-        } else if (useWorkflowWidget.value && isWorkflowConnected) {
-            textWidget.disabled = true;
-            if (textWidget.inputEl) {
-                textWidget.inputEl.style.pointerEvents = "auto";
-                textWidget.inputEl.readOnly = true;
-            }
-        } else {
-            textWidget.disabled = false;
-            if (textWidget.inputEl) {
-                textWidget.inputEl.readOnly = false;
-            }
-        }
+        refreshPmaPromptGhosting(node);
     };
 
     // Apply initial state
     refreshGhosting();
 
     const originalCallback = useWorkflowWidget.callback;
-    useWorkflowWidget.callback = function(value) {
+    useWorkflowWidget.callback = async function(value) {
         // Prevent turning on if workflow_data is not connected
         const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
         const isConnected = workflowConnection && workflowConnection.link != null;
@@ -3255,23 +3413,33 @@ function setupUseWorkflowToggleHandler(node) {
             originalCallback.apply(this, arguments);
         }
 
-        if (value) {
-            const wfData = resolveWorkflowDataForSave(node);
-            if (wfData && typeof wfData === "object") {
-                node.lastWorkflowData = wfData;
-                syncSavedWorkflowDataWidget(node);
+        // Force next execution update to run even if payload content is unchanged.
+        // This is required when toggling workflow mode OFF then ON, otherwise the
+        // signature guard can incorrectly skip re-applying found/available flags.
+        node._lastExecutionUpdateSig = null;
+        node._lastLiveWorkflowPickupSig = null;
 
-                const useExternalWidget = node.widgets?.find(w => w.name === "use_prompt_input");
-                if (!useExternalWidget?.value) {
-                    const wfPrompt = String(wfData.positive_prompt || "");
-                    if (wfPrompt) {
-                        textWidget.value = wfPrompt;
-                    }
-                }
+        if (!value) {
+            // Treat toggle OFF as restoring the selected saved prompt state,
+            // similar to other input-toggle behavior.
+            node.lastWorkflowData = null;
+            syncSavedWorkflowDataWidget(node);
 
-                syncWorkflowLorasForDisplay(node, wfData, wfData.loras_a || [], wfData.loras_b || []);
+            const categoryWidget = node.widgets?.find((w) => w.name === "category");
+            const promptWidget = node.widgets?.find((w) => w.name === "name");
+            if (categoryWidget && promptWidget && promptWidget.value) {
+                await loadPromptData(node, categoryWidget.value, promptWidget.value);
+            } else {
+                // Fallback when no prompt is selected: only remove workflow-derived entries.
+                node.currentLorasA = (node.currentLorasA || []).filter((l) => !l.fromWorkflow);
+                node.currentLorasB = (node.currentLorasB || []).filter((l) => !l.fromWorkflow);
+                node.savedLorasA = (node.savedLorasA || []).filter((l) => !l.fromWorkflow);
+                node.savedLorasB = (node.savedLorasB || []).filter((l) => !l.fromWorkflow);
                 updateLoraDisplays(node);
             }
+        } else {
+            // Live pickup with the same ingest path used for execution data.
+            void tryLiveWorkflowPickup(node, { force: true });
         }
 
         refreshGhosting();
@@ -3665,6 +3833,47 @@ function buildWorkflowDataFromBuilderNode(builderNode) {
     return workflowData;
 }
 
+function buildWorkflowDataFromExtractorNode(extractorNode) {
+    if (!extractorNode) return null;
+
+    const extracted = parseJsonObjectSafe(extractorNode.properties?.pe_extracted_data, null);
+    if (!extracted || typeof extracted !== "object") return null;
+
+    const clipNames = Array.isArray(extracted.clip?.names)
+        ? extracted.clip.names.filter((x) => !!x)
+        : (Array.isArray(extracted.clip) ? extracted.clip.filter((x) => !!x) : []);
+
+    return {
+        _source: extractorNode.comfyClass || extractorNode.type || "PromptExtractor",
+        family: extracted.model_family || extracted.family || "sdxl",
+        model_a: extracted.model_a || "",
+        model_b: extracted.model_b || "",
+        positive_prompt: extracted.positive_prompt || "",
+        negative_prompt: extracted.negative_prompt || "",
+        loras_a: normalizeBuilderLoraList(extracted.loras_a),
+        loras_b: normalizeBuilderLoraList(extracted.loras_b),
+        vae: extracted.vae?.name || extracted.vae || "",
+        clip: clipNames,
+        clip_type: extracted.clip?.type || extracted.clip_type || "",
+        loader_type: extracted.loader_type || "",
+        sampler: extracted.sampler || {
+            steps_a: 20,
+            steps_b: null,
+            cfg: 5,
+            seed_a: 0,
+            sampler_name: "euler",
+            scheduler: "simple",
+            seed_b: null,
+        },
+        resolution: extracted.resolution || {
+            width: 768,
+            height: 1280,
+            batch_size: 1,
+            length: null,
+        },
+    };
+}
+
 function resolveWorkflowDataForSave(node) {
     const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
     if (wfInput?.link != null) {
@@ -3673,6 +3882,11 @@ function resolveWorkflowDataForSave(node) {
         if (sourceClass === "WorkflowBuilder") {
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
             if (fromBuilder) return fromBuilder;
+        }
+
+        if (sourceClass === "PromptExtractor" || sourceClass === "WorkflowExtractor") {
+            const fromExtractor = buildWorkflowDataFromExtractorNode(upstream);
+            if (fromExtractor) return fromExtractor;
         }
 
         const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
@@ -3688,6 +3902,63 @@ function resolveWorkflowDataForSave(node) {
     }
 
     return node.lastWorkflowData || null;
+}
+
+async function resolveWorkflowDataForLive(node) {
+    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    if (wfInput?.link == null) return null;
+
+    const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
+    if (!upstream) return null;
+
+    const sourceClass = String(upstream?.comfyClass || upstream?.type || "");
+    const sourceClassLower = sourceClass.toLowerCase();
+
+    if (sourceClass === "WorkflowBuilder") {
+        return buildWorkflowDataFromBuilderNode(upstream);
+    }
+
+    if (sourceClassLower === "promptextractor" || sourceClassLower === "workflowextractor") {
+        const fromExtractorCache = buildWorkflowDataFromExtractorNode(upstream);
+        if (fromExtractorCache) return fromExtractorCache;
+
+        const imageWidget = upstream.widgets?.find((w) => w.name === "image");
+        const sourceWidget = upstream.widgets?.find((w) => w.name === "source_folder");
+        const filename = String(imageWidget?.value || "").trim();
+        const source = String(sourceWidget?.value || "input").trim() || "input";
+        if (filename && filename !== "(none)") {
+            try {
+                const resp = await fetch(
+                    `/prompt-extractor/extract-preview?filename=${encodeURIComponent(filename)}&source=${encodeURIComponent(source)}`
+                );
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const extracted = data?.extracted || null;
+                    if (extracted && typeof extracted === "object") {
+                        upstream.properties = upstream.properties || {};
+                        upstream.properties.pe_extracted_data = JSON.stringify(extracted);
+                        const fromPreview = buildWorkflowDataFromExtractorNode(upstream);
+                        if (fromPreview) return fromPreview;
+                    }
+                }
+            } catch {
+                // Keep silent in live mode; execution update remains authoritative fallback.
+            }
+        }
+    }
+
+    const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
+    if (wfOutIdx >= 0) {
+        const out = upstream.outputs[wfOutIdx];
+        const data = out?._data ?? out?.value ?? null;
+        if (data && typeof data === "object") return data;
+        if (typeof data === "string") {
+            const parsed = parseJsonObjectSafe(data, null);
+            if (parsed) return parsed;
+        }
+    }
+
+    return null;
 }
 
 async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null, nsfw = false) {
@@ -5507,6 +5778,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
+                const rawWorkflowData = promptData?.workflow_data;
+                const hasWorkflowData = (
+                    (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+                    (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+                );
 
                 const card = document.createElement("div");
                 if (isSelected) {
@@ -5538,24 +5814,56 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     }
                 };
 
-                // NSFW badge (top-right)
-                if (isNSFW) {
-                    const badge = document.createElement("div");
-                    badge.textContent = "NSFW";
-                    badge.style.cssText = `
+                // Top-right badge stack: NSFW first, workflow badge under it.
+                if (isNSFW || hasWorkflowData) {
+                    const badgeStack = document.createElement("div");
+                    badgeStack.style.cssText = `
                         position: absolute;
                         top: 4px;
                         right: 4px;
-                        background: rgba(204, 0, 0, 0.85);
-                        color: #fff;
-                        font-size: 8px;
-                        font-weight: bold;
-                        padding: 1px 4px;
-                        border-radius: 3px;
-                        line-height: 1.2;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: flex-end;
+                        gap: 2px;
                         z-index: 1;
                     `;
-                    card.appendChild(badge);
+
+                    if (isNSFW) {
+                        const badge = document.createElement("div");
+                        badge.textContent = "NSFW";
+                        badge.style.cssText = `
+                            background: rgba(204, 0, 0, 0.85);
+                            color: #fff;
+                            font-size: 8px;
+                            font-weight: bold;
+                            padding: 1px 4px;
+                            border-radius: 3px;
+                            line-height: 1.2;
+                        `;
+                        badgeStack.appendChild(badge);
+                    }
+
+                    if (hasWorkflowData) {
+                        const workflowBadge = document.createElement("div");
+                        workflowBadge.textContent = "W";
+                        workflowBadge.title = "Has workflow data";
+                        workflowBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(235, 140, 35, 0.95);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(workflowBadge);
+                    }
+
+                    card.appendChild(badgeStack);
                 }
 
                 // Thumbnail (using div with background-image to avoid browser extension interference)
@@ -5670,6 +5978,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
+                const rawWorkflowData = promptData?.workflow_data;
+                const hasWorkflowData = (
+                    (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+                    (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+                );
                 const lorasACount = (promptData?.loras_a || []).length;
                 const lorasBCount = (promptData?.loras_b || []).length;
                 const triggerCount = (promptData?.trigger_words || []).length;
@@ -5693,6 +6006,14 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 row.onmouseleave = () => { if (!isSelected) row.style.background = 'transparent'; };
 
                 // Thumbnail icon (using div with background-image to avoid browser extension interference)
+                const thumbWrap = document.createElement("div");
+                thumbWrap.style.cssText = `
+                    width: 36px;
+                    height: 36px;
+                    position: relative;
+                    flex-shrink: 0;
+                `;
+
                 const thumbDiv = document.createElement("div");
                 thumbDiv.style.cssText = `
                     width: 36px;
@@ -5702,7 +6023,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     background-position: center;
                     border-radius: 4px;
                     background-color: #1a1a1a;
-                    flex-shrink: 0;
                     cursor: pointer;
                 `;
                 
@@ -5716,6 +6036,33 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                         e.stopPropagation();
                         scheduleHidePreview();
                     });
+                }
+
+                thumbWrap.appendChild(thumbDiv);
+
+                if (hasWorkflowData) {
+                    const workflowBadge = document.createElement("div");
+                    workflowBadge.textContent = "W";
+                    workflowBadge.title = "Has workflow data";
+                    workflowBadge.style.cssText = `
+                        position: absolute;
+                        right: -2px;
+                        bottom: -2px;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 50%;
+                        background: rgba(235, 140, 35, 0.95);
+                        color: #fff;
+                        font-size: 8px;
+                        font-weight: bold;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        line-height: 1;
+                        border: 1px solid rgba(0, 0, 0, 0.4);
+                        z-index: 1;
+                    `;
+                    thumbWrap.appendChild(workflowBadge);
                 }
 
                 // Name + optional NSFW badge
@@ -5764,7 +6111,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     return d;
                 };
 
-                row.appendChild(thumbDiv);
+                row.appendChild(thumbWrap);
                 row.appendChild(nameDiv);
                 row.appendChild(makeCount(lorasACount));
                 row.appendChild(makeCount(lorasBCount));
@@ -6885,19 +7232,34 @@ function createPromptSelectorWidget(node) {
         nameDisplay.textContent = `${category} : ${prompt}`;
         nameDisplay.title = `${category} : ${prompt}`;
 
-        // Remove existing NSFW label if any
-        const existingLabel = nameDisplay.querySelector('.nsfw-selector-label');
-        if (existingLabel) existingLabel.remove();
+        // Remove existing badges if any
+        const existingNsfwLabel = nameDisplay.querySelector('.nsfw-selector-label');
+        if (existingNsfwLabel) existingNsfwLabel.remove();
+        const existingWorkflowLabel = nameDisplay.querySelector('.workflow-selector-label');
+        if (existingWorkflowLabel) existingWorkflowLabel.remove();
 
-        // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible
+        const createBadge = (className, text, styleBlock) => {
+            const label = document.createElement("span");
+            label.className = className;
+            label.textContent = text;
+            label.style.cssText = styleBlock;
+            nameDisplay.appendChild(label);
+        };
+
+        // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible.
+        // Also show orange WORKFLOW badge when selected prompt contains workflow_data.
         if (node.prompts && category) {
+            const promptData = node.prompts[category]?.[prompt] || null;
             const catIsNSFW = node.prompts[category]?.["__meta__"]?.nsfw === true;
-            const promptIsNSFW = node.prompts[category]?.[prompt]?.nsfw === true;
+            const promptIsNSFW = promptData?.nsfw === true;
+            const rawWorkflowData = promptData?.workflow_data;
+            const hasWorkflowData = (
+                (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+                (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+            );
+
             if (catIsNSFW || promptIsNSFW) {
-                const label = document.createElement("span");
-                label.className = "nsfw-selector-label";
-                label.textContent = "NSFW";
-                label.style.cssText = `
+                createBadge("nsfw-selector-label", "NSFW", `
                     background: rgba(204, 50, 50, 0.85);
                     color: #fff;
                     font-size: 8px;
@@ -6907,8 +7269,25 @@ function createPromptSelectorWidget(node) {
                     margin-left: 6px;
                     flex-shrink: 0;
                     line-height: 12px;
-                `;
-                nameDisplay.appendChild(label);
+                `);
+            }
+
+            if (hasWorkflowData) {
+                createBadge("workflow-selector-label", "W", `
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 50%;
+                    background: rgba(235, 140, 35, 0.95);
+                    color: #fff;
+                    font-size: 9px;
+                    font-weight: bold;
+                    margin-left: 6px;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                    line-height: 1;
+                `);
             }
         }
     };

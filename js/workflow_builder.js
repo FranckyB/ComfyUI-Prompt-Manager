@@ -260,6 +260,14 @@ function _leafStem(v) {
     return dot > 0 ? leaf.substring(0, dot) : leaf;
 }
 
+function _isLoraAvailableForSort(lora, availabilityMap = null) {
+    if (!lora) return true;
+    if (lora.available === false || lora.found === false) return false;
+    const name = String(lora.name || "");
+    if (availabilityMap && name && availabilityMap[name] === false) return false;
+    return true;
+}
+
 function _findEquivalentOptionValue(sel, value) {
     const v = String(value ?? "");
     if (!v) return "";
@@ -1190,6 +1198,16 @@ function _sortLorasByName(loras) {
     return src.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
 }
 
+function _sortLorasMissingLast(loras, availabilityMap = null) {
+    const src = Array.isArray(loras) ? [...loras] : [];
+    return src.sort((a, b) => {
+        const aAvailable = _isLoraAvailableForSort(a, availabilityMap);
+        const bAvailable = _isLoraAvailableForSort(b, availabilityMap);
+        if (aAvailable !== bAvailable) return aAvailable ? -1 : 1;
+        return String(a?.name || "").localeCompare(String(b?.name || ""));
+    });
+}
+
 /** Merge two LoRA lists, dedup by name (second list wins on conflict), then sort by name. */
 function _mergeLoraLists(listA, listB) {
     const byName = new Map();
@@ -1209,8 +1227,8 @@ function updateLoras(node) {
     const d = node._weExtracted;
     if (!d) return;
 
-    const lorasA = _sortLorasByName(d.loras_a || []);
-    const lorasB = _sortLorasByName(d.loras_b || []);
+    const lorasA = _sortLorasMissingLast(d.loras_a || [], d.lora_availability || null);
+    const lorasB = _sortLorasMissingLast(d.loras_b || [], d.lora_availability || null);
     const hasBoth = lorasA.length > 0 && lorasB.length > 0;
 
     const noLorasMsg = () => makeEl("div", {

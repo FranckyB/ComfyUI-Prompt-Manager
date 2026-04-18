@@ -177,6 +177,38 @@ function parseA1111Parameters(parametersText) {
     return result;
 }
 
+function _isLoraAvailableForSort(lora) {
+    if (!lora) return true;
+    if (lora.available === false) return false;
+    if (lora.found === false) return false;
+    return true;
+}
+
+function _sortLorasMissingLast(loras) {
+    const src = Array.isArray(loras) ? [...loras] : [];
+    return src.sort((a, b) => {
+        const aAvailable = _isLoraAvailableForSort(a);
+        const bAvailable = _isLoraAvailableForSort(b);
+        if (aAvailable !== bAvailable) return aAvailable ? -1 : 1;
+        return String(a?.name || "").localeCompare(String(b?.name || ""));
+    });
+}
+
+function _normalizeExtractedLoraOrder(extracted) {
+    if (!extracted || typeof extracted !== "object") return extracted;
+    const normalized = { ...extracted };
+    if (Array.isArray(normalized.loras)) {
+        normalized.loras = _sortLorasMissingLast(normalized.loras);
+    }
+    if (Array.isArray(normalized.loras_a)) {
+        normalized.loras_a = _sortLorasMissingLast(normalized.loras_a);
+    }
+    if (Array.isArray(normalized.loras_b)) {
+        normalized.loras_b = _sortLorasMissingLast(normalized.loras_b);
+    }
+    return normalized;
+}
+
 /**
  * Extract metadata from JPEG/WebP file
  * Reads EXIF UserComment field (0x9286) for workflow metadata
@@ -1544,8 +1576,9 @@ async function extractAndUpdateMetadata(node, filename) {
                 if (previewResp.ok) {
                     const previewData = await previewResp.json();
                     if (previewData.extracted) {
+                        const normalizedExtracted = _normalizeExtractedLoraOrder(previewData.extracted);
                         node.properties = node.properties || {};
-                        node.properties.pe_extracted_data = JSON.stringify(previewData.extracted);
+                        node.properties.pe_extracted_data = JSON.stringify(normalizedExtracted);
                         console.log(`[PromptExtractor] Cached extracted preview data for: ${filename}`);
                     }
                 }

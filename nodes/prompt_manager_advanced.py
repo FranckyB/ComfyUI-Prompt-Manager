@@ -121,6 +121,12 @@ class PromptManagerAdvanced:
                     "label_off": "off",
                     "tooltip": "When enabled, use LoRAs from connected inputs. When off, use only prompt LoRAs."
                 }),
+                "use_workflow_data": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "on",
+                    "label_off": "off",
+                    "tooltip": "When enabled, use connected workflow_data prompt/LoRAs at execution."
+                }),
                 "text": ("STRING", {
                     "multiline": True,
                     "default": first_prompt_text,
@@ -160,7 +166,7 @@ class PromptManagerAdvanced:
     OUTPUT_NODE = True
 
     @classmethod
-    def IS_CHANGED(cls, category, name, text, use_prompt_input, use_lora_input, swap_lora_outputs=False,
+    def IS_CHANGED(cls, category, name, use_prompt_input, use_lora_input=True, use_workflow_data=False, text="", swap_lora_outputs=False,
                    **kwargs):
         """
         Track changes to the node's inputs to determine if re-execution is needed.
@@ -172,18 +178,16 @@ class PromptManagerAdvanced:
         lora_stack_b = kwargs.get('lora_stack_b', None)
         trigger_words = kwargs.get('trigger_words', None)
         workflow_data = kwargs.get('workflow_data', None)
-        use_workflow_data = kwargs.get('use_workflow_data', False)
-
         # Return tuple of all values that should trigger re-execution when changed
         # Convert lists/objects to strings for hashable comparison
         return (
             category,
             name,
-            text,
             use_prompt_input,
             use_lora_input,
-            swap_lora_outputs,
             use_workflow_data,
+            text,
+            swap_lora_outputs,
             str(prompt_input) if prompt_input else None,
             str(lora_stack_a) if lora_stack_a else None,
             str(lora_stack_b) if lora_stack_b else None,
@@ -403,8 +407,8 @@ class PromptManagerAdvanced:
         # Not found
         return lora_path, False
 
-    def get_prompt(self, category, name, use_prompt_input, text="", use_lora_input=True, swap_lora_outputs=False,
-                   use_workflow_data=False, prompt=None, lora_stack_a=None, lora_stack_b=None,
+    def get_prompt(self, category, name, use_prompt_input, use_lora_input=True, use_workflow_data=False, text="", swap_lora_outputs=False,
+                   prompt=None, lora_stack_a=None, lora_stack_b=None,
                    trigger_words=None, thumbnail_image=None, workflow_data=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None,
                    saved_workflow_data=None):
@@ -683,8 +687,8 @@ class PromptManagerAdvanced:
 
         return (final_output, out_stack_a, out_stack_b, out_workflow_data)
 
-    def check_lazy_status(self, category, name, use_prompt_input, text, use_lora_input=True, swap_lora_outputs=False,
-                          use_workflow_data=False, prompt=None, lora_stack_a=None, lora_stack_b=None,
+    def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=True, use_workflow_data=False, text="", swap_lora_outputs=False,
+                          prompt=None, lora_stack_a=None, lora_stack_b=None,
                           trigger_words=None, thumbnail_image=None, workflow_data=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None,
                           trigger_words_toggle=None, saved_workflow_data=None):
