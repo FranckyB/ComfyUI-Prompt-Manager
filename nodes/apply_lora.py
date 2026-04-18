@@ -5,7 +5,6 @@ import ast
 import json
 import os
 
-import folder_paths
 import comfy.sd
 import comfy.utils
 
@@ -47,7 +46,7 @@ def parse_lora_stack_text(text):
     return []
 
 
-class PromptApplyLora:
+class ApplyLoraPlusPlus:
     """
     Apply a LoRA stack to a model.
     Takes a LORA_STACK (list of tuples) and applies each LoRA sequentially.
@@ -61,27 +60,35 @@ class PromptApplyLora:
                 "model": ("MODEL",),
             },
             "optional": {
+                "clip_optional": ("CLIP",),
                 "lora_stack": ("LORA_STACK",),
                 "lora_stack_text": ("STRING", {"default": "", "multiline": True}),
             },
         }
 
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("model",)
+    RETURN_TYPES = ("MODEL", "CLIP")
+    RETURN_NAMES = ("model", "clip")
     FUNCTION = "apply_stack"
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Apply a LoRA stack to a model. You can connect LORA_STACK or input LoRA path as text\none LoRA per line (Full paths can reference any location on disk.)"
 
-    def apply_stack(self, model, lora_stack=None, lora_stack_text=""):
+    def apply_stack(self, model, clip_optional=None, lora_stack=None, lora_stack_text=""):
+        clip = clip_optional
+
+        # If no stack input and no text, return early
+        if not lora_stack and (not lora_stack_text or not lora_stack_text.strip()):
+            return (model, clip)
+
         # Merge both sources
         stack = list(lora_stack) if lora_stack else []
         if lora_stack_text:
             stack.extend(parse_lora_stack_text(lora_stack_text))
 
         if not stack:
-            return (model,)
+            return (model, clip)
 
         model_out = model
+        clip_out = clip
 
         for lora_name, model_strength, clip_strength in stack:
             # Skip if no strength
@@ -101,9 +108,9 @@ class PromptApplyLora:
             # Load the LoRA
             lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
 
-            # Apply to model
-            model_out, _ = comfy.sd.load_lora_for_models(
-                model_out, None, lora, model_strength, clip_strength
+            # Apply to model + clip
+            model_out, clip_out = comfy.sd.load_lora_for_models(
+                model_out, clip_out, lora, model_strength, clip_strength
             )
 
-        return (model_out,)
+        return (model_out, clip_out)

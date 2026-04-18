@@ -226,50 +226,59 @@ class WorkflowRenderer:
                 width = (round(width * scale) // 16) * 16
                 height = (round(height * scale) // 16) * 16
 
-        # ── Load Model A ──────────────────────────────────────────────────
-        resolved_a, folder_a = resolve_model_name(model_name_a)
-        # Verify resolved model belongs to a compatible family — resolve_model_name
-        # does basename matching which can match unrelated models (e.g. audio files).
-        if resolved_a is not None:
-            compat_check = get_compatible_families(family_key)
-            resolved_family = get_model_family(resolved_a)
-            if resolved_family is not None and resolved_family not in compat_check:
-                print(f"[WorkflowRenderer] Resolved model {resolved_a} is family "
-                      f"{resolved_family}, not compatible with {family_key} — rejecting")
-                resolved_a, folder_a = None, None
-        if resolved_a is None:
-            compat = get_compatible_families(family_key)
-            all_on_disk = []
-            for fn in ["checkpoints", "diffusion_models", "unet", "unet_gguf"]:
-                try:
-                    all_on_disk.extend(folder_paths.get_filename_list(fn))
-                except Exception:
-                    pass
-            seen = set()
-            fallbacks = []
-            for m in all_on_disk:
-                if m not in seen:
-                    seen.add(m)
-                    if get_model_family(m) in compat:
-                        fallbacks.append(m)
-            if fallbacks:
-                model_name_a = sorted(fallbacks)[0]
-                resolved_a, folder_a = resolve_model_name(model_name_a)
-                print(f"[WorkflowRenderer] Using fallback model: {model_name_a}")
-            else:
-                raise FileNotFoundError(
-                    f"Model A not found and no fallback for family {family_key}: {model_name_a}"
-                )
-
-        full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
+        # ── Load Model A (or reuse passthrough object) ────────────────────
+        resolved_a = None
+        folder_a = None
         _cache = WorkflowRenderer._class_model_cache
-        _cache_key_a = (str(unique_id), full_path_a, family_key)
-        if _cache_key_a not in _cache:
-            print(f"[WorkflowRenderer] Loading model: {resolved_a}")
-            _cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a, family_is_checkpoint=_family_is_ckpt)
+        passthrough_model_a = wf.get("MODEL_A", None)
+        if passthrough_model_a is not None:
+            model_a = passthrough_model_a
+            clip_a = wf.get("CLIP", None)
+            vae_a = wf.get("VAE", None)
+            print("[WorkflowRenderer] Using passthrough MODEL_A object from workflow_data")
         else:
-            print(f"[WorkflowRenderer] Using cached model: {resolved_a}")
-        model_a, clip_a, vae_a = _cache[_cache_key_a]
+            resolved_a, folder_a = resolve_model_name(model_name_a)
+            # Verify resolved model belongs to a compatible family — resolve_model_name
+            # does basename matching which can match unrelated models (e.g. audio files).
+            if resolved_a is not None:
+                compat_check = get_compatible_families(family_key)
+                resolved_family = get_model_family(resolved_a)
+                if resolved_family is not None and resolved_family not in compat_check:
+                    print(f"[WorkflowRenderer] Resolved model {resolved_a} is family "
+                          f"{resolved_family}, not compatible with {family_key} — rejecting")
+                    resolved_a, folder_a = None, None
+            if resolved_a is None:
+                compat = get_compatible_families(family_key)
+                all_on_disk = []
+                for fn in ["checkpoints", "diffusion_models", "unet", "unet_gguf"]:
+                    try:
+                        all_on_disk.extend(folder_paths.get_filename_list(fn))
+                    except Exception:
+                        pass
+                seen = set()
+                fallbacks = []
+                for m in all_on_disk:
+                    if m not in seen:
+                        seen.add(m)
+                        if get_model_family(m) in compat:
+                            fallbacks.append(m)
+                if fallbacks:
+                    model_name_a = sorted(fallbacks)[0]
+                    resolved_a, folder_a = resolve_model_name(model_name_a)
+                    print(f"[WorkflowRenderer] Using fallback model: {model_name_a}")
+                else:
+                    raise FileNotFoundError(
+                        f"Model A not found and no fallback for family {family_key}: {model_name_a}"
+                    )
+
+            full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
+            _cache_key_a = (str(unique_id), full_path_a, family_key)
+            if _cache_key_a not in _cache:
+                print(f"[WorkflowRenderer] Loading model: {resolved_a}")
+                _cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a, family_is_checkpoint=_family_is_ckpt)
+            else:
+                print(f"[WorkflowRenderer] Using cached model: {resolved_a}")
+            model_a, clip_a, vae_a = _cache[_cache_key_a]
         has_both_stacks = bool(loras_a) and bool(loras_b)
 
         # ── Load VAE + CLIP ───────────────────────────────────────────────
@@ -345,7 +354,11 @@ class WorkflowRenderer:
         elif family_key in ("wan_video_t2v", "wan_video_i2v"):
             # Load Model B for dual-sampler
             model_b_obj = None
-            if model_name_b:
+            passthrough_model_b = wf.get("MODEL_B", None)
+            if passthrough_model_b is not None:
+                model_b_obj = passthrough_model_b
+                print("[WorkflowRenderer] Using passthrough MODEL_B object from workflow_data")
+            elif model_name_b:
                 resolved_b, folder_b = resolve_model_name(model_name_b)
                 if resolved_b:
                     full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
@@ -1077,6 +1090,9 @@ def _render_wan_image(model, clip, vae, pos_prompt, neg_prompt,
         model, clip = _apply_loras(
             model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key
         )
+
+    # Keep WAN image aligned with WAN video sampling path.
+    model = _patch_model_sampling_sd3(model, shift=5.0)
 
     tokens_pos = clip.tokenize(pos_prompt)
     cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)

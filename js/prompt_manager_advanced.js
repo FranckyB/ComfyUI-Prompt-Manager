@@ -2396,161 +2396,138 @@ function addButtonBar(node) {
 
     // Save Prompt button
     const savePromptBtn = createButton("Save Prompt", async () => {
-        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
         const currentCategory = categoryWidget.value;
+        const initialName = (promptWidget.value || "").trim() || "New Prompt";
 
-        // Determine NSFW default from existing prompt if editing
-        let defaultNsfw = false;
-        if (node.prompts[currentCategory]) {
-            const existingPrompt = node.prompts[currentCategory][promptWidget.value];
-            if (existingPrompt && existingPrompt.nsfw) defaultNsfw = true;
-        }
-
-        const result = await showPromptWithCategory(
-            "Save Prompt",
-            "Enter prompt name:",
-            promptWidget.value || "New Prompt",
-            categories,
+        await openPromptBrowserForSave({
+            node,
             currentCategory,
-            defaultNsfw
-        );
-
-        if (result && result.name && result.name.trim()) {
-            const promptName = result.name.trim();
-            const targetCategory = result.category;
-            const promptText = textWidget.value;
-
-            try {
-            // Check for existing prompt in target category
-            let existingPromptName = null;
-            if (node.prompts[targetCategory]) {
-                const existingNames = Object.keys(node.prompts[targetCategory]).filter(k => k !== '__meta__');
-                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
-            }
-
-            if (existingPromptName) {
-                const confirmed = await showConfirm(
-                    "Overwrite Prompt",
-                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}". Do you want to overwrite it?`,
-                    "Overwrite",
-                    "#f80"
-                );
-
-                if (!confirmed) {
-                    return;
+            currentPrompt: promptWidget.value || "",
+            title: "Save Prompt",
+            saveButtonText: "Save",
+            namePlaceholder: "Prompt name",
+            initialName,
+            onSave: async ({ category, name, overwrite }) => {
+                const promptName = String(name || "").trim();
+                const targetCategory = String(category || "").trim();
+                const promptText = textWidget.value;
+                if (!promptName || !targetCategory) {
+                    return { success: false, error: "Category and prompt name are required." };
                 }
-            }
 
-            // Use the last-executed state from Python as the authoritative source for connected loras.
-            // node.currentLorasA/B is populated from the backend after each execution (input_loras_a/b),
-            // so it already reflects only what actually ran — muted/bypassed nodes are absent.
-            // Graph traversal (collectAllLorasFromChain) is intentionally NOT used here because it
-            // reads raw widget values regardless of node mute/bypass state.
-            const connectedLorasA = node.currentLorasA || [];
-            const connectedLorasB = node.currentLorasB || [];
+                try {
+                    // Use the last-executed state from Python as the authoritative source for connected loras.
+                    // node.currentLorasA/B is populated from the backend after each execution (input_loras_a/b),
+                    // so it already reflects only what actually ran.
+                    const connectedLorasA = node.currentLorasA || [];
+                    const connectedLorasB = node.currentLorasB || [];
 
-            // Check if use_lora_input is disabled
-            const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-            const useLoraInput = useLoraInputWidget?.value !== false;
+                    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+                    const useLoraInput = useLoraInputWidget?.value !== false;
 
-            // Get loras to save
-            let allLorasA, allLorasB;
-
-            if (!useLoraInput) {
-                allLorasA = [...(node.savedLorasA || [])];
-                allLorasB = [...(node.savedLorasB || [])];
-            } else {
-                const mergedA = mergeLoraLists(
-                    connectedLorasA.map(l => ({ ...l, source: 'current' })),
-                    node.savedLorasA || []
-                );
-                const mergedB = mergeLoraLists(
-                    connectedLorasB.map(l => ({ ...l, source: 'current' })),
-                    node.savedLorasB || []
-                );
-                allLorasA = [...mergedA];
-                allLorasB = [...mergedB];
-            }
-
-            // Get all trigger words (merged, with their states)
-            const allTriggerWords = mergeTriggerWordLists(
-                node.currentTriggerWords || [],
-                node.savedTriggerWords || []
-            );
-
-            // Use connected thumbnail if available
-            const thumbnail = node.connectedThumbnail || null;
-
-            await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail, result.nsfw);
-
-            // After saving from workflow mode, immediately switch back to preset mode
-            // and show exactly what was saved. This avoids restoring stale pre-workflow
-            // snapshots that can clear LoRA displays until prompt re-selection.
-            const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
-            if (useWorkflowWidget?.value === true) {
-                const clone = (v, fb) => {
-                    try {
-                        return JSON.parse(JSON.stringify(v ?? fb));
-                    } catch {
-                        return fb;
+                    let allLorasA, allLorasB;
+                    if (!useLoraInput) {
+                        allLorasA = [...(node.savedLorasA || [])];
+                        allLorasB = [...(node.savedLorasB || [])];
+                    } else {
+                        const mergedA = mergeLoraLists(
+                            connectedLorasA.map(l => ({ ...l, source: "current" })),
+                            node.savedLorasA || []
+                        );
+                        const mergedB = mergeLoraLists(
+                            connectedLorasB.map(l => ({ ...l, source: "current" })),
+                            node.savedLorasB || []
+                        );
+                        allLorasA = [...mergedA];
+                        allLorasB = [...mergedB];
                     }
-                };
 
-                node._preWorkflowModeState = {
-                    text: promptText || "",
-                    savedLorasA: clone(allLorasA, []),
-                    savedLorasB: clone(allLorasB, []),
-                    currentLorasA: [],
-                    currentLorasB: [],
-                    savedTriggerWords: clone(allTriggerWords, []),
-                    currentTriggerWords: [],
-                    lastWorkflowData: clone(node.lastWorkflowData, null),
-                };
+                    const allTriggerWords = mergeTriggerWordLists(
+                        node.currentTriggerWords || [],
+                        node.savedTriggerWords || []
+                    );
 
-                useWorkflowWidget.value = false;
-                if (typeof useWorkflowWidget.callback === "function") {
-                    await useWorkflowWidget.callback(false);
+                    const thumbnail = node.connectedThumbnail || null;
+
+                    // Preserve existing NSFW status when overwriting from the browser-save flow.
+                    let preservedNsfw = false;
+                    const categoryPrompts = node.prompts?.[targetCategory];
+                    if (categoryPrompts && typeof categoryPrompts === "object") {
+                        const existingName = Object.keys(categoryPrompts)
+                            .filter((k) => k !== "__meta__")
+                            .find((k) => k.toLowerCase() === promptName.toLowerCase());
+                        if (existingName && categoryPrompts[existingName]?.nsfw === true) {
+                            preservedNsfw = true;
+                        }
+                    }
+
+                    await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail, preservedNsfw);
+
+                    const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+                    if (useWorkflowWidget?.value === true) {
+                        const clone = (v, fb) => {
+                            try {
+                                return JSON.parse(JSON.stringify(v ?? fb));
+                            } catch {
+                                return fb;
+                            }
+                        };
+
+                        node._preWorkflowModeState = {
+                            text: promptText || "",
+                            savedLorasA: clone(allLorasA, []),
+                            savedLorasB: clone(allLorasB, []),
+                            currentLorasA: [],
+                            currentLorasB: [],
+                            savedTriggerWords: clone(allTriggerWords, []),
+                            currentTriggerWords: [],
+                            lastWorkflowData: clone(node.lastWorkflowData, null),
+                        };
+
+                        useWorkflowWidget.value = false;
+                        if (typeof useWorkflowWidget.callback === "function") {
+                            await useWorkflowWidget.callback(false);
+                        }
+                    }
+
+                    node._skipCallbackReload = true;
+                    categoryWidget.value = targetCategory;
+                    filterPromptDropdown(node);
+                    promptWidget.value = promptName;
+                    textWidget.value = promptText;
+                    node._skipCallbackReload = false;
+
+                    node._previousCategory = targetCategory;
+                    node._previousPrompt = promptName;
+
+                    node.savedLorasA = allLorasA;
+                    node.savedLorasB = allLorasB;
+                    node.savedTriggerWords = allTriggerWords;
+                    updateLoraDisplays(node);
+                    updateTriggerWordsDisplay(node);
+
+                    if (node.updatePromptSelectorDisplay) {
+                        node.updatePromptSelectorDisplay();
+                    }
+
+                    updateLastSavedState(node);
+
+                    return {
+                        success: true,
+                        category: targetCategory,
+                        name: promptName,
+                        overwritten: overwrite === true,
+                    };
+                } catch (err) {
+                    console.error("[PromptManagerAdvanced] Error during save:", err);
+                    return { success: false, error: err?.message || "Error during save" };
+                } finally {
+                    node.isNewUnsavedPrompt = false;
+                    node.newPromptCategory = null;
+                    node.newPromptName = null;
                 }
-            }
-
-            // Skip callback reload logic during save update
-            node._skipCallbackReload = true;
-
-            // Update UI to show the saved prompt
-            categoryWidget.value = targetCategory;
-            filterPromptDropdown(node);
-            promptWidget.value = promptName;
-            textWidget.value = promptText;  // Ensure text shows what was just saved
-
-            // Clear skip flag
-            node._skipCallbackReload = false;
-
-            // Update previous values tracking
-            node._previousCategory = targetCategory;
-            node._previousPrompt = promptName;
-
-            node.savedLorasA = allLorasA;
-            node.savedLorasB = allLorasB;
-            node.savedTriggerWords = allTriggerWords;
-            updateLoraDisplays(node);
-            updateTriggerWordsDisplay(node);
-
-            // Update custom prompt selector display
-            if (node.updatePromptSelectorDisplay) {
-                node.updatePromptSelectorDisplay();
-            }
-
-            // Update last saved state after successful save
-            updateLastSavedState(node);
-            } catch (err) {
-                console.error("[PromptManagerAdvanced] Error during save:", err);
-            } finally {
-                // Always clear new prompt flag after save attempt
-                node.isNewUnsavedPrompt = false;
-                node.newPromptCategory = null;
-                node.newPromptName = null;
-            }
-        }
+            },
+        });
     });
 
     // New Prompt button - simply clears fields for a fresh start
@@ -5234,9 +5211,16 @@ function resizeImageToThumbnail(file, minSize = 200) {
  * Show thumbnail browser popup for selecting prompts
  * Returns { category, prompt } or null if cancelled
  */
-async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
+async function showThumbnailBrowser(node, currentCategory, currentPrompt, options = {}) {
     // Reload prompts to ensure we have the latest data
     await loadPrompts(node);
+
+    const mode = options?.mode === "save" ? "save" : "select";
+    const onSave = typeof options?.onSave === "function" ? options.onSave : null;
+    const saveButtonText = options?.saveButtonText || "Save";
+    const saveTitle = options?.title || "Save Workflow";
+    const saveNamePlaceholder = options?.namePlaceholder || "Prompt name";
+    const initialSaveName = typeof options?.initialName === "string" ? options.initialName : "";
     
     // Check if thumbnail preview is enabled from user preferences
     const previewEnabled = getThumbnailPreviewEnabled();
@@ -5296,7 +5280,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         `;
 
         const title = document.createElement("div");
-        title.textContent = "Select Prompt";
+        title.textContent = mode === "save" ? saveTitle : "Select Prompt";
         title.style.cssText = `
             font-size: 18px;
             font-weight: bold;
@@ -5446,13 +5430,38 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         `;
 
         let categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+        let selectedSaveName = initialSaveName;
         let categoryButtons = [];
 
         const isCategoryNSFW = (cat) => {
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
         };
 
+        const ensureSelectedCategory = () => {
+            if (!Array.isArray(categories) || categories.length === 0) {
+                selectedCategory = "";
+                return "";
+            }
+
+            if (!selectedCategory || !categories.includes(selectedCategory)) {
+                selectedCategory = categories[0];
+            }
+
+            if (hideNSFWState && isCategoryNSFW(selectedCategory)) {
+                const firstVisible = categories.find(c => !isCategoryNSFW(c));
+                if (firstVisible) {
+                    selectedCategory = firstVisible;
+                }
+            }
+
+            return selectedCategory;
+        };
+
+        ensureSelectedCategory();
+
         const updateCategoryButtons = () => {
+            ensureSelectedCategory();
+
             categoryButtons.forEach(btn => {
                 const cat = btn.dataset.category;
                 const isSelected = cat === selectedCategory;
@@ -5729,6 +5738,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
 
         const rebuildCategoryList = () => {
             categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+            ensureSelectedCategory();
             categoryButtons = [];
             categoryContainer.innerHTML = "";
             categories.forEach(cat => {
@@ -6021,10 +6031,48 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 card.appendChild(thumbDiv);
                 card.appendChild(nameLabel);
 
-                card.onclick = () => {
+                card.onclick = async () => {
+                    if (mode === "save") {
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
+                            saveNameInput.focus();
+                            saveNameInput.select();
+                        }
+                        currentPrompt = promptName;
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
                     resolve({ category: selectedCategory, prompt: promptName });
                     cleanup();
                 };
+
+                if (mode === "save") {
+                    card.ondblclick = async () => {
+                        if (!onSave) return;
+                        const overwriteOk = await showConfirm(
+                            "Overwrite Prompt",
+                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
+                            "Replace",
+                            "#c44"
+                        );
+                        if (!overwriteOk) return;
+
+                        const saveResult = await onSave({
+                            category: selectedCategory,
+                            name: promptName,
+                            overwrite: true,
+                        });
+
+                        if (saveResult?.success) {
+                            resolve(saveResult);
+                            cleanup();
+                        } else {
+                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        }
+                    };
+                }
 
                 card.oncontextmenu = (e) => promptContextMenu(e, promptName);
 
@@ -6228,10 +6276,48 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 row.appendChild(makeCount(lorasBCount));
                 row.appendChild(makeCount(triggerCount));
 
-                row.onclick = () => {
+                row.onclick = async () => {
+                    if (mode === "save") {
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
+                            saveNameInput.focus();
+                            saveNameInput.select();
+                        }
+                        currentPrompt = promptName;
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
                     resolve({ category: selectedCategory, prompt: promptName });
                     cleanup();
                 };
+
+                if (mode === "save") {
+                    row.ondblclick = async () => {
+                        if (!onSave) return;
+                        const overwriteOk = await showConfirm(
+                            "Overwrite Prompt",
+                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
+                            "Replace",
+                            "#c44"
+                        );
+                        if (!overwriteOk) return;
+
+                        const saveResult = await onSave({
+                            category: selectedCategory,
+                            name: promptName,
+                            overwrite: true,
+                        });
+
+                        if (saveResult?.success) {
+                            resolve(saveResult);
+                            cleanup();
+                        } else {
+                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        }
+                    };
+                }
 
                 row.oncontextmenu = (e) => promptContextMenu(e, promptName);
 
@@ -6387,6 +6473,51 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             renderContent(searchInput.value);
         };
 
+        let saveNameInput = null;
+        let saveActionButton = null;
+        let cancelSaveButton = null;
+
+        const handleSaveAction = async () => {
+            if (mode !== "save" || !onSave || !saveNameInput) {
+                return;
+            }
+
+            const category = ensureSelectedCategory();
+            if (!category) {
+                await showInfo("Missing Category", "Please create or select a category before saving.");
+                return;
+            }
+
+            const name = (saveNameInput.value || "").trim();
+            if (!name) {
+                await showInfo("Missing Name", "Please enter a name before saving.");
+                saveNameInput.focus();
+                return;
+            }
+
+            const existing = node.prompts?.[category]?.[name];
+            let overwrite = false;
+            if (existing) {
+                overwrite = await showConfirm(
+                    "Overwrite Prompt",
+                    `Prompt "${name}" already exists in category "${category}". Do you want to replace it?`,
+                    "Replace",
+                    "#c44"
+                );
+                if (!overwrite) {
+                    return;
+                }
+            }
+
+            const saveResult = await onSave({ category, name, overwrite });
+            if (saveResult?.success) {
+                resolve(saveResult);
+                cleanup();
+            } else {
+                await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+            }
+        };
+
         // Initial render
         renderContent();
 
@@ -6416,13 +6547,93 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             color: #666;
             text-align: center;
         `;
-        footer.textContent = "Right-click a prompt or category for more options (thumbnails, NSFW, delete)";
+        footer.textContent = mode === "save"
+            ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
+            : "Right-click a prompt or category for more options (thumbnails, NSFW, delete)";
+
+        const saveBar = document.createElement("div");
+        if (mode === "save") {
+            saveBar.style.cssText = `
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                margin-top: 8px;
+                padding-top: 8px;
+                border-top: 1px solid #444;
+            `;
+
+            saveNameInput = document.createElement("input");
+            saveNameInput.type = "text";
+            saveNameInput.value = selectedSaveName;
+            saveNameInput.placeholder = saveNamePlaceholder;
+            saveNameInput.style.cssText = `
+                flex: 1;
+                min-width: 0;
+                padding: 7px 10px;
+                background: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 4px;
+                color: #fff;
+                font-size: 13px;
+                box-sizing: border-box;
+                outline: none;
+            `;
+            saveNameInput.onfocus = () => saveNameInput.style.borderColor = "#666";
+            saveNameInput.onblur = () => saveNameInput.style.borderColor = "#444";
+            saveNameInput.onkeydown = async (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    await handleSaveAction();
+                }
+            };
+
+            saveActionButton = document.createElement("button");
+            saveActionButton.textContent = saveButtonText;
+            saveActionButton.style.cssText = `
+                background: #2f7a3d;
+                border: 1px solid #4b9a5a;
+                color: #fff;
+                padding: 7px 14px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            saveActionButton.onclick = async () => {
+                await handleSaveAction();
+            };
+
+            cancelSaveButton = document.createElement("button");
+            cancelSaveButton.textContent = "Cancel";
+            cancelSaveButton.style.cssText = `
+                background: #3a3a3a;
+                border: 1px solid #555;
+                color: #ccc;
+                padding: 7px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            cancelSaveButton.onclick = () => {
+                resolve(null);
+                cleanup();
+            };
+
+            saveBar.appendChild(saveNameInput);
+            saveBar.appendChild(saveActionButton);
+            saveBar.appendChild(cancelSaveButton);
+        }
 
         dialog.appendChild(header);
         dialog.appendChild(controlsBar);
         dialog.appendChild(categoryContainer);
         dialog.appendChild(gridContainer);
         dialog.appendChild(footer);
+        if (mode === "save") {
+            dialog.appendChild(saveBar);
+        }
 
         const cleanup = () => {
             clearTimeout(hoverTimer);
@@ -6456,16 +6667,39 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         dialog.onclick = (e) => e.stopPropagation();
 
         // Keyboard shortcuts
-        dialog.onkeydown = (e) => {
+        dialog.onkeydown = async (e) => {
             if (e.key === "Escape") {
                 resolve(null);
                 cleanup();
+                return;
+            }
+            if (mode === "save" && e.key === "Enter") {
+                const target = e.target;
+                if (target !== searchInput) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    await handleSaveAction();
+                }
             }
         };
 
         document.body.appendChild(overlay);
         document.body.appendChild(dialog);
         searchInput.focus();
+    });
+}
+
+export async function openPromptBrowserForSave(options = {}) {
+    const browserNode = options.node || {};
+    const currentCategory = options.currentCategory || "Default";
+    const currentPrompt = options.currentPrompt || "";
+    return showThumbnailBrowser(browserNode, currentCategory, currentPrompt, {
+        mode: "save",
+        onSave: options.onSave,
+        title: options.title || "Save Workflow",
+        saveButtonText: options.saveButtonText || "Save",
+        namePlaceholder: options.namePlaceholder || "Prompt name",
+        initialName: options.initialName || "",
     });
 }
 

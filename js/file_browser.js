@@ -763,3 +763,311 @@ function cleanupOrphanedThumbnailCache(currentFiles) {
         console.error('[FileBrowser] Error cleaning up cache:', error);
     }
 }
+
+/**
+ * Workflow Saver browser modal.
+ * - Single click prompt card: fills name input
+ * - Double click prompt card: overwrite with confirmation
+ * - OK button: save new/edited name, asks overwrite confirmation if it exists
+ */
+export async function createWorkflowSaveBrowserModal(nodeId, options = {}) {
+    const onSaved = typeof options.onSaved === 'function' ? options.onSaved : null;
+
+    // Ensure a snapshot exists before opening UI.
+    try {
+        const snapRes = await fetch(`/workflow-saver/snapshot?node_id=${encodeURIComponent(String(nodeId))}`);
+        const snapData = await snapRes.json();
+        if (!snapData?.success) {
+            window.alert(snapData?.error || 'No workflow snapshot available. Queue once, then save.');
+            return;
+        }
+    } catch (e) {
+        window.alert('Failed to verify workflow snapshot.');
+        return;
+    }
+
+    let promptsData = {};
+    try {
+        const listRes = await fetch('/prompt-manager-advanced/get-prompts');
+        promptsData = await listRes.json();
+        if (!promptsData || typeof promptsData !== 'object') {
+            promptsData = {};
+        }
+    } catch (_) {
+        promptsData = {};
+    }
+
+    const categoryNames = Object.keys(promptsData).sort((a, b) => a.localeCompare(b));
+    let selectedCategory = categoryNames[0] || 'Default';
+    let selectedName = '';
+    let searchText = '';
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10001;
+    `;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        background: rgba(28, 32, 38, 0.98);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 12px;
+        width: 92%;
+        max-width: 1000px;
+        height: 86%;
+        max-height: 900px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    `;
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: space-between;';
+    const title = document.createElement('h3');
+    title.textContent = 'Save Workflow Snapshot';
+    title.style.cssText = 'margin: 0; color: #ddd; font-size: 30px;';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.style.cssText = 'background:none;border:none;color:#aaa;font-size:28px;cursor:pointer;width:32px;height:32px;';
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    const controls = document.createElement('div');
+    controls.style.cssText = 'padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; gap: 10px; align-items: center;';
+
+    const searchInput = document.createElement('input');
+    searchInput.placeholder = 'Search prompts...';
+    searchInput.style.cssText = 'flex:1; padding:8px 10px; background: rgba(45,55,72,0.7); border:1px solid rgba(255,255,255,0.18); border-radius:6px; color:#ddd;';
+
+    const categoryInput = document.createElement('input');
+    categoryInput.placeholder = 'Category';
+    categoryInput.value = selectedCategory;
+    categoryInput.style.cssText = 'width: 220px; padding:8px 10px; background: rgba(45,55,72,0.7); border:1px solid rgba(255,255,255,0.18); border-radius:6px; color:#ddd;';
+
+    controls.appendChild(searchInput);
+    controls.appendChild(categoryInput);
+
+    const categoryBar = document.createElement('div');
+    categoryBar.style.cssText = 'padding: 8px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display:flex; gap:8px; flex-wrap:wrap;';
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'flex:1; overflow:auto; padding:14px 16px; display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:12px; align-content:start;';
+
+    const footer = document.createElement('div');
+    footer.style.cssText = 'padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.1); display:flex; gap:8px; align-items:center;';
+
+    const nameInput = document.createElement('input');
+    nameInput.placeholder = 'Prompt name';
+    nameInput.style.cssText = 'flex:1; padding:9px 10px; background: rgba(45,55,72,0.7); border:1px solid rgba(255,255,255,0.18); border-radius:6px; color:#ddd;';
+
+    const okBtn = document.createElement('button');
+    okBtn.textContent = 'OK';
+    okBtn.style.cssText = 'padding:8px 14px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:#2563eb; color:white; cursor:pointer;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = 'padding:8px 14px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:#374151; color:white; cursor:pointer;';
+
+    footer.appendChild(nameInput);
+    footer.appendChild(okBtn);
+    footer.appendChild(cancelBtn);
+
+    modal.appendChild(header);
+    modal.appendChild(controls);
+    modal.appendChild(categoryBar);
+    modal.appendChild(grid);
+    modal.appendChild(footer);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    function closeModal() {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+
+    function getCategoryEntries(category) {
+        const raw = promptsData[category];
+        if (!raw || typeof raw !== 'object') return [];
+        return Object.keys(raw)
+            .filter((k) => k !== '__meta__')
+            .map((name) => ({ name, data: raw[name] || {} }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    function getEntry(category, name) {
+        const raw = promptsData[category];
+        if (!raw || typeof raw !== 'object') return null;
+        return raw[name] || null;
+    }
+
+    function renderCategories() {
+        categoryBar.innerHTML = '';
+        const cats = Object.keys(promptsData).sort((a, b) => a.localeCompare(b));
+        cats.forEach((cat) => {
+            const chip = document.createElement('button');
+            const isActive = cat === selectedCategory;
+            chip.textContent = cat;
+            chip.style.cssText = `
+                padding: 6px 10px;
+                border-radius: 7px;
+                border: 1px solid ${isActive ? 'rgba(96,165,250,0.9)' : 'rgba(255,255,255,0.18)'};
+                background: ${isActive ? 'rgba(37,99,235,0.35)' : 'rgba(55,65,81,0.5)'};
+                color: #ddd;
+                cursor: pointer;
+                font-size: 12px;
+            `;
+            chip.onclick = () => {
+                selectedCategory = cat;
+                categoryInput.value = selectedCategory;
+                renderCategories();
+                renderGrid();
+            };
+            categoryBar.appendChild(chip);
+        });
+    }
+
+    function createCard(entry) {
+        const card = document.createElement('div');
+        card.style.cssText = `
+            background: rgba(45,55,72,0.7);
+            border: 1px solid ${entry.name === selectedName ? 'rgba(96,165,250,0.95)' : 'rgba(255,255,255,0.18)'};
+            border-radius: 8px;
+            padding: 8px;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: all 0.15s ease;
+        `;
+
+        const preview = document.createElement('div');
+        preview.style.cssText = 'width:100%;height:120px;border-radius:6px;background: rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;overflow:hidden;';
+        const thumb = entry.data?.thumbnail;
+        const img = document.createElement('img');
+        img.src = thumb || new URL('./placeholder.png', import.meta.url).href;
+        img.style.cssText = 'max-width:100%;max-height:100%;object-fit:cover;';
+        preview.appendChild(img);
+
+        const label = document.createElement('div');
+        label.textContent = entry.name;
+        label.style.cssText = 'font-size:12px;color:#ddd;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+
+        card.appendChild(preview);
+        card.appendChild(label);
+
+        card.onclick = () => {
+            selectedName = entry.name;
+            nameInput.value = entry.name;
+            renderGrid();
+        };
+
+        card.ondblclick = async () => {
+            const ok = window.confirm(`Prompt '${entry.name}' already exists in '${selectedCategory}'. Replace it?`);
+            if (!ok) return;
+            await savePrompt(entry.name, true);
+        };
+
+        return card;
+    }
+
+    function renderGrid() {
+        grid.innerHTML = '';
+        const search = (searchText || '').trim().toLowerCase();
+        const entries = getCategoryEntries(selectedCategory)
+            .filter((e) => !search || e.name.toLowerCase().includes(search));
+
+        if (!entries.length) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'grid-column: 1 / -1; color:#999; text-align:center; padding:30px;';
+            empty.textContent = 'No prompts in this category.';
+            grid.appendChild(empty);
+            return;
+        }
+
+        entries.forEach((entry) => grid.appendChild(createCard(entry)));
+    }
+
+    async function savePrompt(name, overwrite) {
+        const category = (categoryInput.value || '').trim() || 'Default';
+        const payload = {
+            node_id: String(nodeId),
+            category,
+            name,
+            overwrite: !!overwrite,
+        };
+
+        const res = await fetch('/workflow-saver/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data?.success) {
+            if (data?.exists) {
+                const ok = window.confirm(`Prompt '${name}' already exists in '${category}'. Replace it?`);
+                if (!ok) return false;
+                return await savePrompt(name, true);
+            }
+            window.alert(data?.error || 'Save failed.');
+            return false;
+        }
+
+        if (!promptsData[category] || typeof promptsData[category] !== 'object') {
+            promptsData[category] = {};
+        }
+        promptsData[category][name] = promptsData[category][name] || {};
+
+        if (typeof onSaved === 'function') {
+            try {
+                onSaved(data.saved || { category, name });
+            } catch (_) {
+                // no-op
+            }
+        }
+
+        closeModal();
+        return true;
+    }
+
+    closeBtn.onclick = closeModal;
+    cancelBtn.onclick = closeModal;
+    overlay.onclick = (e) => {
+        if (e.target === overlay) closeModal();
+    };
+
+    searchInput.oninput = () => {
+        searchText = searchInput.value || '';
+        renderGrid();
+    };
+
+    categoryInput.onchange = () => {
+        const next = (categoryInput.value || '').trim();
+        selectedCategory = next || 'Default';
+        renderCategories();
+        renderGrid();
+    };
+
+    okBtn.onclick = async () => {
+        const name = (nameInput.value || '').trim();
+        if (!name) {
+            window.alert('Enter a name to save.');
+            return;
+        }
+
+        const category = (categoryInput.value || '').trim() || 'Default';
+        const exists = !!getEntry(category, name);
+        if (exists) {
+            const ok = window.confirm(`Prompt '${name}' already exists in '${category}'. Replace it?`);
+            if (!ok) return;
+        }
+
+        await savePrompt(name, exists);
+    };
+
+    renderCategories();
+    renderGrid();
+}

@@ -43,6 +43,7 @@ from ..py.workflow_extraction_utils import (
     resolve_clip_names,
     build_simplified_workflow_data,
 )
+from ..py.workflow_data_utils import strip_runtime_objects, to_json_safe_workflow_data
 
 # ── Shared extraction functions from PromptExtractor ────────────────────────
 from .prompt_extractor import (
@@ -565,9 +566,7 @@ class WorkflowBuilder:
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
                 "workflow_data": ("WORKFLOW_DATA", {
-                    "forceInput": True,
-                    "tooltip": "Connect workflow_data from PromptExtractor. "
-                               "Used by the Update Workflow button.",
+                    "tooltip": "Optional workflow_data input for prefill/update.",
                 }),
                 "pos_prompt": ("STRING", {
                     "forceInput": True,
@@ -647,8 +646,7 @@ class WorkflowBuilder:
                 'model_b': wf_data.get('model_b', ''),
                 'vae':     {'name': wf_data.get('vae', ''), 'source': 'workflow_data'},
                 'clip':    {
-                    'names': wf_data.get('clip', []) if isinstance(wf_data.get('clip'), list)
-                             else ([wf_data['clip']] if wf_data.get('clip') else []),
+                    'names': wf_data.get('clip', []) if isinstance(wf_data.get('clip'), list) else ([wf_data['clip']] if wf_data.get('clip') else []),
                     'type': wf_data.get('clip_type', ''), 'source': 'workflow_data',
                 },
                 'sampler': {
@@ -700,10 +698,10 @@ class WorkflowBuilder:
 
         def _merge_lora_lists(wf_list, inp_list):
             by_name = {}
-            for l in wf_list:
-                by_name[l.get('name', '')] = l
-            for l in inp_list:
-                by_name[l.get('name', '')] = l
+            for lst in wf_list:
+                by_name[lst.get('name', '')] = lst
+            for lst in inp_list:
+                by_name[lst.get('name', '')] = lst
             return list(by_name.values())
 
         if lora_stack_a:
@@ -1038,11 +1036,42 @@ class WorkflowBuilder:
                             fixed_clips.append(name)
                     simplified_wf['clip'] = fixed_clips
 
-        # Preserve runtime passthrough objects from incoming workflow_data.
-        # This lets Builder -> Context/Builder chains keep loaded objects and
-        # resolved text conditioning without requiring re-render in-between.
+        # Preserve runtime passthrough objects from incoming workflow_data
+        # only when the effective selection remains unchanged. If the user
+        # changed model/clip/vae in this Builder, drop stale runtime objects
+        # so downstream Renderer reloads the new assets.
         if isinstance(wf_data, dict):
-            for key in ("MODEL_A", "MODEL_B", "CLIP", "VAE", "POSITIVE", "NEGATIVE", "LATENT", "IMAGE"):
+            def _norm_name(v):
+                return str(v or "").strip()
+
+            def _norm_clip_list(v):
+                if isinstance(v, list):
+                    return [str(x or "").strip() for x in v if str(x or "").strip()]
+                if isinstance(v, str):
+                    s = v.strip()
+                    return [s] if s else []
+                return []
+
+            in_model_a = _norm_name(wf_data.get("model_a", ""))
+            out_model_a = _norm_name(simplified_wf.get("model_a", ""))
+            in_model_b = _norm_name(wf_data.get("model_b", ""))
+            out_model_b = _norm_name(simplified_wf.get("model_b", ""))
+            in_vae = _norm_name(wf_data.get("vae", ""))
+            out_vae = _norm_name(simplified_wf.get("vae", ""))
+            in_clip = _norm_clip_list(wf_data.get("clip", []))
+            out_clip = _norm_clip_list(simplified_wf.get("clip", []))
+
+            if out_model_a and in_model_a == out_model_a and "MODEL_A" in wf_data:
+                simplified_wf["MODEL_A"] = wf_data.get("MODEL_A")
+            if in_model_b == out_model_b and "MODEL_B" in wf_data:
+                simplified_wf["MODEL_B"] = wf_data.get("MODEL_B")
+            if in_clip == out_clip and "CLIP" in wf_data:
+                simplified_wf["CLIP"] = wf_data.get("CLIP")
+            if in_vae == out_vae and "VAE" in wf_data:
+                simplified_wf["VAE"] = wf_data.get("VAE")
+
+            # Keep conditioning/latent/image passthrough when present.
+            for key in ("POSITIVE", "NEGATIVE", "LATENT", "IMAGE"):
                 if key in wf_data:
                     simplified_wf[key] = wf_data.get(key)
 
@@ -1051,8 +1080,8 @@ class WorkflowBuilder:
         # LoRAs at load time via resolve_lora_path.
         for lora_key in ('loras_a', 'loras_b'):
             missing = [
-                l.get('name') for l in simplified_wf.get(lora_key, [])
-                if not lora_availability.get(l.get('name', ''), True)
+                lora.get('name') for lora in simplified_wf.get(lora_key, [])
+                if not lora_availability.get(lora.get('name', ''), True)
             ]
             for r in missing:
                 print(f"[WorkflowBuilder] LoRA '{r}' not found, preserving in workflow_data (renderer will skip)")
@@ -1161,8 +1190,9 @@ class WorkflowBuilder:
                     extracted.get('loras_b', []), lora_overrides, 'b'
                 )
 
-                # Start from the already-built simplified_wf dict
-                extracted_data = dict(simplified_wf)
+                # Start from simplified_wf, but strip runtime objects so
+                # workflow metadata stays JSON-serializable for Save Image.
+                extracted_data = to_json_safe_workflow_data(dict(simplified_wf))
                 extracted_data['loras_a'] = loras_a_enriched
                 extracted_data['loras_b'] = loras_b_enriched
 

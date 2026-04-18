@@ -10,6 +10,7 @@ import torch
 import server
 import comfy.samplers
 from ..py.workflow_families import get_family_label
+from ..py.workflow_data_utils import strip_runtime_objects, to_json_safe_workflow_data
 
 # Import PIL for image metadata reading
 try:
@@ -203,7 +204,7 @@ def parse_a1111_parameters(parameters_text):
 
         cfg = _a1111_val('CFG scale')
         if cfg:
-            try: 
+            try:
                 result['cfg'] = float(cfg)
             except ValueError:
                 pass
@@ -427,8 +428,11 @@ async def get_extracted_data(request):
             if data:
                 return server.web.json_response({"extracted": data, "node_id": node_id})
             else:
-                return server.web.json_response({"extracted": None, "node_id": node_id,
-                                                  "error": "No cached data for this node. Execute PromptExtractor first."})
+                return server.web.json_response({
+                    "extracted": None,
+                    "node_id": node_id,
+                    "error": "No cached data for this node. Execute PromptExtractor first.",
+                })
         else:
             # Return all cached node IDs so JS can pick
             available = {nid: bool(d) for nid, d in _last_extracted_info.items()}
@@ -795,15 +799,19 @@ def extract_metadata_from_png(file_path):
         # Try to get relative path from input or output directory (matches JavaScript cache keys)
         input_dir = folder_paths.get_input_directory()
         output_dir = folder_paths.get_output_directory()
+        use_cache = True
         if file_path.startswith(input_dir):
             cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
         elif file_path.startswith(output_dir):
             cache_key = os.path.relpath(file_path, output_dir).replace('\\', '/')
+            # Output files can be regenerated at the same relative path while JS
+            # metadata cache still holds a previous run. Prefer fresh file-read.
+            use_cache = False
         else:
             cache_key = os.path.basename(file_path)
 
         # Check if metadata was cached by JavaScript
-        if cache_key in _file_metadata_cache:
+        if use_cache and cache_key in _file_metadata_cache:
             metadata = _file_metadata_cache[cache_key]
             print(f"[PromptExtractor] Using cached PNG metadata for: {cache_key}")
 
@@ -2364,6 +2372,8 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # Collect embedded data candidates from PromptExtractor/WorkflowRenderer nodes
     # (resolved after the loop — WorkflowRenderer takes priority if both are present)
     _embedded_candidates = []
+    _embedded_positive_fallback = []
+    _embedded_negative_fallback = []
 
     # Iterate through all nodes (workflow format) - including subgraphs
     all_workflow_nodes = []
@@ -2558,6 +2568,7 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     if _embedded_candidates:
         has_render = any(nt in ('WorkflowRenderer', 'WorkflowGenerator') for nt, *_ in _embedded_candidates)
         has_builder = any(nt == 'WorkflowBuilder' for nt, *_ in _embedded_candidates)
+        builder_prompt_candidate = None
 
         if has_render:
             chosen = [
@@ -2570,16 +2581,35 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             chosen = [c for c in _embedded_candidates if c[0] == 'WorkflowBuilder']
             if len(_embedded_candidates) > len(chosen):
                 print("[PromptExtractor] Both PromptExtractor and WorkflowBuilder found — preferring WorkflowBuilder embedded data")
+
+            # When multiple builder nodes are present, select a single prompt source.
+            # Prefer the first builder (stable workflow order), then first non-empty prompt.
+            for c in chosen:
+                ext_data = c[3] if len(c) > 3 and isinstance(c[3], dict) else {}
+                if not builder_prompt_candidate:
+                    builder_prompt_candidate = c
+                if ext_data.get('positive_prompt', '').strip() or ext_data.get('negative_prompt', '').strip():
+                    builder_prompt_candidate = c
+                    break
         else:
             chosen = _embedded_candidates
 
         for node_type, node_id, title, ext_data in chosen:
-            ext_pos = ext_data.get('positive_prompt', '').strip()
-            ext_neg = ext_data.get('negative_prompt', '').strip()
-            if ext_pos:
-                positive_prompts.append(ext_pos)
-            if ext_neg:
-                negative_prompts.append(ext_neg)
+            # Builder-only workflows can contain several builder nodes from
+            # multi-branch generation graphs; use one prompt source instead of
+            # concatenating all builder prompts.
+            if node_type != 'WorkflowBuilder' or not has_render:
+                use_for_prompt = True
+                if node_type == 'WorkflowBuilder' and builder_prompt_candidate:
+                    use_for_prompt = (node_id == builder_prompt_candidate[1])
+
+                if use_for_prompt:
+                    ext_pos = ext_data.get('positive_prompt', '').strip()
+                    ext_neg = ext_data.get('negative_prompt', '').strip()
+                    if ext_pos:
+                        _embedded_positive_fallback.append(ext_pos)
+                    if ext_neg:
+                        _embedded_negative_fallback.append(ext_neg)
 
             # Extract LoRAs from embedded data (with active/available state)
             for stack_label, key in [('A', 'loras_a'), ('B', 'loras_b')]:
@@ -3102,6 +3132,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                     'model_strength': model_strength,
                     'clip_strength': clip_strength
                 })
+
+    # Embedded prompt text is fallback-only. Prefer prompts extracted from
+    # execution metadata/workflow graph first to avoid stale node UI state.
+    if not positive_prompts and _embedded_positive_fallback:
+        positive_prompts.extend(_embedded_positive_fallback)
+    if not negative_prompts and _embedded_negative_fallback:
+        negative_prompts.extend(_embedded_negative_fallback)
 
     # Clean LoRA syntax from prompts (even if we skipped extraction, we still clean the syntax)
     lora_pattern = r'<lora:([^:>]+):([^:>]+)(?::([^>]+))?>'
@@ -3996,7 +4033,7 @@ class PromptExtractor:
             # Reuse the already-built _simplified workflow_data dict if available,
             # otherwise build a minimal one.
             try:
-                extracted_data = dict(workflow_data) if isinstance(workflow_data, dict) else {}
+                extracted_data = to_json_safe_workflow_data(dict(workflow_data) if isinstance(workflow_data, dict) else {})
             except Exception:
                 extracted_data = {}
 

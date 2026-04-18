@@ -396,6 +396,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
     }
     let _loaded = false;
     let _loadingPromise = null;
+    let _origFound = true;
     _recolor = () => {
         const cur = sel.value;
         const opt = [...sel.options].find(o => o.value === cur);
@@ -427,7 +428,21 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
                 resetBtn.style.visibility = "visible";
             }
             // Keep existing selection stable even if fetched options changed.
+            const equivalentBeforeInject = _findEquivalentOptionValue(sel, currentVal);
+            const shouldMarkMissing = (
+                _origFound === false &&
+                !!currentVal &&
+                !String(currentVal).startsWith("(") &&
+                !equivalentBeforeInject
+            );
             _ensureOptionValue(sel, currentVal, grouped);
+            if (shouldMarkMissing) {
+                const injected = [...sel.options].find(o => o.value === String(currentVal));
+                if (injected) {
+                    injected.style.color = C.error;
+                    injected.dataset.missing = "1";
+                }
+            }
             const resolvedCurrent = _findEquivalentOptionValue(sel, currentVal);
             if (resolvedCurrent) {
                 sel.value = resolvedCurrent;
@@ -457,6 +472,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
     row._resetBtn = resetBtn;
     row._setOriginal = (v, found) => {
         _origVal = v || "";
+        _origFound = found !== false;
         _loaded = false;
         _loadingPromise = null;
         sel.innerHTML = "";
@@ -2362,6 +2378,7 @@ app.registerExtension({
                 { w: 3,  h: 4  },
                 { w: 2,  h: 3  },
                 { w: 9,  h: 16 },
+                { w: 1,  h: 2  },
             ];
             node._weRatioDefs = RATIOS;
             function _ratioLabel(r, land) {

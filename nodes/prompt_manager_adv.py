@@ -10,7 +10,7 @@ import base64
 from io import BytesIO
 import folder_paths
 import server
-from ..py.workflow_data_utils import strip_runtime_objects
+from ..py.workflow_data_utils import to_json_safe_workflow_data
 
 # Import numpy and PIL for image processing (available in ComfyUI environment)
 try:
@@ -702,7 +702,7 @@ class PromptManagerAdvanced:
                 "use_prompt_input": use_prompt_input,
                 "use_workflow_data": use_workflow_data,
                 "prompt_input": prompt,
-                "workflow_data": strip_runtime_objects(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None,
+                "workflow_data": to_json_safe_workflow_data(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None,
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
                 "input_loras_a": input_loras_a,  # Original input loras for change detection
@@ -1227,12 +1227,12 @@ async def save_prompt_advanced(request):
         workflow_data = data.get("workflow_data")
         wf_to_save = None
         if isinstance(workflow_data, dict):
-            wf_to_save = strip_runtime_objects(workflow_data)
+            wf_to_save = to_json_safe_workflow_data(workflow_data)
         elif isinstance(workflow_data, str) and workflow_data.strip():
             try:
                 parsed_wf = json.loads(workflow_data)
                 if isinstance(parsed_wf, dict):
-                    wf_to_save = strip_runtime_objects(parsed_wf)
+                    wf_to_save = to_json_safe_workflow_data(parsed_wf)
             except (json.JSONDecodeError, TypeError):
                 wf_to_save = None
 
