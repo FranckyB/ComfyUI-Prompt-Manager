@@ -5,7 +5,7 @@ A complete prompt and workflow management suite featuring:
 
 **Prompt Manager** — Save and organize prompts with categories, simple UI with minimal feature.
 
-**Prompt Manager Advanced** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan videos. Toggle LoRAs on/off or adjust strengths directly from saved presets. Will also remap Loras if path differs.
+**Prompt Manager Advanced** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan videos. Toggle LoRAs on/off or adjust strengths directly from saved presets. Supports workflow_data input from Workflow Builder or Prompt Extractor to pull workflow prompts and LoRA stacks directly into PMA. Will also remap Loras if path differs.
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp) or [Ollama](https://ollama.com). Supports text enhancement, image analysis with vision models (Qwen3.5), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
@@ -58,6 +58,7 @@ ___
 - **Save LoRAs with Prompts**: When you save a prompt, the current LoRA configuration is saved with it
 - **Override Mode**: Toggle "Override Lora" to ignore connected inputs and use only saved preset LoRAs
 - **Merge Mode**: When override is off, connected LoRAs are merged with saved presets
+- **Workflow Data Input**: Optional workflow_data input from Workflow Builder or Prompt Extractor, with use_workflow_data toggle support to use extracted prompt and LoRA stacks directly in PMA
 - **LoRA Manager Integration**: If [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) is installed, hovering over LoRA tags shows preview images
 - **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
 - **Thumbnail Generation**: Right-click any prompt to generate a thumbnail using a selectable checkpoint model. Model choice persists in ComfyUI preferences.
@@ -157,8 +158,9 @@ ___
 4. **Toggle LoRAs**: Click a tag to enable/disable that LoRA (disabled tags turn gray)
 5. **Adjust Strength**: Click the strength number on a tag to edit it inline
 6. **Save with LoRAs**: Click "Save Prompt" to save both the prompt text and current LoRA configuration
-7. **Override Mode**: Enable "Override Lora" checkbox to ignore connected inputs and use only the saved preset LoRAs
-8. **Connect Outputs**: Use `lora_stack_a` and `lora_stack_b` outputs with the Apply LoRA Stack node
+7. **Workflow Input (Optional)**: Connect workflow_data from Workflow Builder or Prompt Extractor and enable use_workflow_data to use extracted prompt and LoRA stacks in PMA
+8. **Override Mode**: Enable "Override Lora" checkbox to ignore connected inputs and use only the saved preset LoRAs
+9. **Connect Outputs**: Use `lora_stack_a` and `lora_stack_b` outputs with the Apply LoRA Stack node
 
 ### Prompt Extractor
 
