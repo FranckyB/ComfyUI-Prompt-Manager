@@ -1262,6 +1262,71 @@ function _loraStacksSignature(workflowLoras, inputLoras) {
     ].join("||");
 }
 
+function _loraEntrySignature(lora) {
+    const l = lora || {};
+    const name = String(l.name || "").trim();
+    const path = String(l.path || "").trim();
+    const ms = Number(l.model_strength ?? l.strength ?? 1);
+    const cs = Number(l.clip_strength ?? l.model_strength ?? l.strength ?? 1);
+    const active = (l.active !== false) ? "1" : "0";
+    return `${name}|${path}|${ms}|${cs}|${active}`;
+}
+
+function _buildCanonicalLoraMap(lorasA, lorasB) {
+    const aList = Array.isArray(lorasA) ? lorasA : [];
+    const bList = Array.isArray(lorasB) ? lorasB : [];
+    const hasBoth = aList.length > 0 && bList.length > 0;
+    const out = {};
+
+    for (const lora of aList) {
+        const name = String(lora?.name || "").trim();
+        if (!name) continue;
+        const canonicalKey = `a:${name}`;
+        out[canonicalKey] = {
+            signature: _loraEntrySignature(lora),
+            stateKey: hasBoth ? canonicalKey : name,
+            stack: "a",
+        };
+    }
+    for (const lora of bList) {
+        const name = String(lora?.name || "").trim();
+        if (!name) continue;
+        const canonicalKey = `b:${name}`;
+        out[canonicalKey] = {
+            signature: _loraEntrySignature(lora),
+            stateKey: canonicalKey,
+            stack: "b",
+        };
+    }
+
+    return out;
+}
+
+function _resetChangedLoraState(node, oldLorasA, oldLorasB, newLorasA, newLorasB) {
+    if (!node?._weLoraState) return;
+
+    const oldMap = _buildCanonicalLoraMap(oldLorasA, oldLorasB);
+    const newMap = _buildCanonicalLoraMap(newLorasA, newLorasB);
+    const keys = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
+    const stateKeysToClear = new Set();
+
+    for (const key of keys) {
+        const oldEntry = oldMap[key];
+        const newEntry = newMap[key];
+        const oldSig = oldEntry?.signature || "";
+        const newSig = newEntry?.signature || "";
+        if (oldSig === newSig) continue;
+
+        if (oldEntry?.stateKey) stateKeysToClear.add(oldEntry.stateKey);
+        if (newEntry?.stateKey) stateKeysToClear.add(newEntry.stateKey);
+        if (key.startsWith("a:")) stateKeysToClear.add(key.substring(2));
+    }
+
+    for (const stateKey of stateKeysToClear) {
+        if (stateKey in node._weLoraState) delete node._weLoraState[stateKey];
+    }
+}
+
 function _captureLoraOriginalStrengths(node, lorasA, lorasB) {
     if (!node) return;
     const aList = Array.isArray(lorasA) ? lorasA : [];
@@ -1305,6 +1370,16 @@ function _getLoraOriginalStrength(node, stateKey, lora) {
     if (byKey && typeof byKey === "object") return byKey;
 
     const name = String(lora?.name || "").trim();
+    const key = String(stateKey || "").trim();
+    if (name) {
+        if (key === name) {
+            const byAKey = baseline[`a:${name}`];
+            if (byAKey && typeof byAKey === "object") return byAKey;
+        } else if (key === `a:${name}`) {
+            const byNameKey = baseline[name];
+            if (byNameKey && typeof byNameKey === "object") return byNameKey;
+        }
+    }
     const byName = baseline[name];
     if (byName && typeof byName === "object") return byName;
 
@@ -1465,21 +1540,75 @@ function syncHidden(node) {
         const w = node.widgets?.find(x => x.name === name);
         if (w) w.value = val;
     };
-    const serializeLoraList = (list, stackKey = "") => {
+    const _resolvePersistedLoraStrengths = (st, lora) => {
+        const baseModelRaw = Number(lora?.model_strength ?? lora?.strength ?? 1.0);
+        const baseModel = Number.isFinite(baseModelRaw) ? baseModelRaw : 1.0;
+        const stateModelRaw = Number(st?.model_strength);
+        const hasStateModel = Number.isFinite(stateModelRaw);
+        const modelStrength = hasStateModel ? stateModelRaw : baseModel;
+        const clipStrength = modelStrength;
+
+        return {
+            model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
+            clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1.0,
+        };
+    };
+    const _normalizeLoraStateForPersistence = () => {
+        const extracted = node._weExtracted || {};
+        const lorasA = Array.isArray(extracted.loras_a) ? extracted.loras_a : [];
+        const lorasB = Array.isArray(extracted.loras_b) ? extracted.loras_b : [];
+        const hasBothStacks = lorasA.length > 0 && lorasB.length > 0;
+        const srcState = node._weLoraState || {};
+        const normalized = {};
+
+        for (const lora of lorasA) {
+            const name = String(lora?.name || "").trim();
+            if (!name) continue;
+            const stateKey = hasBothStacks ? `a:${name}` : name;
+            const aliasKey = hasBothStacks ? name : `a:${name}`;
+            const st = srcState[stateKey] || srcState[aliasKey] || {};
+            const strengths = _resolvePersistedLoraStrengths(st, lora);
+            const val = {
+                active: st.active !== undefined ? (st.active !== false) : (lora._active !== false && lora.active !== false),
+                model_strength: strengths.model_strength,
+                clip_strength: strengths.clip_strength,
+            };
+            normalized[stateKey] = val;
+            // Keep both aliases in sync when A is single-stack so Python
+            // pref-key resolution cannot pick a stale value.
+            if (!hasBothStacks) normalized[`a:${name}`] = val;
+        }
+
+        for (const lora of lorasB) {
+            const name = String(lora?.name || "").trim();
+            if (!name) continue;
+            const stateKey = `b:${name}`;
+            const st = srcState[stateKey] || {};
+            const strengths = _resolvePersistedLoraStrengths(st, lora);
+            normalized[stateKey] = {
+                active: st.active !== undefined ? (st.active !== false) : (lora._active !== false && lora.active !== false),
+                model_strength: strengths.model_strength,
+                clip_strength: strengths.clip_strength,
+            };
+        }
+
+        return normalized;
+    };
+    const serializeLoraList = (list, stackKey = "", stateMap = null) => {
         const src = _sortLorasByName(Array.isArray(list) ? list : []);
+        const state = stateMap || node._weLoraState || {};
         return src
             .map((lora) => {
                 const name = String(lora?.name || "").trim();
                 if (!name) return null;
                 const prefKey = stackKey ? `${stackKey}:${name}` : name;
-                const st = node._weLoraState?.[prefKey] || node._weLoraState?.[name] || {};
-                const modelStrength = Number(st.model_strength ?? lora.model_strength ?? lora.strength ?? 1.0);
-                const clipStrength = Number(st.clip_strength ?? lora.clip_strength ?? modelStrength);
+                const st = state[prefKey] || state[name] || {};
+                const strengths = _resolvePersistedLoraStrengths(st, lora);
                 return {
                     name,
                     path: lora.path || name,
-                    model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
-                    clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1.0,
+                    model_strength: strengths.model_strength,
+                    clip_strength: strengths.clip_strength,
                     active: st.active !== undefined ? (st.active !== false) : (lora._active !== false && lora.active !== false),
                     available: node._weExtracted?.lora_availability?.[name] !== false,
                 };
@@ -1556,28 +1685,30 @@ function syncHidden(node) {
     if (node._weShowAllModels) ov._show_all_models = true;
     else delete ov._show_all_models;
 
+    const persistedLoraState = _normalizeLoraStateForPersistence();
+
     // Persist full LoRA stacks as part of authoritative UI state so tab
     // switch rehydrate restores the same lists (not just toggle/strength state).
     if (node._weExtracted) {
         const lorasA = node._weExtracted.loras_a || [];
         const lorasB = node._weExtracted.loras_b || [];
         const hasBothStacks = lorasA.length > 0 && lorasB.length > 0;
-        ov.loras_a = serializeLoraList(lorasA, hasBothStacks ? "a" : "");
-        ov.loras_b = serializeLoraList(lorasB, "b");
+        ov.loras_a = serializeLoraList(lorasA, hasBothStacks ? "a" : "", persistedLoraState);
+        ov.loras_b = serializeLoraList(lorasB, "b", persistedLoraState);
         if (node._weExtracted.lora_availability && typeof node._weExtracted.lora_availability === "object") {
             ov._lora_availability = { ...node._weExtracted.lora_availability };
         }
     }
 
     wSet("override_data", JSON.stringify(ov));
-    wSet("lora_state", JSON.stringify(node._weLoraState || {}));
+    wSet("lora_state", JSON.stringify(persistedLoraState));
 
     // Persist to node.properties for tab-switch survival
     node.properties = node.properties || {};
     node.properties.we_override_data = JSON.stringify(ov);
     // Canonical saved UI state for workflow reload restore.
     node.properties.we_ui_state = JSON.stringify(ov);
-    node.properties.we_lora_state = JSON.stringify(node._weLoraState || {});
+    node.properties.we_lora_state = JSON.stringify(persistedLoraState);
     if (node._weWorkflowLoras) node.properties.we_workflow_loras = JSON.stringify(node._weWorkflowLoras);
     if (node._weInputLoras) node.properties.we_input_loras = JSON.stringify(node._weInputLoras);
     if (node._weWorkflowPrompts) node.properties.we_workflow_prompts = JSON.stringify(node._weWorkflowPrompts);
@@ -3100,13 +3231,27 @@ app.registerExtension({
                     const lorasA = d?.loras_a || [];
                     const hasBoth = lorasA.length > 0 && (d?.loras_b || []).length > 0;
                     for (const lora of lorasA) {
-                        const k = hasBoth ? `a:${lora.name}` : lora.name;
-                        if (!node._weLoraState[k]) {
-                            node._weLoraState[k] = { active: lora.active !== false, model_strength: 1.0, clip_strength: 1.0 };
+                        const name = String(lora?.name || "");
+                        if (!name) continue;
+                        const stateKey = hasBoth ? `a:${name}` : name;
+                        const altAKey = `a:${name}`;
+                        const altNameKey = name;
+
+                        if (!node._weLoraState[stateKey]) {
+                            node._weLoraState[stateKey] = { active: lora.active !== false, model_strength: 1.0, clip_strength: 1.0 };
                         }
-                        const orig = _getLoraOriginalStrength(node, k, lora);
-                        node._weLoraState[k].model_strength = orig.model_strength;
-                        node._weLoraState[k].clip_strength = orig.clip_strength;
+                        const orig = _getLoraOriginalStrength(node, stateKey, lora);
+                        node._weLoraState[stateKey].model_strength = orig.model_strength;
+                        node._weLoraState[stateKey].clip_strength = orig.clip_strength;
+
+                        // Keep both A-key variants in sync so reset works across
+                        // transitions between single-stack and dual-stack modes.
+                        for (const key of [altAKey, altNameKey]) {
+                            if (!key || key === stateKey) continue;
+                            if (!node._weLoraState[key]) continue;
+                            node._weLoraState[key].model_strength = orig.model_strength;
+                            node._weLoraState[key].clip_strength = orig.clip_strength;
+                        }
                     }
                     updateLoras(node); _syncS();
                 },
@@ -3311,6 +3456,8 @@ app.registerExtension({
                 const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
                 const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
                 let changed = false;
+                const oldMergedLorasA = node._weExtracted?.loras_a || [];
+                const oldMergedLorasB = node._weExtracted?.loras_b || [];
                 if (!node._weInputLoras) node._weInputLoras = { a: [], b: [] };
                 if (loraAConn?.link == null && node._weInputLoras.a.length > 0) {
                     node._weInputLoras.a = [];
@@ -3325,7 +3472,7 @@ app.registerExtension({
                     node._weExtracted.loras_a = _mergeLoraLists(wl.a, node._weInputLoras.a);
                     node._weExtracted.loras_b = _mergeLoraLists(wl.b, node._weInputLoras.b);
                     _captureLoraOriginalStrengths(node, node._weExtracted.loras_a, node._weExtracted.loras_b);
-                    node._weLoraState = {};
+                    _resetChangedLoraState(node, oldMergedLorasA, oldMergedLorasB, node._weExtracted.loras_a, node._weExtracted.loras_b);
                     updateLoras(node);
                     syncHidden(node);
                     node.setDirtyCanvas(true, true);
@@ -3405,7 +3552,13 @@ app.registerExtension({
                 const lorasLocked = !!(node._weSectionLocks?.loras);
                 if (!lorasLocked && oldSig !== newSig) {
                     _captureLoraOriginalStrengths(node, mergedLorasA, mergedLorasB);
-                    node._weLoraState = {};
+                    _resetChangedLoraState(
+                        node,
+                        node._weExtracted?.loras_a || [],
+                        node._weExtracted?.loras_b || [],
+                        mergedLorasA,
+                        mergedLorasB
+                    );
                 }
                 if (isExtractorConnected) {
                     // In extractor-connected mode, keep manual section behavior,
@@ -3544,7 +3697,13 @@ app.registerExtension({
                 const lorasLocked = !!(this._weSectionLocks?.loras);
                 if (!lorasLocked && oldSig !== newSig) {
                     _captureLoraOriginalStrengths(this, mergedLorasA, mergedLorasB);
-                    this._weLoraState = {};
+                    _resetChangedLoraState(
+                        this,
+                        this._weExtracted?.loras_a || [],
+                        this._weExtracted?.loras_b || [],
+                        mergedLorasA,
+                        mergedLorasB
+                    );
                 }
 
                 if (isExtractorConnected) {

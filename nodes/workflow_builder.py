@@ -1173,16 +1173,22 @@ class WorkflowBuilder:
                 if key in wf_data:
                     simplified_wf[key] = wf_data.get(key)
 
-        # Keep not-found LoRAs in workflow_data so Builder->Builder chaining
-        # preserves the full authored stack. Renderer already skips missing
-        # LoRAs at load time via resolve_lora_path.
+        # Do not pass missing LoRAs in emitted workflow_data.
+        # Keep them visible in UI (via lora_availability), but strip them from
+        # runtime workflow payload so downstream nodes only receive valid LoRAs.
         for lora_key in ('loras_a', 'loras_b'):
-            missing = [
-                lora.get('name') for lora in simplified_wf.get(lora_key, [])
-                if not lora_availability.get(lora.get('name', ''), True)
-            ]
-            for r in missing:
-                print(f"[WorkflowBuilder] LoRA '{r}' not found, preserving in workflow_data (renderer will skip)")
+            original_list = list(simplified_wf.get(lora_key, []))
+            filtered_list = []
+            dropped = []
+            for lora in original_list:
+                name = str((lora or {}).get('name', '')).strip()
+                if name and not lora_availability.get(name, True):
+                    dropped.append(name)
+                    continue
+                filtered_list.append(lora)
+            simplified_wf[lora_key] = filtered_list
+            for r in dropped:
+                print(f"[WorkflowBuilder] LoRA '{r}' not found, removed from workflow_data")
 
         # ── Build UI info for JS (always, even if generation fails) ───────
         # Echo back the *effective* values (overrides applied) so the JS
