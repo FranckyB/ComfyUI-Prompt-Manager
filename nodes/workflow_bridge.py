@@ -102,10 +102,11 @@ DEFAULT_WORKFLOW_DATA = {
         "steps_a": 10,
         "steps_b": 10,
         "cfg": 5,
-        "seed_a": 0,
-        "seed_b": 0,
         "sampler_name": "euler",
         "scheduler": "simple",
+        "denoise": 1.0,
+        "seed_a": 0,
+        "seed_b": 0,
     },
     "resolution": {
         "width": 512,
@@ -132,7 +133,7 @@ class WorkflowBridge:
             "WORKFLOW_DATA",
             "MODEL", "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", ANY_TYPE,
             "INT", "INT", "INT", "INT", "FLOAT",
-            cls._SAMPLER_ENUM, cls._SCHEDULER_ENUM,
+            cls._SAMPLER_ENUM, cls._SCHEDULER_ENUM, "FLOAT",
             "STRING", "STRING",
             "LORA_STACK", "LORA_STACK",
             "INT", "INT", "INT", "INT",
@@ -163,6 +164,7 @@ class WorkflowBridge:
                 "cfg":             ("FLOAT",   {"forceInput": True, "tooltip": "Override CFG scale"}),
                 "sampler_name":    (cls._SAMPLER_ENUM, {"forceInput": True, "tooltip": "Override sampler name"}),
                 "scheduler":       (cls._SCHEDULER_ENUM, {"forceInput": True, "tooltip": "Override scheduler"}),
+                "denoise":         ("FLOAT",   {"forceInput": True, "tooltip": "Override denoise"}),
                 "pos_prompt":      ("STRING",  {"forceInput": True, "tooltip": "Override positive prompt"}),
                 "neg_prompt":      ("STRING",  {"forceInput": True, "tooltip": "Override negative prompt"}),
                 "lora_stack_a":    ("LORA_STACK", {"tooltip": "Override LoRA stack A"}),
@@ -182,7 +184,7 @@ class WorkflowBridge:
         "WORKFLOW_DATA",
         "MODEL", "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", ANY_TYPE,
         "INT", "INT", "INT", "INT", "FLOAT",
-        _LIVE_SAMPLERS, _LIVE_SCHEDULERS,
+        _LIVE_SAMPLERS, _LIVE_SCHEDULERS, "FLOAT",
         "STRING", "STRING",
         "LORA_STACK", "LORA_STACK",
         "INT", "INT", "INT", "INT",
@@ -192,7 +194,7 @@ class WorkflowBridge:
         "workflow_data",
         "model_a", "model_b", "clip", "positive", "negative", "vae", "latent", "image", "mask", "extra",
         "seed_a", "seed_b", "steps_a", "steps_b", "cfg",
-        "sampler_name", "scheduler",
+        "sampler_name", "scheduler", "denoise",
         "pos_prompt", "neg_prompt",
         "lora_stack_a", "lora_stack_b",
         "width", "height", "batch_size", "length",
@@ -272,7 +274,7 @@ class WorkflowBridge:
         wf['resolution'] = resolution
 
         # -- Sampler overrides ---------------------------------------
-        for key in ('steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'):
+        for key in ('steps_a', 'steps_b', 'cfg', 'denoise', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'):
             if kwargs.get(key) is not None:
                 sampler[key] = kwargs[key]
         wf['sampler'] = sampler
@@ -428,6 +430,7 @@ class WorkflowBridge:
             sampler.get('cfg', 5.0),
             sampler.get('sampler_name', 'euler'),
             sampler.get('scheduler', 'simple'),
+            sampler.get('denoise', 1.0),
             wf.get('positive_prompt', ''),
             wf.get('negative_prompt', ''),
             lora_stack_a,

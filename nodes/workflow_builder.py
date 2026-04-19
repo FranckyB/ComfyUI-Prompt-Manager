@@ -328,6 +328,7 @@ async def api_process_extracted(request):
             'steps_a': raw_sampler.get('steps_a', raw_sampler.get('steps', 20)),
             'steps_b': raw_sampler.get('steps_b'),
             'cfg': raw_sampler.get('cfg', 5.0),
+            'denoise': raw_sampler.get('denoise', 1.0),
             'seed_a': raw_sampler.get('seed_a', raw_sampler.get('seed', 0)),
             'seed_b': raw_sampler.get('seed_b'),
             'sampler_name': raw_sampler.get('sampler_name', 'euler'),
@@ -587,6 +588,10 @@ class WorkflowBuilder:
                     "forceInput": True,
                     "tooltip": "Seed B input. When connected, overrides Sampler Seed B.",
                 }),
+                "denoise": ("FLOAT", {
+                    "forceInput": True,
+                    "tooltip": "Denoise input. When connected, overrides Sampler Denoise.",
+                }),
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
                 # ── Hidden state widgets — written by JS, read by Python ──
@@ -613,7 +618,7 @@ class WorkflowBuilder:
     def execute(self,
                 workflow_data=None,
                 pos_prompt=None, neg_prompt=None,
-                seed_a=None, seed_b=None,
+                seed_a=None, seed_b=None, denoise=None,
                 lora_stack_a=None, lora_stack_b=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
@@ -656,6 +661,7 @@ class WorkflowBuilder:
                     'steps_a': wf_sampler.get('steps_a', wf_sampler.get('steps', 20)),
                     'steps_b': wf_sampler.get('steps_b'),
                     'cfg': wf_sampler.get('cfg', 5.0),
+                    'denoise': wf_sampler.get('denoise', 1.0),
                     'seed_a': wf_sampler.get('seed_a', wf_sampler.get('seed', 0)),
                     'seed_b': wf_sampler.get('seed_b'),  # None = same as seed_a
                     'sampler_name': wf_sampler.get('sampler_name', 'euler'),
@@ -682,7 +688,7 @@ class WorkflowBuilder:
                 'vae':     {'name': '', 'source': 'unknown'},
                 'clip':    {'names': [], 'type': '', 'source': 'unknown'},
                 'sampler': {
-                    'steps_a': 20, 'steps_b': None, 'cfg': 5.0, 'seed_a': 0,
+                    'steps_a': 20, 'steps_b': None, 'cfg': 5.0, 'denoise': 1.0, 'seed_a': 0,
                     'sampler_name': 'euler', 'scheduler': 'simple',
                 },
                 'resolution': {
@@ -848,7 +854,7 @@ class WorkflowBuilder:
 
         sampler_params = extracted['sampler'].copy()
         if _allow_override('sampler'):
-            for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
+            for key in ['steps_a', 'steps_b', 'cfg', 'denoise', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
                 if key in overrides:
                     val = overrides[key]
                     # Guard: overrides could carry a stale list from a corrupt
@@ -857,9 +863,11 @@ class WorkflowBuilder:
                         val = 0
                     elif key == 'cfg' and isinstance(val, list):
                         val = 5.0
+                    elif key == 'denoise' and isinstance(val, list):
+                        val = 1.0
                     sampler_params[key] = val
         # Also ensure extracted sampler seed/steps are never lists
-        for key, default in (('seed_a', 0), ('seed_b', None), ('steps_a', 20), ('steps_b', None), ('cfg', 5.0)):
+        for key, default in (('seed_a', 0), ('seed_b', None), ('steps_a', 20), ('steps_b', None), ('cfg', 5.0), ('denoise', 1.0)):
             if isinstance(sampler_params.get(key), list):
                 sampler_params[key] = default
 
@@ -873,6 +881,11 @@ class WorkflowBuilder:
         if seed_b is not None:
             try:
                 sampler_params['seed_b'] = int(seed_b)
+            except (TypeError, ValueError):
+                pass
+        if denoise is not None:
+            try:
+                sampler_params['denoise'] = float(denoise)
             except (TypeError, ValueError):
                 pass
 
@@ -937,7 +950,7 @@ class WorkflowBuilder:
                 if 'clip_names' not in overrides:
                     wf_overrides['clip_names'] = []
         if _allow_override('sampler'):
-            for key in ('steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'):
+            for key in ('steps_a', 'steps_b', 'cfg', 'denoise', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'):
                 if key in overrides:
                     wf_overrides[key] = overrides[key]
         if _allow_override('resolution'):
@@ -1201,7 +1214,7 @@ class WorkflowBuilder:
         # NOT mistakenly treat it as a source change that clears all fields.
         effective_sampler = dict(sampler_params)
         if _allow_override('sampler'):
-            for key in ['steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
+            for key in ['steps_a', 'steps_b', 'cfg', 'denoise', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
                 if key in overrides:
                     effective_sampler[key] = overrides[key]
 
@@ -1214,6 +1227,11 @@ class WorkflowBuilder:
         if seed_b is not None:
             try:
                 effective_sampler['seed_b'] = int(seed_b)
+            except (TypeError, ValueError):
+                pass
+        if denoise is not None:
+            try:
+                effective_sampler['denoise'] = float(denoise)
             except (TypeError, ValueError):
                 pass
 

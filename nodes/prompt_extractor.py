@@ -2417,6 +2417,7 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 'steps_a': ui_state.get('steps_a', 20),
                 'steps_b': ui_state.get('steps_b'),
                 'cfg': ui_state.get('cfg', 5.0),
+                'denoise': 1.0,
                 'seed_a': ui_state.get('seed_a', 0),
                 'seed_b': ui_state.get('seed_b'),
                 'sampler_name': ui_state.get('sampler_name', 'euler'),
@@ -3705,6 +3706,7 @@ class PromptExtractor:
                     _is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
 
                     _sampler  = extract_sampler_params(prompt_data, _raw_wf)
+                    _sampler['denoise'] = 1.0
                     _vae      = extract_vae_info(prompt_data, _raw_wf)
                     _clip     = extract_clip_info(prompt_data, _raw_wf)
                     _res      = extract_resolution(prompt_data, _raw_wf)

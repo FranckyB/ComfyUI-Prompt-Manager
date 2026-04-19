@@ -1021,6 +1021,7 @@ async function updateUI(node) {
         if (rows.cfg?._setOriginal) rows.cfg._setOriginal(s.cfg ?? 5.0);
         if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
         if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "simple");
+        if (rows.denoise?._setOriginal) rows.denoise._setOriginal(s.denoise ?? 1.0);
         if (!seedALinked && rows.seed_a?._setOriginal) rows.seed_a._setOriginal(s.seed_a ?? s.seed ?? 0);
         if (!seedBLinked && rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed_a ?? s.seed ?? 0);
         // WAN Video dual steps
@@ -1203,6 +1204,10 @@ function updateWanVisibility(node) {
     // Seed B: only for WAN Video
     if (node._weSamplerRows?.seed_b) {
         node._weSamplerRows.seed_b.style.display = isWanVideo ? "flex" : "none";
+    }
+    // Denoise: hidden for WAN Video families
+    if (node._weSamplerRows?.denoise) {
+        node._weSamplerRows.denoise.style.display = isWanVideo ? "none" : "flex";
     }
     // Seed A label: "Seed A" for WAN Video, "Seed" otherwise
     if (node._weSamplerRows?.seed_a?._label) {
@@ -1637,6 +1642,7 @@ function syncHidden(node) {
         const r = node._weSamplerRows;
         if (r.steps_a?._inp) ov.steps_a = parseInt(r.steps_a._inp.value) || 20;
         if (r.cfg?._inp) ov.cfg = parseFloat(r.cfg._inp.value) || 5.0;
+        if (r.denoise?._inp && r.denoise.style.display !== "none") ov.denoise = parseFloat(r.denoise._inp.value) || 1.0;
         if (r.seed_a?._inp) ov.seed_a = parseInt(r.seed_a._inp.value) || 0;
         if (r.seed_b?._inp && r.seed_b.style.display !== "none") {
             ov.seed_b = parseInt(r.seed_b._inp.value) || 0;
@@ -1728,6 +1734,7 @@ function syncHidden(node) {
             clip: { names: ov.clip_names || [], type: "", source: "manual" },
             sampler: {
                 steps_a: ov.steps_a || 20, cfg: ov.cfg || 5.0,
+                denoise: ov.denoise ?? 1.0,
                 seed_a: ov.seed_a || 0, seed_b: ov.seed_b,
                 sampler_name: ov.sampler_name || "euler",
                 scheduler: ov.scheduler || "simple",
@@ -1833,6 +1840,7 @@ function applyOverrides(node, ovJson, lsJson) {
         const rows = node._weSamplerRows;
         if (ov.steps_a != null) applyInput(rows.steps_a, ov.steps_a);
         if (ov.cfg != null) applyInput(rows.cfg, ov.cfg);
+        if (ov.denoise != null) applyInput(rows.denoise, ov.denoise);
         if (ov.seed_a != null) applyInput(rows.seed_a, ov.seed_a);
         if (ov.seed_b != null) applyInput(rows.seed_b, ov.seed_b);
         if (ov.sampler_name) applyInput(rows.sampler, ov.sampler_name);
@@ -1900,7 +1908,7 @@ function parseWorkflowData(jsonStr) {
                 type: "", source: "workflow_data",
             },
             sampler: d.sampler || {
-                steps_a: 20, cfg: 5.0, seed_a: 0,
+                steps_a: 20, cfg: 5.0, denoise: 1.0, seed_a: 0,
                 sampler_name: "euler", scheduler: "simple",
             },
             resolution: d.resolution || { width: 768, height: 1280, batch_size: 1, length: null },
@@ -2307,7 +2315,7 @@ app.registerExtension({
                                 }
 
                                 const s = { ...(extracted.sampler || {}) };
-                                for (const k of ["steps_a", "steps_b", "cfg", "seed_a", "seed_b", "sampler_name", "scheduler"]) {
+                                for (const k of ["steps_a", "steps_b", "cfg", "denoise", "seed_a", "seed_b", "sampler_name", "scheduler"]) {
                                     if (Object.prototype.hasOwnProperty.call(ov, k)) s[k] = ov[k];
                                 }
                                 extracted.sampler = s;
@@ -3110,6 +3118,7 @@ app.registerExtension({
                         if (defs.steps_a != null    && rows.steps_a?._inp)    rows.steps_a._inp.value = defs.steps_a;
                         if (defs.steps_b != null    && rows.steps_b?._inp)    rows.steps_b._inp.value = defs.steps_b;
                         if (defs.cfg != null         && rows.cfg?._inp)        rows.cfg._inp.value = defs.cfg;
+                        if (rows.denoise?._inp)    rows.denoise._inp.value = (defs.denoise != null ? defs.denoise : 1.0);
                         if (defs.sampler             && rows.sampler?._inp)    rows.sampler._inp.value = defs.sampler;
                         if (defs.scheduler           && rows.scheduler?._inp)  rows.scheduler._inp.value = defs.scheduler;
                     }
@@ -3146,15 +3155,17 @@ app.registerExtension({
                 cfg:        makeInput("CFG",       "number", 5.0,      { min: 0, max: 100, step: 0.5 }, _syncS),
                 sampler:    makeInput("Sampler",   "select", "euler",  { options: SAMPLERS }, _syncS),
                 scheduler:  makeInput("Scheduler", "select", "simple", { options: SCHEDULERS }, _syncS),
+                denoise:    makeInput("Denoise",   "number", 1.0,      { min: 0, max: 1, step: 0.01 }, _syncS),
                 seed_a:     seedRow,
                 seed_b:     seedBRow,
             };
-            // Append in display order: steps_a, steps_b, cfg, sampler, scheduler, seed, seed_b
+            // Append in display order: steps_a, steps_b, cfg, sampler, scheduler, denoise, seed, seed_b
             sampSec._body.appendChild(stepsARow);
             sampSec._body.appendChild(stepsBRow);
             sampSec._body.appendChild(sampRows.cfg);
             sampSec._body.appendChild(sampRows.sampler);
             sampSec._body.appendChild(sampRows.scheduler);
+            sampSec._body.appendChild(sampRows.denoise);
             sampSec._body.appendChild(seedRow);
             sampSec._body.appendChild(seedBRow);
 
@@ -3793,7 +3804,7 @@ app.registerExtension({
                 "pos_prompt", "neg_prompt",
                 // Legacy names: accepted during migration then normalized.
                 "positive_prompt", "negative_prompt",
-                "seed_a", "seed_b",
+                "seed_a", "seed_b", "denoise",
                 "lora_stack_a", "lora_stack_b",
             ]);
             // Normalize legacy prompt input slot names on load.
@@ -3953,6 +3964,7 @@ app.registerExtension({
                         steps_a: (ov?.steps_a != null) ? ov.steps_a : (fbSampler.steps_a ?? 20),
                         steps_b: (ov?.steps_b != null) ? ov.steps_b : (fbSampler.steps_b ?? null),
                         cfg: (ov?.cfg != null) ? ov.cfg : (fbSampler.cfg ?? 5.0),
+                        denoise: (ov?.denoise != null) ? ov.denoise : (fbSampler.denoise ?? 1.0),
                         seed_a: (ov?.seed_a != null) ? ov.seed_a : (fbSampler.seed_a ?? 0),
                         seed_b: (ov?.seed_b != null) ? ov.seed_b : (fbSampler.seed_b ?? null),
                         sampler_name: (ov?.sampler_name != null) ? ov.sampler_name : (fbSampler.sampler_name || "euler"),
