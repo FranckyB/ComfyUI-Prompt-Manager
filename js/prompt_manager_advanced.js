@@ -627,6 +627,12 @@ app.registerExtension({
                 if (!node.promptSelectorWidget) {
                     createPromptSelectorWidget(node);
                 }
+                for (let i = node.inputs.length - 1; i >= 0; i--) {
+                    const inp = node.inputs[i];
+                    if (inp.name === "category" || inp.name === "name" || inp.name === "prompt_input") {
+                        node.removeInput(i);
+                    }
+                }
                 if (!node.buttonBarAttached) {
                     addButtonBar(node);
                     setupCategoryChangeHandler(node);
@@ -8072,6 +8078,13 @@ function createPromptSelectorWidget(node) {
     categoryWidget.computeSize = () => [0, -4];
     promptWidget.type = "converted-widget";
     promptWidget.computeSize = () => [0, -4];
+
+    for (let i = node.inputs.length - 1; i >= 0; i--) {
+        const inp = node.inputs[i];
+        if (inp.name === "category" || inp.name === "name" || inp.name === "prompt_input") {
+            node.removeInput(i);
+        }
+    }
 
     // Create custom selector container
     const container = document.createElement("div");
