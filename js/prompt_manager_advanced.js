@@ -8073,6 +8073,13 @@ function createPromptSelectorWidget(node) {
     promptWidget.type = "converted-widget";
     promptWidget.computeSize = () => [0, -4];
 
+    for (let i = node.inputs.length - 1; i >= 0; i--) {
+        const inp = node.inputs[i];
+        if (inp.name === "category" || inp.name === "name") {
+            node.removeInput(i);
+        }
+    }
+
     // Create custom selector container
     const container = document.createElement("div");
     container.style.cssText = `
