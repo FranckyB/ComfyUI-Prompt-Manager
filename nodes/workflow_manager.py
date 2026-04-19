@@ -156,15 +156,25 @@ class WorkflowManager(PromptManagerAdvanced):
             except (json.JSONDecodeError, TypeError):
                 hidden_saved_wf = None
 
-        resolved_workflow_data = live_workflow_data or hidden_saved_wf
+        # WorkflowManager should prefer live connected workflow_data when present,
+        # then fall back to local serialized state.
+        resolved_workflow_data = live_workflow_data if isinstance(live_workflow_data, dict) else None
+        if resolved_workflow_data is None:
+            resolved_workflow_data = hidden_saved_wf
         if resolved_workflow_data is None and isinstance(stored_prompt_wf, dict):
             resolved_workflow_data = stored_prompt_wf
 
         wf = resolved_workflow_data if isinstance(resolved_workflow_data, dict) else {}
+        incoming_wf = live_workflow_data if isinstance(live_workflow_data, dict) else None
         output_text = (wf.get("positive_prompt", "") or text or "")
         generated_thumbnail = _image_to_base64_thumbnail(wf.get("IMAGE")) if isinstance(wf, dict) else None
-        workflow_thumbnail = generated_thumbnail if isinstance(generated_thumbnail, str) and generated_thumbnail else (
-            wf.get("thumbnail") if isinstance(wf.get("thumbnail"), str) else None
+        incoming_thumbnail = _image_to_base64_thumbnail(incoming_wf.get("IMAGE")) if isinstance(incoming_wf, dict) else None
+        workflow_thumbnail = incoming_thumbnail if isinstance(incoming_thumbnail, str) and incoming_thumbnail else (
+            generated_thumbnail if isinstance(generated_thumbnail, str) and generated_thumbnail else (
+                incoming_wf.get("thumbnail") if isinstance(incoming_wf, dict) and isinstance(incoming_wf.get("thumbnail"), str) else (
+                    wf.get("thumbnail") if isinstance(wf.get("thumbnail"), str) else None
+                )
+            )
         )
 
         # Build preset stacks from saved toggle state.
@@ -205,7 +215,9 @@ class WorkflowManager(PromptManagerAdvanced):
                 "use_prompt_input": False,
                 "use_workflow_data": True,
                 "prompt_input": "",
-                "workflow_data": to_json_safe_workflow_data(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None,
+                "workflow_data": to_json_safe_workflow_data(incoming_wf) if isinstance(incoming_wf, dict) else (
+                    to_json_safe_workflow_data(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None
+                ),
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
                 "input_loras_a": self._format_loras_for_display(wf_loras_a) if wf_loras_a else [],

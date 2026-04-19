@@ -7,6 +7,7 @@ import json
 import shutil
 import time
 import base64
+from datetime import datetime
 from io import BytesIO
 import folder_paths
 import server
@@ -559,11 +560,13 @@ class PromptManagerAdvanced:
                 hidden_saved_wf = None
 
         if use_workflow_data:
-            # Workflow mode ON: prefer live upstream, then hidden saved widget,
-            # then prompt-stored workflow_data.
-            resolved_workflow_data = live_workflow_data or hidden_saved_wf
+            # Workflow mode ON: keep local manager state authoritative.
+            # Priority: hidden saved widget -> prompt-stored workflow_data -> live upstream fallback.
+            resolved_workflow_data = hidden_saved_wf
             if resolved_workflow_data is None and isinstance(stored_prompt_wf, dict):
                 resolved_workflow_data = stored_prompt_wf
+            if resolved_workflow_data is None:
+                resolved_workflow_data = live_workflow_data
         else:
             # Workflow mode OFF: never source from connected/hidden live payload.
             resolved_workflow_data = stored_prompt_wf if isinstance(stored_prompt_wf, dict) else None
@@ -1186,6 +1189,31 @@ async def save_prompt_advanced(request):
                     })
             return normalized
 
+        def normalize_workflow_lora_data(wf_loras):
+            """Normalize LoRAs coming from workflow_data payload structure."""
+            normalized = []
+            if not isinstance(wf_loras, list):
+                return normalized
+            for lora in wf_loras:
+                if not isinstance(lora, dict):
+                    continue
+                name = str(lora.get('name', '')).strip()
+                if not name:
+                    continue
+                strength = lora.get('strength', lora.get('model_strength', 1.0))
+                clip_strength = lora.get('clip_strength', strength)
+                available = lora.get('available', lora.get('found', True))
+                found = lora.get('found', available)
+                normalized.append({
+                    "name": name,
+                    "strength": strength,
+                    "clip_strength": clip_strength,
+                    "active": lora.get('active', True),
+                    "available": bool(available),
+                    "found": bool(found),
+                })
+            return normalized
+
         # Normalize trigger words data
         def normalize_trigger_words(words):
             normalized = []
@@ -1213,17 +1241,7 @@ async def save_prompt_advanced(request):
         if thumbnail is None:
             thumbnail = existing_prompt.get("thumbnail")
 
-        # Save prompt with normalized lora data (no paths - they're resolved at runtime)
-        prompt_data = {
-            "prompt": text,
-            "loras_a": normalize_lora_data(loras_a),
-            "loras_b": normalize_lora_data(loras_b),
-            "trigger_words": normalize_trigger_words(trigger_words)
-        }
-
         # Save workflow_data if provided.
-        # Always sanitize to remove runtime-only objects (MODEL_A/MODEL_B/CLIP/VAE)
-        # and accept either dict or JSON string payloads from frontend.
         workflow_data = data.get("workflow_data")
         wf_to_save = None
         if isinstance(workflow_data, dict):
@@ -1236,6 +1254,49 @@ async def save_prompt_advanced(request):
             except (json.JSONDecodeError, TypeError):
                 wf_to_save = None
 
+        # Save prompt with normalized lora data (no paths - they're resolved at runtime)
+        normalized_loras_a = normalize_lora_data(loras_a)
+        normalized_loras_b = normalize_lora_data(loras_b)
+
+        # Workflow Saver parity: when workflow_data is present, treat its LoRA lists
+        # as authoritative for persistence.
+        wf_loras_a = normalize_workflow_lora_data((wf_to_save or {}).get("loras_a", []))
+        wf_loras_b = normalize_workflow_lora_data((wf_to_save or {}).get("loras_b", []))
+        if isinstance(wf_to_save, dict):
+            if "loras_a" in wf_to_save:
+                normalized_loras_a = wf_loras_a
+            elif not normalized_loras_a and wf_loras_a:
+                normalized_loras_a = wf_loras_a
+
+            if "loras_b" in wf_to_save:
+                normalized_loras_b = wf_loras_b
+            elif not normalized_loras_b and wf_loras_b:
+                normalized_loras_b = wf_loras_b
+
+        # Guard against accidental empty-stack overwrites from transient UI state.
+        # If the incoming payload has no LoRAs for a side, preserve existing saved
+        # LoRAs for that side instead of silently erasing them.
+        if not normalized_loras_a and isinstance(existing_prompt.get("loras_a"), list):
+            normalized_loras_a = existing_prompt.get("loras_a", [])
+        if not normalized_loras_b and isinstance(existing_prompt.get("loras_b"), list):
+            normalized_loras_b = existing_prompt.get("loras_b", [])
+
+        prompt_data = {
+            "prompt": text,
+            "loras_a": normalized_loras_a,
+            "loras_b": normalized_loras_b,
+            "trigger_words": normalize_trigger_words(trigger_words)
+        }
+
+        # Persist prompt fields from workflow_data snapshot when available.
+        if isinstance(wf_to_save, dict):
+            if isinstance(wf_to_save.get("positive_prompt"), str):
+                prompt_data["prompt"] = wf_to_save.get("positive_prompt", "")
+            if isinstance(wf_to_save.get("negative_prompt"), str):
+                prompt_data["negative_prompt"] = wf_to_save.get("negative_prompt", "")
+            prompt_data["saved_from"] = "WorkflowManager"
+            prompt_data["saved_at"] = datetime.utcnow().isoformat() + "Z"
+
         if wf_to_save:
             prompt_data["workflow_data"] = wf_to_save
         else:
@@ -1243,7 +1304,7 @@ async def save_prompt_advanced(request):
             # edits without a currently connected workflow_data source.
             existing_wf = existing_prompt.get("workflow_data")
             if isinstance(existing_wf, dict):
-                prompt_data["workflow_data"] = existing_wf
+                prompt_data["workflow_data"] = to_json_safe_workflow_data(existing_wf)
 
         if thumbnail:
             prompt_data["thumbnail"] = thumbnail
@@ -1258,7 +1319,7 @@ async def save_prompt_advanced(request):
         # Preserve any extra fields from an existing prompt that this node does not manage.
         # This includes workflow_config (added by WorkflowManager) and any future extensions.
         # Known managed keys — everything else is preserved verbatim.
-        _MANAGED_KEYS = {"prompt", "loras_a", "loras_b", "trigger_words", "thumbnail", "nsfw", "workflow_data"}
+        _MANAGED_KEYS = {"prompt", "negative_prompt", "loras_a", "loras_b", "trigger_words", "thumbnail", "nsfw", "workflow_data", "saved_from", "saved_at"}
         for extra_key, extra_val in existing_prompt.items():
             if extra_key not in _MANAGED_KEYS and extra_key not in prompt_data:
                 prompt_data[extra_key] = extra_val

@@ -214,11 +214,7 @@ app.registerExtension({
                         const useWorkflowEvent = event.detail.use_workflow_data === true;
                         const workflowInput = this.inputs?.find((inp) => inp.name === "workflow_data");
                         const hasWorkflowInputConnected = workflowInput?.link != null;
-                        const shouldIngestWorkflowExecution = useWorkflowEvent || (
-                            this._isWorkflowManager === true &&
-                            hasWorkflowInputConnected &&
-                            wfDataEvent && typeof wfDataEvent === "object"
-                        );
+                        const shouldIngestWorkflowExecution = useWorkflowEvent && !this._isWorkflowManager;
 
                         if (shouldIngestWorkflowExecution) {
                             newLorasA = await applyLoraFoundState(newLorasA);
@@ -233,6 +229,10 @@ app.registerExtension({
                             use_lora_input: (this.widgets?.find(w => w.name === "use_lora_input")?.value !== false),
                             prompt_input: String(event.detail.prompt_input || ""),
                             workflow_prompt: String(wfDataEvent?.positive_prompt || ""),
+                            connected_thumbnail_sig: (() => {
+                                const t = String(event.detail.connected_thumbnail || "");
+                                return t ? `${t.length}:${t.slice(0, 64)}` : "";
+                            })(),
                             workflow_data_sig: wfDataEvent ? JSON.stringify({
                                 positive_prompt: String(wfDataEvent.positive_prompt || ""),
                                 loras_a: (Array.isArray(wfDataEvent.loras_a) ? wfDataEvent.loras_a : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
@@ -441,7 +441,12 @@ app.registerExtension({
 
                             // Store workflow_data on node for saving
                             this.lastWorkflowData = wfData;
-                            syncSavedWorkflowDataWidget(this);
+                            // For Workflow Manager in input-connected mode, keep incoming payload
+                            // for preview/save UX but don't overwrite local serialized workflow state.
+                            const isPmaWorkflowConnected = (!this._isWorkflowManager) && hasWorkflowInputConnected && useWorkflowEvent;
+                            if (!(this._isWorkflowManager && hasWorkflowInputConnected) && !isPmaWorkflowConnected) {
+                                syncSavedWorkflowDataWidget(this);
+                            }
                             if (this._isWorkflowManager) {
                                 updateWorkflowManagerPreview(this);
                                 if (this.updatePromptSelectorDisplay) {
@@ -3570,6 +3575,27 @@ function setupWorkflowLivePickupHandler(node) {
         this._lastWorkflowInputLink = currentWorkflowLink;
         if (workflowLinkChanged) {
             this._lastLiveWorkflowPickupSig = null;
+
+            if (this._isWorkflowManager && currentWorkflowLink != null) {
+                // New input connection: clear local cached workflow state so
+                // upstream workflow_data becomes authoritative.
+                this.lastWorkflowData = null;
+                this.savedLorasA = [];
+                this.savedLorasB = [];
+                this.currentLorasA = [];
+                this.currentLorasB = [];
+                this.savedTriggerWords = [];
+                this.currentTriggerWords = [];
+
+                const textWidget = this.widgets?.find((w) => w.name === "text");
+                if (textWidget) textWidget.value = "";
+
+                syncSavedWorkflowDataWidget(this);
+                updateLoraDisplays(this);
+                updateTriggerWordsDisplay(this);
+                updateWorkflowManagerPreview(this);
+            }
+
             void tryLiveWorkflowPickup(this);
         }
     };
@@ -4297,6 +4323,16 @@ function resolveWorkflowDataForSave(node) {
                 if (parsed) return parsed;
             }
         }
+
+        // Connected input but no fresh upstream workflow_data: for Workflow Manager,
+        // allow fallback to the latest live payload captured from execution updates.
+        if (node?._isWorkflowManager && node.lastWorkflowData && typeof node.lastWorkflowData === "object") {
+            return node.lastWorkflowData;
+        }
+
+        // For non-WorkflowManager nodes, avoid saving stale local cache from
+        // a previously selected prompt while connected.
+        return null;
     }
 
     return node.lastWorkflowData || null;
@@ -4396,8 +4432,23 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
         // WorkflowBuilder, pull it directly from Builder UI state so saving works
         // even before executing the graph.
         const workflowDataForSave = resolveWorkflowDataForSave(node);
+        if (node?._isWorkflowManager && hasConnectedWorkflowInput(node) && !workflowDataForSave) {
+            await showInfo("Workflow Data", "No live workflow_data available to save yet. Execute upstream nodes and try again.");
+            return;
+        }
         if (workflowDataForSave) {
-            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, text, lorasA, lorasB);
+            const effectivePromptText = (
+                node?._isWorkflowManager &&
+                hasConnectedWorkflowInput(node) &&
+                typeof workflowDataForSave?.positive_prompt === "string"
+            )
+                ? workflowDataForSave.positive_prompt
+                : text;
+
+            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasA, lorasB);
+            if (node?._isWorkflowManager) {
+                liveWorkflowData._source = "WorkflowManager";
+            }
             node.lastWorkflowData = liveWorkflowData;
             syncSavedWorkflowDataWidget(node);
             requestBody.workflow_data = liveWorkflowData;

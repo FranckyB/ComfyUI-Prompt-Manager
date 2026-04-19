@@ -803,12 +803,20 @@ class WorkflowBuilder:
         section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
         has_workflow_input = wf_data is not None
         upstream_source = str((wf_data or {}).get('_source', '')).strip().lower() if isinstance(wf_data, dict) else ""
-        extractor_sourced_input = upstream_source in ("promptextractor", "workflowextractor")
+        # Sources that should keep WorkflowBuilder in manual-edit mode while connected.
+        # This includes extractors and manager nodes that users actively edit.
+        manual_override_sources = {
+            "promptextractor",
+            "workflowextractor",
+            "promptmanageradvanced",
+            "workflowmanager",
+        }
+        manual_sourced_input = upstream_source in manual_override_sources
 
         def _allow_override(section_name):
-            # Extractor-sourced workflow_data keeps WB in manual-edit mode.
-            # Non-extractor workflow_data chains are lock-gated to stay in sync.
-            if has_workflow_input and extractor_sourced_input:
+            # Extractor/Manager sourced workflow_data keeps WB in manual-edit mode.
+            # Other chained workflow_data sources are lock-gated to stay in sync.
+            if has_workflow_input and manual_sourced_input:
                 return True
             # If workflow_data is connected from non-extractor sources,
             # only locked sections keep local UI overrides.

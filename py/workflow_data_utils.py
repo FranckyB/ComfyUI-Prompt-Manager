@@ -1,24 +1,54 @@
 """
 Utility functions for WORKFLOW_DATA dicts.
-Runtime object keys (MODEL_A, MODEL_B, CLIP, VAE) store non-serializable
-ComfyUI objects and must be stripped before JSON serialization.
+Runtime object keys (MODEL_A, MODEL_B, CLIP, VAE, POSITIVE, NEGATIVE, etc.)
+store non-serializable ComfyUI objects and must be stripped before JSON
+serialization.
 """
 
 import json
 import math
 
-# Keys that hold runtime (non-JSON-serializable) objects
-RUNTIME_OBJECT_KEYS = frozenset({"MODEL_A", "MODEL_B", "CLIP", "VAE", "LATENT", "IMAGE", "MASK", "EXTRA"})
+# Keys that hold runtime (non-JSON-serializable) objects/conditioning payloads.
+# These should never be persisted in saved prompt/workflow metadata.
+RUNTIME_OBJECT_KEYS = frozenset({
+    "MODEL_A",
+    "MODEL_B",
+    "CLIP",
+    "VAE",
+    "LATENT",
+    "IMAGE",
+    "MASK",
+    "EXTRA",
+    "POSITIVE",
+    "NEGATIVE",
+})
+
+
+def _strip_runtime_keys_deep(value):
+    """Recursively strip runtime-only keys from dict/list containers."""
+    if isinstance(value, dict):
+        return {
+            k: _strip_runtime_keys_deep(v)
+            for k, v in value.items()
+            if k not in RUNTIME_OBJECT_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_runtime_keys_deep(v) for v in value]
+    if isinstance(value, tuple):
+        return [_strip_runtime_keys_deep(v) for v in value]
+    if isinstance(value, set):
+        return [_strip_runtime_keys_deep(v) for v in value]
+    return value
 
 
 def strip_runtime_objects(wf):
-    """Return a shallow copy of wf with all runtime object keys removed.
+    """Return a deep copy of wf with all runtime object keys removed.
 
     Use before JSON serialization (saving prompts, send_sync to JS, etc.).
     """
     if not isinstance(wf, dict):
         return wf
-    return {k: v for k, v in wf.items() if k not in RUNTIME_OBJECT_KEYS}
+    return _strip_runtime_keys_deep(wf)
 
 
 def _json_default(value):
