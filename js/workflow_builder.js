@@ -2071,7 +2071,8 @@ app.registerExtension({
                   const tyNorm = ty.toLowerCase().replace(/\s+/g, "");
                   return ccNorm === "promptextractor" || ccNorm === "workflowextractor" ||
                       tyNorm === "promptextractor" || tyNorm === "workflowextractor" ||
-                      ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced";
+                                            ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
+                                            ccNorm === "workflowmanager" || tyNorm === "workflowmanager";
             };
             const _isRerouteNodeHint = (n) => {
                 if (!n) return false;
@@ -2167,7 +2168,8 @@ app.registerExtension({
                       const tyNorm = ty.toLowerCase().replace(/\s+/g, "");
                       return ccNorm === "promptextractor" || ccNorm === "workflowextractor" ||
                           tyNorm === "promptextractor" || tyNorm === "workflowextractor" ||
-                          ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced";
+                                                    ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
+                                                    ccNorm === "workflowmanager" || tyNorm === "workflowmanager";
                 };
                 const _isRerouteNode = (n) => {
                     if (!n) return false;
@@ -2210,7 +2212,7 @@ app.registerExtension({
                     }
                 }
                 if (!sourceNode) {
-                    _showError(node, "No PromptExtractor, WorkflowExtractor, or PromptManagerAdvanced connected to workflow_data.");
+                    _showError(node, "No PromptExtractor, WorkflowExtractor, PromptManagerAdvanced, or WorkflowManager connected to workflow_data.");
                     return;
                 }
 
@@ -2221,7 +2223,8 @@ app.registerExtension({
                     const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
                     const isBuilderSource = sourceClass === "WorkflowBuilder";
                     const isContextSource = sourceClass === "WorkflowBridge";
-                    const isPmaSource = sourceClass === "PromptManagerAdvanced";
+                    const sourceClassNorm = String(sourceClass || "").toLowerCase().replace(/\s+/g, "");
+                    const isPmaSource = sourceClassNorm === "promptmanageradvanced" || sourceClassNorm === "workflowmanager";
 
                     console.log("[WB UpdateTrace] Update Workflow start", {
                         nodeId: node.id,
@@ -2418,7 +2421,7 @@ app.registerExtension({
                         }
 
                         if (extracted) {
-                            extracted._source = "PromptManagerAdvanced";
+                            extracted._source = (sourceClassNorm === "workflowmanager") ? "WorkflowManager" : "PromptManagerAdvanced";
                         }
                     } else {
 

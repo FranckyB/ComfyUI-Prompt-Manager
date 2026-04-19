@@ -18,6 +18,7 @@ from .nodes.workflow_renderer import WorkflowRenderer
 from .nodes.workflow_bridge import WorkflowBridge
 from .nodes.workflow_model_loader import WorkflowModelLoader
 from .nodes.workflow_saver import WorkflowSaver
+from .nodes.workflow_manager import WorkflowManager
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":       ApplyLoraPlusPlus,
@@ -32,6 +33,7 @@ NODE_CLASS_MAPPINGS = {
     "WorkflowBridge":        WorkflowBridge,
     "WorkflowModelLoader":   WorkflowModelLoader,
     "WorkflowSaver":         WorkflowSaver,
+    "WorkflowManager":       WorkflowManager,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -47,10 +49,11 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WorkflowBridge":        "Workflow Bridge",
     "WorkflowModelLoader":   "Workflow Model Loader",
     "WorkflowSaver":         "Workflow Saver",
+    "WorkflowManager":       "Workflow Manager",
 }
 
 WEB_DIRECTORY = "./js"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
-print("[PromptManager] Nodes registered: Apply LoRA++, Prompt Manager (Basic), Prompt Manager, Prompt Generator, Prompt Generator Options, Prompt Extractor, Workflow Extractor, Workflow Builder, Workflow Renderer, Workflow Bridge, Workflow Model Loader, Workflow Saver")
+print("[PromptManager] Nodes registered: Apply LoRA++, Prompt Manager (Basic), Prompt Manager, Prompt Generator, Prompt Generator Options, Prompt Extractor, Workflow Extractor, Workflow Builder, Workflow Renderer, Workflow Bridge, Workflow Model Loader, Workflow Saver, Workflow Manager")

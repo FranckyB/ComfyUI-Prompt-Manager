@@ -118,13 +118,16 @@ app.registerExtension({
     name: "PromptManagerAdvanced",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptManagerAdvanced") {
+        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "WorkflowManager") {
+            const isWorkflowManagerNode = nodeData.name === "WorkflowManager";
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated?.apply(this, arguments);
 
                 const node = this;
+                node._isWorkflowManager = isWorkflowManagerNode;
+                enforceWorkflowManagerCompactMode(node);
                 node.prompts = {};
                 node.currentLorasA = [];
                 node.currentLorasB = [];
@@ -144,13 +147,18 @@ app.registerExtension({
                     triggerWords: "[]"
                 };
 
-                // Set initial size - taller to accommodate lora displays
-                this.setSize([440, 700]);
+                // Set initial size.
+                // Workflow Manager is compact-only, so keep a smaller default height.
+                this.setSize([440, node._isWorkflowManager ? 420 : 700]);
 
                 // Change widget labels
                 const promptTextWidget = this.widgets.find(w => w.name === "text");
                 if (promptTextWidget) {
                     promptTextWidget.label = "prompt";
+                    if (node._isWorkflowManager) {
+                        promptTextWidget.type = "converted-widget";
+                        promptTextWidget.computeSize = () => [0, -4];
+                    }
                 }
 
                 const promptNameWidget = this.widgets.find(w => w.name === "name");
@@ -204,7 +212,15 @@ app.registerExtension({
                         const inputLorasB = event.detail.input_loras_b || [];
                         const wfDataEvent = event.detail.workflow_data || null;
                         const useWorkflowEvent = event.detail.use_workflow_data === true;
-                        if (useWorkflowEvent) {
+                        const workflowInput = this.inputs?.find((inp) => inp.name === "workflow_data");
+                        const hasWorkflowInputConnected = workflowInput?.link != null;
+                        const shouldIngestWorkflowExecution = useWorkflowEvent || (
+                            this._isWorkflowManager === true &&
+                            hasWorkflowInputConnected &&
+                            wfDataEvent && typeof wfDataEvent === "object"
+                        );
+
+                        if (shouldIngestWorkflowExecution) {
                             newLorasA = await applyLoraFoundState(newLorasA);
                             newLorasB = await applyLoraFoundState(newLorasB);
                         }
@@ -213,7 +229,7 @@ app.registerExtension({
                         // Include found/available in the signature so availability refreshes still apply.
                         const incomingSig = JSON.stringify({
                             use_prompt_input: event.detail.use_prompt_input === true,
-                            use_workflow_data: useWorkflowEvent,
+                            use_workflow_data: shouldIngestWorkflowExecution,
                             use_lora_input: (this.widgets?.find(w => w.name === "use_lora_input")?.value !== false),
                             prompt_input: String(event.detail.prompt_input || ""),
                             workflow_prompt: String(wfDataEvent?.positive_prompt || ""),
@@ -236,8 +252,8 @@ app.registerExtension({
                         }
                         this._lastExecutionUpdateSig = incomingSig;
 
-                        const effectiveInputLorasA = useWorkflowEvent ? newLorasA : inputLorasA;
-                        const effectiveInputLorasB = useWorkflowEvent ? newLorasB : inputLorasB;
+                        const effectiveInputLorasA = shouldIngestWorkflowExecution ? newLorasA : inputLorasA;
+                        const effectiveInputLorasB = shouldIngestWorkflowExecution ? newLorasB : inputLorasB;
                         // Explicit list of unavailable lora names from Python
                         const unavailableLorasA = new Set((event.detail.unavailable_loras_a || []).map(n => n.toLowerCase()));
                         const unavailableLorasB = new Set((event.detail.unavailable_loras_b || []).map(n => n.toLowerCase()));
@@ -309,7 +325,7 @@ app.registerExtension({
 
 
                         // Workflow mode: execution payload is authoritative (single ingest path).
-                        if (useWorkflowEvent) {
+                        if (shouldIngestWorkflowExecution) {
                             syncWorkflowLorasForDisplay(this, wfDataEvent, newLorasA, newLorasB, { preserveUserState: false });
                             this.currentTriggerWords = [];
                             updateLoraDisplays(this);
@@ -378,8 +394,8 @@ app.registerExtension({
                             }
 
                             // Set current loras from input (these are the loras from connected nodes)
-                            this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: useWorkflowEvent ? 'workflow' : 'current' }));
-                            this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: useWorkflowEvent ? 'workflow' : 'current' }));
+                            this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                            this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
 
                             // Set current trigger words from connected input
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
@@ -396,8 +412,8 @@ app.registerExtension({
                             const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
 
                             if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
-                                this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: useWorkflowEvent ? 'workflow' : 'current' }));
-                                this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: useWorkflowEvent ? 'workflow' : 'current' }));
+                                this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                                this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
                                 this.currentTriggerWords = newConnectedTriggers;
 
                                 // Filter out saved LoRAs that came from input but are no longer present
@@ -419,13 +435,19 @@ app.registerExtension({
                         const promptTextWidget = this.widgets.find(w => w.name === "text");
                         if (promptTextWidget) {
                             const useExternal = event.detail.use_prompt_input || false;
-                            const useWorkflow = event.detail.use_workflow_data || false;
+                            const useWorkflow = shouldIngestWorkflowExecution;
                             const llmInput = event.detail.prompt_input || "";
                             const wfData = event.detail.workflow_data || null;
 
                             // Store workflow_data on node for saving
                             this.lastWorkflowData = wfData;
                             syncSavedWorkflowDataWidget(this);
+                            if (this._isWorkflowManager) {
+                                updateWorkflowManagerPreview(this);
+                                if (this.updatePromptSelectorDisplay) {
+                                    this.updatePromptSelectorDisplay();
+                                }
+                            }
 
                             if (useExternal && llmInput) {
                                 // Using external prompt — display the input text (grayed out)
@@ -459,13 +481,22 @@ app.registerExtension({
 
                 // IMPORTANT: Add DOM widgets SYNCHRONOUSLY during node creation
                 // to ensure proper positioning within the node bounds
+                if (node._isWorkflowManager) {
+                    addWorkflowManagerPreview(node);
+                }
                 createPromptSelectorWidget(node);  // Custom thumbnail selector (before buttons)
                 addButtonBar(node);
-                addLoraDisplays(node);
-                addTriggerWordsDisplay(node);
+                if (!node._isWorkflowManager) {
+                    addLoraDisplays(node);
+                }
+                if (!node._isWorkflowManager) {
+                    addTriggerWordsDisplay(node);
+                }
                 setupCategoryChangeHandler(node);
-                setupUseExternalToggleHandler(node);
-                setupUseWorkflowToggleHandler(node);
+                if (!node._isWorkflowManager) {
+                    setupUseExternalToggleHandler(node);
+                    setupUseWorkflowToggleHandler(node);
+                }
                 setupWorkflowLivePickupHandler(node);
 
                 // Load prompts asynchronously (data only, not widgets)
@@ -492,9 +523,15 @@ app.registerExtension({
                     // Ensure height is sufficient after data is loaded
                     setTimeout(() => {
                         const computedSize = node.computeSize();
-                        const minHeight = Math.max(600, computedSize[1] + 20);
+                        const baseMinHeight = node._isWorkflowManager ? 420 : 600;
+                        const minHeight = Math.max(baseMinHeight, computedSize[1] + 20);
 
-                        if (node.size[1] < minHeight) {
+                        if (node._isWorkflowManager) {
+                            // Auto-shrink legacy oversized Workflow Manager nodes created before compact sizing.
+                            if (node.size[1] > 560 || node.size[1] < minHeight) {
+                                node.setSize([Math.max(440, node.size[0]), minHeight]);
+                            }
+                        } else if (node.size[1] < minHeight) {
                             node.setSize([Math.max(440, node.size[0]), minHeight]);
                         }
                         app.graph.setDirtyCanvas(true, true);
@@ -510,6 +547,7 @@ app.registerExtension({
                 const result = onConfigure?.apply(this, arguments);
 
                 const node = this;
+                enforceWorkflowManagerCompactMode(node);
 
                 // Flag that this node is being restored from a workflow,
                 // so onNodeCreated's async loadPromptData won't overwrite state
@@ -578,6 +616,9 @@ app.registerExtension({
 
                 // IMPORTANT: Reattach DOM widgets SYNCHRONOUSLY during configure
                 // to ensure proper positioning within the node bounds
+                if (node._isWorkflowManager && !node.workflowManagerPreviewAttached) {
+                    addWorkflowManagerPreview(node);
+                }
                 if (!node.promptSelectorWidget) {
                     createPromptSelectorWidget(node);
                 }
@@ -585,13 +626,15 @@ app.registerExtension({
                     addButtonBar(node);
                     setupCategoryChangeHandler(node);
                 }
-                if (!node.loraDisplaysAttached) {
+                if (!node._isWorkflowManager && !node.loraDisplaysAttached) {
                     addLoraDisplays(node);
                 }
-                if (!node.triggerWordsDisplayAttached) {
+                if (!node._isWorkflowManager && !node.triggerWordsDisplayAttached) {
                     addTriggerWordsDisplay(node);
                 }
-                setupUseExternalToggleHandler(node);
+                if (!node._isWorkflowManager) {
+                    setupUseExternalToggleHandler(node);
+                }
 
                 // Load prompts data asynchronously (data only, widgets already added)
                 loadPrompts(node).then(async () => {
@@ -614,6 +657,14 @@ app.registerExtension({
                         node.updatePromptSelectorDisplay();
                     }
 
+                    if (node._isWorkflowManager) {
+                        const computedSize = node.computeSize();
+                        const minHeight = Math.max(420, computedSize[1] + 20);
+                        if (node.size[1] > 560 || node.size[1] < minHeight) {
+                            node.setSize([Math.max(440, node.size[0]), minHeight]);
+                        }
+                    }
+
                     app.graph.setDirtyCanvas(true, true);
                 });
 
@@ -624,7 +675,7 @@ app.registerExtension({
             const onResize = nodeType.prototype.onResize;
             nodeType.prototype.onResize = function(size) {
                 size[0] = Math.max(440, size[0]);
-                size[1] = Math.max(600, size[1]);
+                size[1] = Math.max(this?._isWorkflowManager ? 420 : 600, size[1]);
                 return onResize ? onResize.apply(this, arguments) : size;
             };
 
@@ -725,6 +776,35 @@ function getSerializedSavedTriggerWords(node) {
         active: word.active !== false,
         source: 'saved'
     }));
+}
+
+function enforceWorkflowManagerCompactMode(node) {
+    if (!node?._isWorkflowManager) return;
+
+    const hiddenNames = new Set(["category", "name", "text", "use_prompt_input", "use_lora_input", "use_workflow_data"]);
+    for (const widget of (node.widgets || [])) {
+        if (!hiddenNames.has(String(widget?.name || ""))) continue;
+        widget.type = "converted-widget";
+        widget.hidden = true;
+        widget.computeSize = () => [0, -4];
+        if (widget.inputEl) {
+            widget.inputEl.style.display = "none";
+        }
+    }
+
+    // Cleanup stale sockets from pre-change serialized nodes.
+    if (Array.isArray(node.inputs) && typeof node.removeInput === "function") {
+        for (let i = node.inputs.length - 1; i >= 0; i--) {
+            const n = String(node.inputs[i]?.name || "").toLowerCase();
+            if (n === "thumbnail_image" || n === "image") {
+                try {
+                    node.removeInput(i);
+                } catch {
+                    // Best-effort only.
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -883,20 +963,212 @@ function collectAllLorasFromChain(node, inputName, visited = new Set()) {
     return allLoras;
 }
 
+function hasWorkflowDataPayload(rawWorkflowData) {
+    return (
+        (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+        (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+    );
+}
+
+function hasConnectedWorkflowInput(node) {
+    const wfInput = node?.inputs?.find((inp) => inp?.name === "workflow_data");
+    return wfInput?.link != null;
+}
+
+function getPromptNamesForCategory(node, category, options = {}) {
+    const hideNSFW = options.hideNSFW === true;
+    const workflowOnly = options.workflowOnly === true;
+    const categoryPrompts = node?.prompts?.[category];
+    if (!categoryPrompts || typeof categoryPrompts !== "object") return [];
+
+    let promptNames = Object.keys(categoryPrompts)
+        .filter((k) => k !== "__meta__")
+        .sort((a, b) => a.localeCompare(b));
+
+    if (hideNSFW) {
+        promptNames = promptNames.filter((name) => categoryPrompts?.[name]?.nsfw !== true);
+    }
+
+    if (workflowOnly) {
+        promptNames = promptNames.filter((name) => hasWorkflowDataPayload(categoryPrompts?.[name]?.workflow_data));
+    }
+
+    return promptNames;
+}
+
+function getVisibleCategories(node, options = {}) {
+    const categories = Object.keys(node?.prompts || {})
+        .filter((c) => c !== "__meta__")
+        .sort((a, b) => a.localeCompare(b));
+
+    // Keep empty categories visible so users can still save prompts/workflows into them.
+    return categories;
+}
+
 function filterPromptDropdown(node) {
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
 
     if (categoryWidget && promptWidget) {
+        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW") === true;
+        const workflowOnly = node?._isWorkflowManager === true;
+        const visibleCategories = getVisibleCategories(node, { hideNSFW, workflowOnly });
+
+        categoryWidget.options.values = visibleCategories.length > 0 ? visibleCategories : ["Default"];
+
+        if (!visibleCategories.includes(categoryWidget.value)) {
+            categoryWidget.value = visibleCategories[0] || "Default";
+        }
+
         const currentCategory = categoryWidget.value;
-        if (node.prompts[currentCategory]) {
-            const promptNames = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
-            if (promptNames.length === 0) {
-                promptNames.push("");
-            }
-            promptWidget.options.values = promptNames;
+        const promptNames = getPromptNamesForCategory(node, currentCategory, { hideNSFW, workflowOnly });
+        promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
+        if (!promptNames.includes(promptWidget.value)) {
+            promptWidget.value = promptNames[0] || "";
         }
     }
+}
+
+function updateWorkflowManagerPreview(node) {
+    const ui = node?._workflowManagerPreview;
+    if (!ui) return;
+
+    const categoryWidget = node.widgets?.find(w => w.name === "category");
+    const promptWidget = node.widgets?.find(w => w.name === "name");
+    const category = categoryWidget?.value || "";
+    const prompt = promptWidget?.value || "";
+    const promptData = node.prompts?.[category]?.[prompt] || null;
+    const liveWorkflow = (node.lastWorkflowData && typeof node.lastWorkflowData === "object") ? node.lastWorkflowData : null;
+    const workflowInputConnected = hasConnectedWorkflowInput(node);
+
+    // Input-connected mode should not show saved/random prompt thumbnails while waiting.
+    // Use the placeholder image until live workflow_data arrives.
+    if (workflowInputConnected && !liveWorkflow) {
+        ui.image.src = DEFAULT_THUMBNAIL;
+        ui.image.style.display = "block";
+        ui.emptyLabel.style.display = "none";
+        return;
+    }
+
+    const pickThumbnail = (obj) => {
+        if (!obj || typeof obj !== "object") return "";
+        const candidates = [
+            obj.thumbnail,
+            obj.connected_thumbnail,
+            obj.thumbnail_image,
+            obj.preview,
+            obj.image,
+        ];
+        for (const value of candidates) {
+            if (typeof value === "string" && value.trim()) {
+                return value;
+            }
+        }
+        return "";
+    };
+
+    const liveThumbnail = pickThumbnail(liveWorkflow) || (typeof node.connectedThumbnail === "string" ? node.connectedThumbnail : "");
+    const savedThumbnail = pickThumbnail(promptData);
+    const thumbnail = liveThumbnail || savedThumbnail || DEFAULT_THUMBNAIL;
+
+    if (thumbnail && thumbnail !== DEFAULT_THUMBNAIL) {
+        ui.image.src = thumbnail;
+        ui.image.style.display = "block";
+        ui.emptyLabel.style.display = "none";
+    } else {
+        ui.image.removeAttribute("src");
+        ui.image.style.display = "none";
+        ui.emptyLabel.style.display = "flex";
+        if (liveWorkflow) {
+            ui.emptyLabel.textContent = "Connected workflow loaded (no thumbnail)";
+        } else if (workflowInputConnected) {
+            ui.emptyLabel.textContent = "Waiting for workflow_data input...";
+        } else {
+            ui.emptyLabel.textContent = "No thumbnail for selected workflow";
+        }
+    }
+}
+
+function addWorkflowManagerPreview(node) {
+    if (node.workflowManagerPreviewAttached) return;
+
+    const container = document.createElement("div");
+    container.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: #1e1e1e;
+        border: 1px solid #3a3a3a;
+        border-radius: 8px;
+        padding: 8px;
+        box-sizing: border-box;
+        overflow: hidden;
+    `;
+
+    const title = document.createElement("div");
+    title.textContent = "Workflow Preview";
+    title.style.cssText = `
+        font-size: 11px;
+        color: #9aa;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+    `;
+
+    const previewBox = document.createElement("div");
+    previewBox.style.cssText = `
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 6px;
+        background: #111;
+        border: 1px solid #333;
+        overflow: hidden;
+        box-sizing: border-box;
+    `;
+
+    const image = document.createElement("img");
+    image.style.cssText = `
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        object-position: center center;
+        display: none;
+    `;
+
+    const emptyLabel = document.createElement("div");
+    emptyLabel.textContent = "No thumbnail for selected workflow";
+    emptyLabel.style.cssText = `
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        font-size: 11px;
+        color: #777;
+        background: #141414;
+        border: 1px dashed rgba(110, 110, 110, 0.5);
+        border-radius: 5px;
+        padding: 8px;
+        box-sizing: border-box;
+    `;
+
+    container.appendChild(title);
+    previewBox.appendChild(image);
+    previewBox.appendChild(emptyLabel);
+    container.appendChild(previewBox);
+
+    const widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
+        hideOnZoom: false,
+    });
+    // Keep width behavior unchanged; make preview area ~20% taller.
+    widget.computeSize = (width) => [Math.max(width || 260, 260), 320];
+
+    node._workflowManagerPreview = { container, image, emptyLabel, widget };
+    node.workflowManagerPreviewAttached = true;
+    updateWorkflowManagerPreview(node);
 }
 
 // ========================
@@ -2372,6 +2644,18 @@ function removeTriggerWord(node, index) {
 // Button Bar Functions
 // ========================
 
+function buildWorkflowDefaultName() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const y = now.getFullYear();
+    const m = pad(now.getMonth() + 1);
+    const d = pad(now.getDate());
+    const hh = pad(now.getHours());
+    const mm = pad(now.getMinutes());
+    const ss = pad(now.getSeconds());
+    return `Workflow ${y}-${m}-${d} ${hh}-${mm}-${ss}`;
+}
+
 function addButtonBar(node) {
     if (node.buttonBarAttached) {
         return;
@@ -2395,19 +2679,32 @@ function addButtonBar(node) {
     // Forward wheel events to canvas for zooming
     forwardWheelToCanvas(buttonContainer);
 
-    // Save Prompt button
-    const savePromptBtn = createButton("Save Prompt", async () => {
+    const saveButtonLabel = node._isWorkflowManager ? "Save Workflow" : "Save Prompt";
+    const clearButtonLabel = node._isWorkflowManager ? "Clear Workflow" : "New Prompt";
+
+    // Save Prompt/Workflow button
+    const savePromptBtn = createButton(saveButtonLabel, async () => {
         const currentCategory = categoryWidget.value;
-        const initialName = (promptWidget.value || "").trim() || "New Prompt";
+        const currentName = (promptWidget.value || "").trim();
+        const useWorkflowDateDefault = node._isWorkflowManager && (
+            hasConnectedWorkflowInput(node) ||
+            !currentName ||
+            currentName.toLowerCase() === "new prompt" ||
+            node.isNewUnsavedPrompt === true
+        );
+        const initialName = useWorkflowDateDefault
+            ? buildWorkflowDefaultName()
+            : (currentName || "New Prompt");
 
         await openPromptBrowserForSave({
             node,
             currentCategory,
             currentPrompt: promptWidget.value || "",
-            title: "Save Prompt",
+            title: node._isWorkflowManager ? "Save Workflow" : "Save Prompt",
             saveButtonText: "Save",
             namePlaceholder: "Prompt name",
             initialName,
+            workflowOnly: node?._isWorkflowManager === true,
             onSave: async ({ category, name, overwrite }) => {
                 const promptName = String(name || "").trim();
                 const targetCategory = String(category || "").trim();
@@ -2531,8 +2828,8 @@ function addButtonBar(node) {
         });
     });
 
-    // New Prompt button - simply clears fields for a fresh start
-    const newPromptBtn = createButton("New Prompt", async () => {
+    // New/Clear button - clears current editable state
+    const newPromptBtn = createButton(clearButtonLabel, async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
         const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
@@ -2540,7 +2837,9 @@ function addButtonBar(node) {
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and start fresh?",
+                node._isWorkflowManager
+                    ? "You have unsaved workflow changes. Do you want to discard them and clear the current workflow selection?"
+                    : "You have unsaved changes to the current prompt. Do you want to discard them and start fresh?",
                 "Discard & Continue",
                 "#f80"
             );
@@ -3256,6 +3555,12 @@ function setupWorkflowLivePickupHandler(node) {
         }
 
         refreshPmaPromptGhosting(this);
+        if (this._isWorkflowManager) {
+            if (this.updatePromptSelectorDisplay) {
+                this.updatePromptSelectorDisplay();
+            }
+            updateWorkflowManagerPreview(this);
+        }
 
         // Only trigger live workflow pickup when the workflow_data input link changes.
         // Unrelated connection edits (e.g. output preview nodes) must not overwrite
@@ -3692,6 +3997,10 @@ function updateLastSavedState(node) {
  * Check if there are unsaved changes
  */
 function hasUnsavedChanges(node) {
+    if (node?._isWorkflowManager) {
+        return false;
+    }
+
     // New unsaved prompt always has unsaved changes
     if (node.isNewUnsavedPrompt) {
         return true;
@@ -5226,6 +5535,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
     const saveTitle = options?.title || "Save Workflow";
     const saveNamePlaceholder = options?.namePlaceholder || "Prompt name";
     const initialSaveName = typeof options?.initialName === "string" ? options.initialName : "";
+    const workflowOnly = options?.workflowOnly === true || node?._isWorkflowManager === true;
     
     // Check if thumbnail preview is enabled from user preferences
     const previewEnabled = getThumbnailPreviewEnabled();
@@ -5323,7 +5633,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         // Search input (fills remaining space)
         const searchInput = document.createElement("input");
         searchInput.type = "text";
-        searchInput.placeholder = "Search prompts...";
+        searchInput.placeholder = workflowOnly ? "Search workflows..." : "Search prompts...";
         searchInput.style.cssText = `
             flex: 1;
             min-width: 0;
@@ -5434,7 +5744,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             flex-wrap: wrap;
         `;
 
-        let categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+        let categories = getVisibleCategories(node, {
+            hideNSFW: hideNSFWState,
+            workflowOnly,
+            keepCategory: mode === "save" ? selectedCategory : "",
+        });
         let selectedSaveName = initialSaveName;
         let categoryButtons = [];
 
@@ -5443,6 +5757,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         const ensureSelectedCategory = () => {
+            categories = getVisibleCategories(node, {
+                hideNSFW: hideNSFWState,
+                workflowOnly,
+                keepCategory: mode === "save" ? selectedCategory : "",
+            });
+
             if (!Array.isArray(categories) || categories.length === 0) {
                 selectedCategory = "";
                 return "";
@@ -5491,14 +5811,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 }
             });
 
-            // If selected category is now hidden, switch to first visible
-            if (hideNSFWState && isCategoryNSFW(selectedCategory)) {
-                const firstVisible = categories.find(c => !isCategoryNSFW(c));
-                if (firstVisible) {
-                    selectedCategory = firstVisible;
-                    updateCategoryButtons();
-                }
-            }
+            // If selected category is now hidden/empty under current filters, switch.
+            ensureSelectedCategory();
         };
 
         // Category context menu for NSFW toggle
@@ -5747,7 +6061,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         const rebuildCategoryList = () => {
-            categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+            categories = getVisibleCategories(node, {
+                hideNSFW: hideNSFWState,
+                workflowOnly,
+                keepCategory: mode === "save" ? selectedCategory : "",
+            });
             ensureSelectedCategory();
             categoryButtons = [];
             categoryContainer.innerHTML = "";
@@ -5852,15 +6170,10 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
         // Helper: get filtered prompt names for the selected category
         const getFilteredPrompts = (filter = "") => {
-            const categoryPrompts = node.prompts[selectedCategory] || {};
-            let promptNames = Object.keys(categoryPrompts)
-                .filter(k => k !== "__meta__")
-                .sort((a, b) => a.localeCompare(b));
-
-            // Filter by NSFW
-            if (hideNSFWState) {
-                promptNames = promptNames.filter(name => !categoryPrompts[name]?.nsfw);
-            }
+            let promptNames = getPromptNamesForCategory(node, selectedCategory, {
+                hideNSFW: hideNSFWState,
+                workflowOnly,
+            });
 
             // Filter by search
             if (filter) {
@@ -5946,7 +6259,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 };
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
-                if (isNSFW || hasWorkflowData) {
+                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
+                if (isNSFW || showWorkflowBadge) {
                     const badgeStack = document.createElement("div");
                     badgeStack.style.cssText = `
                         position: absolute;
@@ -5974,7 +6288,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         badgeStack.appendChild(badge);
                     }
 
-                    if (hasWorkflowData) {
+                    if (showWorkflowBadge) {
                         const workflowBadge = document.createElement("div");
                         workflowBadge.textContent = "W";
                         workflowBadge.title = "Has workflow data";
@@ -6209,7 +6523,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
                 thumbWrap.appendChild(thumbDiv);
 
-                if (hasWorkflowData) {
+                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
+                if (showWorkflowBadge) {
                     const workflowBadge = document.createElement("div");
                     workflowBadge.textContent = "W";
                     workflowBadge.title = "Has workflow data";
@@ -6472,7 +6787,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             hideNSFWState = !hideNSFWState;
             sessionHideNSFW = hideNSFWState;
             updateNsfwBtn();
-            updateCategoryButtons();
+            rebuildCategoryList();
             renderContent(searchInput.value);
         };
 
@@ -6711,6 +7026,7 @@ export async function openPromptBrowserForSave(options = {}) {
         saveButtonText: options.saveButtonText || "Save",
         namePlaceholder: options.namePlaceholder || "Prompt name",
         initialName: options.initialName || "",
+        workflowOnly: options.workflowOnly === true || browserNode?._isWorkflowManager === true,
     });
 }
 
@@ -7793,6 +8109,9 @@ function createPromptSelectorWidget(node) {
     // Show/hide thumbnail on hover
     let hoverTimeout = null;
     nameDisplay.addEventListener("mouseenter", () => {
+        if (node._isWorkflowManager) {
+            return;
+        }
         hoverTimeout = setTimeout(() => {
             const category = categoryWidget.value;
             const prompt = promptWidget.value;
@@ -7839,6 +8158,9 @@ function createPromptSelectorWidget(node) {
         }, 300);
     });
     nameDisplay.addEventListener("mouseleave", () => {
+        if (node._isWorkflowManager) {
+            return;
+        }
         if (hoverTimeout) clearTimeout(hoverTimeout);
         thumbnailPreview.style.display = "none";
     });
@@ -7880,8 +8202,33 @@ function createPromptSelectorWidget(node) {
     const updateDisplay = () => {
         const category = categoryWidget.value || "";
         const prompt = promptWidget.value || "new prompt";
-        nameDisplay.textContent = `${category} : ${prompt}`;
-        nameDisplay.title = `${category} : ${prompt}`;
+
+        const wmInputMode = node._isWorkflowManager && hasConnectedWorkflowInput(node);
+        const hasLiveWorkflow = !!(node.lastWorkflowData && typeof node.lastWorkflowData === "object");
+
+        if (wmInputMode) {
+            nameDisplay.textContent = hasLiveWorkflow
+                ? "Input connected: save incoming workflow"
+                : "Waiting for workflow_data input...";
+            nameDisplay.title = nameDisplay.textContent;
+            nameDisplay.style.cursor = "default";
+            leftArrow.style.opacity = "0.35";
+            rightArrow.style.opacity = "0.35";
+            leftArrow.style.cursor = "default";
+            rightArrow.style.cursor = "default";
+        } else {
+            nameDisplay.textContent = `${category} : ${prompt}`;
+            nameDisplay.title = `${category} : ${prompt}`;
+            nameDisplay.style.cursor = "pointer";
+            leftArrow.style.opacity = "1";
+            rightArrow.style.opacity = "1";
+            leftArrow.style.cursor = "pointer";
+            rightArrow.style.cursor = "pointer";
+        }
+
+        if (node._isWorkflowManager) {
+            updateWorkflowManagerPreview(node);
+        }
 
         // Remove existing badges if any
         const existingNsfwLabel = nameDisplay.querySelector('.nsfw-selector-label');
@@ -7899,7 +8246,7 @@ function createPromptSelectorWidget(node) {
 
         // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible.
         // Also show orange WORKFLOW badge when selected prompt contains workflow_data.
-        if (node.prompts && category) {
+        if (!wmInputMode && node.prompts && category) {
             const promptData = node.prompts[category]?.[prompt] || null;
             const catIsNSFW = node.prompts[category]?.["__meta__"]?.nsfw === true;
             const promptIsNSFW = promptData?.nsfw === true;
@@ -7923,7 +8270,7 @@ function createPromptSelectorWidget(node) {
                 `);
             }
 
-            if (hasWorkflowData) {
+            if (hasWorkflowData && !node?._isWorkflowManager) {
                 createBadge("workflow-selector-label", "W", `
                     width: 14px;
                     height: 14px;
@@ -7949,12 +8296,19 @@ function createPromptSelectorWidget(node) {
         if (!node.prompts) return allPrompts;
 
         const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
-        const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
+        const workflowOnly = node?._isWorkflowManager === true;
+        const categories = getVisibleCategories(node, {
+            hideNSFW: hideNSFW === true,
+            workflowOnly,
+        });
         for (const cat of categories) {
             // Skip NSFW categories when preference is set to hide
             if (hideNSFW && node.prompts[cat]?.["__meta__"]?.nsfw === true) continue;
 
-            const prompts = Object.keys(node.prompts[cat]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+            const prompts = getPromptNamesForCategory(node, cat, {
+                hideNSFW: hideNSFW === true,
+                workflowOnly,
+            });
             for (const prompt of prompts) {
                 // Skip NSFW prompts when preference is set to hide
                 if (hideNSFW && node.prompts[cat][prompt]?.nsfw === true) continue;
@@ -8028,6 +8382,7 @@ function createPromptSelectorWidget(node) {
     // Navigate to previous prompt (wraps across categories)
     leftArrow.onclick = async (e) => {
         e.stopPropagation();
+        if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) return;
         const allPrompts = getAllPromptsFlat();
         if (allPrompts.length === 0) return;
 
@@ -8039,6 +8394,7 @@ function createPromptSelectorWidget(node) {
     // Navigate to next prompt (wraps across categories)
     rightArrow.onclick = async (e) => {
         e.stopPropagation();
+        if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) return;
         const allPrompts = getAllPromptsFlat();
         if (allPrompts.length === 0) return;
 
@@ -8050,6 +8406,10 @@ function createPromptSelectorWidget(node) {
     // Open thumbnail browser on click
     nameDisplay.onclick = async (e) => {
         e.stopPropagation();
+
+        if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) {
+            return;
+        }
 
         try {
             // Check for unsaved changes before opening browser
@@ -8071,7 +8431,9 @@ function createPromptSelectorWidget(node) {
             const category = categoryWidget.value;
             const currentPrompt = promptWidget.value;
 
-            const selection = await showThumbnailBrowser(node, category, currentPrompt);
+            const selection = await showThumbnailBrowser(node, category, currentPrompt, {
+                workflowOnly: node?._isWorkflowManager === true,
+            });
 
             if (selection) {
                 // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
