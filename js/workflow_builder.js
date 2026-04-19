@@ -509,7 +509,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
     return row;
 }
 
-async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, includeEmptyOption = true) {
+async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, includeEmptyOption = true, preservePrevious = true) {
     const options = await fetchFn();
     const sel = row._sel;
     const previousVal = sel.value;
@@ -522,10 +522,14 @@ async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, incl
             sel.appendChild(noneOpt);
         }
         populateGroupedSelect(sel, options, true);
-        _ensureOptionValue(sel, previousVal, grouped);
-        const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
-        if (resolvedPrev) {
-            sel.value = resolvedPrev;
+        if (preservePrevious) {
+            _ensureOptionValue(sel, previousVal, grouped);
+            const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
+            if (resolvedPrev) {
+                sel.value = resolvedPrev;
+            } else {
+                sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
+            }
         } else {
             sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
         }
@@ -543,12 +547,16 @@ async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, incl
         if (recommendedValue && options.includes(recommendedValue)) {
             sel.value = recommendedValue;
         } else {
-            const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
-            if (resolvedPrev) {
-                sel.value = resolvedPrev;
-            } else if (previousVal) {
-                _ensureOptionValue(sel, previousVal, grouped);
-                sel.value = previousVal;
+            if (preservePrevious) {
+                const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
+                if (resolvedPrev) {
+                    sel.value = resolvedPrev;
+                } else if (previousVal) {
+                    _ensureOptionValue(sel, previousVal, grouped);
+                    sel.value = previousVal;
+                } else {
+                    sel.value = "";
+                }
             } else {
                 sel.value = "";
             }
@@ -3087,15 +3095,15 @@ app.registerExtension({
                     try {
                         const r = await fetch(`/workflow-extractor/list-vaes?family=${fam}`);
                         const d = await r.json();
-                        await reloadGroupedSelect(node._weVaeRow, async () => d.vaes || [], false, null);
-                    } catch { await reloadGroupedSelect(node._weVaeRow, async () => [], false, null); }
+                        await reloadGroupedSelect(node._weVaeRow, async () => d.vaes || [], false, null, true, false);
+                    } catch { await reloadGroupedSelect(node._weVaeRow, async () => [], false, null, true, false); }
                 };
                 const reloadClip = async () => {
                     try {
                         const r = await fetch(`/workflow-extractor/list-clips?family=${fam}`);
                         const d = await r.json();
-                        await reloadGroupedSelect(node._weClipRow, async () => d.clips || [], false, null);
-                    } catch { await reloadGroupedSelect(node._weClipRow, async () => [], false, null); }
+                        await reloadGroupedSelect(node._weClipRow, async () => d.clips || [], false, null, true, false);
+                    } catch { await reloadGroupedSelect(node._weClipRow, async () => [], false, null, true, false); }
                 };
                 await Promise.all([
                     reloadModelRowsForFamily(familyKey),
