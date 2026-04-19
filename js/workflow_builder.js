@@ -1262,6 +1262,60 @@ function _loraStacksSignature(workflowLoras, inputLoras) {
     ].join("||");
 }
 
+function _captureLoraOriginalStrengths(node, lorasA, lorasB) {
+    if (!node) return;
+    const aList = Array.isArray(lorasA) ? lorasA : [];
+    const bList = Array.isArray(lorasB) ? lorasB : [];
+    const hasBoth = aList.length > 0 && bList.length > 0;
+    const baseline = {};
+
+    for (const lora of aList) {
+        const name = String(lora?.name || "").trim();
+        if (!name) continue;
+        const modelStrength = Number(lora?.model_strength ?? lora?.strength ?? 1);
+        const clipStrength = Number(lora?.clip_strength ?? lora?.model_strength ?? lora?.strength ?? modelStrength);
+        const st = {
+            model_strength: Number.isFinite(modelStrength) ? modelStrength : 1,
+            clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1,
+        };
+        const key = hasBoth ? `a:${name}` : name;
+        baseline[key] = st;
+        if (!(name in baseline)) baseline[name] = st;
+    }
+
+    for (const lora of bList) {
+        const name = String(lora?.name || "").trim();
+        if (!name) continue;
+        const modelStrength = Number(lora?.model_strength ?? lora?.strength ?? 1);
+        const clipStrength = Number(lora?.clip_strength ?? lora?.model_strength ?? lora?.strength ?? modelStrength);
+        const st = {
+            model_strength: Number.isFinite(modelStrength) ? modelStrength : 1,
+            clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1,
+        };
+        baseline[`b:${name}`] = st;
+        if (!(name in baseline)) baseline[name] = st;
+    }
+
+    node._weLoraOriginalStrengths = baseline;
+}
+
+function _getLoraOriginalStrength(node, stateKey, lora) {
+    const baseline = node?._weLoraOriginalStrengths || {};
+    const byKey = baseline[stateKey];
+    if (byKey && typeof byKey === "object") return byKey;
+
+    const name = String(lora?.name || "").trim();
+    const byName = baseline[name];
+    if (byName && typeof byName === "object") return byName;
+
+    const modelStrength = Number(lora?.model_strength ?? lora?.strength ?? 1);
+    const clipStrength = Number(lora?.clip_strength ?? lora?.model_strength ?? lora?.strength ?? modelStrength);
+    return {
+        model_strength: Number.isFinite(modelStrength) ? modelStrength : 1,
+        clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1,
+    };
+}
+
 // --- LoRA display ---
 function updateLoras(node) {
     const containerA = node._weLoraAContainer;
@@ -1919,7 +1973,21 @@ app.registerExtension({
                     return;
                 }
                 const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
+                // During initial graph load, links can exist before upstream node
+                // resolution is fully settled. Keep the button visible for linked
+                // workflow_data in that transient state and refine on the next pass.
+                if (!upstream) {
+                    node._weUpdateBtn.style.display = "";
+                    return;
+                }
                 node._weUpdateBtn.style.display = _isUpdateSourceHint(upstream) ? "" : "none";
+            };
+            const _deferUpdateWorkflowButtonRefresh = () => {
+                if (!node._weUpdateBtn) return;
+                requestAnimationFrame(() => {
+                    if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
+                    if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
+                });
             };
             const _refreshUpdateWorkflowTooltip = () => {
                 if (!node._weUpdateBtn) return;
@@ -1949,9 +2017,11 @@ app.registerExtension({
             };
             node._weRefreshUpdateWorkflowTooltip = _refreshUpdateWorkflowTooltip;
             node._weRefreshUpdateWorkflowButtonVisibility = _refreshUpdateWorkflowButtonVisibility;
+            node._weDeferUpdateWorkflowButtonRefresh = _deferUpdateWorkflowButtonRefresh;
             node._weIsConnectedWorkflowDataExtractor = _isConnectedWorkflowDataExtractor;
             _refreshUpdateWorkflowButtonVisibility();
             _refreshUpdateWorkflowTooltip();
+            _deferUpdateWorkflowButtonRefresh();
 
             updateBtn.onmouseenter = () => { updateBtn.style.background = C.accentDim; };
             updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
@@ -2376,6 +2446,7 @@ app.registerExtension({
                     if (!lorasLocked) {
                         node._weExtracted.loras_a = _mergeLoraLists(processed.loras_a || [], node._weInputLoras.a);
                         node._weExtracted.loras_b = _mergeLoraLists(processed.loras_b || [], node._weInputLoras.b);
+                        _captureLoraOriginalStrengths(node, node._weExtracted.loras_a, node._weExtracted.loras_b);
                         node._weLoraState = {};
                     }
                     node._weOverrides = {};
@@ -3030,10 +3101,12 @@ app.registerExtension({
                     const hasBoth = lorasA.length > 0 && (d?.loras_b || []).length > 0;
                     for (const lora of lorasA) {
                         const k = hasBoth ? `a:${lora.name}` : lora.name;
-                        if (node._weLoraState[k]) {
-                            node._weLoraState[k].model_strength = lora.model_strength ?? 1.0;
-                            node._weLoraState[k].clip_strength  = lora.clip_strength  ?? 1.0;
+                        if (!node._weLoraState[k]) {
+                            node._weLoraState[k] = { active: lora.active !== false, model_strength: 1.0, clip_strength: 1.0 };
                         }
+                        const orig = _getLoraOriginalStrength(node, k, lora);
+                        node._weLoraState[k].model_strength = orig.model_strength;
+                        node._weLoraState[k].clip_strength = orig.clip_strength;
                     }
                     updateLoras(node); _syncS();
                 },
@@ -3063,10 +3136,12 @@ app.registerExtension({
                     const d = node._weExtracted;
                     for (const lora of (d?.loras_b || [])) {
                         const k = `b:${lora.name}`;
-                        if (node._weLoraState[k]) {
-                            node._weLoraState[k].model_strength = lora.model_strength ?? 1.0;
-                            node._weLoraState[k].clip_strength  = lora.clip_strength  ?? 1.0;
+                        if (!node._weLoraState[k]) {
+                            node._weLoraState[k] = { active: lora.active !== false, model_strength: 1.0, clip_strength: 1.0 };
                         }
+                        const orig = _getLoraOriginalStrength(node, k, lora);
+                        node._weLoraState[k].model_strength = orig.model_strength;
+                        node._weLoraState[k].clip_strength = orig.clip_strength;
                     }
                     updateLoras(node); _syncS();
                 },
@@ -3229,6 +3304,7 @@ app.registerExtension({
                 if (node._weUpdateBtn) {
                     if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
                     if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
+                    if (node._weDeferUpdateWorkflowButtonRefresh) node._weDeferUpdateWorkflowButtonRefresh();
                 }
 
                 // Clear input LoRAs for disconnected stacks and re-merge
@@ -3248,6 +3324,7 @@ app.registerExtension({
                     const wl = node._weWorkflowLoras || { a: [], b: [] };
                     node._weExtracted.loras_a = _mergeLoraLists(wl.a, node._weInputLoras.a);
                     node._weExtracted.loras_b = _mergeLoraLists(wl.b, node._weInputLoras.b);
+                    _captureLoraOriginalStrengths(node, node._weExtracted.loras_a, node._weExtracted.loras_b);
                     node._weLoraState = {};
                     updateLoras(node);
                     syncHidden(node);
@@ -3298,12 +3375,22 @@ app.registerExtension({
 
                 const oldWl = node._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = node._weInputLoras || { a: [], b: [] };
-                const oldSig = _loraStacksSignature(oldWl, oldIl);
+                const isExtractorConnected = node._weIsConnectedWorkflowDataExtractor?.() === true;
+                const oldSig = isExtractorConnected
+                    ? `${_loraListSignature(oldIl.a)}||${_loraListSignature(oldIl.b)}`
+                    : _loraStacksSignature(oldWl, oldIl);
 
-                node._weWorkflowLoras = {
-                    a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
-                    b: [...(info.workflow_loras_b || info.loras_b || oldWl.b || [])],
-                };
+                node._weWorkflowLoras = isExtractorConnected
+                    ? {
+                        // Extractor-connected mode is manual-refresh only.
+                        // Keep workflow baseline stable across executions.
+                        a: [...(oldWl.a || [])],
+                        b: [...(oldWl.b || [])],
+                    }
+                    : {
+                        a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
+                        b: [...(info.workflow_loras_b || info.loras_b || oldWl.b || [])],
+                    };
                 node._weInputLoras = {
                     a: [...(info.input_loras_a || oldIl.a || [])],
                     b: [...(info.input_loras_b || oldIl.b || [])],
@@ -3312,10 +3399,14 @@ app.registerExtension({
                 const mergedLorasA = _mergeLoraLists(node._weWorkflowLoras.a, node._weInputLoras.a);
                 const mergedLorasB = _mergeLoraLists(node._weWorkflowLoras.b, node._weInputLoras.b);
 
-                const newSig = _loraStacksSignature(node._weWorkflowLoras, node._weInputLoras);
-                if (oldSig !== newSig) node._weLoraState = {};
-
-                const isExtractorConnected = node._weIsConnectedWorkflowDataExtractor?.() === true;
+                const newSig = isExtractorConnected
+                    ? `${_loraListSignature(node._weInputLoras.a)}||${_loraListSignature(node._weInputLoras.b)}`
+                    : _loraStacksSignature(node._weWorkflowLoras, node._weInputLoras);
+                const lorasLocked = !!(node._weSectionLocks?.loras);
+                if (!lorasLocked && oldSig !== newSig) {
+                    _captureLoraOriginalStrengths(node, mergedLorasA, mergedLorasB);
+                    node._weLoraState = {};
+                }
                 if (isExtractorConnected) {
                     // In extractor-connected mode, keep manual section behavior,
                     // but always reflect latest merged LoRA stacks from execution.
@@ -3426,12 +3517,19 @@ app.registerExtension({
             if (info && !this._preUpdateApplied) {
                 const oldWl = this._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = this._weInputLoras || { a: [], b: [] };
-                const oldSig = _loraStacksSignature(oldWl, oldIl);
+                const oldSig = isExtractorConnected
+                    ? `${_loraListSignature(oldIl.a)}||${_loraListSignature(oldIl.b)}`
+                    : _loraStacksSignature(oldWl, oldIl);
 
-                this._weWorkflowLoras = {
-                    a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
-                    b: [...(info.workflow_loras_b || info.loras_b || oldWl.b || [])],
-                };
+                this._weWorkflowLoras = isExtractorConnected
+                    ? {
+                        a: [...(oldWl.a || [])],
+                        b: [...(oldWl.b || [])],
+                    }
+                    : {
+                        a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
+                        b: [...(info.workflow_loras_b || info.loras_b || oldWl.b || [])],
+                    };
                 this._weInputLoras = {
                     a: [...(info.input_loras_a || oldIl.a || [])],
                     b: [...(info.input_loras_b || oldIl.b || [])],
@@ -3440,8 +3538,14 @@ app.registerExtension({
                 const mergedLorasA = _mergeLoraLists(this._weWorkflowLoras.a, this._weInputLoras.a);
                 const mergedLorasB = _mergeLoraLists(this._weWorkflowLoras.b, this._weInputLoras.b);
 
-                const newSig = _loraStacksSignature(this._weWorkflowLoras, this._weInputLoras);
-                if (oldSig !== newSig) this._weLoraState = {};
+                const newSig = isExtractorConnected
+                    ? `${_loraListSignature(this._weInputLoras.a)}||${_loraListSignature(this._weInputLoras.b)}`
+                    : _loraStacksSignature(this._weWorkflowLoras, this._weInputLoras);
+                const lorasLocked = !!(this._weSectionLocks?.loras);
+                if (!lorasLocked && oldSig !== newSig) {
+                    _captureLoraOriginalStrengths(this, mergedLorasA, mergedLorasB);
+                    this._weLoraState = {};
+                }
 
                 if (isExtractorConnected) {
                     this._weExtracted = {
@@ -3713,6 +3817,7 @@ app.registerExtension({
                     loras_a: mergedLorasA,
                     loras_b: mergedLorasB,
                 });
+                _captureLoraOriginalStrengths(node, mergedLorasA, mergedLorasB);
                 node._wePopulated = true;
                 node._weLoraState = {};
                 node._weOverrides = {};
@@ -3749,6 +3854,7 @@ app.registerExtension({
             if (node._weUpdateBtn) {
                 if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
                 if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
+                if (node._weDeferUpdateWorkflowButtonRefresh) node._weDeferUpdateWorkflowButtonRefresh();
             }
         };
     },

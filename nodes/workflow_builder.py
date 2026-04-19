@@ -555,6 +555,9 @@ class WorkflowBuilder:
     # caches are always empty.  Keyed by (unique_id, full_path, family_key) so
     # each canvas node has its own cache slot and model changes are detected.
     _class_model_cache: dict = {}
+    # Cache last effective LoRA UI state per node to protect against transient
+    # empty lora_state payloads when connected input stacks are unchanged.
+    _class_lora_ui_cache: dict = {}
 
     def __init__(self):
         pass  # cache lives at class level — see _class_model_cache
@@ -761,6 +764,23 @@ class WorkflowBuilder:
         extracted['loras_a'] = _merge_lora_lists(workflow_loras_a, input_loras_a)
         extracted['loras_b'] = _merge_lora_lists(workflow_loras_b, input_loras_b)
 
+        def _lora_input_signature(lora_list):
+            rows = []
+            for lora_item in (lora_list or []):
+                if not isinstance(lora_item, dict):
+                    continue
+                rows.append((
+                    str(lora_item.get('name', '')),
+                    str(lora_item.get('path', '')),
+                    float(lora_item.get('model_strength', 1.0)),
+                    float(lora_item.get('clip_strength', lora_item.get('model_strength', 1.0))),
+                ))
+            rows.sort()
+            return json.dumps(rows, separators=(',', ':'))
+
+        node_state_key = str(unique_id) if unique_id is not None else None
+        input_lora_sig = _lora_input_signature(input_loras_a) + "||" + _lora_input_signature(input_loras_b)
+
         # ── Parse overrides from JS ──────────────────────────────────────
         try:
             overrides = json.loads(override_data) if override_data else {}
@@ -770,6 +790,15 @@ class WorkflowBuilder:
             lora_overrides = json.loads(lora_state) if lora_state else {}
         except json.JSONDecodeError:
             lora_overrides = {}
+
+        # If connected input stacks did not change but lora_state arrived empty,
+        # reuse last known effective LoRA UI state for this node.
+        if node_state_key is not None and (not isinstance(lora_overrides, dict) or len(lora_overrides) == 0):
+            cached_lora_state = WorkflowBuilder._class_lora_ui_cache.get(node_state_key)
+            if isinstance(cached_lora_state, dict) and cached_lora_state.get('input_sig') == input_lora_sig:
+                cached_overrides = cached_lora_state.get('overrides')
+                if isinstance(cached_overrides, dict) and cached_overrides:
+                    lora_overrides = dict(cached_overrides)
 
         section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
         has_workflow_input = wf_data is not None
@@ -916,17 +945,28 @@ class WorkflowBuilder:
         # ── Apply lora_overrides: set active flag + update strengths ─────
         # Keep ALL loras (like PMA) but mark inactive ones with active=False.
         # Only _apply_loras filters out inactive when actually loading models.
-        has_both = bool(extracted.get('loras_a')) and bool(extracted.get('loras_b'))
-        if has_workflow_input and not extractor_sourced_input and not bool(section_locks.get('loras', False)):
-            lora_overrides = {}
+        def _resolve_lora_override(overrides_map, lora_name, stack_key):
+            """Resolve LoRA UI state across prefixed/unprefixed key variants.
+
+            Historical/UI states may use either `<name>` or `<stack>:<name>` keys,
+            and stack shape can change between runs. Prefer stack-specific key
+            then fall back to bare-name key.
+            """
+            name = str(lora_name or "")
+            if not name or not isinstance(overrides_map, dict):
+                return {}
+            pref_key = f"{stack_key}:{name}" if stack_key else name
+            ov = overrides_map.get(pref_key)
+            if isinstance(ov, dict):
+                return ov
+            ov = overrides_map.get(name)
+            return ov if isinstance(ov, dict) else {}
 
         for stack_key, list_key in [('a', 'loras_a'), ('b', 'loras_b')]:
-            sk = stack_key if has_both else ''
             updated_list = []
             for lora in extracted.get(list_key, []):
                 lora_name = lora.get('name', '')
-                state_key = f"{sk}:{lora_name}" if sk else lora_name
-                lora_st = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
+                lora_st = _resolve_lora_override(lora_overrides, lora_name, stack_key)
                 updated = dict(lora)
                 # Preserve incoming active state unless user explicitly toggled it in UI.
                 updated['active'] = lora_st.get('active', lora.get('active', True)) is not False
@@ -936,6 +976,26 @@ class WorkflowBuilder:
                     updated['clip_strength'] = float(lora_st['clip_strength'])
                 updated_list.append(updated)
             extracted[list_key] = updated_list
+
+        # Persist last effective LoRA UI state for unchanged-stack protection.
+        if node_state_key is not None:
+            effective_map = {}
+            for stack_key, list_key in [('a', 'loras_a'), ('b', 'loras_b')]:
+                for lora in extracted.get(list_key, []):
+                    name = str(lora.get('name', '')).strip()
+                    if not name:
+                        continue
+                    st = {
+                        'active': lora.get('active', True) is not False,
+                        'model_strength': float(lora.get('model_strength', lora.get('strength', 1.0))),
+                        'clip_strength': float(lora.get('clip_strength', lora.get('model_strength', lora.get('strength', 1.0)))),
+                    }
+                    effective_map[name] = st
+                    effective_map[f"{stack_key}:{name}"] = st
+            WorkflowBuilder._class_lora_ui_cache[node_state_key] = {
+                'input_sig': input_lora_sig,
+                'overrides': effective_map,
+            }
 
         simplified_wf = build_simplified_workflow_data(
             extracted, wf_overrides, sampler_params
@@ -1206,8 +1266,7 @@ class WorkflowBuilder:
                     for lora in lora_list:
                         name = lora.get('name', '')
                         # Read active state from JS lora_overrides
-                        key = f"{stack_prefix}:{name}" if stack_prefix else name
-                        ov = overrides_map.get(key, {})
+                        ov = _resolve_lora_override(overrides_map, name, stack_prefix)
                         active = ov.get('active', lora.get('active', True)) if ov else lora.get('active', True)
                         enriched.append({
                             'name': name,
@@ -1219,10 +1278,9 @@ class WorkflowBuilder:
                         })
                     return enriched
 
-                has_both = bool(extracted.get('loras_a')) and bool(extracted.get('loras_b'))
                 loras_a_enriched = _enrich_loras(
                     extracted.get('loras_a', []), lora_overrides,
-                    'a' if has_both else ''
+                    'a'
                 )
                 loras_b_enriched = _enrich_loras(
                     extracted.get('loras_b', []), lora_overrides, 'b'
