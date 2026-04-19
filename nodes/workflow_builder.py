@@ -1173,22 +1173,19 @@ class WorkflowBuilder:
                 if key in wf_data:
                     simplified_wf[key] = wf_data.get(key)
 
-        # Do not pass missing LoRAs in emitted workflow_data.
-        # Keep them visible in UI (via lora_availability), but strip them from
-        # runtime workflow payload so downstream nodes only receive valid LoRAs.
+        # Keep missing LoRAs in workflow_data (Prompt Manager-compatible).
+        # Annotate each LoRA with found flag so downstream nodes can
+        # skip missing entries without losing authored stack information.
         for lora_key in ('loras_a', 'loras_b'):
-            original_list = list(simplified_wf.get(lora_key, []))
-            filtered_list = []
-            dropped = []
-            for lora in original_list:
-                name = str((lora or {}).get('name', '')).strip()
-                if name and not lora_availability.get(name, True):
-                    dropped.append(name)
-                    continue
-                filtered_list.append(lora)
-            simplified_wf[lora_key] = filtered_list
-            for r in dropped:
-                print(f"[WorkflowBuilder] LoRA '{r}' not found, removed from workflow_data")
+            annotated = []
+            for lora in list(simplified_wf.get(lora_key, [])):
+                row = dict(lora or {})
+                name = str(row.get('name', '')).strip()
+                found = lora_availability.get(name, True) if name else True
+                row['found'] = bool(found)
+                annotated.append(row)
+
+            simplified_wf[lora_key] = annotated
 
         # ── Build UI info for JS (always, even if generation fails) ───────
         # Echo back the *effective* values (overrides applied) so the JS
@@ -1280,7 +1277,7 @@ class WorkflowBuilder:
                             'strength': float(ov.get('model_strength', lora.get('model_strength', 1.0))),
                             'clip_strength': float(ov.get('clip_strength', lora.get('clip_strength', 1.0))),
                             'active': active,
-                            'available': lora_availability.get(name, True),
+                            'found': lora_availability.get(name, True),
                         })
                     return enriched
 

@@ -699,6 +699,10 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
             print(f"[WorkflowRenderer] Skipping disabled LoRA: {lora_name}")
             continue
 
+        if lora.get('found') is False:
+            print(f"[WorkflowRenderer] Skipping missing LoRA flagged in workflow_data: {lora_name}")
+            continue
+
         model_strength = float(lora_st.get('model_strength', lora.get('model_strength', 1.0)))
         clip_strength  = float(lora_st.get('clip_strength',  lora.get('clip_strength',  1.0)))
 
