@@ -138,13 +138,10 @@ class WorkflowRenderer:
         _class_vae_cache.clear()
         cleared_clips = len(_class_clip_cache)
         _class_clip_cache.clear()
-        print(f"[WorkflowRenderer] Cleared class model cache entries: {cleared}")
-        print(f"[WorkflowRenderer] Cleared VAE cache entries: {cleared_vaes}")
-        print(f"[WorkflowRenderer] Cleared CLIP cache entries: {cleared_clips}")
+        print(f"[WorkflowRenderer] Cleared caches (models={cleared}, vaes={cleared_vaes}, clips={cleared_clips})")
 
         try:
             comfy.model_management.soft_empty_cache()
-            print("[WorkflowRenderer] Requested ComfyUI cache cleanup.")
         except Exception as e:
             print(f"[WorkflowRenderer] Cache cleanup call failed: {e}")
 
@@ -157,7 +154,6 @@ class WorkflowRenderer:
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-                print("[WorkflowRenderer] Requested CUDA empty_cache().")
         except Exception as e:
             print(f"[WorkflowRenderer] CUDA cache clear failed: {e}")
 
@@ -262,7 +258,15 @@ class WorkflowRenderer:
             "sampler_name": wf_sampler.get("sampler_name", family_defaults.get("sampler", "euler")),
             "scheduler": wf_sampler.get("scheduler", family_defaults.get("scheduler", "simple")),
         }
+        try:
+            denoise_value = float(wf_sampler.get("denoise", 1.0))
+        except (TypeError, ValueError):
+            denoise_value = 1.0
+        denoise_value = max(0.0, min(1.0, denoise_value))
+        sampler_params["denoise"] = denoise_value
         seed_b = wf_sampler.get("seed_b")
+        workflow_image = wf.get("IMAGE")
+        denoise_source_image = source_image if isinstance(source_image, torch.Tensor) else workflow_image
 
         # Only WAN video families use dual-model sampling. Ignore stale model_b
         # values for image families so logs and state remain unambiguous.
@@ -290,7 +294,6 @@ class WorkflowRenderer:
             model_a = passthrough_model_a
             clip_a = wf.get("CLIP", None)
             vae_a = wf.get("VAE", None)
-            print("[WorkflowRenderer] Using passthrough MODEL_A object from workflow_data")
         else:
             resolved_a, folder_a = resolve_model_name(model_name_a)
             # Verify resolved model belongs to a compatible family — resolve_model_name
@@ -331,8 +334,6 @@ class WorkflowRenderer:
             if _cache_key_a not in _cache:
                 print(f"[WorkflowRenderer] Loading model: {resolved_a}")
                 _cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a, family_is_checkpoint=_family_is_ckpt)
-            else:
-                print(f"[WorkflowRenderer] Using cached model: {resolved_a}")
             model_a, clip_a, vae_a = _cache[_cache_key_a]
         has_both_stacks = bool(loras_a) and bool(loras_b)
 
@@ -371,11 +372,18 @@ class WorkflowRenderer:
         model_b_obj = None
 
         # ── Dispatch by family ────────────────────────────────────────────
+        # Never trust/reuse prior LATENT directly across families.
+        # If denoise < 1.0, regenerate a compatible latent from IMAGE via current VAE.
+        input_latent_for_denoise = None
+        if family_key not in ("wan_video_t2v", "wan_video_i2v") and denoise_value < 1.0:
+            input_latent_for_denoise = _build_denoise_latent_from_image(vae, denoise_source_image, family_key)
+
         render_args = dict(
             model=model_a, clip=clip, vae=vae,
             pos_prompt=positive_prompt, neg_prompt=negative_prompt,
             width=width, height=height, batch=batch,
             sampler_params=sampler_params,
+            input_latent=input_latent_for_denoise,
             loras_a=loras_a, lora_overrides=lora_overrides,
             lora_stack_key=stack_key_a,
         )
@@ -412,7 +420,6 @@ class WorkflowRenderer:
             passthrough_model_b = wf.get("MODEL_B", None)
             if passthrough_model_b is not None:
                 model_b_obj = passthrough_model_b
-                print("[WorkflowRenderer] Using passthrough MODEL_B object from workflow_data")
             elif model_name_b:
                 resolved_b, folder_b = resolve_model_name(model_name_b)
                 if resolved_b:
@@ -421,8 +428,6 @@ class WorkflowRenderer:
                     if _cache_key_b not in _cache:
                         print(f"[WorkflowRenderer] Loading model B: {resolved_b}")
                         _cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b, family_is_checkpoint=_family_is_ckpt)
-                    else:
-                        print(f"[WorkflowRenderer] Using cached model B: {resolved_b}")
                     model_b_obj, _, _ = _cache[_cache_key_b]
 
             # WAN dual-sampler step counts
@@ -619,7 +624,6 @@ def _load_vae(vae_name, existing_vae=None):
             cache_key = os.path.realpath(vae_path)
             cached_vae = _class_vae_cache.get(cache_key)
             if cached_vae is not None:
-                print(f"[WorkflowRenderer] Using cached VAE: {vae_name}")
                 return cached_vae
             print(f"[WorkflowRenderer] Loading VAE: {vae_name}")
             sd, metadata = comfy.utils.load_torch_file(vae_path, return_metadata=True)
@@ -668,11 +672,9 @@ def _load_clip(clip_info, overrides, existing_clip=None):
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
 
     print(f"[WorkflowRenderer] Loading CLIP: {clip_names}")
-    print(f"[WorkflowRenderer] clip_info={clip_info}, overrides={overrides}")
     cache_key = (tuple(os.path.realpath(p) for p in valid_paths), str(clip_type))
     cached_clip = _class_clip_cache.get(cache_key)
     if cached_clip is not None:
-        print(f"[WorkflowRenderer] Using cached CLIP: {clip_names}")
         return cached_clip
 
     loaded_clip = comfy.sd.load_clip(
@@ -696,11 +698,9 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
         lora_st   = lora_overrides.get(state_key, lora_overrides.get(lora_name, {}))
 
         if lora_st.get('active') is False or lora.get('active') is False:
-            print(f"[WorkflowRenderer] Skipping disabled LoRA: {lora_name}")
             continue
 
         if lora.get('found') is False:
-            print(f"[WorkflowRenderer] Skipping missing LoRA flagged in workflow_data: {lora_name}")
             continue
 
         model_strength = float(lora_st.get('model_strength', lora.get('model_strength', 1.0)))
@@ -708,7 +708,6 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
 
         lora_path, found = resolve_lora_path(lora_name)
         if not found:
-            print(f"[WorkflowRenderer] LoRA not found, skipping: {lora_name}")
             continue
 
         print(f"[WorkflowRenderer] Applying LoRA: {lora_name} "
@@ -747,10 +746,7 @@ def _decode_latent_output(vae, latent_out, tag="render"):
     if not isinstance(latent_out, dict) or "samples" not in latent_out:
         raise TypeError(f"[{tag}] Expected LATENT dict with 'samples', got: {type(latent_out)}")
 
-    print(f"[{tag}] Decoding latent…")
     decoded = vae.decode(latent_out["samples"])
-    print(f"[{tag}] latent shape={latent_out['samples'].shape}")
-    print(f"[{tag}] decoded shape={decoded.shape}")
 
     if len(decoded.shape) == 5:
         decoded = decoded.reshape(
@@ -787,6 +783,51 @@ def _make_latent(channels, width, height, batch=1, frames=None, spacial_ratio=No
     latent = {"samples": samples}
     if spacial_ratio is not None:
         latent["downscale_ratio_spacial"] = spacial_ratio
+    return latent
+
+
+def _build_denoise_latent_from_image(vae, image, family_key):
+    """
+    Build a LATENT dict from an IMAGE tensor using the active VAE.
+    Used when denoise < 1.0 so the latent is compatible with the current model family.
+    """
+    if not isinstance(image, torch.Tensor) or image.ndim != 4:
+        return None
+
+    # Comfy IMAGE tensors are BHWC in [0,1]. Keep RGB channels only.
+    image_rgb = image[..., :3].contiguous()
+
+    try:
+        if family_key == "wan_image" and image_rgb.shape[0] > 1:
+            # Some WAN VAEs only encode the first item of a BHWC batch.
+            # Encode per item and concatenate to preserve full batch behavior.
+            encoded_parts = []
+            for i in range(image_rgb.shape[0]):
+                part = vae.encode(image_rgb[i:i + 1].contiguous())
+                if not isinstance(part, torch.Tensor):
+                    return None
+                if part.ndim == 4:
+                    part = part.unsqueeze(2)
+                elif part.ndim != 5:
+                    return None
+                encoded_parts.append(part)
+            encoded = torch.cat(encoded_parts, dim=0)
+        else:
+            encoded = vae.encode(image_rgb)
+    except Exception as e:
+        print(f"[WorkflowRenderer] Failed to VAE-encode IMAGE for denoise latent: {e}")
+        return None
+
+    if not isinstance(encoded, torch.Tensor):
+        return None
+
+    # WAN image path uses video-native latent shape [B, C, T, H, W] with T=1.
+    if family_key == "wan_image" and encoded.ndim == 4:
+        encoded = encoded.unsqueeze(2)
+
+    latent = {"samples": encoded}
+    if family_key == "wan_image":
+        latent["downscale_ratio_spacial"] = 8
     return latent
 
 
@@ -829,7 +870,7 @@ def _patch_model_sampling_auraflow(model, shift=3.0):
     return outs[0]
 
 
-def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_params):
+def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_params, denoise_override=None):
     """
     Standard KSampler path.
     Input: LATENT dict
@@ -847,6 +888,7 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
     seed         = int(sampler_params.get("seed_a", sampler_params.get("seed", 0)))
     sampler_name = sampler_params["sampler_name"]
     scheduler    = sampler_params["scheduler"]
+    denoise      = float(sampler_params.get("denoise", 1.0)) if denoise_override is None else float(denoise_override)
     latent_image = comfy.sample.fix_empty_latent_channels(
         model,
         latent_dict["samples"],
@@ -863,7 +905,7 @@ def _run_standard_ksampler(model, cond_pos, cond_neg, latent_dict, sampler_param
     samples = comfy.sample.sample(
         model, noise, steps, cfg, sampler_name, scheduler,
         cond_pos, cond_neg, latent_image,
-        denoise=1.0, disable_noise=False,
+        denoise=denoise, disable_noise=False,
         start_step=None, last_step=None,
         force_full_denoise=False, noise_mask=noise_mask,
         callback=callback, disable_pbar=disable_pbar, seed=seed,
@@ -903,12 +945,6 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
     seed_b       = int(sampler_params.get("seed_b", seed_a))
     sampler_name = sampler_params.get("sampler_name", "euler")
     scheduler    = sampler_params.get("scheduler", "simple")
-
-    print(
-        f"[_run_wan_sampler] total_steps={total_steps}, "
-        f"high=0→{steps_high}, low={steps_high}→{total_steps}, "
-        f"cfg={cfg}, seed_a={seed_a}, seed_b={seed_b}"
-    )
 
     latent_image = comfy.sample.fix_empty_latent_channels(
         model,
@@ -965,6 +1001,7 @@ def _run_wan_sampler(model, cond_pos, cond_neg, latent_dict, sampler_params,
 
 def _render_sdxl(model, clip, vae, pos_prompt, neg_prompt,
                  width, height, batch, sampler_params,
+                 input_latent=None,
                  loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
     SDXL render — also suitable for SD1.5-style image flow if desired.
@@ -982,14 +1019,17 @@ def _render_sdxl(model, clip, vae, pos_prompt, neg_prompt,
     tokens_neg = clip.tokenize(neg_prompt)
     cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
 
-    latent = _make_latent(4, width, height, batch=batch)
-    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    latent = input_latent if use_input_latent else _make_latent(4, width, height, batch=batch)
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
+    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise)
     decoded = _decode_latent_output(vae, latent_out, tag="_render_sdxl")
     return decoded, latent_out
 
 
 def _render_qwen_image(model, clip, vae, pos_prompt, neg_prompt,
                        width, height, batch, sampler_params,
+                       input_latent=None,
                        loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
     Qwen Image render — mirrors qwen_image.json.
@@ -1010,22 +1050,27 @@ def _render_qwen_image(model, clip, vae, pos_prompt, neg_prompt,
         model, shift=float(sampler_params.get("shift", 3.1))
     )
 
-    latent_node = EmptySD3LatentImage()
-
-    if hasattr(latent_node, "generate"):
-        latent = latent_node.generate(width=width, height=height, batch_size=batch)[0]
-    elif hasattr(EmptySD3LatentImage, "execute"):
-        latent = _extract_node_outputs(
-            EmptySD3LatentImage.execute(width=width, height=height, batch_size=batch)
-        )[0]
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    if use_input_latent:
+        latent = input_latent
     else:
-        raise RuntimeError("EmptySD3LatentImage has neither generate() nor execute().")
+        latent_node = EmptySD3LatentImage()
+
+        if hasattr(latent_node, "generate"):
+            latent = latent_node.generate(width=width, height=height, batch_size=batch)[0]
+        elif hasattr(EmptySD3LatentImage, "execute"):
+            latent = _extract_node_outputs(
+                EmptySD3LatentImage.execute(width=width, height=height, batch_size=batch)
+            )[0]
+        else:
+            raise RuntimeError("EmptySD3LatentImage has neither generate() nor execute().")
 
     if not isinstance(latent, dict) or "samples" not in latent:
         raise TypeError("EmptySD3LatentImage did not return a LATENT dict.")
 
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
     latent_out = _run_standard_ksampler(
-        model, cond_pos, cond_neg, latent, sampler_params
+        model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise
     )
 
     decoded = _decode_latent_output(vae, latent_out, tag="_render_qwen_image")
@@ -1034,6 +1079,7 @@ def _render_qwen_image(model, clip, vae, pos_prompt, neg_prompt,
 
 def _render_flux1(model, clip, vae, pos_prompt, neg_prompt,
                   width, height, batch, sampler_params,
+                  input_latent=None,
                   loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
     Flux 1 render.
@@ -1054,14 +1100,17 @@ def _render_flux1(model, clip, vae, pos_prompt, neg_prompt,
     cond_pos = node_helpers.conditioning_set_values(cond_pos, {"guidance": 3.5})
     (cond_neg,) = ConditioningZeroOut().zero_out(cond_neg)
 
-    latent = _make_latent(16, width, height, batch=batch, spacial_ratio=16)
-    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    latent = input_latent if use_input_latent else _make_latent(16, width, height, batch=batch, spacial_ratio=16)
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
+    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise)
     decoded = _decode_latent_output(vae, latent_out, tag="_render_flux1")
     return decoded, latent_out
 
 
 def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
                   width, height, batch, sampler_params,
+                  input_latent=None,
                   loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
     Flux 2 render using custom sampler nodes.
@@ -1082,7 +1131,8 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
     tokens_neg = clip.tokenize(neg_prompt)
     cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
 
-    latent = _make_latent(16, width, height, batch=batch, spacial_ratio=16)
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    latent = input_latent if use_input_latent else _make_latent(16, width, height, batch=batch, spacial_ratio=16)
 
     steps        = int(sampler_params.get("steps", 4))
     cfg          = float(sampler_params.get("cfg", 1.0))
@@ -1092,7 +1142,8 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
 
     guider = _extract_node_outputs(CFGGuider.execute(model, cond_pos, cond_neg, cfg))[0]
     sampler = _extract_node_outputs(KSamplerSelect.execute(sampler_name))[0]
-    sigmas = _extract_node_outputs(BasicScheduler.execute(model, scheduler, steps, 1.0))[0]
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
+    sigmas = _extract_node_outputs(BasicScheduler.execute(model, scheduler, steps, denoise))[0]
     noise_obj = _extract_node_outputs(RandomNoise.execute(seed))[0]
 
     latent_image = comfy.sample.fix_empty_latent_channels(
@@ -1120,6 +1171,7 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
 
 def _render_zimage(model, clip, vae, pos_prompt, neg_prompt,
                    width, height, batch, sampler_params,
+                   input_latent=None,
                    loras_a=None, lora_overrides=None, lora_stack_key=''):
     from comfy_extras.nodes_sd3 import EmptySD3LatentImage
 
@@ -1137,16 +1189,21 @@ def _render_zimage(model, clip, vae, pos_prompt, neg_prompt,
         model, shift=float(sampler_params.get("shift", 3.0))
     )
 
-    latent_node = EmptySD3LatentImage()
-    if hasattr(latent_node, "generate"):
-        latent = latent_node.generate(width=width, height=height, batch_size=batch)[0]
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    if use_input_latent:
+        latent = input_latent
     else:
-        latent = _extract_node_outputs(
-            EmptySD3LatentImage.execute(width=width, height=height, batch_size=batch)
-        )[0]
+        latent_node = EmptySD3LatentImage()
+        if hasattr(latent_node, "generate"):
+            latent = latent_node.generate(width=width, height=height, batch_size=batch)[0]
+        else:
+            latent = _extract_node_outputs(
+                EmptySD3LatentImage.execute(width=width, height=height, batch_size=batch)
+            )[0]
 
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
     latent_out = _run_standard_ksampler(
-        model, cond_pos, cond_neg, latent, sampler_params
+        model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise
     )
 
     decoded = _decode_latent_output(vae, latent_out, tag="_render_zimage")
@@ -1155,6 +1212,7 @@ def _render_zimage(model, clip, vae, pos_prompt, neg_prompt,
 
 def _render_wan_image(model, clip, vae, pos_prompt, neg_prompt,
                       width, height, batch, sampler_params,
+                      input_latent=None,
                       loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
     WAN image render using a video-native latent with T=1.
@@ -1172,8 +1230,10 @@ def _render_wan_image(model, clip, vae, pos_prompt, neg_prompt,
     tokens_neg = clip.tokenize(neg_prompt)
     cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
 
-    latent = _make_latent(16, width, height, batch=batch, frames=1, spacial_ratio=8)
-    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params)
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    latent = input_latent if use_input_latent else _make_latent(16, width, height, batch=batch, frames=1, spacial_ratio=8)
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
+    latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise)
     decoded = _decode_latent_output(vae, latent_out, tag="_render_wan_image")
     return decoded, latent_out
 

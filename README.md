@@ -293,6 +293,12 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ## Changelog
 
+### version 2.0.1
+- **Added Denoise options to Workflow Pipeline**
+  - Workflow Data now contains Denoise Value, Extractor will always return 1
+  - This allow mid-run model handoff: start rendering with Model A, then switch to Model B to finish using KSampler denoise.
+  - Bug Fixes
+
 ### version 2.0.0
 - **Prompt Manager becomes Prompt + Workflow Manager**
   - Workflow Manager now allows saving Workflow and is integrated with Prompt Manager save/reuse behavior

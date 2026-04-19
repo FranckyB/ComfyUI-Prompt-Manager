@@ -88,12 +88,13 @@ def _get_embedded_extracted_data(workflow_data):
 def extract_sampler_params(prompt_data, workflow_data):
     """
     Extract sampler parameters from KSampler nodes in API or workflow format.
-    Returns a dict with steps_a, steps_b, cfg, seed_a, seed_b, sampler_name, scheduler.
+    Returns a dict with steps_a, steps_b, cfg, denoise, seed_a, seed_b, sampler_name, scheduler.
     """
     params = {
         'steps_a': 20,
         'steps_b': None,   # WAN Video low-pass steps (None = same as steps_a)
         'cfg': 7.0,
+        'denoise': 1.0,
         'seed_a': 0,
         'seed_b': None,   # WAN Video second-sampler seed (None = use same as seed_a)
         'sampler_name': 'euler',
@@ -567,6 +568,7 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
                 'steps_a':      s.get('steps_a', s.get('steps', 20)),
                 'steps_b':      s.get('steps_b'),
                 'cfg':          s.get('cfg', 7.0),
+                'denoise':      1.0,
                 'seed_a':       s.get('seed_a', s.get('seed', 0)),
                 'seed_b':       s.get('seed_b'),
                 'sampler_name': s.get('sampler_name', 'euler'),
@@ -607,6 +609,7 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
                     'steps_a':      ov.get('steps_a', ov.get('steps', 20)),
                     'steps_b':      ov.get('steps_b'),
                     'cfg':          ov.get('cfg', 7.0),
+                    'denoise':      1.0,
                     'seed_a':       ov.get('seed_a', ov.get('seed', 0)),
                     'seed_b':       ov.get('seed_b'),
                     'sampler_name': ov.get('sampler_name', 'euler'),
@@ -676,7 +679,7 @@ def extract_all_from_file(file_path, source_folder='input'):
       model_a, model_b,
       vae  {'name', 'source'},
       clip {'names', 'type', 'source'},
-      sampler {'steps_a', 'steps_b', 'cfg', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'},
+            sampler {'steps_a', 'steps_b', 'cfg', 'denoise', 'seed_a', 'seed_b', 'sampler_name', 'scheduler'},
       resolution {'width', 'height', 'batch_size', 'length'},
       is_video (bool)
     """
@@ -702,7 +705,7 @@ def extract_all_from_file(file_path, source_folder='input'):
         'vae':      {'name': '', 'source': 'unknown'},
         'clip':     {'names': [], 'type': '', 'source': 'unknown'},
         'sampler':  {
-            'steps_a': 20, 'steps_b': None, 'cfg': 7.0, 'seed_a': 0, 'seed_b': None,
+            'steps_a': 20, 'steps_b': None, 'cfg': 7.0, 'denoise': 1.0, 'seed_a': 0, 'seed_b': None,
             'sampler_name': 'euler', 'scheduler': 'normal',
         },
         'resolution': {'width': 512, 'height': 512, 'batch_size': 1, 'length': None},
@@ -859,6 +862,10 @@ def _build_sampler_dict(sampler, family):
     elif 'steps' in d:
         d.pop('steps')
     d.setdefault('steps_a', 20)
+    try:
+        d['denoise'] = 1.0 if d.get('denoise') is None else float(d.get('denoise', 1.0))
+    except (TypeError, ValueError):
+        d['denoise'] = 1.0
     if family in ('wan_video_i2v', 'wan_video_t2v'):
         # For WAN dual-sampler: if steps_b not set, split steps_a evenly
         if d.get('steps_b') is None:
@@ -886,7 +893,7 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
     if overrides is None:
         overrides = {}
     sampler = sampler_params if sampler_params is not None else extracted.get('sampler', {
-        'steps_a': 20, 'steps_b': None, 'cfg': 7.0, 'seed_a': 0, 'seed_b': None,
+        'steps_a': 20, 'steps_b': None, 'cfg': 7.0, 'denoise': 1.0, 'seed_a': 0, 'seed_b': None,
         'sampler_name': 'euler', 'scheduler': 'normal',
     })
 
