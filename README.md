@@ -1,17 +1,44 @@
 # ComfyUI Prompt Manager
-## A comprehensive prompt toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) — Save, Generate, and Extract prompts with full LoRA support.
+## A comprehensive prompt and workflow toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) — Save, Generate, Extract, Build, and Reuse workflows with full LoRA support.
 
-A complete prompt management solution featuring three core capabilities:
+A complete prompt and workflow management suite featuring:
 
-**Prompt Manager** — Save and organize prompts with categories, simple UI with minimal feature.
+## v2.0 Introduces: Workflow Extractor + Workflow Builder + Workflow Renderer + Workflow Manager
 
-**Prompt Manager Advanced** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan videos. Toggle LoRAs on/off or adjust strengths directly from saved presets. Will also remap Loras if path differs.
+The goal of this v2.0 workflow layer is to strip workflows down to their core elements so they are easier to understand, edit, and reuse.
+
+- Extract metadata from source images and videos (ComfyUI or A1111/Forge)
+- Reduce complex graphs into a clean, editable workflow core
+- Rebuild and run from that simplified core with Workflow Builder to Workflow Renderer
+- Save and reuse clean workflow entries through Workflow Manager
+- Combine with Prompt tools (Prompt Manager, and Prompt Generator) for easier prompt creation and generation.
+
+Think of it as workflow de-spaghetti: keep the important parts, remove unnecessary complexity.
+
+This release marks version 2.0.0. More polish and quality-of-life improvements are planned.
+
+**Prompt Manager** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan videos. Toggle LoRAs on/off or adjust strengths directly from saved presets. Supports workflow_data input from Workflow Builder or Prompt Extractor to pull workflow prompts and LoRA stacks directly into PMA. Will also remap LoRAs if paths differ.
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp) or [Ollama](https://ollama.com). Supports text enhancement, image analysis with vision models (Qwen3.5), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
-**Prompt Extractor** — Extract prompts, LoRA configurations, and checkpoint/model paths from existing images, videos, or JSON workflow files. Will extract first frame from any video. Automatically parses embedded metadata and outputs active LoRA as Lora stacks, plus resolved model paths (High/Low for dual-model workflows like Wan). Supports ComfyUI, A1111/Forge, and WebP metadata formats. When used in conjunction with Prompt Manager Advanced, Loras will be automatically found if available, regardless of path. For those that aren't, right click offers the option to look for them on Civitai. Browse files from both your input and output folders.
+**Prompt Extractor** — Extract prompts, LoRA configurations, and checkpoint/model paths from existing images, videos, or JSON workflow files. Extracts the first frame from any video. Automatically parses embedded metadata and outputs active LoRAs as LoRA stacks, plus resolved model paths (High/Low for dual-model workflows like Wan). Supports ComfyUI, A1111/Forge, and WebP metadata formats. When used with Prompt Manager Advanced, LoRAs are automatically found if available, regardless of path. For those that are not, right-click offers the option to look for them on Civitai. Browse files from both your input and output folders.
 
 **Prompt Model Loader** — Load checkpoints, diffusion, or GGUF models from a string path output by Prompt Extractor. Auto-detects whether the model is a checkpoint (outputs MODEL + CLIP + VAE) or a diffusion/UNET/GGUF model (outputs MODEL only). Displays model type badge and name directly on the node. Works around ComfyUI's combo type limitation, allowing extracted model paths to connect directly to a loader. Supports [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) models when the extension is installed.
+
+**Workflow Suite of Tools** — Build and re-render extracted workflows with dedicated nodes:
+
+- **Workflow Extractor**: Reads workflow metadata and normalizes it into reusable workflow_data.
+- **Workflow Builder**: Lets you edit and assemble a clean core workflow from extracted metadata.
+- **Workflow Renderer**: Runs built-in workflow templates for near one-click generation after Builder setup.
+- **Workflow Bridge**: Passes workflow context and routing data between nodes cleanly.
+- **Workflow Model Loader**: Resolves and loads the right model/checkpoint from workflow data.
+- **Workflow Manager**: Saves and reuses cleaned workflow entries for fast reruns.
+
+Builder + Renderer + Workflow Manager provides a streamlined generation path: configure Builder once, connect Renderer and Save Image/Save Video, and save both the output and the resulting workflow.
+
+Built-in workflow support includes Flux 1, Flux 2, SDXL, Wan, Qwen, Z-Image, Wan Image, and Wan Video (I2V and T2V).
+
+**Workflow Builder + Workflow Manager Reuse Loop** — Build workflow_data from extracted image/video metadata or from Workflow Builder directly, then save and reuse those workflow entries through Workflow Manager.
 ___
 
 <div align="center">
@@ -23,12 +50,16 @@ ___
   <img src="docs/prompt_extractor.png" alt="Prompt Manager">
 </div>
 <div align="center">
-  <figcaption>Advanced Prompt Generator Usage</figcaption>
+  <figcaption>Advanced Prompt Generator</figcaption>
   <img src="docs/prompt_generator_advanced.png" alt="Prompt Manager">
 </div>
 <div align="center">
-  <figcaption>Simple Prompt Generator Usage</figcaption>
+  <figcaption>Simple Prompt Generator</figcaption>
   <img src="docs/prompt_manager.png" alt="Prompt Manager">
+</div>
+<div align="center">
+  <figcaption>Workflow Builder</figcaption>
+  <img src="docs/workflow_builder.jpg" alt="Prompt Manager">
 </div>
 
 ### Key features:
@@ -42,7 +73,7 @@ ___
 - **Persistent Storage**: All prompts saved in your ComfyUI user folder
 
 ### Prompt Manager Advanced:
-- **All Prompt Manager Features**: Everything from the basic Prompt Manager, plus LoRA and Trigger word integration
+- **All Prompt Manager Features**: Everything from the basic Prompt Manager, plus LoRA and trigger-word integration
 - **NSFW Tagging**: Mark categories and individual prompts as NSFW — red "NSFW" badge appears on the prompt selector and in the thumbnail browser
 - **NSFW Filtering**: Session-persistent NSFW toggle button in the thumbnail browser to show/hide NSFW content; navigation arrows skip NSFW entries when hidden
 - **List View Mode**: Switch between thumbnail grid and compact list view in the prompt browser, with session-persistent preference
@@ -51,11 +82,12 @@ ___
 - **Visual LoRA Tags**: See connected LoRAs as clickable tags with strength values
 - **Toggle LoRAs On/Off**: Click any LoRA tag to enable/disable it without disconnecting
 - **Editable Strengths**: Click the strength value on any tag to adjust it inline
-- **Trigger Words Support**: Save and display trigger words alongside prompts and LoRAs, can use [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) trigger words.
+- **Trigger Words Support**: Save and display trigger words alongside prompts and LoRAs; can use [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) trigger words.
 - **Right-Click to Delete**: Right-click any LoRA or trigger word tag to remove it
 - **Save LoRAs with Prompts**: When you save a prompt, the current LoRA configuration is saved with it
 - **Override Mode**: Toggle "Override Lora" to ignore connected inputs and use only saved preset LoRAs
 - **Merge Mode**: When override is off, connected LoRAs are merged with saved presets
+- **Workflow Data Input**: Optional workflow_data input from Workflow Builder or Prompt Extractor, with use_workflow_data toggle support to use extracted prompt and LoRA stacks directly in PMA
 - **LoRA Manager Integration**: If [ComfyUI-Lora-Manager](https://github.com/infantesimone/ComfyUI-Lora-Manager) is installed, hovering over LoRA tags shows preview images
 - **Missing LoRA Detection**: LoRAs that aren't found on your system are highlighted in red
 - **Thumbnail Generation**: Right-click any prompt to generate a thumbnail using a selectable checkpoint model. Model choice persists in ComfyUI preferences.
@@ -70,7 +102,7 @@ ___
 - **Dual LoRA Stack Output**: Outputs two separate LoRA stacks for workflows using dual stacking (e.g., Wan video)
 - **Active LoRA Filtering**: Only extracts LoRAs that are marked as active in the source workflow
 - **Wide Node Compatibility**: Supports 11+ model loader types including CheckpointLoader, UNETLoader, UnetLoaderGGUF, DiffusionModelLoader, WanVideoModelLoader, CyberdyneModelHub, and more
-- **Preview in Manager**: View extracted data and repathed loras using Manager Advanced.
+- **Preview in Manager**: View extracted data and repathed LoRAs using Manager Advanced.
 
 ### Prompt Model Loader:
 - **String-to-Model Loading**: Takes a model path string (from Prompt Extractor) and loads the model directly
@@ -81,6 +113,7 @@ ___
 - **Graceful Error Handling**: Displays a red "NOT FOUND" badge instead of crashing when a model path cannot be resolved
 - **Model Path Resolution**: Works with both full paths and relative paths, searching checkpoints, diffusion_models, and unet folders
 - **Weight Dtype Support**: Optional weight dtype selection for memory optimization
+- **Family Filtering Tip**: Family filtering works best when model families are separated into clear folder structures (for example folders that include family cues like i2v/t2v/high/low).
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
@@ -99,12 +132,12 @@ ___
 - **LLM Parameters**: Fine-tune temperature, top_k, top_p, min_p, repeat_penalty and context size.
 - **Custom Instructions**: Override default system prompt for different enhancement styles.
 - **Extra Image Inputs**:  Combine up to 5 images to generate your prompt.
-- **Console Debugging**: Enable outputing the entire process to the console for debugging purposes.
+- **Console Debugging**: Enable outputting the entire process to the console for debugging purposes.
 
 ### Preference Options 
-- Set choices for prefered Model for both base mode and vision model.
-- Set new default model location, previous folder (gguf and llm) will still be scanned, but model will save in new default.
-- Set custom Location for Llama.cpp. If Llama.cpp was not added to the system Path, this option let's you specify it's location.
+- Set choices for preferred models for both base mode and vision mode.
+- Set a new default model location. Previous folders (gguf and llm) are still scanned, but new downloads are saved to the new default.
+- Set a custom location for Llama.cpp. If Llama.cpp was not added to your system PATH, this option lets you specify its location.
 - **LLM Backend**: Choose between llama.cpp (default) or Ollama as the generation backend.
 - **Ollama Settings**: Configure Ollama URL and keep-alive duration for model memory management.
 
@@ -134,7 +167,7 @@ ___
    ```bash
    brew install llama.cpp
    ```
-5. If you have them, place your .gguf models in the models/gguf folder or set in prererences your preferred folder path.
+5. If you have them, place your .gguf models in the models/gguf folder, or set your preferred folder path in preferences.
 
 6. Restart ComfyUI
 
@@ -155,15 +188,16 @@ ___
 4. **Toggle LoRAs**: Click a tag to enable/disable that LoRA (disabled tags turn gray)
 5. **Adjust Strength**: Click the strength number on a tag to edit it inline
 6. **Save with LoRAs**: Click "Save Prompt" to save both the prompt text and current LoRA configuration
-7. **Override Mode**: Enable "Override Lora" checkbox to ignore connected inputs and use only the saved preset LoRAs
-8. **Connect Outputs**: Use `lora_stack_a` and `lora_stack_b` outputs with the Apply LoRA Stack node
+7. **Workflow Input (Optional)**: Connect workflow_data from Workflow Builder or Prompt Extractor and enable use_workflow_data to use extracted prompt and LoRA stacks in PMA
+8. **Override Mode**: Enable "Override Lora" checkbox to ignore connected inputs and use only the saved preset LoRAs
+9. **Connect Outputs**: Use `lora_stack_a` and `lora_stack_b` outputs with the Apply LoRA Stack node
 
 ### Prompt Extractor
 
 1. **Add the Node**: Add Node → Prompt Manager → Prompt Extractor
 2. **Choose Source Folder**: Use the `source_folder` dropdown to browse files from either your **input** or **output** folder
 3. **Load Media**: Select an image or video from the file browser, or drag-and-drop files onto the node
-4. **JSON Workflows**: Support extracting from JSON, by importing workflow files directly
+4. **JSON Workflows**: Supports extracting from JSON workflow files directly
 5. **Extract Data**: The node automatically extracts prompts, LoRAs, and trigger words from embedded metadata
 6. **View Results**: Extracted positive/negative prompts display in the text outputs, LoRA stacks output as LORA_STACK
 7. **Use with Manager**: Connect the LoRA stack outputs to Prompt Manager Advanced to view and save the extracted configuration
@@ -180,8 +214,8 @@ ___
 3. **Connect inputs**: Connect image for vision modes, or just use text for enhancement mode
 4. **Output as Json**: Use Format_as_Json to experiment with Json prompts.
 5. **Push the LLM**: Use enable_thinking to enable the model to perform deeper generative reasoning before producing the final prompt.
-4. **Save memory**: Toggle "stop_server_after" ON to free VRAM after generation
-5. **Run Workflow**: Generated prompt displays and can be saved to Prompt Manager
+6. **Save memory**: Toggle "stop_server_after" ON to free VRAM after generation
+7. **Run Workflow**: Generated prompt displays and can be saved to Prompt Manager
 
 **Advanced Usage**:
 1. **Add the Options Node**: Add Node → Prompt Generator Options
@@ -242,7 +276,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - **Solution**: Install llama.cpp and make sure `llama-server` is available in command line. See [llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases)
 
 **Problem**: "No models found"
-- **Solution**: Either place a .gguf file in the `models/` folder, or connect the Prompt Generator Option node and select a model size (1.7B, 4B, or 8B) to download from HuggingFace
+- **Solution**: Either place a .gguf file in the `models/` folder, or connect the Prompt Generator Options node and select a model size (1.7B, 4B, or 8B) to download from HuggingFace
 
 **Problem**: Server won't start
 - **Solution**: Check that port 8080 is not in use. Close any existing llama-server processes.
@@ -251,17 +285,46 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - **Solution**: Check your internet connection and HuggingFace availability. Large models may take time to download.
 
 **Problem**: Generation is slow
-- **Solution**: Either, Use a smaller quantized model (Q4 instead of Q8) or toggle 'stop_server_after' to quit llama.cpp after generating prompt.
+- **Solution**: Use a smaller quantized model (Q4 instead of Q8), or toggle 'stop_server_after' to quit llama.cpp after generating a prompt.
 
-**Problem**: Default Model used is not what I want
+**Problem**: Default model used is not what I want
 - **Solution**: You can set your preferred model in the ComfyUI settings. Simply add its full name, with .gguf extension, for both the VL and base models. Enabling Thinking in the Generator might change what is used for VL models.
 
 
 ## Changelog
 
+### version 2.0.0
+- **Prompt Manager becomes Prompt + Workflow Manager**
+  - Workflow Manager now allows saving Workflow and is integrated with Prompt Manager save/reuse behavior
+  - Extractor, Builder, and Manager workflow loop now focuses on simplified, reusable workflow cores
+  - Workflow save/reuse behavior aligned with workflow_data-first persistence for consistent prompt and LoRA retention
+  - Documentation updated to reflect full prompt and workflow scope
+  - More polish improvements coming soon
+
+### version 1.25.0
+- **Workflow Tools Release Milestone**
+  - Workflow Builder / Workflow Renderer / Workflow Bridge / Workflow Model Loader now form a complete editable workflow pipeline
+  - Improved extractor-to-builder update flow for image/video metadata refresh
+  - Improved Builder dropdown stability and selection persistence on first open
+  - Improved tab-switch persistence for Builder UI state, including LoRA stacks and LoRA state
+  - Improved compatibility when extracting from workflows generated by Builder persistence data
+
+- **Wan i2v Workflow Quality and UX Improvements**
+  - Better high/low model handling and dual-pass sampler defaults in workflow path
+  - Improved model-family filtering and unsupported-family handling in Builder/Renderer
+  - Improved workflow update diagnostics to simplify troubleshooting of resolution and model propagation
+
+- **Prompt Manager Advanced Save + Thumbnail Improvements**
+  - Save flow now reuses the full Advanced browser UI (same search, category tools, NSFW/filter handling, and existing prompt selection behavior)
+  - Save action terminology updated to **Save Workflow** for workflow-oriented entries
+  - Save now enforces category selection before submission to avoid uncategorized/invalid saves
+  - Workflow Saver save action now uses failure-only notifications (no success toast spam)
+  - Thumbnail generation now tries Workflow Renderer first when workflow_data is present, with automatic fallback to the basic checkpoint/LoRA thumbnail path
+  - Renderer thumbnail path now forces thumbnail-safe resolution and single-frame batch settings before queueing (consistent size, batch=1)
+
 ### version 1.22.6
 - **Prompt Extractor now extract Prompt Extractor**
-  - Prompt Extractor now embeds extracted data in the worklow, so it can extract itself.
+  - Prompt Extractor now embeds extracted data in the workflow, so it can extract itself.
 
 ### version 1.22.5
 - **Thumbnail Generation in Prompt Manager Advanced**
@@ -347,7 +410,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - **Metadata Json**
   - Added metadata output, so workflow found can be visualized
 - **Bug Fix**
-  - Fixed bug where page reload and switching workflow would needlesly refetch the prompt.
+  - Fixed bug where page reload and switching workflow would needlessly refetch the prompt.
 
 ### version 1.18.0
 - **Thumbnail Hover Preview**
@@ -459,7 +522,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - Bug fix for issue caused by new additions.
 
 ### version 1.12.7
-- Quality of life improvements and added option to change the Strenght of any Lora in Manager, so we can tweak Extracted Workflows Live.
+- Quality of life improvements and added option to change the strength of any LoRA in Manager, so we can tweak extracted workflows live.
 
 ### version 1.12.6
 - Tweak to caching behavior for prompt extractor and prompt manager advanced
@@ -469,7 +532,7 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 ### version 1.12.0
 - Prompt Extractor: Added Lora inputs, so it can be used as a passthrough, with a None Choice at top, to easily deactivate it.
-- Prompt Extractor: Improved logic for determining Positive prompts in Worfklow.
+- Prompt Extractor: Improved logic for determining positive prompts in workflow.
 - Prompt Extractor: Improved logic for finding High and Low Lora Stacks
 - Prompt Manager Advanced: Added Fuzzy Logic to find Loras that might have been renamed
 - Prompt Manager Advanced: Fixed issue of Lora buttons getting cleared when changing tab.

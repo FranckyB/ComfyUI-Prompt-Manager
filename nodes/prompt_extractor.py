@@ -8,6 +8,9 @@ import re
 import folder_paths
 import torch
 import server
+import comfy.samplers
+from ..py.workflow_families import get_family_label
+from ..py.workflow_data_utils import strip_runtime_objects, to_json_safe_workflow_data
 
 # Import PIL for image metadata reading
 try:
@@ -24,6 +27,10 @@ except ImportError:
 _file_metadata_cache = {}
 # Cache for video frames extracted by JavaScript
 _video_frames_cache = {}
+# Cache for last extracted info per node (keyed by unique_id) — used by WorkflowBuilder's
+# "Update Workflow" button to pull data without re-executing PromptExtractor.
+_last_extracted_info = {}
+
 
 # LoRA Blacklist - LoRAs containing these keywords will be excluded from extraction
 # Add keywords that identify non-style LoRAs (e.g., distillation, optimization LoRAs)
@@ -46,6 +53,73 @@ def is_lora_blacklisted(lora_name):
             if keyword.lower() in lora_name_lower:
                 return True
     return False
+
+
+# ── A1111 → ComfyUI name mappings ─────────────────────────────────────────────
+# A1111 uses human-readable names (e.g. "DPM++ 2M SDE"); ComfyUI uses
+# k-diffusion internal names (e.g. "dpmpp_2m_sde").  Lookup is case-insensitive.
+_A1111_SAMPLER_MAP = {
+    "euler":                "euler",
+    "euler a":              "euler_ancestral",
+    "lms":                  "lms",
+    "heun":                 "heun",
+    "heun++":               "heunpp2",
+    "dpm2":                 "dpm_2",
+    "dpm2 a":               "dpm_2_ancestral",
+    "dpm fast":             "dpm_fast",
+    "dpm adaptive":         "dpm_adaptive",
+    "dpm++ sde":            "dpmpp_sde",
+    "dpm++ 2s a":           "dpmpp_2s_ancestral",
+    "dpm++ 2m":             "dpmpp_2m",
+    "dpm++ 2m sde":         "dpmpp_2m_sde",
+    "dpm++ 2m sde heun":    "dpmpp_2m_sde",   # no exact ComfyUI equivalent
+    "dpm++ 3m sde":         "dpmpp_3m_sde",
+    "ddim":                 "ddim",
+    "plms":                 "ipndm",           # closest equivalent
+    "ddpm":                 "ddpm",
+    "unipc":                "uni_pc",
+    "uni_pc":               "uni_pc",
+    "uni_pc_bh2":           "uni_pc_bh2",
+    "lcm":                  "lcm",
+    "deis":                 "deis",
+}
+
+_A1111_SCHEDULER_MAP = {
+    "karras":               "karras",
+    "exponential":          "exponential",
+    "sgm uniform":          "sgm_uniform",
+    "uniform":              "normal",
+    "normal":               "normal",
+    "simple":               "simple",
+    "ddim":                 "ddim_uniform",
+    "beta":                 "beta",
+    "polyexponential":      "exponential",     # closest available
+    "align your steps":     "normal",          # no ComfyUI equivalent
+    "kl optimal":           "normal",          # no ComfyUI equivalent
+    "automatic":            "normal",
+}
+
+
+def _map_a1111_sampler(name):
+    """Convert an A1111 sampler name to its ComfyUI equivalent.
+    Returns 'euler' if the mapped value isn't a valid ComfyUI sampler."""
+    if not name:
+        return 'euler'
+    mapped = _A1111_SAMPLER_MAP.get(name.lower().strip(), name)
+    if mapped not in comfy.samplers.KSampler.SAMPLERS:
+        return 'euler'
+    return mapped
+
+
+def _map_a1111_scheduler(name):
+    """Convert an A1111 scheduler / schedule-type to its ComfyUI equivalent.
+    Returns 'simple' if the mapped value isn't a valid ComfyUI scheduler."""
+    if not name:
+        return 'simple'
+    mapped = _A1111_SCHEDULER_MAP.get(name.lower().strip(), name)
+    if mapped not in comfy.samplers.KSampler.SCHEDULERS:
+        return 'simple'
+    return mapped
 
 
 def parse_a1111_parameters(parameters_text):
@@ -99,6 +173,66 @@ def parse_a1111_parameters(parameters_text):
     model_match = re.search(r'\bModel:\s*([^,\n]+)', parameters_text)
     if model_match:
         result['model'] = model_match.group(1).strip()
+
+    # ── Extract sampler / resolution / generation settings ────────────────
+    # A1111 format: "Steps: 20, Sampler: DPM++ 2M SDE, Schedule type: Karras,
+    #                CFG scale: 5, Seed: 2427658518, Size: 768x1152, ..."
+    settings_line = ''
+    steps_pos = parameters_text.find('Steps:')
+    if steps_pos >= 0:
+        settings_line = parameters_text[steps_pos:]
+
+    if settings_line:
+        def _a1111_val(key, text=settings_line):
+            m = re.search(r'\b' + re.escape(key) + r':\s*([^,\n]+)', text)
+            return m.group(1).strip() if m else None
+
+        steps = _a1111_val('Steps')
+        if steps:
+            try:
+                result['steps'] = int(steps)
+            except ValueError:
+                pass
+
+        sampler = _a1111_val('Sampler')
+        if sampler:
+            result['sampler_name'] = _map_a1111_sampler(sampler)
+
+        schedule = _a1111_val('Schedule type')
+        if schedule:
+            result['scheduler'] = _map_a1111_scheduler(schedule)
+
+        cfg = _a1111_val('CFG scale')
+        if cfg:
+            try:
+                result['cfg'] = float(cfg)
+            except ValueError:
+                pass
+
+        seed = _a1111_val('Seed')
+        if seed:
+            try:
+                result['seed'] = int(seed)
+            except ValueError:
+                pass
+
+        size = _a1111_val('Size')
+        if size:
+            m = re.match(r'(\d+)\s*x\s*(\d+)', size)
+            if m:
+                result['width'] = int(m.group(1))
+                result['height'] = int(m.group(2))
+
+        # ── Extract Forge/A1111 Module fields ────────────────────────────
+        # Forge embeds CLIP/VAE module names as "Module 1: ae, Module 2: clip_l, Module 3: t5xxl_fp16"
+        # These are reliable family indicators when the model name is unrecognised.
+        modules = []
+        for i in range(1, 5):
+            mod = _a1111_val(f'Module {i}')
+            if mod:
+                modules.append(mod.lower())
+        if modules:
+            result['modules'] = modules
 
     return result
 
@@ -282,9 +416,234 @@ async def list_input_files(request):
         return server.web.json_response({"files": [], "error": str(e)}, status=500)
 
 
-def get_available_loras():
-    """Get all available LoRAs from ComfyUI's folder system"""
-    return folder_paths.get_filename_list("loras")
+# API endpoint to get cached extracted info for WorkflowBuilder's "Update Workflow" button.
+# Accepts ?node_id=<id> for a specific PE node, or returns all cached entries.
+@server.PromptServer.instance.routes.get("/prompt-extractor/get-extracted-data")
+async def get_extracted_data(request):
+    """Return the last extracted info cached by PromptExtractor after execution."""
+    try:
+        node_id = request.rel_url.query.get('node_id', '')
+        if node_id:
+            data = _last_extracted_info.get(str(node_id))
+            if data:
+                return server.web.json_response({"extracted": data, "node_id": node_id})
+            else:
+                return server.web.json_response({
+                    "extracted": None,
+                    "node_id": node_id,
+                    "error": "No cached data for this node. Execute PromptExtractor first.",
+                })
+        else:
+            # Return all cached node IDs so JS can pick
+            available = {nid: bool(d) for nid, d in _last_extracted_info.items()}
+            return server.web.json_response({"available": available})
+    except Exception as e:
+        print(f"[PromptExtractor] Error in get-extracted-data: {e}")
+        return server.web.json_response({"extracted": None, "error": str(e)}, status=500)
+
+
+# API endpoint to extract metadata from a file on demand (no node execution required).
+# Used by WorkflowBuilder's "Update Workflow" button and PE JS on file selection.
+@server.PromptServer.instance.routes.get("/prompt-extractor/extract-preview")
+async def extract_preview(request):
+    """Extract metadata from a file and return structured info for WorkflowBuilder."""
+    try:
+        filename = request.rel_url.query.get('filename', '')
+        source = request.rel_url.query.get('source', 'input')
+
+        if not filename or filename == '(none)':
+            return server.web.json_response({"extracted": None})
+
+        # Resolve path with directory-traversal protection
+        base_dir = folder_paths.get_output_directory() if source == 'output' else folder_paths.get_input_directory()
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+        real_base = os.path.realpath(base_dir)
+        real_path = os.path.realpath(file_path)
+        if not (real_path == real_base or real_path.startswith(real_base + os.sep)):
+            return server.web.json_response({"extracted": None, "error": "Invalid path"}, status=403)
+        if not os.path.exists(file_path):
+            return server.web.json_response({"extracted": None, "error": "File not found"})
+
+        ext = os.path.splitext(file_path)[1].lower()
+        prompt_data = None
+        wf_data = None
+
+        if ext == '.png':
+            prompt_data, wf_data = extract_metadata_from_png(file_path)
+        elif ext in ['.jpg', '.jpeg', '.webp']:
+            prompt_data, wf_data = extract_metadata_from_jpeg(file_path)
+        elif ext == '.json':
+            prompt_data, wf_data = extract_metadata_from_json(file_path)
+        elif ext in ['.mp4', '.webm', '.mov', '.avi']:
+            prompt_data, wf_data = extract_metadata_from_video(file_path)
+
+        if not prompt_data and not wf_data:
+            return server.web.json_response({"extracted": None, "error": "No metadata found in file"})
+
+        parsed = parse_workflow_for_prompts(prompt_data, wf_data)
+        pos = parsed['positive_prompt'] or ""
+        neg = parsed['negative_prompt'] or ""
+        loras_a = parsed['loras_a']
+        loras_b = parsed['loras_b']
+
+        model_a = ""
+        model_b = ""
+        raw_a = parsed.get('models_a', [])
+        raw_b = parsed.get('models_b', [])
+        if raw_a:
+            model_a = os.path.basename(raw_a[0].replace('\\', '/'))
+        if raw_b:
+            model_b = os.path.basename(raw_b[0].replace('\\', '/'))
+
+        from ..py.workflow_extraction_utils import (
+            extract_sampler_params, extract_vae_info, extract_clip_info,
+            extract_resolution, resolve_model_name, resolve_vae_name,
+        )
+        from ..py.workflow_families import get_model_family, get_family_label
+
+        sampler = extract_sampler_params(prompt_data, wf_data)
+        vae = extract_vae_info(prompt_data, wf_data)
+        clip = extract_clip_info(prompt_data, wf_data)
+        resolution = extract_resolution(prompt_data, wf_data)
+
+        print(
+            f"[PE UpdateTrace] extract-preview base resolution for {filename}: "
+            f"{resolution.get('width')}x{resolution.get('height')}"
+        )
+
+        # Simpler policy:
+        # - image/video files: always use the source media dimensions
+        # - json files: use workflow-derived resolution only
+        if ext != '.json':
+            src_w, src_h = _get_media_dimensions(file_path, ext, filename_hint=filename)
+            if src_w and src_h:
+                resolution['width'] = int(src_w)
+                resolution['height'] = int(src_h)
+                print(
+                    f"[PE UpdateTrace] extract-preview media resolution override for {filename}: "
+                    f"{resolution['width']}x{resolution['height']}"
+                )
+            else:
+                print(
+                    f"[PE UpdateTrace] extract-preview media probe failed for {filename}; "
+                    f"keeping {resolution.get('width')}x{resolution.get('height')}"
+                )
+
+        # Handle A1111 format
+        is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
+        if is_a1111:
+            for key in ['sampler_name', 'scheduler', 'cfg']:
+                if prompt_data.get(key) is not None:
+                    sampler[key] = prompt_data[key]
+            if prompt_data.get('steps') is not None:
+                sampler['steps_a'] = prompt_data['steps']
+            if prompt_data.get('seed') is not None:
+                sampler['seed_a'] = prompt_data['seed']
+            if prompt_data.get('width') and prompt_data.get('height'):
+                resolution['width'] = prompt_data['width']
+                resolution['height'] = prompt_data['height']
+            # Forge modules → clip_type inference
+            _modules = prompt_data.get('modules', [])
+            if _modules and not clip.get('type'):
+                _mod_str = ' '.join(_modules)
+                if 'qwen_3_8b' in _mod_str:
+                    clip['type'] = 'flux2'
+                    clip['source'] = 'a1111_modules'
+                elif 'qwen_3_4b' in _mod_str or 'qwen-4b' in _mod_str:
+                    clip['type'] = 'lumina2'
+                    clip['source'] = 'a1111_modules'
+                elif 't5xxl' in _mod_str:
+                    clip['type'] = 'flux'
+                    clip['source'] = 'a1111_modules'
+                elif 'umt5' in _mod_str:
+                    clip['type'] = 'wan'
+                    clip['source'] = 'a1111_modules'
+
+        _model_a_path = raw_a[0] if raw_a else model_a
+        family = get_model_family(_model_a_path)
+
+        # Fallback: infer family from clip type (same logic as PE execute path)
+        if not family:
+            _clip_src  = clip.get('source', '')
+            _clip_type = clip.get('type', '').lower()
+            if _clip_src == 'checkpoint':
+                family = 'sdxl'
+            elif 'flux2' in _clip_type:
+                family = 'flux2'
+            elif 'flux' in _clip_type:
+                family = 'flux1'
+            elif 'sd3' in _clip_type:
+                family = 'sd3'
+            elif 'wan' in _clip_type:
+                family = 'wan_video_t2v'
+            elif 'qwen_image' in _clip_type:
+                family = 'qwen_image'
+            elif 'lumina2' in _clip_type:
+                family = 'zimage'
+        if not family:
+            family = 'sdxl'
+
+        # Check availability
+        model_a_found = True
+        model_b_found = True
+        if model_a:
+            _r, _ = resolve_model_name(model_a)
+            model_a_found = _r is not None
+        if model_b:
+            _r, _ = resolve_model_name(model_b)
+            model_b_found = _r is not None
+
+        vae_found = True
+        vae_name_str = vae.get('name', '') if isinstance(vae, dict) else (vae or '')
+        if vae_name_str and not vae_name_str.startswith('('):
+            vae_found = resolve_vae_name(vae_name_str) is not None
+
+        lora_avail = {}
+        for _l in loras_a + loras_b:
+            _ln = _l.get('name', '')
+            if _ln:
+                _, _found = resolve_lora_path(_ln)
+                lora_avail[_ln] = _found
+
+        extracted = {
+            'positive_prompt':    pos,
+            'negative_prompt':    neg,
+            'model_a':            model_a,
+            'model_b':            model_b,
+            'model_a_found':      model_a_found,
+            'model_b_found':      model_b_found,
+            'loras_a':            loras_a,
+            'loras_b':            loras_b,
+            'vae':                vae,
+            'vae_found':          vae_found,
+            'clip':               clip,
+            'sampler':            sampler,
+            'resolution':         resolution,
+            'is_video':           ext in ['.mp4', '.webm', '.mov', '.avi'],
+            'model_family':       family,
+            'model_family_label': get_family_label(family),
+            'lora_availability':  lora_avail,
+        }
+
+        print(
+            f"[PE UpdateTrace] extract-preview final resolution for {filename}: "
+            f"{extracted['resolution'].get('width')}x{extracted['resolution'].get('height')}"
+        )
+
+        print(f"[PromptExtractor] extract-preview: {filename} -> {family}, model_a={model_a}")
+        return server.web.json_response({"extracted": extracted})
+    except Exception as e:
+        print(f"[PromptExtractor] extract-preview error: {e}")
+        import traceback
+        traceback.print_exc()
+        return server.web.json_response({"extracted": None, "error": str(e)}, status=500)
+
+
+# ── Shared LoRA utilities ─────────────────────────────────────────────────────
+from ..py.lora_utils import (
+    get_available_loras,
+    resolve_lora_path,
+)
 
 
 # Known model file extensions
@@ -313,6 +672,93 @@ def get_available_models():
         except Exception:
             pass
     return models
+
+
+def _get_media_dimensions(file_path, ext, filename_hint=None):
+    """Return (width, height) from an image/video file, or (None, None).
+
+    For videos, attempts in order:
+        1) ffprobe stream width/height
+        2) cached JS-extracted frame dimensions
+        3) PyAV first-frame dimensions
+    """
+    try:
+        if ext in ['.png', '.jpg', '.jpeg', '.webp'] and IMAGE_SUPPORT:
+            with Image.open(file_path) as img:
+                w, h = img.size
+                if w and h:
+                    return int(w), int(h)
+    except Exception:
+        pass
+
+    if ext in ['.mp4', '.webm', '.mov', '.avi']:
+        try:
+            result = subprocess.run(
+                [
+                    'ffprobe', '-v', 'quiet', '-print_format', 'json',
+                    '-select_streams', 'v:0', '-show_streams', file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout:
+                data = json.loads(result.stdout)
+                streams = data.get('streams') or []
+                if streams:
+                    s = streams[0]
+                    w = int(s.get('width') or 0)
+                    h = int(s.get('height') or 0)
+                    if w > 0 and h > 0:
+                        return w, h
+        except Exception:
+            pass
+
+        # Fallback: use cached JS video frame dimensions when available.
+        try:
+            candidates = []
+            if filename_hint:
+                hint = str(filename_hint).replace('\\', '/')
+                candidates.append(hint.replace('/', '_'))
+            for base_dir in (folder_paths.get_input_directory(), folder_paths.get_output_directory()):
+                try:
+                    real_base = os.path.realpath(base_dir)
+                    real_path = os.path.realpath(file_path)
+                    if real_path == real_base or real_path.startswith(real_base + os.sep):
+                        rel = os.path.relpath(file_path, base_dir).replace('\\', '/')
+                        candidates.append(rel.replace('/', '_'))
+                except Exception:
+                    pass
+            candidates.append(os.path.basename(file_path).replace('\\', '/').replace('/', '_'))
+
+            seen = set()
+            for key in candidates:
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                frame_b64 = _video_frames_cache.get(key)
+                if not frame_b64:
+                    continue
+                frame_tensor = base64_to_tensor(frame_b64)
+                if frame_tensor is not None and hasattr(frame_tensor, 'shape') and len(frame_tensor.shape) >= 3:
+                    h = int(frame_tensor.shape[1])
+                    w = int(frame_tensor.shape[2])
+                    if w > 0 and h > 0:
+                        return w, h
+        except Exception:
+            pass
+
+        # Last fallback: decode first frame via PyAV and read its dimensions.
+        try:
+            img = extract_video_frame_av(file_path, 0.0)
+            if img is not None and hasattr(img, 'size'):
+                w, h = img.size
+                if w and h:
+                    return int(w), int(h)
+        except Exception:
+            pass
+
+    return None, None
 
 
 def resolve_model_path(model_name):
@@ -347,48 +793,25 @@ def resolve_model_path(model_name):
     return sanitized_name, False
 
 
-def resolve_lora_path(lora_name):
-    """
-    Resolve a LoRA name to its full path using ComfyUI's folder system.
-    Returns (full_path, found) tuple.
-    """
-    lora_files = get_available_loras()
-
-    # Try exact match first (with extension)
-    for lora_file in lora_files:
-        if lora_file == lora_name:
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    # Try matching by name without extension
-    lora_name_lower = lora_name.lower()
-    for lora_file in lora_files:
-        file_name_no_ext = os.path.splitext(os.path.basename(lora_file))[0]
-        if file_name_no_ext.lower() == lora_name_lower:
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    # Try partial match (lora_name might be just the filename, lora_file might have subdirs)
-    for lora_file in lora_files:
-        if lora_name_lower in lora_file.lower():
-            return folder_paths.get_full_path("loras", lora_file), True
-
-    return None, False
-
-
 def extract_metadata_from_png(file_path):
     """Extract workflow/prompt metadata from PNG file (cached from JavaScript)"""
     try:
         # Try to get relative path from input or output directory (matches JavaScript cache keys)
         input_dir = folder_paths.get_input_directory()
         output_dir = folder_paths.get_output_directory()
+        use_cache = True
         if file_path.startswith(input_dir):
             cache_key = os.path.relpath(file_path, input_dir).replace('\\', '/')
         elif file_path.startswith(output_dir):
             cache_key = os.path.relpath(file_path, output_dir).replace('\\', '/')
+            # Output files can be regenerated at the same relative path while JS
+            # metadata cache still holds a previous run. Prefer fresh file-read.
+            use_cache = False
         else:
             cache_key = os.path.basename(file_path)
 
         # Check if metadata was cached by JavaScript
-        if cache_key in _file_metadata_cache:
+        if use_cache and cache_key in _file_metadata_cache:
             metadata = _file_metadata_cache[cache_key]
             print(f"[PromptExtractor] Using cached PNG metadata for: {cache_key}")
 
@@ -400,7 +823,18 @@ def extract_metadata_from_png(file_path):
                 # Return both parsed parameters AND workflow data (workflow needed for JSON export)
                 if metadata.get('parsed_parameters'):
                     print("[PromptExtractor] Found parsed A1111 parameters")
-                    return metadata.get('parsed_parameters'), workflow_data
+                    parsed = metadata['parsed_parameters']
+                    # JS parser doesn't extract sampler/resolution/modules — enrich
+                    # from the raw parameters text via the Python parser.
+                    raw_params = metadata.get('parameters', '')
+                    if raw_params:
+                        py_parsed = parse_a1111_parameters(raw_params)
+                        if py_parsed:
+                            for k in ('steps', 'sampler_name', 'scheduler', 'cfg',
+                                      'seed', 'width', 'height', 'modules'):
+                                if k in py_parsed and k not in parsed:
+                                    parsed[k] = py_parsed[k]
+                    return parsed, workflow_data
 
                 return prompt_data, workflow_data
 
@@ -819,7 +1253,7 @@ def get_cached_video_frame(relative_path, frame_position):
             if path_key in _video_frames_cache:
                 print(f"[PromptExtractor] Frame cached successfully for: {relative_path}")
             else:
-                print(f"[PromptExtractor] Timeout waiting for JS frame extraction, trying PyAV...")
+                print("[PromptExtractor] Timeout waiting for JS frame extraction, trying PyAV...")
                 return None
 
         except Exception as e:
@@ -1192,6 +1626,12 @@ def traverse_to_find_text(node_id, input_slot, node_map, link_map, visited=None,
                         link_info['source_slot'],
                         node_map, link_map, visited, max_depth - 1
                     )
+
+    # PromptExtractor / WorkflowRenderer — text outputs are computed at runtime,
+    # NOT stored in widgets_values (which contain file selector, toggles, etc.).
+    # Without this guard the generic fallback below picks up the image filename.
+    if node_type in ['PromptExtractor', 'WorkflowRenderer', 'WorkflowGenerator']:
+        return ""
 
     # Generic: if node has a text/string output, check widgets
     for val in widgets_values:
@@ -1929,6 +2369,12 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # Initialize lora_chains early so embedded data extraction can append to it
     lora_chains = []
 
+    # Collect embedded data candidates from PromptExtractor/WorkflowRenderer nodes
+    # (resolved after the loop — WorkflowRenderer takes priority if both are present)
+    _embedded_candidates = []
+    _embedded_positive_fallback = []
+    _embedded_negative_fallback = []
+
     # Iterate through all nodes (workflow format) - including subgraphs
     all_workflow_nodes = []
     if workflow_data:
@@ -1943,6 +2389,75 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                     all_workflow_nodes.extend(subgraph['nodes'])
 
     if all_workflow_nodes:
+        def _parse_json_dict(value):
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str) and value.strip():
+                try:
+                    parsed = json.loads(value)
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+
+        def _build_embedded_from_builder_ui(node):
+            props = node.get('properties') if isinstance(node.get('properties'), dict) else {}
+            ui_state = _parse_json_dict(props.get('we_ui_state'))
+            if not ui_state:
+                ui_state = _parse_json_dict(props.get('we_override_data'))
+            if not ui_state:
+                return None
+
+            fam = ui_state.get('_family') or ui_state.get('family') or 'sdxl'
+            clip_names = ui_state.get('clip_names', [])
+            if isinstance(clip_names, str):
+                clip_names = [clip_names] if clip_names else []
+
+            sampler = {
+                'steps_a': ui_state.get('steps_a', 20),
+                'steps_b': ui_state.get('steps_b'),
+                'cfg': ui_state.get('cfg', 5.0),
+                'seed_a': ui_state.get('seed_a', 0),
+                'seed_b': ui_state.get('seed_b'),
+                'sampler_name': ui_state.get('sampler_name', 'euler'),
+                'scheduler': ui_state.get('scheduler', 'simple'),
+            }
+            resolution = {
+                'width': ui_state.get('width', 768),
+                'height': ui_state.get('height', 1280),
+                'batch_size': ui_state.get('batch_size', 1),
+                'length': ui_state.get('length'),
+            }
+
+            loras_a = ui_state.get('loras_a', []) if isinstance(ui_state.get('loras_a', []), list) else []
+            loras_b = ui_state.get('loras_b', []) if isinstance(ui_state.get('loras_b', []), list) else []
+            lora_avail = ui_state.get('_lora_availability', {})
+            if not isinstance(lora_avail, dict):
+                lora_avail = {}
+
+            return {
+                'positive_prompt': ui_state.get('positive_prompt', ''),
+                'negative_prompt': ui_state.get('negative_prompt', ''),
+                'model_a': ui_state.get('model_a', ''),
+                'model_b': ui_state.get('model_b', ''),
+                'loras_a': loras_a,
+                'loras_b': loras_b,
+                'vae': {
+                    'name': ui_state.get('vae', ''),
+                    'source': 'workflow_data',
+                },
+                'clip': {
+                    'names': clip_names,
+                    'type': '',
+                    'source': 'workflow_data',
+                },
+                'sampler': sampler,
+                'resolution': resolution,
+                'model_family': fam,
+                'model_family_label': get_family_label(fam),
+                'lora_availability': lora_avail,
+            }
+
         for node in all_workflow_nodes:
             if not isinstance(node, dict):
                 continue
@@ -2015,55 +2530,18 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                             positive_prompts.append(val.strip())
                             break
 
-            # PromptExtractor nodes — read back embedded extracted_data
-            elif node_type == 'PromptExtractor':
-                ext_data = node.get('extracted_data')
+            # PromptExtractor / WorkflowBuilder / WorkflowRenderer nodes — collect
+            # embedded extracted_data. Also accept legacy WorkflowGenerator.
+            elif node_type in ('PromptExtractor', 'WorkflowBuilder', 'WorkflowRenderer', 'WorkflowGenerator'):
+                ext_data = None
+                # Builder videos now persist authoritative UI state in properties.
+                # Prefer that over stale extracted_data snapshots when available.
+                if node_type == 'WorkflowBuilder':
+                    ext_data = _build_embedded_from_builder_ui(node)
+                if not ext_data:
+                    ext_data = node.get('extracted_data')
                 if ext_data and isinstance(ext_data, dict):
-                    ext_pos = ext_data.get('positive_prompt', '').strip()
-                    ext_neg = ext_data.get('negative_prompt', '').strip()
-                    if ext_pos:
-                        positive_prompts.append(ext_pos)
-                    if ext_neg:
-                        negative_prompts.append(ext_neg)
-
-                    # Extract LoRAs from embedded data
-                    for stack_label, key in [('A', 'loras_a'), ('B', 'loras_b')]:
-                        ext_loras = ext_data.get(key, [])
-                        if not ext_loras:
-                            continue
-                        chain_loras_list = []
-                        for lora_item in ext_loras:
-                            if not isinstance(lora_item, dict):
-                                continue
-                            lora_name = lora_item.get('name', '')
-                            if not lora_name or is_lora_blacklisted(lora_name):
-                                continue
-                            strength = float(lora_item.get('strength', 1.0))
-                            clip_strength = float(lora_item.get('clip_strength', strength))
-                            chain_loras_list.append({
-                                'name': lora_name,
-                                'path': lora_item.get('path', lora_name),
-                                'model_strength': strength,
-                                'clip_strength': clip_strength,
-                                'active': True
-                            })
-                        if chain_loras_list:
-                            print(f"[PromptExtractor] PromptExtractor embedded data stack {stack_label}: {len(chain_loras_list)} LoRAs")
-                            lora_chains.append({
-                                'titles': [title or 'PromptExtractor'],
-                                'loras': chain_loras_list,
-                                'terminal_title': title or 'PromptExtractor',
-                                'source_id': node_id,
-                                '_pm_stack': stack_label
-                            })
-
-                    # Extract model info
-                    ext_model_a = ext_data.get('model_a', '').strip()
-                    ext_model_b = ext_data.get('model_b', '').strip()
-                    if ext_model_a:
-                        _pe_extracted_models.append(('a', ext_model_a, title or 'PromptExtractor'))
-                    if ext_model_b:
-                        _pe_extracted_models.append(('b', ext_model_b, title or 'PromptExtractor'))
+                    _embedded_candidates.append((node_type, node_id, title, ext_data))
 
             # PrimitiveStringMultiline - direct prompt text (only add if connected to something)
             elif node_type == 'PrimitiveStringMultiline':
@@ -2079,6 +2557,102 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         else:
                             positive_prompts.append(val.strip())
                         break
+
+    # ========================================
+    # RESOLVE EMBEDDED DATA (PromptExtractor vs WorkflowRenderer)
+    # ========================================
+    # Priority when multiple embedded sources are present:
+    #   1. WorkflowRenderer / WorkflowGenerator (actual render source)
+    #   2. WorkflowBuilder
+    #   3. PromptExtractor
+    if _embedded_candidates:
+        has_render = any(nt in ('WorkflowRenderer', 'WorkflowGenerator') for nt, *_ in _embedded_candidates)
+        has_builder = any(nt == 'WorkflowBuilder' for nt, *_ in _embedded_candidates)
+        builder_prompt_candidate = None
+
+        if has_render:
+            chosen = [
+                c for c in _embedded_candidates
+                if c[0] in ('WorkflowRenderer', 'WorkflowGenerator')
+            ]
+            if len(_embedded_candidates) > len(chosen):
+                print("[PromptExtractor] Multiple embedded sources found — preferring WorkflowRenderer/WorkflowGenerator")
+        elif has_builder:
+            chosen = [c for c in _embedded_candidates if c[0] == 'WorkflowBuilder']
+            if len(_embedded_candidates) > len(chosen):
+                print("[PromptExtractor] Both PromptExtractor and WorkflowBuilder found — preferring WorkflowBuilder embedded data")
+
+            # When multiple builder nodes are present, select a single prompt source.
+            # Prefer the first builder (stable workflow order), then first non-empty prompt.
+            for c in chosen:
+                ext_data = c[3] if len(c) > 3 and isinstance(c[3], dict) else {}
+                if not builder_prompt_candidate:
+                    builder_prompt_candidate = c
+                if ext_data.get('positive_prompt', '').strip() or ext_data.get('negative_prompt', '').strip():
+                    builder_prompt_candidate = c
+                    break
+        else:
+            chosen = _embedded_candidates
+
+        for node_type, node_id, title, ext_data in chosen:
+            # Builder-only workflows can contain several builder nodes from
+            # multi-branch generation graphs; use one prompt source instead of
+            # concatenating all builder prompts.
+            if node_type != 'WorkflowBuilder' or not has_render:
+                use_for_prompt = True
+                if node_type == 'WorkflowBuilder' and builder_prompt_candidate:
+                    use_for_prompt = (node_id == builder_prompt_candidate[1])
+
+                if use_for_prompt:
+                    ext_pos = ext_data.get('positive_prompt', '').strip()
+                    ext_neg = ext_data.get('negative_prompt', '').strip()
+                    if ext_pos:
+                        _embedded_positive_fallback.append(ext_pos)
+                    if ext_neg:
+                        _embedded_negative_fallback.append(ext_neg)
+
+            # Extract LoRAs from embedded data (with active/available state)
+            for stack_label, key in [('A', 'loras_a'), ('B', 'loras_b')]:
+                ext_loras = ext_data.get(key, [])
+                if not ext_loras:
+                    continue
+                chain_loras_list = []
+                for lora_item in ext_loras:
+                    if not isinstance(lora_item, dict):
+                        continue
+                    lora_name = lora_item.get('name', '')
+                    if not lora_name or is_lora_blacklisted(lora_name):
+                        continue
+                    strength = float(lora_item.get('strength', lora_item.get('model_strength', 1.0)))
+                    clip_strength = float(lora_item.get('clip_strength', strength))
+                    chain_loras_list.append({
+                        'name': lora_name,
+                        'path': lora_item.get('path', lora_name),
+                        'model_strength': strength,
+                        'clip_strength': clip_strength,
+                        'active': lora_item.get('active', True),
+                        'available': lora_item.get('available', True),
+                    })
+                if chain_loras_list:
+                    active_count = sum(1 for lr in chain_loras_list if lr.get('active', True))
+                    avail_count = sum(1 for lr in chain_loras_list if lr.get('available', True))
+                    print(f"[PromptExtractor] {node_type} embedded data stack {stack_label}: "
+                          f"{len(chain_loras_list)} LoRAs ({active_count} active, {avail_count} available)")
+                    lora_chains.append({
+                        'titles': [title or node_type],
+                        'loras': chain_loras_list,
+                        'terminal_title': title or node_type,
+                        'source_id': node_id,
+                        '_pm_stack': stack_label
+                    })
+
+            # Extract model info
+            ext_model_a = ext_data.get('model_a', '').strip()
+            ext_model_b = ext_data.get('model_b', '').strip()
+            if ext_model_a:
+                _pe_extracted_models.append(('a', ext_model_a, title or node_type))
+            if ext_model_b:
+                _pe_extracted_models.append(('b', ext_model_b, title or node_type))
 
     # ========================================
     # UNIFIED LORA CHAIN EXTRACTION
@@ -2559,6 +3133,13 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                     'clip_strength': clip_strength
                 })
 
+    # Embedded prompt text is fallback-only. Prefer prompts extracted from
+    # execution metadata/workflow graph first to avoid stale node UI state.
+    if not positive_prompts and _embedded_positive_fallback:
+        positive_prompts.extend(_embedded_positive_fallback)
+    if not negative_prompts and _embedded_negative_fallback:
+        negative_prompts.extend(_embedded_negative_fallback)
+
     # Clean LoRA syntax from prompts (even if we skipped extraction, we still clean the syntax)
     lora_pattern = r'<lora:([^:>]+):([^:>]+)(?::([^>]+))?>'
     clean_positive = []
@@ -2574,6 +3155,24 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
         cleaned = re.sub(r'\s+', ' ', cleaned)
         if cleaned:
             clean_negative.append(cleaned)
+
+    # Guard against duplicate prompt chunks when metadata provides both
+    # workflow-node and API-node representations of the same text.
+    def _dedupe_prompt_chunks(chunks):
+        seen = set()
+        out = []
+        for chunk in chunks:
+            key = re.sub(r'\s+', ' ', str(chunk or '')).strip()
+            if not key:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+        return out
+
+    clean_positive = _dedupe_prompt_chunks(clean_positive)
+    clean_negative = _dedupe_prompt_chunks(clean_negative)
 
     # Use the first prompt from each list (our connection logic already determined which is which)
     # If multiple prompts exist, concatenate them with commas
@@ -2956,10 +3555,10 @@ class PromptExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
-    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image", "model_a", "model_b", "metadata_json")
+    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "WORKFLOW_DATA", "IMAGE")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "workflow_data", "image")
     FUNCTION = "extract"
-    OUTPUT_NODE = True  # Enable preview display
+    OUTPUT_NODE = False
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):
@@ -2978,7 +3577,7 @@ class PromptExtractor:
         extracted_lora_stack_a = []
         extracted_lora_stack_b = []
         image_tensor = None
-        metadata_json = ""
+        workflow_data = ""
         model_a = ""
         model_b = ""
 
@@ -3087,24 +3686,178 @@ class PromptExtractor:
                     model_b = os.path.basename(raw_models_b[0].replace('\\', '/'))
                     print(f"[PromptExtractor] Model B: {model_b}")
 
-            # Output raw JSON for metadata_json output
-            # Priority: ComfyUI workflow_data (full workflow) > ComfyUI prompt_data (API format)
-            # Skip A1111 parsed parameters (they're dicts with 'prompt', 'loras' keys)
-            if workflow_data:
+            # Build workflow_data in the same structured format as WorkflowBuilder
+            # so both nodes output identical workflow_data that can feed PromptManagerAdvanced.
+            if prompt_data or workflow_data:
                 try:
-                    metadata_json = json.dumps(workflow_data, indent=2)
-                    print(f"[PromptExtractor] Output workflow JSON ({len(metadata_json)} chars)")
+                    # Late import to avoid circular dependency (py/ imports from nodes/)
+                    from ..py.workflow_extraction_utils import (
+                        extract_sampler_params,
+                        extract_vae_info,
+                        extract_clip_info,
+                        extract_resolution,
+                        build_simplified_workflow_data,
+                        get_model_family,
+                        get_family_label,
+                    )
+                    # Use raw workflow_data dict (before we overwrite the var below)
+                    _raw_wf = workflow_data  # still a dict here
+                    _is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
+
+                    _sampler  = extract_sampler_params(prompt_data, _raw_wf)
+                    _vae      = extract_vae_info(prompt_data, _raw_wf)
+                    _clip     = extract_clip_info(prompt_data, _raw_wf)
+                    _res      = extract_resolution(prompt_data, _raw_wf)
+
+                    # Simpler policy:
+                    # - image/video files: always use source media dimensions
+                    # - json files: use workflow-derived resolution only
+                    if ext != '.json':
+                        src_w, src_h = _get_media_dimensions(resolved_path, ext)
+                        if src_w and src_h:
+                            _res['width'] = int(src_w)
+                            _res['height'] = int(src_h)
+                        elif image_tensor is not None and hasattr(image_tensor, 'shape'):
+                            # Last fallback if direct media probe fails.
+                            _res['width'] = int(image_tensor.shape[2])
+                            _res['height'] = int(image_tensor.shape[1])
+
+                    # A1111 images embed sampler/resolution in the parameters
+                    # string — the ComfyUI extraction functions won't find them.
+                    if _is_a1111:
+                        if prompt_data.get('sampler_name'):
+                            _sampler['sampler_name'] = prompt_data['sampler_name']
+                        if prompt_data.get('scheduler'):
+                            _sampler['scheduler'] = prompt_data['scheduler']
+                        if prompt_data.get('steps'):
+                            _sampler['steps_a'] = prompt_data['steps']
+                        if prompt_data.get('cfg'):
+                            _sampler['cfg'] = prompt_data['cfg']
+                        if prompt_data.get('seed'):
+                            _sampler['seed_a'] = prompt_data['seed']
+                        if prompt_data.get('width') and prompt_data.get('height'):
+                            _res['width'] = prompt_data['width']
+                            _res['height'] = prompt_data['height']
+
+                        # Forge embeds CLIP/VAE module names (e.g. "Module 2: clip_l, Module 3: t5xxl_fp16").
+                        # Use these to infer clip_type when extract_clip_info found nothing.
+                        _modules = prompt_data.get('modules', [])
+                        if _modules and not _clip.get('type'):
+                            _mod_str = ' '.join(_modules)
+                            if 'qwen_3_8b' in _mod_str:
+                                _clip['type'] = 'flux2'
+                                _clip['source'] = 'a1111_modules'
+                            elif 'qwen_3_4b' in _mod_str or 'qwen-4b' in _mod_str:
+                                _clip['type'] = 'lumina2'
+                                _clip['source'] = 'a1111_modules'
+                            elif 't5xxl' in _mod_str:
+                                _clip['type'] = 'flux'
+                                _clip['source'] = 'a1111_modules'
+                            elif 'umt5' in _mod_str:
+                                _clip['type'] = 'wan'
+                                _clip['source'] = 'a1111_modules'
+
+                    # Resolve model family from model_a path
+                    _raw_models_a = parsed.get('models_a', [])
+                    _model_a_path = _raw_models_a[0] if _raw_models_a else model_a
+                    _family = get_model_family(_model_a_path)
+
+                    # Fallback: if model name doesn't match any family pattern,
+                    # infer from clip source/type (checkpoint → sdxl, clip_type
+                    # substring → specific family).
+                    if not _family:
+                        _clip_src  = _clip.get('source', '')
+                        _clip_type = _clip.get('type', '').lower()
+                        if _clip_src == 'checkpoint':
+                            _family = 'sdxl'
+                        elif 'flux2' in _clip_type:
+                            _family = 'flux2'
+                        elif 'flux' in _clip_type:
+                            _family = 'flux1'
+                        elif 'sd3' in _clip_type:
+                            _family = 'sd3'
+                        elif 'wan' in _clip_type:
+                            _family = 'wan_video_t2v'
+                        elif 'qwen_image' in _clip_type:
+                            _family = 'qwen_image'
+                        elif 'lumina2' in _clip_type:
+                            _family = 'zimage'
+                    if not _family:
+                        _family = 'sdxl'
+
+                    _extracted_for_wf = {
+                        'positive_prompt': positive_prompt,
+                        'negative_prompt': negative_prompt,
+                        'loras_a':  loras_a,
+                        'loras_b':  loras_b,
+                        'model_a':  model_a,
+                        'model_b':  model_b,
+                        'vae':      _vae,
+                        'clip':     _clip,
+                        'sampler':  _sampler,
+                        'resolution': _res,
+                        'model_family':       _family,
+                        'model_family_label': get_family_label(_family),
+                    }
+                    _simplified = build_simplified_workflow_data(
+                        _extracted_for_wf,
+                        overrides={'_source': 'PromptExtractor'},
+                        sampler_params=_sampler,
+                    )
+                    # Add model / VAE availability so WorkflowBuilder can show red
+                    from ..py.workflow_extraction_utils import resolve_model_name, resolve_vae_name
+                    if model_a:
+                        _res_a, _ = resolve_model_name(model_a)
+                        _simplified['model_a_found'] = _res_a is not None
+                    if model_b:
+                        _res_b, _ = resolve_model_name(model_b)
+                        _simplified['model_b_found'] = _res_b is not None
+                    _vae_name = _vae.get('name', '') if isinstance(_vae, dict) else (_vae or '')
+                    if _vae_name and not _vae_name.startswith('('):
+                        _simplified['vae_found'] = resolve_vae_name(_vae_name) is not None
+                    workflow_data = _simplified
+                    print(f"[PromptExtractor] Output structured workflow_data (dict, {len(workflow_data)} keys)")
+
+                    # Cache extracted info for WorkflowBuilder's "Update Workflow" button.
+                    # Shape matches what WB's updateUI() expects (ui_info['extracted']).
+                    if unique_id is not None:
+                        from ..py.lora_utils import resolve_lora_path as _resolve_lora
+                        _lora_avail = {}
+                        for _l in loras_a + loras_b:
+                            _ln = _l.get('name', '')
+                            if _ln:
+                                _, _found = _resolve_lora(_ln)
+                                _lora_avail[_ln] = _found
+                        _last_extracted_info[str(unique_id)] = {
+                            '_source_file':       file_path,
+                            '_source_folder':     source_folder,
+                            'positive_prompt':    positive_prompt,
+                            'negative_prompt':    negative_prompt,
+                            'model_a':            model_a,
+                            'model_b':            model_b,
+                            'model_a_found':      _simplified.get('model_a_found', True),
+                            'model_b_found':      _simplified.get('model_b_found', True),
+                            'loras_a':            loras_a,
+                            'loras_b':            loras_b,
+                            'vae':                _vae,
+                            'vae_found':          _simplified.get('vae_found', True),
+                            'clip':               _clip,
+                            'sampler':            _sampler,
+                            'resolution':         _res,
+                            'is_video':           ext in ['.mp4', '.webm', '.mov', '.avi'],
+                            'model_family':       _family,
+                            'model_family_label': get_family_label(_family),
+                            'lora_availability':  _lora_avail,
+                        }
+                        print(f"[PromptExtractor] Cached extracted info for node {unique_id}")
+
                 except Exception as e:
-                    print(f"[PromptExtractor] Error serializing workflow to JSON: {e}")
-                    metadata_json = ""
-            elif prompt_data and not isinstance(prompt_data, dict) or (isinstance(prompt_data, dict) and 'loras' not in prompt_data):
-                # Only use prompt_data if it's ComfyUI format (not parsed A1111 parameters)
-                try:
-                    metadata_json = json.dumps(prompt_data, indent=2)
-                    print(f"[PromptExtractor] Output prompt JSON ({len(metadata_json)} chars)")
-                except Exception as e:
-                    print(f"[PromptExtractor] Error serializing prompt to JSON: {e}")
-                    metadata_json = ""
+                    print(f"[PromptExtractor] Error building structured workflow_data: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    workflow_data = {}
+            else:
+                workflow_data = {}
 
             # Process loras only if use_lora_input_only is disabled (extract mode)
             if not use_lora_input_only:
@@ -3192,12 +3945,47 @@ class PromptExtractor:
                     else:
                         skipped_count += 1
 
+        # ── Merge final LoRA stacks back into workflow_data & cache ──────
+        # Connected lora_stack inputs may have added LoRAs that weren't in
+        # the extracted metadata.  Push the merged set into workflow_data
+        # (the _simplified dict) and the _last_extracted_info cache so
+        # WorkflowBuilder's "Update Workflow" button sees the full set.
+        if isinstance(workflow_data, dict) and (final_lora_stack_a or final_lora_stack_b):
+            def _tuples_to_lora_dicts(stack_tuples):
+                """Convert (path, model_str, clip_str) tuples to LoRA dicts."""
+                result = []
+                for path, ms, cs in stack_tuples:
+                    result.append({
+                        'name': os.path.splitext(os.path.basename(path))[0],
+                        'path': path,
+                        'model_strength': ms,
+                        'clip_strength': cs,
+                        'active': True,
+                    })
+                return result
+
+            merged_a = _tuples_to_lora_dicts(final_lora_stack_a)
+            merged_b = _tuples_to_lora_dicts(final_lora_stack_b)
+            workflow_data['loras_a'] = merged_a
+            workflow_data['loras_b'] = merged_b
+
+            # Update the _last_extracted_info cache too
+            uid_str = str(unique_id) if unique_id is not None else None
+            if uid_str and uid_str in _last_extracted_info:
+                _last_extracted_info[uid_str]['loras_a'] = merged_a
+                _last_extracted_info[uid_str]['loras_b'] = merged_b
+                # Refresh availability for any newly-added LoRAs
+                avail = _last_extracted_info[uid_str].get('lora_availability', {})
+                for _l in merged_a + merged_b:
+                    _ln = _l.get('name', '')
+                    if _ln and _ln not in avail:
+                        _, _found = resolve_lora_path(_ln)
+                        avail[_ln] = _found
+                _last_extracted_info[uid_str]['lora_availability'] = avail
+
         # Provide placeholder image tensor if none loaded (e.g., for JSON files)
         if image_tensor is None:
             image_tensor = get_placeholder_image_tensor()
-
-        # Save preview image for display
-        preview_images = self.save_preview_images(image_tensor)
 
         # Ensure strings are never empty - ComfyUI treats "" as "no connection"
         # Use single space " " to indicate "connected but no content found"
@@ -3205,15 +3993,12 @@ class PromptExtractor:
             positive_prompt = " "
         if not negative_prompt:
             negative_prompt = " "
-        if not metadata_json:
-            metadata_json = " "
-        if not model_a:
-            model_a = " "
-        if not model_b:
-            model_b = " "
+        if not workflow_data:
+            workflow_data = " "
 
-        # Embed extracted data into workflow so it's saved in the PNG metadata
-        # This allows re-extraction from images generated using PromptExtractor
+        # Embed extracted_data into workflow so it's saved in the PNG metadata.
+        # Uses the same schema as workflow_data (build_simplified_workflow_data)
+        # with LoRA entries enriched with active/available state.
         if extra_pnginfo is not None and unique_id is not None:
             # Handle extra_pnginfo whether it's a dict or a list wrapper
             pnginfo = extra_pnginfo
@@ -3226,23 +4011,40 @@ class PromptExtractor:
             else:
                 workflow = {}
 
-            loras_a_data = []
-            for lora_path, strength, clip_strength in final_lora_stack_a:
-                lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                loras_a_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
-            loras_b_data = []
-            for lora_path, strength, clip_strength in final_lora_stack_b:
-                lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                loras_b_data.append({'name': lora_name, 'path': lora_path, 'strength': strength, 'clip_strength': clip_strength})
+            # Build enriched LoRA lists with active + available state
+            def _enrich_lora_stack(stack_tuples):
+                enriched = []
+                for lora_path, strength, clip_strength in stack_tuples:
+                    lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+                    _, found = resolve_lora_path(lora_name)
+                    enriched.append({
+                        'name': lora_name,
+                        'path': lora_path,
+                        'strength': strength,
+                        'clip_strength': clip_strength,
+                        'active': True,
+                        'available': found,
+                    })
+                return enriched
 
-            extracted_data = {
-                'positive_prompt': positive_prompt.strip(),
-                'negative_prompt': negative_prompt.strip(),
-                'loras_a': loras_a_data,
-                'loras_b': loras_b_data,
-                'model_a': model_a.strip(),
-                'model_b': model_b.strip(),
-            }
+            loras_a_enriched = _enrich_lora_stack(final_lora_stack_a)
+            loras_b_enriched = _enrich_lora_stack(final_lora_stack_b)
+
+            # Reuse the already-built _simplified workflow_data dict if available,
+            # otherwise build a minimal one.
+            try:
+                extracted_data = to_json_safe_workflow_data(dict(workflow_data) if isinstance(workflow_data, dict) else {})
+            except Exception:
+                extracted_data = {}
+
+            # Overwrite LoRA lists with enriched versions
+            extracted_data['loras_a'] = loras_a_enriched
+            extracted_data['loras_b'] = loras_b_enriched
+            # Ensure core fields are present (even if workflow_data build failed)
+            extracted_data.setdefault('positive_prompt', positive_prompt.strip())
+            extracted_data.setdefault('negative_prompt', negative_prompt.strip())
+            extracted_data.setdefault('model_a', model_a.strip())
+            extracted_data.setdefault('model_b', model_b.strip())
 
             wf_nodes = workflow.get('nodes', []) if isinstance(workflow, dict) else []
             for wf_node in wf_nodes:
@@ -3251,8 +4053,10 @@ class PromptExtractor:
                     break
 
         return {
-            "ui": {"images": preview_images},
-            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor, model_a, model_b, metadata_json)
+            # Do not publish extractor preview images to Comfy history/tasks.
+            # This prevents extractor frames from becoming the queue thumbnail.
+            "ui": {},
+            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, workflow_data, image_tensor)
         }
 
     def save_preview_images(self, images):
@@ -3304,3 +4108,96 @@ class PromptExtractor:
                 mtime = os.path.getmtime(file_path)
 
         return (mtime, source_folder, frame_position, use_lora_input_only)
+
+
+class WorkflowExtractor:
+    """
+    Simplified extractor for WorkflowBuilder — outputs only workflow_data + image.
+    No LoRA inputs/outputs, no prompt outputs. Same extraction logic as PromptExtractor.
+    Uses composition (not inheritance) to avoid ComfyUI node-type confusion on reload.
+    """
+
+    def __init__(self):
+        self._pe = PromptExtractor()
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        input_dir = folder_paths.get_input_directory()
+        files = ["(none)"]
+        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.json', '.mp4', '.webm', '.mov', '.avi']
+
+        if os.path.exists(input_dir):
+            for root, dirs, filenames in os.walk(input_dir):
+                for filename in filenames:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext in supported_extensions:
+                        full_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(full_path, input_dir).replace('\\', '/')
+                        files.append(rel_path)
+
+        files_to_sort = files[1:]
+        files_to_sort.sort()
+        files = ["(none)"] + files_to_sort
+
+        return {
+            "required": {
+                "source_folder": (["input", "output"], {
+                    "default": "input",
+                    "tooltip": "Browse files from the input or output folder"
+                }),
+                "image": (files, {}),
+                "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "prompt": "PROMPT",
+            },
+        }
+
+    CATEGORY = "Prompt Manager"
+    DESCRIPTION = "Extract workflow data from images, videos, and workflow files. Simplified version for WorkflowBuilder."
+    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE")
+    RETURN_NAMES = ("workflow_data", "image")
+    FUNCTION = "extract_workflow"
+    OUTPUT_NODE = False
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        return True
+
+    def extract_workflow(self, image="", source_folder="input", frame_position=0.0,
+                         unique_id=None, extra_pnginfo=None, prompt=None):
+        """Extract workflow_data and image only — delegates to PromptExtractor.extract()."""
+        result = self._pe.extract(
+            image=image, source_folder=source_folder, frame_position=frame_position,
+            use_lora_input_only=True, lora_stack_a=None, lora_stack_b=None,
+            unique_id=unique_id, extra_pnginfo=extra_pnginfo, prompt=prompt,
+        )
+        # Parent returns {"ui": ..., "result": (pos, neg, loras_a, loras_b, workflow_data, image)}
+        full = result["result"]
+        workflow_data = full[4]
+        image_tensor = full[5]
+        return {
+            # Keep WorkflowExtractor silent in UI previews for the same reason
+            # as PromptExtractor: avoid replacing final generation thumbnails.
+            "ui": {},
+            "result": (workflow_data, image_tensor),
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, **kwargs):
+        mtime = "no_file"
+        if image:
+            file_path = image.strip()
+            if not os.path.isabs(file_path):
+                if source_folder == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                potential_path = os.path.join(base_dir, file_path)
+                if os.path.exists(potential_path):
+                    mtime = os.path.getmtime(potential_path)
+            elif os.path.exists(file_path):
+                mtime = os.path.getmtime(file_path)
+        return (mtime, source_folder, frame_position)

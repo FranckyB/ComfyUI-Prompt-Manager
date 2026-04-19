@@ -177,6 +177,38 @@ function parseA1111Parameters(parametersText) {
     return result;
 }
 
+function _isLoraAvailableForSort(lora) {
+    if (!lora) return true;
+    if (lora.available === false) return false;
+    if (lora.found === false) return false;
+    return true;
+}
+
+function _sortLorasMissingLast(loras) {
+    const src = Array.isArray(loras) ? [...loras] : [];
+    return src.sort((a, b) => {
+        const aAvailable = _isLoraAvailableForSort(a);
+        const bAvailable = _isLoraAvailableForSort(b);
+        if (aAvailable !== bAvailable) return aAvailable ? -1 : 1;
+        return String(a?.name || "").localeCompare(String(b?.name || ""));
+    });
+}
+
+function _normalizeExtractedLoraOrder(extracted) {
+    if (!extracted || typeof extracted !== "object") return extracted;
+    const normalized = { ...extracted };
+    if (Array.isArray(normalized.loras)) {
+        normalized.loras = _sortLorasMissingLast(normalized.loras);
+    }
+    if (Array.isArray(normalized.loras_a)) {
+        normalized.loras_a = _sortLorasMissingLast(normalized.loras_a);
+    }
+    if (Array.isArray(normalized.loras_b)) {
+        normalized.loras_b = _sortLorasMissingLast(normalized.loras_b);
+    }
+    return normalized;
+}
+
 /**
  * Extract metadata from JPEG/WebP file
  * Reads EXIF UserComment field (0x9286) for workflow metadata
@@ -900,7 +932,7 @@ app.registerExtension({
             // Find the node with this filename
             if (app.graph && app.graph._nodes) {
                 for (const node of app.graph._nodes) {
-                    if (node.type === "PromptExtractor") {
+                    if (node.type === "PromptExtractor" || node.type === "WorkflowExtractor") {
                         const imageWidget = node.widgets?.find(w => w.name === "image");
                         const frameWidget = node.widgets?.find(w => w.name === "frame_position");
                         
@@ -922,7 +954,7 @@ app.registerExtension({
     },
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptExtractor") {
+        if (nodeData.name === "PromptExtractor" || nodeData.name === "WorkflowExtractor") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
@@ -937,7 +969,6 @@ app.registerExtension({
                 node._loadedFramePosition = null;
                 // Track source folder for URL type
                 node._sourceFolder = 'input';
-
                 // Find the frame_position widget (slider) early so we can reference it
                 const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
 
@@ -1122,6 +1153,46 @@ app.registerExtension({
                 const onConfigure = node.onConfigure;
                 node.onConfigure = function(info) {
                     const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+
+                    // ── Migration: remove stale inputs/outputs from old workflows ──
+                    const isWorkflowExtractor = this.type === "WorkflowExtractor";
+                    const VALID_INPUTS = isWorkflowExtractor
+                        ? new Set([])
+                        : new Set(["lora_stack_a", "lora_stack_b"]);
+                    if (this.inputs) {
+                        for (let i = this.inputs.length - 1; i >= 0; i--) {
+                            if (!VALID_INPUTS.has(this.inputs[i].name)) {
+                                this.removeInput(i);
+                            }
+                        }
+                    }
+                    const VALID_OUTPUTS = isWorkflowExtractor
+                        ? [
+                            { name: "workflow_data",   type: "WORKFLOW_DATA" },
+                            { name: "image",           type: "IMAGE" },
+                        ]
+                        : [
+                            { name: "positive_prompt", type: "STRING" },
+                            { name: "negative_prompt", type: "STRING" },
+                            { name: "lora_stack_a",    type: "LORA_STACK" },
+                            { name: "lora_stack_b",    type: "LORA_STACK" },
+                            { name: "workflow_data",   type: "WORKFLOW_DATA" },
+                            { name: "image",           type: "IMAGE" },
+                        ];
+                    if (this.outputs) {
+                        const namesMatch = this.outputs.length === VALID_OUTPUTS.length &&
+                            VALID_OUTPUTS.every((v, i) => this.outputs[i]?.name === v.name && this.outputs[i]?.type === v.type);
+                        if (!namesMatch) {
+                            // Preserve existing links before resetting
+                            const savedLinks = this.outputs.map(o => o.links ? [...o.links] : null);
+                            this.outputs.length = 0;
+                            for (let i = 0; i < VALID_OUTPUTS.length; i++) {
+                                this.addOutput(VALID_OUTPUTS[i].name, VALID_OUTPUTS[i].type);
+                                // Restore links for slots that existed at the same index
+                                if (savedLinks[i]) this.outputs[i].links = savedLinks[i];
+                            }
+                        }
+                    }
 
                     // Restore source_folder from widget value
                     const sfWidget = this.widgets?.find(w => w.name === "source_folder");
@@ -1492,6 +1563,29 @@ async function extractAndUpdateMetadata(node, filename) {
         // Force canvas redraw to update indicator
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
+
+        // Extract full preview data for WorkflowBuilder's "Update Workflow" button.
+        // Runs the Python parse+build pipeline on the cached metadata so WB can
+        // pull it without executing PromptExtractor (live-menu pattern).
+        if (node.hasWorkflow) {
+            try {
+                const sourceFolder = node._sourceFolder || 'input';
+                const previewResp = await fetch(
+                    `/prompt-extractor/extract-preview?filename=${encodeURIComponent(filename)}&source=${encodeURIComponent(sourceFolder)}`
+                );
+                if (previewResp.ok) {
+                    const previewData = await previewResp.json();
+                    if (previewData.extracted) {
+                        const normalizedExtracted = _normalizeExtractedLoraOrder(previewData.extracted);
+                        node.properties = node.properties || {};
+                        node.properties.pe_extracted_data = JSON.stringify(normalizedExtracted);
+                        console.log(`[PromptExtractor] Cached extracted preview data for: ${filename}`);
+                    }
+                }
+            } catch (previewErr) {
+                console.warn('[PromptExtractor] Could not cache preview data:', previewErr);
+            }
+        }
     } catch (error) {
         console.error("[PromptExtractor] Error extracting metadata:", error);
         node.hasWorkflow = false;

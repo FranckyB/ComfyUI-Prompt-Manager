@@ -1,10 +1,34 @@
 import os
 import json
+import shutil
+import time
 import folder_paths
 import server
 
 
 class PromptManager:
+
+    @staticmethod
+    def get_weekly_backup_path():
+        """Get the path to the weekly rotating backup file."""
+        return PromptManager.get_prompts_path() + "_bak"
+
+    @staticmethod
+    def _refresh_weekly_backup_if_due(source_path, backup_path, interval_days=7):
+        """Refresh backup only when missing or older than interval_days."""
+        if not os.path.exists(source_path):
+            return
+
+        should_refresh = not os.path.exists(backup_path)
+        if not should_refresh:
+            try:
+                age_seconds = time.time() - os.path.getmtime(backup_path)
+                should_refresh = age_seconds >= (interval_days * 24 * 60 * 60)
+            except Exception:
+                should_refresh = True
+
+        if should_refresh:
+            shutil.copy2(source_path, backup_path)
 
     @classmethod
     def INPUT_TYPES(s):
@@ -79,6 +103,26 @@ class PromptManager:
                     return json.load(f)
             except Exception as e:
                 print(f"[PromptManager] Error loading user prompts: {e}")
+                # Try backup variants before falling back to defaults.
+                # Never overwrite a user file just because parsing failed.
+                backup_candidates = [
+                    cls.get_weekly_backup_path(),
+                    user_path + ".bak",
+                    user_path + ".backup",
+                    user_path + ".tmp",
+                ]
+                for backup_path in backup_candidates:
+                    if not os.path.exists(backup_path):
+                        continue
+                    try:
+                        with open(backup_path, 'r', encoding='utf-8') as f:
+                            backup_data = json.load(f)
+                        print(f"[PromptManager] Recovered prompts from backup: {backup_path}")
+                        return backup_data
+                    except Exception as be:
+                        print(f"[PromptManager] Backup load failed ({backup_path}): {be}")
+                print("[PromptManager] User prompt file exists but could not be parsed; not overwriting with defaults.")
+                return {}
 
         if os.path.exists(default_path):
             try:
@@ -115,13 +159,25 @@ class PromptManager:
         """Save prompts to user folder"""
         user_path = cls.get_prompts_path()
         sorted_data = cls.sort_prompts_data(data)
+        tmp_path = user_path + ".tmp"
+        bak_path = cls.get_weekly_backup_path()
 
         try:
             os.makedirs(os.path.dirname(user_path), exist_ok=True)
-            with open(user_path, 'w', encoding='utf-8') as f:
+            # Weekly rotating backup: refresh at most once every 7 days.
+            cls._refresh_weekly_backup_if_due(user_path, bak_path)
+
+            # Atomic write: write temp then replace to avoid truncated/corrupt files.
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(sorted_data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, user_path)
         except Exception as e:
             print(f"[PromptManager] Error saving prompts: {e}")
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
 
     def get_prompt(self, category, name, use_external, text="", llm_input="", unique_id=None):
         """Return the appropriate text based on use_external toggle and broadcast update"""

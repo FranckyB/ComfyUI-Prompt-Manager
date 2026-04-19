@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 
 /**
  * PromptManagerAdvanced Extension for ComfyUI
@@ -117,13 +118,16 @@ app.registerExtension({
     name: "PromptManagerAdvanced",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptManagerAdvanced") {
+        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "WorkflowManager") {
+            const isWorkflowManagerNode = nodeData.name === "WorkflowManager";
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated?.apply(this, arguments);
 
                 const node = this;
+                node._isWorkflowManager = isWorkflowManagerNode;
+                enforceWorkflowManagerCompactMode(node);
                 node.prompts = {};
                 node.currentLorasA = [];
                 node.currentLorasB = [];
@@ -143,13 +147,18 @@ app.registerExtension({
                     triggerWords: "[]"
                 };
 
-                // Set initial size - taller to accommodate lora displays
-                this.setSize([440, 700]);
+                // Set initial size.
+                // Workflow Manager is compact-only, so keep a smaller default height.
+                this.setSize([440, node._isWorkflowManager ? 420 : 700]);
 
                 // Change widget labels
                 const promptTextWidget = this.widgets.find(w => w.name === "text");
                 if (promptTextWidget) {
                     promptTextWidget.label = "prompt";
+                    if (node._isWorkflowManager) {
+                        promptTextWidget.type = "converted-widget";
+                        promptTextWidget.computeSize = () => [0, -4];
+                    }
                 }
 
                 const promptNameWidget = this.widgets.find(w => w.name === "name");
@@ -160,6 +169,11 @@ app.registerExtension({
                 const useExternalWidget = this.widgets.find(w => w.name === "use_prompt_input");
                 if (useExternalWidget) {
                     useExternalWidget.label = "use prompt input";
+                }
+
+                const useWorkflowWidget = this.widgets.find(w => w.name === "use_workflow_data");
+                if (useWorkflowWidget) {
+                    useWorkflowWidget.label = "use workflow input";
                 }
 
                 // Make text widget scrollable even when disabled
@@ -174,13 +188,72 @@ app.registerExtension({
                 }
 
                 // Listen for updates from backend
-                api.addEventListener("prompt-manager-advanced-update", (event) => {
+                api.addEventListener("prompt-manager-advanced-update", async (event) => {
                     if (String(event.detail.node_id) === String(this.id)) {
-                        const newLorasA = event.detail.loras_a || [];
-                        const newLorasB = event.detail.loras_b || [];
+                        const normalizeLoraForSig = (lora) => ({
+                            name: String(lora?.name || ""),
+                            strength: Number(lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+                            model_strength: Number(lora?.model_strength ?? lora?.strength ?? 1.0) || 1.0,
+                            clip_strength: Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+                            active: lora?.active !== false,
+                            available: lora?.available !== false,
+                            found: lora?.found !== false,
+                        });
+                        const normalizedLoraListSig = (list) => JSON.stringify(
+                            (Array.isArray(list) ? list : [])
+                                .map(normalizeLoraForSig)
+                                .sort((a, b) => a.name.localeCompare(b.name))
+                        );
+
+                        let newLorasA = event.detail.loras_a || [];
+                        let newLorasB = event.detail.loras_b || [];
                         const newTriggerWords = event.detail.trigger_words || [];
                         const inputLorasA = event.detail.input_loras_a || [];
                         const inputLorasB = event.detail.input_loras_b || [];
+                        const wfDataEvent = event.detail.workflow_data || null;
+                        const useWorkflowEvent = event.detail.use_workflow_data === true;
+                        const workflowInput = this.inputs?.find((inp) => inp.name === "workflow_data");
+                        const hasWorkflowInputConnected = workflowInput?.link != null;
+                        const shouldIngestWorkflowExecution = useWorkflowEvent && !this._isWorkflowManager;
+
+                        if (shouldIngestWorkflowExecution) {
+                            newLorasA = await applyLoraFoundState(newLorasA);
+                            newLorasB = await applyLoraFoundState(newLorasB);
+                        }
+
+                        // Skip expensive state churn and canvas dirtying when payload is unchanged.
+                        // Include found/available in the signature so availability refreshes still apply.
+                        const incomingSig = JSON.stringify({
+                            use_prompt_input: event.detail.use_prompt_input === true,
+                            use_workflow_data: shouldIngestWorkflowExecution,
+                            use_lora_input: (this.widgets?.find(w => w.name === "use_lora_input")?.value !== false),
+                            prompt_input: String(event.detail.prompt_input || ""),
+                            workflow_prompt: String(wfDataEvent?.positive_prompt || ""),
+                            connected_thumbnail_sig: (() => {
+                                const t = String(event.detail.connected_thumbnail || "");
+                                return t ? `${t.length}:${t.slice(0, 64)}` : "";
+                            })(),
+                            workflow_data_sig: wfDataEvent ? JSON.stringify({
+                                positive_prompt: String(wfDataEvent.positive_prompt || ""),
+                                loras_a: (Array.isArray(wfDataEvent.loras_a) ? wfDataEvent.loras_a : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
+                                loras_b: (Array.isArray(wfDataEvent.loras_b) ? wfDataEvent.loras_b : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
+                            }) : null,
+                            loras_a_sig: normalizedLoraListSig(newLorasA),
+                            loras_b_sig: normalizedLoraListSig(newLorasB),
+                            input_loras_a_sig: normalizedLoraListSig(inputLorasA),
+                            input_loras_b_sig: normalizedLoraListSig(inputLorasB),
+                            trigger_words_sig: JSON.stringify(newTriggerWords || []),
+                            unavailable_a_sig: JSON.stringify((event.detail.unavailable_loras_a || []).slice().sort()),
+                            unavailable_b_sig: JSON.stringify((event.detail.unavailable_loras_b || []).slice().sort()),
+                        });
+
+                        if (this._lastExecutionUpdateSig === incomingSig) {
+                            return;
+                        }
+                        this._lastExecutionUpdateSig = incomingSig;
+
+                        const effectiveInputLorasA = shouldIngestWorkflowExecution ? newLorasA : inputLorasA;
+                        const effectiveInputLorasB = shouldIngestWorkflowExecution ? newLorasB : inputLorasB;
                         // Explicit list of unavailable lora names from Python
                         const unavailableLorasA = new Set((event.detail.unavailable_loras_a || []).map(n => n.toLowerCase()));
                         const unavailableLorasB = new Set((event.detail.unavailable_loras_b || []).map(n => n.toLowerCase()));
@@ -194,6 +267,14 @@ app.registerExtension({
                             // Check if use_lora_input is enabled to know what should be displayed
                             const useLoraInputWidget = this.widgets?.find(w => w.name === "use_lora_input");
                             const useLoraInput = useLoraInputWidget?.value !== false;
+                            const currentSigA = useLoraInput
+                                ? normalizedLoraListSig(mergeLoraLists(this.currentLorasA, this.savedLorasA))
+                                : normalizedLoraListSig(this.savedLorasA || []);
+                            const currentSigB = useLoraInput
+                                ? normalizedLoraListSig(mergeLoraLists(this.currentLorasB, this.savedLorasB))
+                                : normalizedLoraListSig(this.savedLorasB || []);
+                            const pythonSigA = normalizedLoraListSig(newLorasA || []);
+                            const pythonSigB = normalizedLoraListSig(newLorasB || []);
                             
                             // Get what JavaScript would currently display
                             let currentDisplayA, currentDisplayB;
@@ -216,8 +297,10 @@ app.registerExtension({
                             // If they don't match, we're out of sync - force reset
                             const lorasOutOfSyncA = JSON.stringify(currentDisplayA) !== JSON.stringify(pythonLorasA);
                             const lorasOutOfSyncB = JSON.stringify(currentDisplayB) !== JSON.stringify(pythonLorasB);
+                            const lorasStateOutOfSyncA = currentSigA !== pythonSigA;
+                            const lorasStateOutOfSyncB = currentSigB !== pythonSigB;
                             
-                            if (lorasOutOfSyncA || lorasOutOfSyncB) {
+                            if (lorasOutOfSyncA || lorasOutOfSyncB || lorasStateOutOfSyncA || lorasStateOutOfSyncB) {
                                 console.log("[PromptManagerAdvanced] JavaScript state out of sync with Python - forcing reset");
                                 console.log("  Current A:", currentDisplayA);
                                 console.log("  Python A:", pythonLorasA);
@@ -240,8 +323,16 @@ app.registerExtension({
 
                         console.log("[PromptManagerAdvanced] Update received, shouldReset:", shouldReset);
 
+
+                        // Workflow mode: execution payload is authoritative (single ingest path).
+                        if (shouldIngestWorkflowExecution) {
+                            syncWorkflowLorasForDisplay(this, wfDataEvent, newLorasA, newLorasB, { preserveUserState: false });
+                            this.currentTriggerWords = [];
+                            updateLoraDisplays(this);
+                            updateTriggerWordsDisplay(this);
+                        }
                         // Clear and reload when Python tells us to (or when we detect desync)
-                        if (shouldReset) {
+                        else if (shouldReset) {
                             console.log("[PromptManagerAdvanced] Resetting toggles as instructed by Python");
 
                             // Clear ALL loras and trigger words - we'll reload fresh
@@ -260,8 +351,8 @@ app.registerExtension({
 
                             // Filter out saved LoRAs that came from input but are no longer in the input.
                             // This prevents LoRAs removed from connected stacker from lingering in saved state.
-                            const inputLoraSetA = new Set(inputLorasA.map(l => l.name.toLowerCase()));
-                            const inputLoraSetB = new Set(inputLorasB.map(l => l.name.toLowerCase()));
+                            const inputLoraSetA = new Set(effectiveInputLorasA.map(l => l.name.toLowerCase()));
+                            const inputLoraSetB = new Set(effectiveInputLorasB.map(l => l.name.toLowerCase()));
                             this.savedLorasA = this.savedLorasA.filter(lora => 
                                 !lora.fromInput || inputLoraSetA.has(lora.name.toLowerCase())
                             );
@@ -303,8 +394,8 @@ app.registerExtension({
                             }
 
                             // Set current loras from input (these are the loras from connected nodes)
-                            this.currentLorasA = inputLorasA.map(l => ({ ...l, source: 'current' }));
-                            this.currentLorasB = inputLorasB.map(l => ({ ...l, source: 'current' }));
+                            this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                            this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
 
                             // Set current trigger words from connected input
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
@@ -315,14 +406,14 @@ app.registerExtension({
                             updateTriggerWordsDisplay(this);
                         } else {
                             // No major change - just update current loras if they differ
-                            const lorasAChanged = JSON.stringify(inputLorasA) !== JSON.stringify(this.currentLorasA.map(l => ({ name: l.name, strength: l.strength })));
-                            const lorasBChanged = JSON.stringify(inputLorasB) !== JSON.stringify(this.currentLorasB.map(l => ({ name: l.name, strength: l.strength })));
+                            const lorasAChanged = normalizedLoraListSig(effectiveInputLorasA) !== normalizedLoraListSig(this.currentLorasA || []);
+                            const lorasBChanged = normalizedLoraListSig(effectiveInputLorasB) !== normalizedLoraListSig(this.currentLorasB || []);
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
 
                             if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
-                                this.currentLorasA = inputLorasA.map(l => ({ ...l, source: 'current' }));
-                                this.currentLorasB = inputLorasB.map(l => ({ ...l, source: 'current' }));
+                                this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                                this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
                                 this.currentTriggerWords = newConnectedTriggers;
 
                                 // Filter out saved LoRAs that came from input but are no longer present
@@ -340,23 +431,51 @@ app.registerExtension({
                             }
                         }
 
-                        // Handle use_prompt_input toggle state for text widget
+                        // Handle use_prompt_input / use_workflow_data toggle state for text widget
                         const promptTextWidget = this.widgets.find(w => w.name === "text");
                         if (promptTextWidget) {
                             const useExternal = event.detail.use_prompt_input || false;
+                            const useWorkflow = shouldIngestWorkflowExecution;
                             const llmInput = event.detail.prompt_input || "";
+                            const wfData = event.detail.workflow_data || null;
+
+                            // Store workflow_data on node for saving
+                            this.lastWorkflowData = wfData;
+                            // For Workflow Manager in input-connected mode, keep incoming payload
+                            // for preview/save UX but don't overwrite local serialized workflow state.
+                            const isPmaWorkflowConnected = (!this._isWorkflowManager) && hasWorkflowInputConnected && useWorkflowEvent;
+                            if (!(this._isWorkflowManager && hasWorkflowInputConnected) && !isPmaWorkflowConnected) {
+                                syncSavedWorkflowDataWidget(this);
+                            }
+                            if (this._isWorkflowManager) {
+                                updateWorkflowManagerPreview(this);
+                                if (this.updatePromptSelectorDisplay) {
+                                    this.updatePromptSelectorDisplay();
+                                }
+                            }
 
                             if (useExternal && llmInput) {
-                                // When using external, display the LLM input text (grayed out)
+                                // Using external prompt — display the input text (grayed out)
                                 promptTextWidget.value = llmInput;
                                 promptTextWidget.disabled = true;
-                                // Keep scrolling enabled
                                 if (promptTextWidget.inputEl) {
                                     promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                    promptTextWidget.inputEl.readOnly = true;
+                                }
+                            } else if (useWorkflow && wfData && wfData.positive_prompt) {
+                                // Using workflow_data prompt — display it (grayed out)
+                                promptTextWidget.value = wfData.positive_prompt;
+                                promptTextWidget.disabled = true;
+                                if (promptTextWidget.inputEl) {
+                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                    promptTextWidget.inputEl.readOnly = true;
                                 }
                             } else {
-                                // When using internal, enable the widget
+                                // Using internal text — enable the widget
                                 promptTextWidget.disabled = false;
+                                if (promptTextWidget.inputEl) {
+                                    promptTextWidget.inputEl.readOnly = false;
+                                }
                             }
 
                             this.serialize_widgets = true;
@@ -367,12 +486,23 @@ app.registerExtension({
 
                 // IMPORTANT: Add DOM widgets SYNCHRONOUSLY during node creation
                 // to ensure proper positioning within the node bounds
+                if (node._isWorkflowManager) {
+                    addWorkflowManagerPreview(node);
+                }
                 createPromptSelectorWidget(node);  // Custom thumbnail selector (before buttons)
                 addButtonBar(node);
-                addLoraDisplays(node);
-                addTriggerWordsDisplay(node);
+                if (!node._isWorkflowManager) {
+                    addLoraDisplays(node);
+                }
+                if (!node._isWorkflowManager) {
+                    addTriggerWordsDisplay(node);
+                }
                 setupCategoryChangeHandler(node);
-                setupUseExternalToggleHandler(node);
+                if (!node._isWorkflowManager) {
+                    setupUseExternalToggleHandler(node);
+                    setupUseWorkflowToggleHandler(node);
+                }
+                setupWorkflowLivePickupHandler(node);
 
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
@@ -398,9 +528,15 @@ app.registerExtension({
                     // Ensure height is sufficient after data is loaded
                     setTimeout(() => {
                         const computedSize = node.computeSize();
-                        const minHeight = Math.max(600, computedSize[1] + 20);
+                        const baseMinHeight = node._isWorkflowManager ? 420 : 600;
+                        const minHeight = Math.max(baseMinHeight, computedSize[1] + 20);
 
-                        if (node.size[1] < minHeight) {
+                        if (node._isWorkflowManager) {
+                            // Auto-shrink legacy oversized Workflow Manager nodes created before compact sizing.
+                            if (node.size[1] > 560 || node.size[1] < minHeight) {
+                                node.setSize([Math.max(440, node.size[0]), minHeight]);
+                            }
+                        } else if (node.size[1] < minHeight) {
                             node.setSize([Math.max(440, node.size[0]), minHeight]);
                         }
                         app.graph.setDirtyCanvas(true, true);
@@ -416,6 +552,7 @@ app.registerExtension({
                 const result = onConfigure?.apply(this, arguments);
 
                 const node = this;
+                enforceWorkflowManagerCompactMode(node);
 
                 // Flag that this node is being restored from a workflow,
                 // so onNodeCreated's async loadPromptData won't overwrite state
@@ -484,6 +621,9 @@ app.registerExtension({
 
                 // IMPORTANT: Reattach DOM widgets SYNCHRONOUSLY during configure
                 // to ensure proper positioning within the node bounds
+                if (node._isWorkflowManager && !node.workflowManagerPreviewAttached) {
+                    addWorkflowManagerPreview(node);
+                }
                 if (!node.promptSelectorWidget) {
                     createPromptSelectorWidget(node);
                 }
@@ -491,13 +631,15 @@ app.registerExtension({
                     addButtonBar(node);
                     setupCategoryChangeHandler(node);
                 }
-                if (!node.loraDisplaysAttached) {
+                if (!node._isWorkflowManager && !node.loraDisplaysAttached) {
                     addLoraDisplays(node);
                 }
-                if (!node.triggerWordsDisplayAttached) {
+                if (!node._isWorkflowManager && !node.triggerWordsDisplayAttached) {
                     addTriggerWordsDisplay(node);
                 }
-                setupUseExternalToggleHandler(node);
+                if (!node._isWorkflowManager) {
+                    setupUseExternalToggleHandler(node);
+                }
 
                 // Load prompts data asynchronously (data only, widgets already added)
                 loadPrompts(node).then(async () => {
@@ -520,6 +662,14 @@ app.registerExtension({
                         node.updatePromptSelectorDisplay();
                     }
 
+                    if (node._isWorkflowManager) {
+                        const computedSize = node.computeSize();
+                        const minHeight = Math.max(420, computedSize[1] + 20);
+                        if (node.size[1] > 560 || node.size[1] < minHeight) {
+                            node.setSize([Math.max(440, node.size[0]), minHeight]);
+                        }
+                    }
+
                     app.graph.setDirtyCanvas(true, true);
                 });
 
@@ -530,7 +680,7 @@ app.registerExtension({
             const onResize = nodeType.prototype.onResize;
             nodeType.prototype.onResize = function(size) {
                 size[0] = Math.max(440, size[0]);
-                size[1] = Math.max(600, size[1]);
+                size[1] = Math.max(this?._isWorkflowManager ? 420 : 600, size[1]);
                 return onResize ? onResize.apply(this, arguments) : size;
             };
 
@@ -580,7 +730,11 @@ async function recheckLoraAvailability(node) {
         if (data.success && data.results) {
             const updateList = (list) => {
                 (list || []).forEach(lora => {
-                    if (lora.name) lora.available = data.results[lora.name] === true;
+                    if (lora.name) {
+                        const found = data.results[lora.name] === true;
+                        lora.available = found;
+                        lora.found = found;
+                    }
                 });
             };
             updateList(node.savedLorasA);
@@ -591,7 +745,10 @@ async function recheckLoraAvailability(node) {
     } catch (error) {
         console.error("[PromptManagerAdvanced] Error re-checking LoRA availability:", error);
         // Default to available on error so they don't all show as missing
-        allLoras.forEach(l => { if (l.available === undefined) l.available = true; });
+        allLoras.forEach(l => {
+            if (l.available === undefined) l.available = true;
+            if (l.found === undefined) l.found = l.available !== false;
+        });
     }
 }
 
@@ -624,6 +781,35 @@ function getSerializedSavedTriggerWords(node) {
         active: word.active !== false,
         source: 'saved'
     }));
+}
+
+function enforceWorkflowManagerCompactMode(node) {
+    if (!node?._isWorkflowManager) return;
+
+    const hiddenNames = new Set(["category", "name", "text", "use_prompt_input", "use_lora_input", "use_workflow_data"]);
+    for (const widget of (node.widgets || [])) {
+        if (!hiddenNames.has(String(widget?.name || ""))) continue;
+        widget.type = "converted-widget";
+        widget.hidden = true;
+        widget.computeSize = () => [0, -4];
+        if (widget.inputEl) {
+            widget.inputEl.style.display = "none";
+        }
+    }
+
+    // Cleanup stale sockets from pre-change serialized nodes.
+    if (Array.isArray(node.inputs) && typeof node.removeInput === "function") {
+        for (let i = node.inputs.length - 1; i >= 0; i--) {
+            const n = String(node.inputs[i]?.name || "").toLowerCase();
+            if (n === "thumbnail_image" || n === "image") {
+                try {
+                    node.removeInput(i);
+                } catch {
+                    // Best-effort only.
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -782,20 +968,212 @@ function collectAllLorasFromChain(node, inputName, visited = new Set()) {
     return allLoras;
 }
 
+function hasWorkflowDataPayload(rawWorkflowData) {
+    return (
+        (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+        (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+    );
+}
+
+function hasConnectedWorkflowInput(node) {
+    const wfInput = node?.inputs?.find((inp) => inp?.name === "workflow_data");
+    return wfInput?.link != null;
+}
+
+function getPromptNamesForCategory(node, category, options = {}) {
+    const hideNSFW = options.hideNSFW === true;
+    const workflowOnly = options.workflowOnly === true;
+    const categoryPrompts = node?.prompts?.[category];
+    if (!categoryPrompts || typeof categoryPrompts !== "object") return [];
+
+    let promptNames = Object.keys(categoryPrompts)
+        .filter((k) => k !== "__meta__")
+        .sort((a, b) => a.localeCompare(b));
+
+    if (hideNSFW) {
+        promptNames = promptNames.filter((name) => categoryPrompts?.[name]?.nsfw !== true);
+    }
+
+    if (workflowOnly) {
+        promptNames = promptNames.filter((name) => hasWorkflowDataPayload(categoryPrompts?.[name]?.workflow_data));
+    }
+
+    return promptNames;
+}
+
+function getVisibleCategories(node, options = {}) {
+    const categories = Object.keys(node?.prompts || {})
+        .filter((c) => c !== "__meta__")
+        .sort((a, b) => a.localeCompare(b));
+
+    // Keep empty categories visible so users can still save prompts/workflows into them.
+    return categories;
+}
+
 function filterPromptDropdown(node) {
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
 
     if (categoryWidget && promptWidget) {
+        const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW") === true;
+        const workflowOnly = node?._isWorkflowManager === true;
+        const visibleCategories = getVisibleCategories(node, { hideNSFW, workflowOnly });
+
+        categoryWidget.options.values = visibleCategories.length > 0 ? visibleCategories : ["Default"];
+
+        if (!visibleCategories.includes(categoryWidget.value)) {
+            categoryWidget.value = visibleCategories[0] || "Default";
+        }
+
         const currentCategory = categoryWidget.value;
-        if (node.prompts[currentCategory]) {
-            const promptNames = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
-            if (promptNames.length === 0) {
-                promptNames.push("");
-            }
-            promptWidget.options.values = promptNames;
+        const promptNames = getPromptNamesForCategory(node, currentCategory, { hideNSFW, workflowOnly });
+        promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
+        if (!promptNames.includes(promptWidget.value)) {
+            promptWidget.value = promptNames[0] || "";
         }
     }
+}
+
+function updateWorkflowManagerPreview(node) {
+    const ui = node?._workflowManagerPreview;
+    if (!ui) return;
+
+    const categoryWidget = node.widgets?.find(w => w.name === "category");
+    const promptWidget = node.widgets?.find(w => w.name === "name");
+    const category = categoryWidget?.value || "";
+    const prompt = promptWidget?.value || "";
+    const promptData = node.prompts?.[category]?.[prompt] || null;
+    const liveWorkflow = (node.lastWorkflowData && typeof node.lastWorkflowData === "object") ? node.lastWorkflowData : null;
+    const workflowInputConnected = hasConnectedWorkflowInput(node);
+
+    // Input-connected mode should not show saved/random prompt thumbnails while waiting.
+    // Use the placeholder image until live workflow_data arrives.
+    if (workflowInputConnected && !liveWorkflow) {
+        ui.image.src = DEFAULT_THUMBNAIL;
+        ui.image.style.display = "block";
+        ui.emptyLabel.style.display = "none";
+        return;
+    }
+
+    const pickThumbnail = (obj) => {
+        if (!obj || typeof obj !== "object") return "";
+        const candidates = [
+            obj.thumbnail,
+            obj.connected_thumbnail,
+            obj.thumbnail_image,
+            obj.preview,
+            obj.image,
+        ];
+        for (const value of candidates) {
+            if (typeof value === "string" && value.trim()) {
+                return value;
+            }
+        }
+        return "";
+    };
+
+    const liveThumbnail = pickThumbnail(liveWorkflow) || (typeof node.connectedThumbnail === "string" ? node.connectedThumbnail : "");
+    const savedThumbnail = pickThumbnail(promptData);
+    const thumbnail = liveThumbnail || savedThumbnail || DEFAULT_THUMBNAIL;
+
+    if (thumbnail && thumbnail !== DEFAULT_THUMBNAIL) {
+        ui.image.src = thumbnail;
+        ui.image.style.display = "block";
+        ui.emptyLabel.style.display = "none";
+    } else {
+        ui.image.removeAttribute("src");
+        ui.image.style.display = "none";
+        ui.emptyLabel.style.display = "flex";
+        if (liveWorkflow) {
+            ui.emptyLabel.textContent = "Connected workflow loaded (no thumbnail)";
+        } else if (workflowInputConnected) {
+            ui.emptyLabel.textContent = "Waiting for workflow_data input...";
+        } else {
+            ui.emptyLabel.textContent = "No thumbnail for selected workflow";
+        }
+    }
+}
+
+function addWorkflowManagerPreview(node) {
+    if (node.workflowManagerPreviewAttached) return;
+
+    const container = document.createElement("div");
+    container.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: #1e1e1e;
+        border: 1px solid #3a3a3a;
+        border-radius: 8px;
+        padding: 8px;
+        box-sizing: border-box;
+        overflow: hidden;
+    `;
+
+    const title = document.createElement("div");
+    title.textContent = "Workflow Preview";
+    title.style.cssText = `
+        font-size: 11px;
+        color: #9aa;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+    `;
+
+    const previewBox = document.createElement("div");
+    previewBox.style.cssText = `
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 6px;
+        background: #111;
+        border: 1px solid #333;
+        overflow: hidden;
+        box-sizing: border-box;
+    `;
+
+    const image = document.createElement("img");
+    image.style.cssText = `
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        object-position: center center;
+        display: none;
+    `;
+
+    const emptyLabel = document.createElement("div");
+    emptyLabel.textContent = "No thumbnail for selected workflow";
+    emptyLabel.style.cssText = `
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        font-size: 11px;
+        color: #777;
+        background: #141414;
+        border: 1px dashed rgba(110, 110, 110, 0.5);
+        border-radius: 5px;
+        padding: 8px;
+        box-sizing: border-box;
+    `;
+
+    container.appendChild(title);
+    previewBox.appendChild(image);
+    previewBox.appendChild(emptyLabel);
+    container.appendChild(previewBox);
+
+    const widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
+        hideOnZoom: false,
+    });
+    // Keep width behavior unchanged; make preview area ~20% taller.
+    widget.computeSize = (width) => [Math.max(width || 260, 260), 320];
+
+    node._workflowManagerPreview = { container, image, emptyLabel, widget };
+    node.workflowManagerPreviewAttached = true;
+    updateWorkflowManagerPreview(node);
 }
 
 // ========================
@@ -1078,10 +1456,26 @@ function mergeLoraLists(currentLoras, savedLoras) {
         }
     });
 
-    // Sort alphabetically by name to maintain stable order when toggling
-    merged.sort((a, b) => a.name.localeCompare(b.name));
+    // Keep available LoRAs first, then missing ones, each group alphabetical.
+    merged.sort(compareLorasMissingLast);
 
     return merged;
+}
+
+function isLoraAvailableForSort(lora) {
+    if (!lora) return true;
+    if (lora.available === false) return false;
+    if (lora.found === false) return false;
+    return true;
+}
+
+function compareLorasMissingLast(a, b) {
+    const aAvailable = isLoraAvailableForSort(a);
+    const bAvailable = isLoraAvailableForSort(b);
+    if (aAvailable !== bAvailable) {
+        return aAvailable ? -1 : 1;
+    }
+    return String(a?.name || "").localeCompare(String(b?.name || ""));
 }
 
 function renderLoraTags(container, loras, stackId, node) {
@@ -1105,7 +1499,8 @@ function renderLoraTags(container, loras, stackId, node) {
         return;
     }
 
-    loras.forEach((lora, index) => {
+    const orderedLoras = (Array.isArray(loras) ? [...loras] : []).sort(compareLorasMissingLast);
+    orderedLoras.forEach((lora, index) => {
         const tag = createLoraTag(lora, index, stackId, node);
         container.appendChild(tag);
     });
@@ -2254,6 +2649,18 @@ function removeTriggerWord(node, index) {
 // Button Bar Functions
 // ========================
 
+function buildWorkflowDefaultName() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const y = now.getFullYear();
+    const m = pad(now.getMonth() + 1);
+    const d = pad(now.getDate());
+    const hh = pad(now.getHours());
+    const mm = pad(now.getMinutes());
+    const ss = pad(now.getSeconds());
+    return `Workflow ${y}-${m}-${d} ${hh}-${mm}-${ss}`;
+}
+
 function addButtonBar(node) {
     if (node.buttonBarAttached) {
         return;
@@ -2266,9 +2673,9 @@ function addButtonBar(node) {
     // Create button container
     const buttonContainer = document.createElement("div");
     buttonContainer.style.display = "flex";
-    buttonContainer.style.gap = "4px";
+    buttonContainer.style.gap = "2px";
     buttonContainer.style.padding = "4px 4px 8px 4px";
-    buttonContainer.style.flexWrap = "nowrap";
+    buttonContainer.style.flexWrap = "wrap";
     buttonContainer.style.marginTop = "0";
 
     // Prevent default context menu on button bar
@@ -2277,137 +2684,157 @@ function addButtonBar(node) {
     // Forward wheel events to canvas for zooming
     forwardWheelToCanvas(buttonContainer);
 
-    // Save Prompt button
-    const savePromptBtn = createButton("Save Prompt", async () => {
-        const categories = Object.keys(node.prompts || {}).sort((a, b) => a.localeCompare(b));
+    const saveButtonLabel = node._isWorkflowManager ? "Save Workflow" : "Save Prompt";
+    const clearButtonLabel = node._isWorkflowManager ? "Clear Workflow" : "New Prompt";
+
+    // Save Prompt/Workflow button
+    const savePromptBtn = createButton(saveButtonLabel, async () => {
         const currentCategory = categoryWidget.value;
-
-        // Determine NSFW default from existing prompt if editing
-        let defaultNsfw = false;
-        if (node.prompts[currentCategory]) {
-            const existingPrompt = node.prompts[currentCategory][promptWidget.value];
-            if (existingPrompt && existingPrompt.nsfw) defaultNsfw = true;
-        }
-
-        const result = await showPromptWithCategory(
-            "Save Prompt",
-            "Enter prompt name:",
-            promptWidget.value || "New Prompt",
-            categories,
-            currentCategory,
-            defaultNsfw
+        const currentName = (promptWidget.value || "").trim();
+        const useWorkflowDateDefault = node._isWorkflowManager && (
+            hasConnectedWorkflowInput(node) ||
+            !currentName ||
+            currentName.toLowerCase() === "new prompt" ||
+            node.isNewUnsavedPrompt === true
         );
+        const initialName = useWorkflowDateDefault
+            ? buildWorkflowDefaultName()
+            : (currentName || "New Prompt");
 
-        if (result && result.name && result.name.trim()) {
-            const promptName = result.name.trim();
-            const targetCategory = result.category;
-            const promptText = textWidget.value;
-
-            try {
-            // Check for existing prompt in target category
-            let existingPromptName = null;
-            if (node.prompts[targetCategory]) {
-                const existingNames = Object.keys(node.prompts[targetCategory]).filter(k => k !== '__meta__');
-                existingPromptName = existingNames.find(name => name.toLowerCase() === promptName.toLowerCase());
-            }
-
-            if (existingPromptName) {
-                const confirmed = await showConfirm(
-                    "Overwrite Prompt",
-                    `Prompt "${existingPromptName}" already exists in category "${targetCategory}". Do you want to overwrite it?`,
-                    "Overwrite",
-                    "#f80"
-                );
-
-                if (!confirmed) {
-                    return;
+        await openPromptBrowserForSave({
+            node,
+            currentCategory,
+            currentPrompt: promptWidget.value || "",
+            title: node._isWorkflowManager ? "Save Workflow" : "Save Prompt",
+            saveButtonText: "Save",
+            namePlaceholder: "Prompt name",
+            initialName,
+            workflowOnly: node?._isWorkflowManager === true,
+            onSave: async ({ category, name, overwrite }) => {
+                const promptName = String(name || "").trim();
+                const targetCategory = String(category || "").trim();
+                const promptText = textWidget.value;
+                if (!promptName || !targetCategory) {
+                    return { success: false, error: "Category and prompt name are required." };
                 }
-            }
 
-            // Use the last-executed state from Python as the authoritative source for connected loras.
-            // node.currentLorasA/B is populated from the backend after each execution (input_loras_a/b),
-            // so it already reflects only what actually ran — muted/bypassed nodes are absent.
-            // Graph traversal (collectAllLorasFromChain) is intentionally NOT used here because it
-            // reads raw widget values regardless of node mute/bypass state.
-            const connectedLorasA = node.currentLorasA || [];
-            const connectedLorasB = node.currentLorasB || [];
+                try {
+                    // Use the last-executed state from Python as the authoritative source for connected loras.
+                    // node.currentLorasA/B is populated from the backend after each execution (input_loras_a/b),
+                    // so it already reflects only what actually ran.
+                    const connectedLorasA = node.currentLorasA || [];
+                    const connectedLorasB = node.currentLorasB || [];
 
-            // Check if use_lora_input is disabled
-            const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-            const useLoraInput = useLoraInputWidget?.value !== false;
+                    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+                    const useLoraInput = useLoraInputWidget?.value !== false;
 
-            // Get loras to save
-            let allLorasA, allLorasB;
+                    let allLorasA, allLorasB;
+                    if (!useLoraInput) {
+                        allLorasA = [...(node.savedLorasA || [])];
+                        allLorasB = [...(node.savedLorasB || [])];
+                    } else {
+                        const mergedA = mergeLoraLists(
+                            connectedLorasA.map(l => ({ ...l, source: "current" })),
+                            node.savedLorasA || []
+                        );
+                        const mergedB = mergeLoraLists(
+                            connectedLorasB.map(l => ({ ...l, source: "current" })),
+                            node.savedLorasB || []
+                        );
+                        allLorasA = [...mergedA];
+                        allLorasB = [...mergedB];
+                    }
 
-            if (!useLoraInput) {
-                allLorasA = [...(node.savedLorasA || [])];
-                allLorasB = [...(node.savedLorasB || [])];
-            } else {
-                const mergedA = mergeLoraLists(
-                    connectedLorasA.map(l => ({ ...l, source: 'current' })),
-                    node.savedLorasA || []
-                );
-                const mergedB = mergeLoraLists(
-                    connectedLorasB.map(l => ({ ...l, source: 'current' })),
-                    node.savedLorasB || []
-                );
-                allLorasA = [...mergedA];
-                allLorasB = [...mergedB];
-            }
+                    const allTriggerWords = mergeTriggerWordLists(
+                        node.currentTriggerWords || [],
+                        node.savedTriggerWords || []
+                    );
 
-            // Get all trigger words (merged, with their states)
-            const allTriggerWords = mergeTriggerWordLists(
-                node.currentTriggerWords || [],
-                node.savedTriggerWords || []
-            );
+                    const thumbnail = node.connectedThumbnail || null;
 
-            // Use connected thumbnail if available
-            const thumbnail = node.connectedThumbnail || null;
+                    // Preserve existing NSFW status when overwriting from the browser-save flow.
+                    let preservedNsfw = false;
+                    const categoryPrompts = node.prompts?.[targetCategory];
+                    if (categoryPrompts && typeof categoryPrompts === "object") {
+                        const existingName = Object.keys(categoryPrompts)
+                            .filter((k) => k !== "__meta__")
+                            .find((k) => k.toLowerCase() === promptName.toLowerCase());
+                        if (existingName && categoryPrompts[existingName]?.nsfw === true) {
+                            preservedNsfw = true;
+                        }
+                    }
 
-            await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail, result.nsfw);
+                    await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail, preservedNsfw);
 
-            // Skip callback reload logic during save update
-            node._skipCallbackReload = true;
+                    const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+                    if (useWorkflowWidget?.value === true) {
+                        const clone = (v, fb) => {
+                            try {
+                                return JSON.parse(JSON.stringify(v ?? fb));
+                            } catch {
+                                return fb;
+                            }
+                        };
 
-            // Update UI to show the saved prompt
-            categoryWidget.value = targetCategory;
-            filterPromptDropdown(node);
-            promptWidget.value = promptName;
-            textWidget.value = promptText;  // Ensure text shows what was just saved
+                        node._preWorkflowModeState = {
+                            text: promptText || "",
+                            savedLorasA: clone(allLorasA, []),
+                            savedLorasB: clone(allLorasB, []),
+                            currentLorasA: [],
+                            currentLorasB: [],
+                            savedTriggerWords: clone(allTriggerWords, []),
+                            currentTriggerWords: [],
+                            lastWorkflowData: clone(node.lastWorkflowData, null),
+                        };
 
-            // Clear skip flag
-            node._skipCallbackReload = false;
+                        useWorkflowWidget.value = false;
+                        if (typeof useWorkflowWidget.callback === "function") {
+                            await useWorkflowWidget.callback(false);
+                        }
+                    }
 
-            // Update previous values tracking
-            node._previousCategory = targetCategory;
-            node._previousPrompt = promptName;
+                    node._skipCallbackReload = true;
+                    categoryWidget.value = targetCategory;
+                    filterPromptDropdown(node);
+                    promptWidget.value = promptName;
+                    textWidget.value = promptText;
+                    node._skipCallbackReload = false;
 
-            node.savedLorasA = allLorasA;
-            node.savedLorasB = allLorasB;
-            node.savedTriggerWords = allTriggerWords;
-            updateLoraDisplays(node);
-            updateTriggerWordsDisplay(node);
+                    node._previousCategory = targetCategory;
+                    node._previousPrompt = promptName;
 
-            // Update custom prompt selector display
-            if (node.updatePromptSelectorDisplay) {
-                node.updatePromptSelectorDisplay();
-            }
+                    node.savedLorasA = allLorasA;
+                    node.savedLorasB = allLorasB;
+                    node.savedTriggerWords = allTriggerWords;
+                    updateLoraDisplays(node);
+                    updateTriggerWordsDisplay(node);
 
-            // Update last saved state after successful save
-            updateLastSavedState(node);
-            } catch (err) {
-                console.error("[PromptManagerAdvanced] Error during save:", err);
-            } finally {
-                // Always clear new prompt flag after save attempt
-                node.isNewUnsavedPrompt = false;
-                node.newPromptCategory = null;
-                node.newPromptName = null;
-            }
-        }
+                    if (node.updatePromptSelectorDisplay) {
+                        node.updatePromptSelectorDisplay();
+                    }
+
+                    updateLastSavedState(node);
+
+                    return {
+                        success: true,
+                        category: targetCategory,
+                        name: promptName,
+                        overwritten: overwrite === true,
+                    };
+                } catch (err) {
+                    console.error("[PromptManagerAdvanced] Error during save:", err);
+                    return { success: false, error: err?.message || "Error during save" };
+                } finally {
+                    node.isNewUnsavedPrompt = false;
+                    node.newPromptCategory = null;
+                    node.newPromptName = null;
+                }
+            },
+        });
     });
 
-    // New Prompt button - simply clears fields for a fresh start
-    const newPromptBtn = createButton("New Prompt", async () => {
+    // New/Clear button - clears current editable state
+    const newPromptBtn = createButton(clearButtonLabel, async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
         const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
@@ -2415,7 +2842,9 @@ function addButtonBar(node) {
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current prompt. Do you want to discard them and start fresh?",
+                node._isWorkflowManager
+                    ? "You have unsaved workflow changes. Do you want to discard them and clear the current workflow selection?"
+                    : "You have unsaved changes to the current prompt. Do you want to discard them and start fresh?",
                 "Discard & Continue",
                 "#f80"
             );
@@ -2444,6 +2873,8 @@ function addButtonBar(node) {
         node.originalStrengthsB = {};
         node.savedTriggerWords = [];
         node.currentTriggerWords = [];
+        node.lastWorkflowData = null;
+        syncSavedWorkflowDataWidget(node);
 
         updateLoraDisplays(node);
         updateTriggerWordsDisplay(node);
@@ -2765,6 +3196,411 @@ function setupCategoryChangeHandler(node) {
     promptWidget.options._values = promptWidget.options.values || [];
 }
 
+function syncSavedWorkflowDataWidget(node) {
+    const w = node.widgets?.find((x) => x.name === "saved_workflow_data");
+    if (!w) return;
+
+    const wf = node.lastWorkflowData;
+    if (!wf) {
+        w.value = "";
+        return;
+    }
+
+    if (typeof wf === "string") {
+        w.value = wf;
+        return;
+    }
+
+    try {
+        w.value = JSON.stringify(wf);
+    } catch {
+        w.value = "";
+    }
+}
+
+function mapWorkflowLorasToUi(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map((lora) => {
+            const name = String(lora?.name || "").trim();
+            if (!name) return null;
+            const strength = Number(lora?.model_strength ?? lora?.strength ?? 1.0);
+            const clipStrength = Number(lora?.clip_strength ?? lora?.strength ?? strength);
+            const available = lora?.available !== false;
+            const found = (lora?.found !== undefined) ? (lora.found !== false) : available;
+            return {
+                name,
+                strength: Number.isFinite(strength) ? strength : 1.0,
+                model_strength: Number.isFinite(strength) ? strength : 1.0,
+                clip_strength: Number.isFinite(clipStrength) ? clipStrength : (Number.isFinite(strength) ? strength : 1.0),
+                active: lora?.active !== false,
+                available,
+                found,
+                source: "workflow",
+            };
+        })
+        .filter(Boolean);
+}
+
+function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, fallbackLorasB = null, options = null) {
+    const preserveLocal = options?.preserveUserState !== false;
+    const mappedPrimaryA = Array.isArray(workflowData?.loras_a) ? mapWorkflowLorasToUi(workflowData.loras_a) : [];
+    const mappedPrimaryB = Array.isArray(workflowData?.loras_b) ? mapWorkflowLorasToUi(workflowData.loras_b) : [];
+    const mappedFallbackA = mapWorkflowLorasToUi(fallbackLorasA || []);
+    const mappedFallbackB = mapWorkflowLorasToUi(fallbackLorasB || []);
+
+    const mergeFlagsFromFallback = (primary, fallback) => {
+        const fallbackMap = new Map((fallback || []).map((l) => [String(l.name || "").toLowerCase(), l]));
+        return (primary || []).map((lora) => {
+            const fb = fallbackMap.get(String(lora.name || "").toLowerCase());
+            return {
+                ...lora,
+                active: (lora.active !== undefined) ? (lora.active !== false) : (fb ? (fb.active !== false) : true),
+                // Prefer freshly checked fallback flags when available.
+                // workflow_data can carry stale availability from prior runs.
+                available: fb
+                    ? (fb.available !== false)
+                    : ((lora.available !== undefined) ? (lora.available !== false) : true),
+                found: fb
+                    ? (fb.found !== false)
+                    : ((lora.found !== undefined) ? (lora.found !== false) : true),
+            };
+        });
+    };
+
+    const wfLorasA = mappedPrimaryA.length > 0
+        ? mergeFlagsFromFallback(mappedPrimaryA, mappedFallbackA)
+        : mappedFallbackA;
+    const wfLorasB = mappedPrimaryB.length > 0
+        ? mergeFlagsFromFallback(mappedPrimaryB, mappedFallbackB)
+        : mappedFallbackB;
+
+    const preserveUserState = (incoming, existing) => {
+        const existingMap = new Map((existing || []).map((l) => [String(l.name || "").toLowerCase(), l]));
+        return incoming.map((lora) => {
+            const prev = existingMap.get(String(lora.name || "").toLowerCase());
+            const strength = Number(prev?.strength ?? prev?.model_strength ?? lora.strength ?? lora.model_strength ?? 1.0);
+            const clipStrength = Number(prev?.clip_strength ?? lora.clip_strength ?? strength);
+            return {
+                ...lora,
+                active: prev ? (prev.active !== false) : (lora.active !== false),
+                strength: Number.isFinite(strength) ? strength : 1.0,
+                model_strength: Number.isFinite(strength) ? strength : 1.0,
+                clip_strength: Number.isFinite(clipStrength) ? clipStrength : (Number.isFinite(strength) ? strength : 1.0),
+                source: "saved",
+                fromWorkflow: true,
+            };
+        });
+    };
+
+    const toSavedWorkflow = (list) => (list || []).map((lora) => {
+        const strength = Number(lora?.strength ?? lora?.model_strength ?? 1.0);
+        const clipStrength = Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? strength);
+        return {
+            ...lora,
+            active: lora?.active !== false,
+            strength: Number.isFinite(strength) ? strength : 1.0,
+            model_strength: Number.isFinite(strength) ? strength : 1.0,
+            clip_strength: Number.isFinite(clipStrength) ? clipStrength : (Number.isFinite(strength) ? strength : 1.0),
+            source: "saved",
+            fromWorkflow: true,
+        };
+    });
+
+    node.savedLorasA = preserveLocal ? preserveUserState(wfLorasA, node.savedLorasA) : toSavedWorkflow(wfLorasA);
+    node.savedLorasB = preserveLocal ? preserveUserState(wfLorasB, node.savedLorasB) : toSavedWorkflow(wfLorasB);
+    node.currentLorasA = wfLorasA.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
+    node.currentLorasB = wfLorasB.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
+}
+
+function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
+    const base = (baseWorkflowData && typeof baseWorkflowData === "object" && !Array.isArray(baseWorkflowData))
+        ? JSON.parse(JSON.stringify(baseWorkflowData))
+        : {};
+
+    base.positive_prompt = String(promptText || "");
+    base.loras_a = (lorasA || []).map((l) => ({
+        name: l.name,
+        model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        active: l.active !== false,
+        available: l.available !== false,
+        found: l.found !== false,
+    }));
+    base.loras_b = (lorasB || []).map((l) => ({
+        name: l.name,
+        model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        active: l.active !== false,
+        available: l.available !== false,
+        found: l.found !== false,
+    }));
+    base._source = "PromptManagerAdvanced";
+    return base;
+}
+
+async function applyLoraFoundState(loras) {
+    const list = Array.isArray(loras) ? loras : [];
+    const names = [...new Set(list.map((l) => String(l?.name || "").trim()).filter(Boolean))];
+    if (names.length === 0) return list;
+
+    try {
+        const response = await fetch("/prompt-manager-advanced/check-loras", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lora_names: names }),
+        });
+        const data = await response.json();
+        if (!data?.success || !data?.results) return list;
+
+        return list.map((lora) => {
+            const key = String(lora?.name || "").trim();
+            const found = data.results[key] === true;
+            return {
+                ...lora,
+                available: found,
+                found,
+            };
+        });
+    } catch {
+        return list;
+    }
+}
+
+async function pullWorkflowIntoNode(node) {
+    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    if (!wfInput || wfInput.link == null) {
+        await showInfo("Workflow Data", "No workflow_data is connected.");
+        return;
+    }
+
+    const wfData = resolveWorkflowDataForSave(node);
+    if (!wfData || typeof wfData !== "object") {
+        await showInfo("Workflow Data", "Could not resolve workflow_data from the connected source.");
+        return;
+    }
+
+    if (!node._workflowPullSnapshot) {
+        const textWidgetSnapshot = node.widgets?.find((w) => w.name === "text");
+        node._workflowPullSnapshot = {
+            text: textWidgetSnapshot?.value ?? "",
+            savedLorasA: JSON.parse(JSON.stringify(node.savedLorasA || [])),
+            savedLorasB: JSON.parse(JSON.stringify(node.savedLorasB || [])),
+            currentLorasA: JSON.parse(JSON.stringify(node.currentLorasA || [])),
+            currentLorasB: JSON.parse(JSON.stringify(node.currentLorasB || [])),
+            lastWorkflowData: node.lastWorkflowData ? JSON.parse(JSON.stringify(node.lastWorkflowData)) : null,
+        };
+    }
+
+    const textWidget = node.widgets?.find((w) => w.name === "text");
+    const usePromptInputWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+    const usePromptInput = usePromptInputWidget?.value === true;
+    if (!usePromptInput && textWidget && wfData.positive_prompt) {
+        textWidget.value = String(wfData.positive_prompt);
+    }
+
+    node.lastWorkflowData = wfData;
+    syncSavedWorkflowDataWidget(node);
+
+    const useLoraInputWidget = node.widgets?.find((w) => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
+
+    // Pull Workflow should only replace fields that are NOT controlled by live inputs.
+    // If use_lora_input is ON, connected stacks control LoRAs at execution; keep PMA stacks unchanged.
+    if (!useLoraInput) {
+        let pulledA = mapWorkflowLorasToUi(wfData.loras_a || []).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
+        let pulledB = mapWorkflowLorasToUi(wfData.loras_b || []).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
+        pulledA = await applyLoraFoundState(pulledA);
+        pulledB = await applyLoraFoundState(pulledB);
+
+        const mergedSavedA = mergeLoraLists(node.savedLorasA || [], pulledA).map((l) => ({ ...l, source: "saved" }));
+        const mergedSavedB = mergeLoraLists(node.savedLorasB || [], pulledB).map((l) => ({ ...l, source: "saved" }));
+
+        node.savedLorasA = await applyLoraFoundState(mergedSavedA);
+        node.savedLorasB = await applyLoraFoundState(mergedSavedB);
+    }
+
+    updateLoraDisplays(node);
+    node.serialize_widgets = true;
+    app.graph.setDirtyCanvas(true, true);
+}
+
+function clearPulledWorkflowFromNode(node) {
+    if (node._workflowPullSnapshot) {
+        const textWidget = node.widgets?.find((w) => w.name === "text");
+        const usePromptInputWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+        const usePromptInput = usePromptInputWidget?.value === true;
+
+        if (!usePromptInput && textWidget) {
+            textWidget.value = node._workflowPullSnapshot.text ?? "";
+        }
+
+        node.savedLorasA = node._workflowPullSnapshot.savedLorasA || [];
+        node.savedLorasB = node._workflowPullSnapshot.savedLorasB || [];
+        node.currentLorasA = node._workflowPullSnapshot.currentLorasA || [];
+        node.currentLorasB = node._workflowPullSnapshot.currentLorasB || [];
+        node.lastWorkflowData = node._workflowPullSnapshot.lastWorkflowData || null;
+        delete node._workflowPullSnapshot;
+    } else {
+        node.lastWorkflowData = null;
+    }
+
+    syncSavedWorkflowDataWidget(node);
+
+    updateLoraDisplays(node);
+    node.serialize_widgets = true;
+    app.graph.setDirtyCanvas(true, true);
+}
+
+function refreshPmaPromptGhosting(node) {
+    const textWidget = node.widgets?.find((w) => w.name === "text");
+    const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+    const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
+    if (!textWidget || !useExternalWidget || !useWorkflowWidget) return;
+
+    const promptInputConnection = node.inputs?.find((inp) => inp.name === "prompt");
+    const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
+
+    if (useExternalWidget.value && isLlmConnected) {
+        textWidget.disabled = true;
+        if (textWidget.inputEl) {
+            textWidget.inputEl.style.pointerEvents = "auto";
+            textWidget.inputEl.readOnly = true;
+        }
+    } else if (useWorkflowWidget.value && isWorkflowConnected) {
+        textWidget.disabled = true;
+        if (textWidget.inputEl) {
+            textWidget.inputEl.style.pointerEvents = "auto";
+            textWidget.inputEl.readOnly = true;
+        }
+    } else {
+        textWidget.disabled = false;
+        if (textWidget.inputEl) {
+            textWidget.inputEl.readOnly = false;
+        }
+    }
+}
+
+function getWorkflowDataLiveSig(workflowData) {
+    if (!workflowData || typeof workflowData !== "object") return "";
+    const normalize = (lora) => ({
+        name: String(lora?.name || ""),
+        model_strength: Number(lora?.model_strength ?? lora?.strength ?? 1.0) || 1.0,
+        clip_strength: Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+        active: lora?.active !== false,
+        available: lora?.available !== false,
+        found: lora?.found !== false,
+    });
+    return JSON.stringify({
+        positive_prompt: String(workflowData.positive_prompt || ""),
+        loras_a: (Array.isArray(workflowData.loras_a) ? workflowData.loras_a : [])
+            .map(normalize)
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        loras_b: (Array.isArray(workflowData.loras_b) ? workflowData.loras_b : [])
+            .map(normalize)
+            .sort((a, b) => a.name.localeCompare(b.name)),
+    });
+}
+
+async function tryLiveWorkflowPickup(node, { force = false } = {}) {
+    const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    if (!useWorkflowWidget?.value || workflowConnection?.link == null) return false;
+
+    const wfData = (await resolveWorkflowDataForLive(node)) || resolveWorkflowDataForSave(node);
+    if (!wfData || typeof wfData !== "object") return false;
+
+    const liveSig = getWorkflowDataLiveSig(wfData);
+    if (!force && liveSig && node._lastLiveWorkflowPickupSig === liveSig) {
+        return false;
+    }
+
+    let liveA = mapWorkflowLorasToUi(wfData.loras_a || []);
+    let liveB = mapWorkflowLorasToUi(wfData.loras_b || []);
+    liveA = await applyLoraFoundState(liveA);
+    liveB = await applyLoraFoundState(liveB);
+
+    syncWorkflowLorasForDisplay(node, wfData, liveA, liveB, { preserveUserState: false });
+    node.lastWorkflowData = wfData;
+    syncSavedWorkflowDataWidget(node);
+
+    const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+    const textWidget = node.widgets?.find((w) => w.name === "text");
+    if (textWidget && !(useExternalWidget?.value === true) && wfData.positive_prompt != null) {
+        textWidget.value = String(wfData.positive_prompt);
+    }
+
+    node.currentTriggerWords = [];
+    updateLoraDisplays(node);
+    updateTriggerWordsDisplay(node);
+    refreshPmaPromptGhosting(node);
+
+    node._lastLiveWorkflowPickupSig = liveSig || null;
+    node.serialize_widgets = true;
+    app.graph.setDirtyCanvas(true, true);
+    return true;
+}
+
+function setupWorkflowLivePickupHandler(node) {
+    if (node._workflowLivePickupHandlerSetup) return;
+    node._workflowLivePickupHandlerSetup = true;
+
+    const getWorkflowInputLink = (n) => {
+        const wfInput = n.inputs?.find((inp) => inp.name === "workflow_data");
+        return wfInput?.link ?? null;
+    };
+    node._lastWorkflowInputLink = getWorkflowInputLink(node);
+
+    const originalOnConnectionsChange = node.onConnectionsChange;
+    node.onConnectionsChange = function () {
+        if (originalOnConnectionsChange) {
+            originalOnConnectionsChange.apply(this, arguments);
+        }
+
+        refreshPmaPromptGhosting(this);
+        if (this._isWorkflowManager) {
+            if (this.updatePromptSelectorDisplay) {
+                this.updatePromptSelectorDisplay();
+            }
+            updateWorkflowManagerPreview(this);
+        }
+
+        // Only trigger live workflow pickup when the workflow_data input link changes.
+        // Unrelated connection edits (e.g. output preview nodes) must not overwrite
+        // user tweaks by re-ingesting upstream workflow payload.
+        const currentWorkflowLink = getWorkflowInputLink(this);
+        const workflowLinkChanged = currentWorkflowLink !== this._lastWorkflowInputLink;
+        this._lastWorkflowInputLink = currentWorkflowLink;
+        if (workflowLinkChanged) {
+            this._lastLiveWorkflowPickupSig = null;
+
+            if (this._isWorkflowManager && currentWorkflowLink != null) {
+                // New input connection: clear local cached workflow state so
+                // upstream workflow_data becomes authoritative.
+                this.lastWorkflowData = null;
+                this.savedLorasA = [];
+                this.savedLorasB = [];
+                this.currentLorasA = [];
+                this.currentLorasB = [];
+                this.savedTriggerWords = [];
+                this.currentTriggerWords = [];
+
+                const textWidget = this.widgets?.find((w) => w.name === "text");
+                if (textWidget) textWidget.value = "";
+
+                syncSavedWorkflowDataWidget(this);
+                updateLoraDisplays(this);
+                updateTriggerWordsDisplay(this);
+                updateWorkflowManagerPreview(this);
+            }
+
+            void tryLiveWorkflowPickup(this);
+        }
+    };
+}
+
 function setupUseExternalToggleHandler(node) {
     const textWidget = node.widgets?.find(w => w.name === "text");
     const useExternalWidget = node.widgets?.find(w => w.name === "use_prompt_input");
@@ -2803,8 +3639,14 @@ function setupUseExternalToggleHandler(node) {
 
     // Apply initial state on load/reload
     const applyToggleState = (value) => {
-        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt_input");
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
         const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
+
+        // Also check use_workflow_data toggle
+        const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
+        const useWorkflow = useWorkflowWidget?.value && isWorkflowConnected;
 
         if (value && isLlmConnected) {
             // Using LLM and it's connected - disable text widget immediately
@@ -2834,6 +3676,13 @@ function setupUseExternalToggleHandler(node) {
                     }
                 }
             }
+        } else if (useWorkflow) {
+            // Using workflow_data — ghost the text widget
+            textWidget.disabled = true;
+            if (textWidget.inputEl) {
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.readOnly = true;
+            }
         } else {
             // Using internal text - enable widget but keep current text (which may be LLM output)
             textWidget.disabled = false;
@@ -2850,7 +3699,7 @@ function setupUseExternalToggleHandler(node) {
     const originalCallback = useExternalWidget.callback;
     useExternalWidget.callback = function(value) {
         // Check if prompt_input is connected
-        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt_input");
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
         const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
 
         // Prevent turning on if nothing is connected
@@ -2866,6 +3715,154 @@ function setupUseExternalToggleHandler(node) {
         }
 
         applyToggleState(value);
+
+        node.serialize_widgets = true;
+        app.graph.setDirtyCanvas(true, true);
+    };
+}
+
+function setupUseWorkflowToggleHandler(node) {
+    const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+    const textWidget = node.widgets?.find(w => w.name === "text");
+    if (!useWorkflowWidget || !textWidget) return;
+
+    const cloneJson = (value, fallback) => {
+        try {
+            return JSON.parse(JSON.stringify(value ?? fallback));
+        } catch {
+            return fallback;
+        }
+    };
+
+    const snapshotPreWorkflowState = () => {
+        node._preWorkflowModeState = {
+            text: textWidget?.value ?? "",
+            savedLorasA: cloneJson(node.savedLorasA, []),
+            savedLorasB: cloneJson(node.savedLorasB, []),
+            currentLorasA: cloneJson(node.currentLorasA, []),
+            currentLorasB: cloneJson(node.currentLorasB, []),
+            savedTriggerWords: cloneJson(node.savedTriggerWords, []),
+            currentTriggerWords: cloneJson(node.currentTriggerWords, []),
+            lastWorkflowData: cloneJson(node.lastWorkflowData, null),
+        };
+    };
+
+    const restorePromptInputText = () => {
+        const promptInputConnection = node.inputs?.find(inp => inp.name === "prompt");
+        const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
+        if (!isLlmConnected || !textWidget) return;
+
+        const graph = app.graph;
+        const link = graph.links[promptInputConnection.link];
+        if (!link) return;
+
+        const originNode = graph.getNodeById(link.origin_id);
+        if (!originNode) return;
+
+        const outputData = originNode.getOutputData?.(link.origin_slot);
+        if (outputData !== undefined) {
+            textWidget.value = outputData;
+            return;
+        }
+
+        if (originNode.widgets) {
+            const outputWidget = originNode.widgets.find(w => w.name === "text" || w.name === "STRING");
+            if (outputWidget) {
+                textWidget.value = outputWidget.value;
+            }
+        }
+    };
+
+    // Re-use the existing applyToggleState from use_prompt_input handler
+    // by triggering a refresh through that widget's state
+    const refreshGhosting = () => {
+        refreshPmaPromptGhosting(node);
+    };
+
+    // Apply initial state
+    refreshGhosting();
+
+    const originalCallback = useWorkflowWidget.callback;
+    useWorkflowWidget.callback = async function(value) {
+        // Prevent turning on if workflow_data is not connected
+        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const isConnected = workflowConnection && workflowConnection.link != null;
+
+        if (value && !isConnected) {
+            useWorkflowWidget.value = false;
+            node.serialize_widgets = true;
+            app.graph.setDirtyCanvas(true, true);
+            return;
+        }
+
+        if (originalCallback) {
+            originalCallback.apply(this, arguments);
+        }
+
+        // Force next execution update to run even if payload content is unchanged.
+        // This is required when toggling workflow mode OFF then ON, otherwise the
+        // signature guard can incorrectly skip re-applying found/available flags.
+        node._lastExecutionUpdateSig = null;
+        node._lastLiveWorkflowPickupSig = null;
+
+        if (value && !node._preWorkflowModeState) {
+            snapshotPreWorkflowState();
+        }
+
+        if (!value) {
+            // Restore pre-workflow state first, then re-apply active toggle behavior.
+            node.lastWorkflowData = null;
+            syncSavedWorkflowDataWidget(node);
+
+            const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
+            const useLoraInputWidget = node.widgets?.find((w) => w.name === "use_lora_input");
+            const usePromptInput = useExternalWidget?.value === true;
+            const useLoraInput = useLoraInputWidget?.value !== false;
+
+            const pre = node._preWorkflowModeState;
+            if (pre) {
+                node.savedLorasA = cloneJson(pre.savedLorasA, []);
+                node.savedLorasB = cloneJson(pre.savedLorasB, []);
+                node.savedTriggerWords = cloneJson(pre.savedTriggerWords, []);
+
+                if (useLoraInput) {
+                    // Restore prompt stacks + connected input stacks when lora input is enabled.
+                    node.currentLorasA = cloneJson(pre.currentLorasA, []);
+                    node.currentLorasB = cloneJson(pre.currentLorasB, []);
+                    node.currentTriggerWords = cloneJson(pre.currentTriggerWords, []);
+                } else {
+                    node.currentLorasA = [];
+                    node.currentLorasB = [];
+                    node.currentTriggerWords = [];
+                }
+
+                // Intentionally do not overwrite text when use_prompt_input is OFF.
+                // Keep the current workflow text so it remains editable after un-ghosting.
+            }
+
+            const categoryWidget = node.widgets?.find((w) => w.name === "category");
+            const promptWidget = node.widgets?.find((w) => w.name === "name");
+            if (!pre) {
+                // Fallback when no prompt is selected: only remove workflow-derived entries.
+                node.currentLorasA = (node.currentLorasA || []).filter((l) => !l.fromWorkflow);
+                node.currentLorasB = (node.currentLorasB || []).filter((l) => !l.fromWorkflow);
+                node.savedLorasA = (node.savedLorasA || []).filter((l) => !l.fromWorkflow);
+                node.savedLorasB = (node.savedLorasB || []).filter((l) => !l.fromWorkflow);
+            }
+
+            if (usePromptInput) {
+                restorePromptInputText();
+            }
+
+            delete node._preWorkflowModeState;
+            updateLoraDisplays(node);
+            updateTriggerWordsDisplay(node);
+        } else {
+            // Live pickup with the same ingest path used for execution data.
+            void tryLiveWorkflowPickup(node, { force: true });
+        }
+
+        refreshGhosting();
 
         node.serialize_widgets = true;
         app.graph.setDirtyCanvas(true, true);
@@ -2893,6 +3890,8 @@ async function loadPromptData(node, category, promptName) {
 
     if (!node.prompts || !node.prompts[category] || !node.prompts[category][promptName]) {
         if (textWidget) textWidget.value = "";
+        node.lastWorkflowData = null;
+        syncSavedWorkflowDataWidget(node);
         updateLoraDisplays(node);
         updateTriggerWordsDisplay(node);
         return;
@@ -2903,6 +3902,10 @@ async function loadPromptData(node, category, promptName) {
     if (textWidget) {
         textWidget.value = promptData.prompt || "";
     }
+
+    // Restore saved workflow_data if present
+    node.lastWorkflowData = promptData.workflow_data || null;
+    syncSavedWorkflowDataWidget(node);
 
     // Load saved loras - preserve active state (default true for backward compatibility)
     const lorasA = (promptData.loras_a || []).map(lora => ({
@@ -3020,6 +4023,10 @@ function updateLastSavedState(node) {
  * Check if there are unsaved changes
  */
 function hasUnsavedChanges(node) {
+    if (node?._isWorkflowManager) {
+        return false;
+    }
+
     // New unsaved prompt always has unsaved changes
     if (node.isNewUnsavedPrompt) {
         return true;
@@ -3141,6 +4148,253 @@ async function renameCategory(node, oldCategory, newCategory) {
     }
 }
 
+function parseJsonObjectSafe(value, fallback = null) {
+    if (!value) return fallback;
+    if (typeof value === "object") return value;
+    if (typeof value !== "string") return fallback;
+    const t = value.trim();
+    if (!t) return fallback;
+    try {
+        const parsed = JSON.parse(t);
+        return (parsed && typeof parsed === "object") ? parsed : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function resolveUpstreamNodeThroughReroutes(graph, startLinkId, maxHops = 24) {
+    if (!graph || startLinkId == null) return null;
+    let linkId = startLinkId;
+    const seen = new Set();
+
+    const isRerouteNode = (n) => {
+        if (!n) return false;
+        const cc = String(n.comfyClass || "").toLowerCase();
+        const ty = String(n.type || "").toLowerCase();
+        return cc.includes("reroute") || ty.includes("reroute");
+    };
+
+    for (let hop = 0; hop < maxHops; hop++) {
+        if (linkId == null || seen.has(linkId)) break;
+        seen.add(linkId);
+
+        const linkInfo = graph.links?.[linkId];
+        if (!linkInfo) break;
+        const srcNode = graph.getNodeById?.(linkInfo.origin_id);
+        if (!srcNode) break;
+
+        if (!isRerouteNode(srcNode)) return srcNode;
+        const in0 = srcNode.inputs?.[0];
+        linkId = in0?.link ?? null;
+    }
+    return null;
+}
+
+function normalizeBuilderLoraList(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map((item) => {
+            const name = String(item?.name || "").trim();
+            if (!name) return null;
+            const modelStrength = Number(item?.model_strength ?? item?.strength ?? 1.0);
+            const clipStrength = Number(item?.clip_strength ?? item?.strength ?? modelStrength);
+            return {
+                name,
+                model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
+                clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1.0,
+                active: item?.active !== false,
+            };
+        })
+        .filter(Boolean);
+}
+
+function buildWorkflowDataFromBuilderNode(builderNode) {
+    if (!builderNode) return null;
+
+    const overrideWidget = builderNode.widgets?.find((w) => w.name === "override_data");
+    const ov =
+        parseJsonObjectSafe(overrideWidget?.value, null) ||
+        parseJsonObjectSafe(builderNode.properties?.we_ui_state, null) ||
+        parseJsonObjectSafe(builderNode.properties?.we_override_data, null) ||
+        null;
+
+    if (!ov || typeof ov !== "object") return null;
+
+    const clipNames = Array.isArray(ov.clip_names)
+        ? ov.clip_names.filter((x) => !!x)
+        : (ov.clip_names ? [ov.clip_names] : []);
+
+    const workflowData = {
+        _source: "WorkflowBuilder",
+        family: ov._family || "sdxl",
+        model_a: ov.model_a || "",
+        model_b: ov.model_b || "",
+        positive_prompt: ov.positive_prompt || "",
+        negative_prompt: ov.negative_prompt || "",
+        loras_a: normalizeBuilderLoraList(ov.loras_a),
+        loras_b: normalizeBuilderLoraList(ov.loras_b),
+        vae: ov.vae || "",
+        clip: clipNames,
+        clip_type: ov.clip_type || "",
+        loader_type: ov.loader_type || "",
+        sampler: {
+            steps_a: ov.steps_a ?? 20,
+            steps_b: ov.steps_b ?? null,
+            cfg: ov.cfg ?? 5,
+            seed_a: ov.seed_a ?? 0,
+            sampler_name: ov.sampler_name || "euler",
+            scheduler: ov.scheduler || "simple",
+            seed_b: ov.seed_b ?? null,
+        },
+        resolution: {
+            width: ov.width ?? 768,
+            height: ov.height ?? 1280,
+            batch_size: ov.batch_size ?? 1,
+            length: ov.length ?? null,
+        },
+    };
+
+    return workflowData;
+}
+
+function buildWorkflowDataFromExtractorNode(extractorNode) {
+    if (!extractorNode) return null;
+
+    const extracted = parseJsonObjectSafe(extractorNode.properties?.pe_extracted_data, null);
+    if (!extracted || typeof extracted !== "object") return null;
+
+    const clipNames = Array.isArray(extracted.clip?.names)
+        ? extracted.clip.names.filter((x) => !!x)
+        : (Array.isArray(extracted.clip) ? extracted.clip.filter((x) => !!x) : []);
+
+    return {
+        _source: extractorNode.comfyClass || extractorNode.type || "PromptExtractor",
+        family: extracted.model_family || extracted.family || "sdxl",
+        model_a: extracted.model_a || "",
+        model_b: extracted.model_b || "",
+        positive_prompt: extracted.positive_prompt || "",
+        negative_prompt: extracted.negative_prompt || "",
+        loras_a: normalizeBuilderLoraList(extracted.loras_a),
+        loras_b: normalizeBuilderLoraList(extracted.loras_b),
+        vae: extracted.vae?.name || extracted.vae || "",
+        clip: clipNames,
+        clip_type: extracted.clip?.type || extracted.clip_type || "",
+        loader_type: extracted.loader_type || "",
+        sampler: extracted.sampler || {
+            steps_a: 20,
+            steps_b: null,
+            cfg: 5,
+            seed_a: 0,
+            sampler_name: "euler",
+            scheduler: "simple",
+            seed_b: null,
+        },
+        resolution: extracted.resolution || {
+            width: 768,
+            height: 1280,
+            batch_size: 1,
+            length: null,
+        },
+    };
+}
+
+function resolveWorkflowDataForSave(node) {
+    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    if (wfInput?.link != null) {
+        const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
+        const sourceClass = upstream?.comfyClass || upstream?.type || "";
+        if (sourceClass === "WorkflowBuilder") {
+            const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
+            if (fromBuilder) return fromBuilder;
+        }
+
+        if (sourceClass === "PromptExtractor" || sourceClass === "WorkflowExtractor") {
+            const fromExtractor = buildWorkflowDataFromExtractorNode(upstream);
+            if (fromExtractor) return fromExtractor;
+        }
+
+        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
+        if (wfOutIdx >= 0) {
+            const out = upstream.outputs[wfOutIdx];
+            const data = out?._data ?? out?.value ?? null;
+            if (data && typeof data === "object") return data;
+            if (typeof data === "string") {
+                const parsed = parseJsonObjectSafe(data, null);
+                if (parsed) return parsed;
+            }
+        }
+
+        // Connected input but no fresh upstream workflow_data: for Workflow Manager,
+        // allow fallback to the latest live payload captured from execution updates.
+        if (node?._isWorkflowManager && node.lastWorkflowData && typeof node.lastWorkflowData === "object") {
+            return node.lastWorkflowData;
+        }
+
+        // For non-WorkflowManager nodes, avoid saving stale local cache from
+        // a previously selected prompt while connected.
+        return null;
+    }
+
+    return node.lastWorkflowData || null;
+}
+
+async function resolveWorkflowDataForLive(node) {
+    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    if (wfInput?.link == null) return null;
+
+    const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
+    if (!upstream) return null;
+
+    const sourceClass = String(upstream?.comfyClass || upstream?.type || "");
+    const sourceClassLower = sourceClass.toLowerCase();
+
+    if (sourceClass === "WorkflowBuilder") {
+        return buildWorkflowDataFromBuilderNode(upstream);
+    }
+
+    if (sourceClassLower === "promptextractor" || sourceClassLower === "workflowextractor") {
+        const fromExtractorCache = buildWorkflowDataFromExtractorNode(upstream);
+        if (fromExtractorCache) return fromExtractorCache;
+
+        const imageWidget = upstream.widgets?.find((w) => w.name === "image");
+        const sourceWidget = upstream.widgets?.find((w) => w.name === "source_folder");
+        const filename = String(imageWidget?.value || "").trim();
+        const source = String(sourceWidget?.value || "input").trim() || "input";
+        if (filename && filename !== "(none)") {
+            try {
+                const resp = await fetch(
+                    `/prompt-extractor/extract-preview?filename=${encodeURIComponent(filename)}&source=${encodeURIComponent(source)}`
+                );
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const extracted = data?.extracted || null;
+                    if (extracted && typeof extracted === "object") {
+                        upstream.properties = upstream.properties || {};
+                        upstream.properties.pe_extracted_data = JSON.stringify(extracted);
+                        const fromPreview = buildWorkflowDataFromExtractorNode(upstream);
+                        if (fromPreview) return fromPreview;
+                    }
+                }
+            } catch {
+                // Keep silent in live mode; execution update remains authoritative fallback.
+            }
+        }
+    }
+
+    const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
+    if (wfOutIdx >= 0) {
+        const out = upstream.outputs[wfOutIdx];
+        const data = out?._data ?? out?.value ?? null;
+        if (data && typeof data === "object") return data;
+        if (typeof data === "string") {
+            const parsed = parseJsonObjectSafe(data, null);
+            if (parsed) return parsed;
+        }
+    }
+
+    return null;
+}
+
 async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null, nsfw = false) {
     try {
         const requestBody = {
@@ -3171,6 +4425,33 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
         // Include thumbnail if provided
         if (thumbnail) {
             requestBody.thumbnail = thumbnail;
+        }
+
+        // Include workflow_data when available.
+        // If use_workflow_data is enabled and workflow_data comes from a connected
+        // WorkflowBuilder, pull it directly from Builder UI state so saving works
+        // even before executing the graph.
+        const workflowDataForSave = resolveWorkflowDataForSave(node);
+        if (node?._isWorkflowManager && hasConnectedWorkflowInput(node) && !workflowDataForSave) {
+            await showInfo("Workflow Data", "No live workflow_data available to save yet. Execute upstream nodes and try again.");
+            return;
+        }
+        if (workflowDataForSave) {
+            const effectivePromptText = (
+                node?._isWorkflowManager &&
+                hasConnectedWorkflowInput(node) &&
+                typeof workflowDataForSave?.positive_prompt === "string"
+            )
+                ? workflowDataForSave.positive_prompt
+                : text;
+
+            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasA, lorasB);
+            if (node?._isWorkflowManager) {
+                liveWorkflowData._source = "WorkflowManager";
+            }
+            node.lastWorkflowData = liveWorkflowData;
+            syncSavedWorkflowDataWidget(node);
+            requestBody.workflow_data = liveWorkflowData;
         }
 
         const response = await fetch("/prompt-manager-advanced/save-prompt", {
@@ -4111,7 +5392,7 @@ function showNewCategoryDialog() {
     });
 }
 
-function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c00") {
+function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c00", useOverlay = true) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -4152,7 +5433,9 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
         const cancelBtn = dialog.querySelector(".cancel-btn");
 
         const cleanup = () => {
-            document.body.removeChild(overlay);
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
             document.body.removeChild(dialog);
         };
 
@@ -4171,7 +5454,9 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
             cleanup();
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         okBtn.focus();
     });
@@ -4291,9 +5576,17 @@ function resizeImageToThumbnail(file, minSize = 200) {
  * Show thumbnail browser popup for selecting prompts
  * Returns { category, prompt } or null if cancelled
  */
-async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
+async function showThumbnailBrowser(node, currentCategory, currentPrompt, options = {}) {
     // Reload prompts to ensure we have the latest data
     await loadPrompts(node);
+
+    const mode = options?.mode === "save" ? "save" : "select";
+    const onSave = typeof options?.onSave === "function" ? options.onSave : null;
+    const saveButtonText = options?.saveButtonText || "Save";
+    const saveTitle = options?.title || "Save Workflow";
+    const saveNamePlaceholder = options?.namePlaceholder || "Prompt name";
+    const initialSaveName = typeof options?.initialName === "string" ? options.initialName : "";
+    const workflowOnly = options?.workflowOnly === true || node?._isWorkflowManager === true;
     
     // Check if thumbnail preview is enabled from user preferences
     const previewEnabled = getThumbnailPreviewEnabled();
@@ -4316,7 +5609,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.8);
+            background: ${UI.overlay};
             z-index: 9999;
         `;
 
@@ -4326,8 +5619,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: #1a1a1a;
-            border: 2px solid #444;
+            background: ${UI.panel};
+            border: 1px solid ${UI.panelBorder};
             border-radius: 12px;
             padding: 16px;
             z-index: 10000;
@@ -4349,11 +5642,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             align-items: center;
             margin-bottom: 12px;
             padding-bottom: 8px;
-            border-bottom: 1px solid #444;
+            border-bottom: 1px solid ${UI.sectionBorder};
         `;
 
         const title = document.createElement("div");
-        title.textContent = "Select Prompt";
+        title.textContent = mode === "save" ? saveTitle : "Select Prompt";
         title.style.cssText = `
             font-size: 18px;
             font-weight: bold;
@@ -4385,27 +5678,27 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             gap: 8px;
             margin-bottom: 10px;
             padding-bottom: 8px;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid ${UI.sectionBorder};
         `;
 
         // Search input (fills remaining space)
         const searchInput = document.createElement("input");
         searchInput.type = "text";
-        searchInput.placeholder = "Search prompts...";
+        searchInput.placeholder = workflowOnly ? "Search workflows..." : "Search prompts...";
         searchInput.style.cssText = `
             flex: 1;
             min-width: 0;
             padding: 6px 10px;
-            background: #2a2a2a;
-            border: 1px solid #444;
+            background: ${UI.inputBg};
+            border: 1px solid ${UI.inputBorder};
             border-radius: 4px;
             color: #fff;
             font-size: 13px;
             box-sizing: border-box;
             outline: none;
         `;
-        searchInput.onfocus = () => searchInput.style.borderColor = "#666";
-        searchInput.onblur = () => searchInput.style.borderColor = "#444";
+        searchInput.onfocus = () => searchInput.style.borderColor = UI.accent;
+        searchInput.onblur = () => searchInput.style.borderColor = UI.inputBorder;
 
         // Wrap search input in a container with clear button
         const searchWrapper = document.createElement("div");
@@ -4452,8 +5745,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         let hideNSFWState = getHideNSFW();
         const nsfwBtn = document.createElement("button");
         const btnStyle = `
-            background: #2a2a2a;
-            border: 1px solid #444;
+            background: ${UI.buttonBg};
+            border: 1px solid ${UI.inputBorder};
             color: #aaa;
             padding: 4px 10px;
             border-radius: 4px;
@@ -4464,7 +5757,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         const updateNsfwBtn = () => {
             if (hideNSFWState) {
                 nsfwBtn.textContent = "NSFW: Hidden";
-                nsfwBtn.style.cssText = btnStyle + `background: #3a2020; border-color: #744; color: #c88;`;
+                nsfwBtn.style.cssText = btnStyle + `background: #453339; border-color: #9b727b; color: #d2a8b0;`;
             } else {
                 nsfwBtn.textContent = "NSFW: Visible";
                 nsfwBtn.style.cssText = btnStyle;
@@ -4472,8 +5765,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             nsfwBtn.title = hideNSFWState ? "NSFW content is hidden — click to show" : "NSFW content is visible — click to hide";
         };
         updateNsfwBtn();
-        nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#3a3a3a'; nsfwBtn.style.color = '#fff'; } };
-        nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#2a2a2a'; nsfwBtn.style.color = '#aaa'; } };
+        nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#38414c'; nsfwBtn.style.color = '#fff'; } };
+        nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#313843'; nsfwBtn.style.color = '#aaa'; } };
 
         // View mode toggle button
         let currentViewMode = getViewMode();
@@ -4483,8 +5776,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             viewModeBtn.title = currentViewMode === "thumbnails" ? "Switch to list view" : "Switch to grid view";
         };
         viewModeBtn.style.cssText = btnStyle;
-        viewModeBtn.onmouseover = () => { viewModeBtn.style.background = '#3a3a3a'; viewModeBtn.style.color = '#fff'; };
-        viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#2a2a2a'; viewModeBtn.style.color = '#aaa'; };
+        viewModeBtn.onmouseover = () => { viewModeBtn.style.background = '#38414c'; viewModeBtn.style.color = '#fff'; };
+        viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#313843'; viewModeBtn.style.color = '#aaa'; };
         updateViewModeBtn();
 
         controlsBar.appendChild(searchWrapper);
@@ -4498,18 +5791,53 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             gap: 6px;
             margin-bottom: 10px;
             padding-bottom: 10px;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid ${UI.sectionBorder};
             flex-wrap: wrap;
         `;
 
-        let categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+        let categories = getVisibleCategories(node, {
+            hideNSFW: hideNSFWState,
+            workflowOnly,
+            keepCategory: mode === "save" ? selectedCategory : "",
+        });
+        let selectedSaveName = initialSaveName;
         let categoryButtons = [];
 
         const isCategoryNSFW = (cat) => {
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
         };
 
+        const ensureSelectedCategory = () => {
+            categories = getVisibleCategories(node, {
+                hideNSFW: hideNSFWState,
+                workflowOnly,
+                keepCategory: mode === "save" ? selectedCategory : "",
+            });
+
+            if (!Array.isArray(categories) || categories.length === 0) {
+                selectedCategory = "";
+                return "";
+            }
+
+            if (!selectedCategory || !categories.includes(selectedCategory)) {
+                selectedCategory = categories[0];
+            }
+
+            if (hideNSFWState && isCategoryNSFW(selectedCategory)) {
+                const firstVisible = categories.find(c => !isCategoryNSFW(c));
+                if (firstVisible) {
+                    selectedCategory = firstVisible;
+                }
+            }
+
+            return selectedCategory;
+        };
+
+        ensureSelectedCategory();
+
         const updateCategoryButtons = () => {
+            ensureSelectedCategory();
+
             categoryButtons.forEach(btn => {
                 const cat = btn.dataset.category;
                 const isSelected = cat === selectedCategory;
@@ -4523,6 +5851,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 btn.style.display = "";
 
                 btn.style.background = isSelected ? '#4a8ad4' : '#2a2a2a';
+                btn.style.background = isSelected ? UI.accentSoft : UI.buttonBg;
                 btn.style.color = isSelected ? '#fff' : '#aaa';
 
                 // NSFW categories get a red border, otherwise normal
@@ -4533,14 +5862,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 }
             });
 
-            // If selected category is now hidden, switch to first visible
-            if (hideNSFWState && isCategoryNSFW(selectedCategory)) {
-                const firstVisible = categories.find(c => !isCategoryNSFW(c));
-                if (firstVisible) {
-                    selectedCategory = firstVisible;
-                    updateCategoryButtons();
-                }
-            }
+            // If selected category is now hidden/empty under current filters, switch.
+            ensureSelectedCategory();
         };
 
         // Category context menu for NSFW toggle
@@ -4722,12 +6045,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     return;
                 }
 
-                // Ensure checkpoint is selected upfront
-                if (!_thumbnailCheckpoint) {
-                    _thumbnailCheckpoint = await showCheckpointPicker();
-                    if (!_thumbnailCheckpoint) return;
-                    app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", _thumbnailCheckpoint);
-                }
+                // Ensure renderer selection is ready for prompts without saved workflow_data.
+                const renderSelection = await ensureThumbnailRenderSelection();
+                if (!renderSelection) return;
+
+                // Resolve family-compatible defaults once for the batch.
+                const fallbackBase = await resolveThumbnailFallbackBase(renderSelection);
 
                 // Progress indicator
                 const progress = document.createElement("div");
@@ -4757,7 +6080,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     try {
                         await generateThumbnailForPrompt(node, cat, pName, () => {
                             renderContent(searchInput.value);
-                        }, { silent: true });
+                        }, {
+                            silent: true,
+                            renderSelection,
+                            fallbackBase,
+                        });
                         generated++;
                     } catch (e) {
                         console.error(`[ThumbnailGen] Failed for "${pName}":`, e);
@@ -4785,7 +6112,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         };
 
         const rebuildCategoryList = () => {
-            categories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+            categories = getVisibleCategories(node, {
+                hideNSFW: hideNSFWState,
+                workflowOnly,
+                keepCategory: mode === "save" ? selectedCategory : "",
+            });
+            ensureSelectedCategory();
             categoryButtons = [];
             categoryContainer.innerHTML = "";
             categories.forEach(cat => {
@@ -4794,8 +6126,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 btn.style.cssText = `
                     padding: 6px 14px;
                     border-radius: 6px;
-                    border: 1px solid #444;
-                    background: #2a2a2a;
+                    border: 1px solid ${UI.inputBorder};
+                    background: ${UI.buttonBg};
                     color: #aaa;
                     cursor: pointer;
                     font-size: 13px;
@@ -4826,15 +6158,15 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             addBtn.style.cssText = `
                 padding: 6px 14px;
                 border-radius: 6px;
-                border: 1px solid #444;
-                background: #2a2a2a;
+                border: 1px solid #5f6773;
+                background: #313843;
                 color: #aaa;
                 cursor: pointer;
                 font-size: 13px;
                 transition: all 0.15s ease;
             `;
-            addBtn.onmouseover = () => { addBtn.style.background = '#3a3a3a'; addBtn.style.color = '#fff'; };
-            addBtn.onmouseout = () => { addBtn.style.background = '#2a2a2a'; addBtn.style.color = '#aaa'; };
+            addBtn.onmouseover = () => { addBtn.style.background = '#38414c'; addBtn.style.color = '#fff'; };
+            addBtn.onmouseout = () => { addBtn.style.background = '#313843'; addBtn.style.color = '#aaa'; };
             addBtn.onclick = async () => {
                 const result = await showNewCategoryDialog();
                 if (result && result.name && result.name.trim()) {
@@ -4889,15 +6221,10 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
 
         // Helper: get filtered prompt names for the selected category
         const getFilteredPrompts = (filter = "") => {
-            const categoryPrompts = node.prompts[selectedCategory] || {};
-            let promptNames = Object.keys(categoryPrompts)
-                .filter(k => k !== "__meta__")
-                .sort((a, b) => a.localeCompare(b));
-
-            // Filter by NSFW
-            if (hideNSFWState) {
-                promptNames = promptNames.filter(name => !categoryPrompts[name]?.nsfw);
-            }
+            let promptNames = getPromptNamesForCategory(node, selectedCategory, {
+                hideNSFW: hideNSFWState,
+                workflowOnly,
+            });
 
             // Filter by search
             if (filter) {
@@ -4946,6 +6273,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
+                const rawWorkflowData = promptData?.workflow_data;
+                const hasWorkflowData = (
+                    (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+                    (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+                );
 
                 const card = document.createElement("div");
                 if (isSelected) {
@@ -4956,8 +6288,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     flex-direction: column;
                     align-items: center;
                     padding: 8px;
-                    background: ${isSelected ? '#2a4a6a' : '#2a2a2a'};
-                    border: 2px solid ${isSelected ? '#4a8ad4' : '#3a3a3a'};
+                    background: ${isSelected ? UI.accentSoft : UI.cardBg};
+                    border: 2px solid ${isSelected ? UI.accentBorder : UI.cardBorder};
                     border-radius: 8px;
                     cursor: pointer;
                     transition: all 0.15s ease;
@@ -4966,35 +6298,68 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
 
                 card.onmouseenter = () => {
                     if (!isSelected) {
-                        card.style.background = '#3a3a3a';
-                        card.style.borderColor = '#555';
+                        card.style.background = UI.accentSoft;
+                        card.style.borderColor = UI.accentBorder;
                     }
                 };
                 card.onmouseleave = () => {
                     if (!isSelected) {
-                        card.style.background = '#2a2a2a';
-                        card.style.borderColor = '#3a3a3a';
+                        card.style.background = UI.cardBg;
+                        card.style.borderColor = UI.cardBorder;
                     }
                 };
 
-                // NSFW badge (top-right)
-                if (isNSFW) {
-                    const badge = document.createElement("div");
-                    badge.textContent = "NSFW";
-                    badge.style.cssText = `
+                // Top-right badge stack: NSFW first, workflow badge under it.
+                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
+                if (isNSFW || showWorkflowBadge) {
+                    const badgeStack = document.createElement("div");
+                    badgeStack.style.cssText = `
                         position: absolute;
                         top: 4px;
                         right: 4px;
-                        background: rgba(204, 0, 0, 0.85);
-                        color: #fff;
-                        font-size: 8px;
-                        font-weight: bold;
-                        padding: 1px 4px;
-                        border-radius: 3px;
-                        line-height: 1.2;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: flex-end;
+                        gap: 2px;
                         z-index: 1;
                     `;
-                    card.appendChild(badge);
+
+                    if (isNSFW) {
+                        const badge = document.createElement("div");
+                        badge.textContent = "NSFW";
+                        badge.style.cssText = `
+                            background: rgba(204, 0, 0, 0.85);
+                            color: #fff;
+                            font-size: 8px;
+                            font-weight: bold;
+                            padding: 1px 4px;
+                            border-radius: 3px;
+                            line-height: 1.2;
+                        `;
+                        badgeStack.appendChild(badge);
+                    }
+
+                    if (showWorkflowBadge) {
+                        const workflowBadge = document.createElement("div");
+                        workflowBadge.textContent = "W";
+                        workflowBadge.title = "Has workflow data";
+                        workflowBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(235, 140, 35, 0.95);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(workflowBadge);
+                    }
+
+                    card.appendChild(badgeStack);
                 }
 
                 // Thumbnail (using div with background-image to avoid browser extension interference)
@@ -5041,10 +6406,48 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 card.appendChild(thumbDiv);
                 card.appendChild(nameLabel);
 
-                card.onclick = () => {
+                card.onclick = async () => {
+                    if (mode === "save") {
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
+                            saveNameInput.focus();
+                            saveNameInput.select();
+                        }
+                        currentPrompt = promptName;
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
                     resolve({ category: selectedCategory, prompt: promptName });
                     cleanup();
                 };
+
+                if (mode === "save") {
+                    card.ondblclick = async () => {
+                        if (!onSave) return;
+                        const overwriteOk = await showConfirm(
+                            "Overwrite Prompt",
+                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
+                            "Replace",
+                            "#c44"
+                        );
+                        if (!overwriteOk) return;
+
+                        const saveResult = await onSave({
+                            category: selectedCategory,
+                            name: promptName,
+                            overwrite: true,
+                        });
+
+                        if (saveResult?.success) {
+                            resolve(saveResult);
+                            cleanup();
+                        } else {
+                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        }
+                    };
+                }
 
                 card.oncontextmenu = (e) => promptContextMenu(e, promptName);
 
@@ -5085,7 +6488,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 grid-template-columns: 44px 1fr 70px 70px 70px;
                 gap: 8px;
                 padding: 4px 8px 6px 8px;
-                border-bottom: 1px solid #444;
+                    border-bottom: 1px solid rgba(148,163,184,0.2);
                 margin-bottom: 4px;
                 align-items: center;
             `;
@@ -5109,6 +6512,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
+                const rawWorkflowData = promptData?.workflow_data;
+                const hasWorkflowData = (
+                    (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+                    (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+                );
                 const lorasACount = (promptData?.loras_a || []).length;
                 const lorasBCount = (promptData?.loras_b || []).length;
                 const triggerCount = (promptData?.trigger_words || []).length;
@@ -5122,7 +6530,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     grid-template-columns: 44px 1fr 70px 70px 70px;
                     gap: 8px;
                     padding: 4px 8px;
-                    background: ${isSelected ? '#2a4a6a' : 'transparent'};
+                    background: ${isSelected ? UI.accentSoft : 'transparent'};
                     border-radius: 4px;
                     cursor: pointer;
                     align-items: center;
@@ -5132,6 +6540,14 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                 row.onmouseleave = () => { if (!isSelected) row.style.background = 'transparent'; };
 
                 // Thumbnail icon (using div with background-image to avoid browser extension interference)
+                const thumbWrap = document.createElement("div");
+                thumbWrap.style.cssText = `
+                    width: 36px;
+                    height: 36px;
+                    position: relative;
+                    flex-shrink: 0;
+                `;
+
                 const thumbDiv = document.createElement("div");
                 thumbDiv.style.cssText = `
                     width: 36px;
@@ -5141,7 +6557,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     background-position: center;
                     border-radius: 4px;
                     background-color: #1a1a1a;
-                    flex-shrink: 0;
                     cursor: pointer;
                 `;
                 
@@ -5155,6 +6570,34 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                         e.stopPropagation();
                         scheduleHidePreview();
                     });
+                }
+
+                thumbWrap.appendChild(thumbDiv);
+
+                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
+                if (showWorkflowBadge) {
+                    const workflowBadge = document.createElement("div");
+                    workflowBadge.textContent = "W";
+                    workflowBadge.title = "Has workflow data";
+                    workflowBadge.style.cssText = `
+                        position: absolute;
+                        right: -2px;
+                        bottom: -2px;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 50%;
+                        background: rgba(235, 140, 35, 0.95);
+                        color: #fff;
+                        font-size: 8px;
+                        font-weight: bold;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        line-height: 1;
+                        border: 1px solid rgba(0, 0, 0, 0.4);
+                        z-index: 1;
+                    `;
+                    thumbWrap.appendChild(workflowBadge);
                 }
 
                 // Name + optional NSFW badge
@@ -5203,16 +6646,54 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     return d;
                 };
 
-                row.appendChild(thumbDiv);
+                row.appendChild(thumbWrap);
                 row.appendChild(nameDiv);
                 row.appendChild(makeCount(lorasACount));
                 row.appendChild(makeCount(lorasBCount));
                 row.appendChild(makeCount(triggerCount));
 
-                row.onclick = () => {
+                row.onclick = async () => {
+                    if (mode === "save") {
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
+                            saveNameInput.focus();
+                            saveNameInput.select();
+                        }
+                        currentPrompt = promptName;
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
                     resolve({ category: selectedCategory, prompt: promptName });
                     cleanup();
                 };
+
+                if (mode === "save") {
+                    row.ondblclick = async () => {
+                        if (!onSave) return;
+                        const overwriteOk = await showConfirm(
+                            "Overwrite Prompt",
+                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
+                            "Replace",
+                            "#c44"
+                        );
+                        if (!overwriteOk) return;
+
+                        const saveResult = await onSave({
+                            category: selectedCategory,
+                            name: promptName,
+                            overwrite: true,
+                        });
+
+                        if (saveResult?.success) {
+                            resolve(saveResult);
+                            cleanup();
+                        } else {
+                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        }
+                    };
+                }
 
                 row.oncontextmenu = (e) => promptContextMenu(e, promptName);
 
@@ -5241,7 +6722,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
                     pointer-events: none;
                     z-index: 10001;
                     display: none;
-                    border: 2px solid #666;
+                    border: 2px solid ${UI.inputBorder};
                     border-radius: 8px;
                     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
                     background-color: #1a1a1a;
@@ -5357,7 +6838,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             hideNSFWState = !hideNSFWState;
             sessionHideNSFW = hideNSFWState;
             updateNsfwBtn();
-            updateCategoryButtons();
+            rebuildCategoryList();
             renderContent(searchInput.value);
         };
 
@@ -5366,6 +6847,52 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             sessionViewMode = currentViewMode;
             updateViewModeBtn();
             renderContent(searchInput.value);
+        };
+
+        let saveNameInput = null;
+        let saveActionButton = null;
+        let cancelSaveButton = null;
+
+        const handleSaveAction = async () => {
+            if (mode !== "save" || !onSave || !saveNameInput) {
+                return;
+            }
+
+            const category = ensureSelectedCategory();
+            if (!category) {
+                await showInfo("Missing Category", "Please create or select a category before saving.");
+                return;
+            }
+
+            const name = (saveNameInput.value || "").trim();
+            if (!name) {
+                await showInfo("Missing Name", "Please enter a name before saving.");
+                saveNameInput.focus();
+                return;
+            }
+
+            const existing = node.prompts?.[category]?.[name];
+            let overwrite = false;
+            if (existing) {
+                overwrite = await showConfirm(
+                    "Overwrite Prompt",
+                    `Prompt "${name}" already exists in category "${category}". Do you want to replace it?`,
+                    "Replace",
+                    "#c44",
+                    false
+                );
+                if (!overwrite) {
+                    return;
+                }
+            }
+
+            const saveResult = await onSave({ category, name, overwrite });
+            if (saveResult?.success) {
+                resolve(saveResult);
+                cleanup();
+            } else {
+                await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+            }
         };
 
         // Initial render
@@ -5392,18 +6919,98 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
             margin-top: 4px;
             margin-bottom: -8px;
             padding-top: 6px;
-            border-top: 1px solid #444;
+            border-top: 1px solid ${UI.sectionBorder};
             font-size: 11px;
             color: #666;
             text-align: center;
         `;
-        footer.textContent = "Right-click a prompt or category for more options (thumbnails, NSFW, delete)";
+        footer.textContent = mode === "save"
+            ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
+            : "Right-click a prompt or category for more options (thumbnails, NSFW, delete)";
+
+        const saveBar = document.createElement("div");
+        if (mode === "save") {
+            saveBar.style.cssText = `
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                margin-top: 8px;
+                padding-top: 8px;
+                border-top: 1px solid ${UI.sectionBorder};
+            `;
+
+            saveNameInput = document.createElement("input");
+            saveNameInput.type = "text";
+            saveNameInput.value = selectedSaveName;
+            saveNameInput.placeholder = saveNamePlaceholder;
+            saveNameInput.style.cssText = `
+                flex: 1;
+                min-width: 0;
+                padding: 7px 10px;
+                background: ${UI.inputBg};
+                border: 1px solid ${UI.inputBorder};
+                border-radius: 4px;
+                color: #fff;
+                font-size: 13px;
+                box-sizing: border-box;
+                outline: none;
+            `;
+            saveNameInput.onfocus = () => saveNameInput.style.borderColor = UI.accent;
+            saveNameInput.onblur = () => saveNameInput.style.borderColor = UI.inputBorder;
+            saveNameInput.onkeydown = async (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    await handleSaveAction();
+                }
+            };
+
+            saveActionButton = document.createElement("button");
+            saveActionButton.textContent = saveButtonText;
+            saveActionButton.style.cssText = `
+                background: #2b6d3a;
+                border: 1px solid #4a9158;
+                color: #fff;
+                padding: 7px 14px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            saveActionButton.onclick = async () => {
+                await handleSaveAction();
+            };
+
+            cancelSaveButton = document.createElement("button");
+            cancelSaveButton.textContent = "Cancel";
+            cancelSaveButton.style.cssText = `
+                background: #313843;
+                border: 1px solid #5f6773;
+                color: #ccc;
+                padding: 7px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            cancelSaveButton.onclick = () => {
+                resolve(null);
+                cleanup();
+            };
+
+            saveBar.appendChild(saveNameInput);
+            saveBar.appendChild(cancelSaveButton);
+            saveBar.appendChild(saveActionButton);
+        }
 
         dialog.appendChild(header);
         dialog.appendChild(controlsBar);
         dialog.appendChild(categoryContainer);
         dialog.appendChild(gridContainer);
         dialog.appendChild(footer);
+        if (mode === "save") {
+            dialog.appendChild(saveBar);
+        }
 
         const cleanup = () => {
             clearTimeout(hoverTimer);
@@ -5437,10 +7044,19 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
         dialog.onclick = (e) => e.stopPropagation();
 
         // Keyboard shortcuts
-        dialog.onkeydown = (e) => {
+        dialog.onkeydown = async (e) => {
             if (e.key === "Escape") {
                 resolve(null);
                 cleanup();
+                return;
+            }
+            if (mode === "save" && e.key === "Enter") {
+                const target = e.target;
+                if (target !== searchInput) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    await handleSaveAction();
+                }
             }
         };
 
@@ -5450,224 +7066,529 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt) {
     });
 }
 
+export async function openPromptBrowserForSave(options = {}) {
+    const browserNode = options.node || {};
+    const currentCategory = options.currentCategory || "Default";
+    const currentPrompt = options.currentPrompt || "";
+    return showThumbnailBrowser(browserNode, currentCategory, currentPrompt, {
+        mode: "save",
+        onSave: options.onSave,
+        title: options.title || "Save Workflow",
+        saveButtonText: options.saveButtonText || "Save",
+        namePlaceholder: options.namePlaceholder || "Prompt name",
+        initialName: options.initialName || "",
+        workflowOnly: options.workflowOnly === true || browserNode?._isWorkflowManager === true,
+    });
+}
+
 // ========================
 // Thumbnail Generation System
 // ========================
 
-// Cached checkpoint selection for thumbnail generation (persisted in ComfyUI settings)
-let _thumbnailCheckpoint = null;
+const THUMB_RENDER_WIDTH = 768;
+const THUMB_RENDER_HEIGHT = 1024;
+const THUMB_RENDER_BATCH = 1;
+const THUMB_RENDER_LENGTH = 1;
+const THUMB_DEFAULT_NEGATIVE = "blurry, bad quality, worst quality, low resolution, watermark, text, logo, deformed, ugly, disfigured";
 
-// Load saved checkpoint from preferences on init
+let _thumbnailRenderFamily = null;
+let _thumbnailRenderModel = null;
+let _thumbnailLegacyModel = null;
+let _thumbnailShowAllModels = false;
+
 try {
-    const saved = app.ui.settings.getSettingValue("PromptManager.ThumbnailCheckpoint");
-    if (saved) _thumbnailCheckpoint = saved;
+    const savedFamily = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderFamily");
+    const savedModel = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderModel");
+    if (typeof savedFamily === "string" && savedFamily.trim()) {
+        _thumbnailRenderFamily = savedFamily;
+    }
+    if (typeof savedModel === "string" && savedModel.trim()) {
+        _thumbnailRenderModel = savedModel;
+    }
+    _thumbnailShowAllModels = app.ui.settings.getSettingValue("PromptManager.ThumbnailShowAllModels") === true;
+
+    // Backward compatibility with old checkpoint-only preference:
+    // keep it only as an initial picker prefill, do not auto-select family/model.
+    if (!_thumbnailRenderModel) {
+        const legacyCheckpoint = app.ui.settings.getSettingValue("PromptManager.ThumbnailCheckpoint");
+        if (typeof legacyCheckpoint === "string" && legacyCheckpoint.trim()) {
+            _thumbnailLegacyModel = legacyCheckpoint;
+        }
+    }
 } catch (e) { /* settings not ready yet, will be loaded on first use */ }
 
-/**
- * Show a checkpoint picker dialog for thumbnail generation
- * @returns {Promise<string|null>} Selected checkpoint path or null if cancelled
- */
-async function showCheckpointPicker(preselected = null) {
-    const resp = await fetch("/prompt-manager-advanced/list-checkpoints");
+function withThumbnailModelFilteringPreference(url, showAllModels) {
+    if (!showAllModels) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}show_all=1`;
+}
+
+function _thumbnailLeafName(modelPath) {
+    const p = String(modelPath || "");
+    if (!p) return "";
+    const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    const leaf = idx >= 0 ? p.substring(idx + 1) : p;
+    return leaf.replace(/\.safetensors$/i, "");
+}
+
+function _thumbnailDisplayName(modelPath, maxLength = 68) {
+    const leaf = _thumbnailLeafName(modelPath);
+    if (leaf.length <= maxLength) return leaf;
+    return `${leaf.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function applyThumbnailResolution(workflowData) {
+    const wfForThumb = JSON.parse(JSON.stringify(workflowData || {}));
+    const baseResolution = (wfForThumb.resolution && typeof wfForThumb.resolution === "object")
+        ? wfForThumb.resolution
+        : {};
+    wfForThumb.resolution = {
+        ...baseResolution,
+        width: THUMB_RENDER_WIDTH,
+        height: THUMB_RENDER_HEIGHT,
+        batch_size: THUMB_RENDER_BATCH,
+        length: THUMB_RENDER_LENGTH,
+    };
+    return wfForThumb;
+}
+
+function normalizeLorasForRenderer(loraList) {
+    if (!Array.isArray(loraList)) return [];
+    return loraList
+        .filter((lora) => lora && typeof lora === "object" && lora.active !== false)
+        .map((lora) => {
+            const modelStrength = Number(lora.model_strength ?? lora.strength ?? 1.0);
+            const clipStrength = Number(lora.clip_strength ?? lora.strength ?? modelStrength);
+            return {
+                name: String(lora.name || lora.path || "").trim(),
+                model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
+                clip_strength: Number.isFinite(clipStrength) ? clipStrength : (Number.isFinite(modelStrength) ? modelStrength : 1.0),
+                active: true,
+            };
+        })
+        .filter((lora) => lora.name.length > 0);
+}
+
+function getThumbnailFamilySamplerDefaults(familyKey) {
+    const key = String(familyKey || "").trim().toLowerCase();
+    const byFamily = {
+        sdxl: { steps_a: 20, steps_b: null, cfg: 5, sampler_name: "dpmpp_2m_sde", scheduler: "karras" },
+        sd15: { steps_a: 20, steps_b: null, cfg: 6, sampler_name: "euler", scheduler: "normal" },
+        flux1: { steps_a: 20, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        flux2: { steps_a: 4, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        zimage: { steps_a: 9, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        ltxv: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+        wan_image: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+        wan_video_t2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+        wan_video_i2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+        qwen_image: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+    };
+    const d = byFamily[key] || byFamily.sdxl;
+    return {
+        steps_a: d.steps_a,
+        steps_b: d.steps_b,
+        cfg: d.cfg,
+        seed_a: 0,
+        sampler_name: d.sampler_name,
+        scheduler: d.scheduler,
+        seed_b: null,
+    };
+}
+
+async function buildRendererFallbackWorkflowData(promptText, promptData, renderSelection) {
+    const familySamplerDefaults = getThumbnailFamilySamplerDefaults(renderSelection.family);
+    const baseRaw = {
+        model_family: renderSelection.family,
+        model_a: renderSelection.model,
+        model_b: "",
+        positive_prompt: String(promptText || ""),
+        negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
+        loras_a: normalizeLorasForRenderer(promptData?.loras_a),
+        loras_b: normalizeLorasForRenderer(promptData?.loras_b),
+        vae: { name: "", source: "unknown" },
+        clip: { names: [], type: "", source: "unknown" },
+        sampler: familySamplerDefaults,
+        resolution: {
+            width: THUMB_RENDER_WIDTH,
+            height: THUMB_RENDER_HEIGHT,
+            batch_size: THUMB_RENDER_BATCH,
+            length: THUMB_RENDER_LENGTH,
+        },
+        is_video: false,
+    };
+
+    let normalized = null;
+    try {
+        const processResp = await fetch("/workflow-builder/process-extracted", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                extracted: baseRaw,
+                family_override: renderSelection.family,
+            }),
+        });
+        const processData = await processResp.json();
+        if (processResp.ok && processData?.extracted && typeof processData.extracted === "object") {
+            normalized = processData.extracted;
+        }
+    } catch (e) {
+        console.warn("[ThumbnailGen] Failed to normalize fallback workflow_data via WorkflowBuilder:", e);
+    }
+
+    const clipNames = Array.isArray(normalized?.clip?.names)
+        ? normalized.clip.names.filter((x) => !!x)
+        : [];
+
+    const base = {
+        family: normalized?.model_family || renderSelection.family,
+        model_a: normalized?.model_a || renderSelection.model,
+        model_b: normalized?.model_b || "",
+        positive_prompt: String(normalized?.positive_prompt ?? baseRaw.positive_prompt),
+        negative_prompt: String(normalized?.negative_prompt ?? baseRaw.negative_prompt),
+        loras_a: Array.isArray(normalized?.loras_a) ? normalized.loras_a : baseRaw.loras_a,
+        loras_b: Array.isArray(normalized?.loras_b) ? normalized.loras_b : baseRaw.loras_b,
+        vae: String(normalized?.vae?.name || ""),
+        clip: clipNames,
+        clip_type: String(normalized?.clip?.type || ""),
+        loader_type: String(normalized?.loader_type || ""),
+        sampler: normalized?.sampler && typeof normalized.sampler === "object"
+            ? normalized.sampler
+            : baseRaw.sampler,
+        _source: "PromptManagerAdvancedThumbnail",
+    };
+    return applyThumbnailResolution(base);
+}
+
+async function resolveThumbnailFallbackBase(renderSelection) {
+    const familySamplerDefaults = getThumbnailFamilySamplerDefaults(renderSelection.family);
+    const baseRaw = {
+        model_family: renderSelection.family,
+        model_a: renderSelection.model,
+        model_b: "",
+        positive_prompt: "",
+        negative_prompt: THUMB_DEFAULT_NEGATIVE,
+        loras_a: [],
+        loras_b: [],
+        vae: { name: "", source: "unknown" },
+        clip: { names: [], type: "", source: "unknown" },
+        sampler: familySamplerDefaults,
+        resolution: {
+            width: THUMB_RENDER_WIDTH,
+            height: THUMB_RENDER_HEIGHT,
+            batch_size: THUMB_RENDER_BATCH,
+            length: THUMB_RENDER_LENGTH,
+        },
+        is_video: false,
+    };
+
+    let normalized = null;
+    try {
+        const processResp = await fetch("/workflow-builder/process-extracted", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                extracted: baseRaw,
+                family_override: renderSelection.family,
+            }),
+        });
+        const processData = await processResp.json();
+        if (processResp.ok && processData?.extracted && typeof processData.extracted === "object") {
+            normalized = processData.extracted;
+        }
+    } catch (e) {
+        console.warn("[ThumbnailGen] Failed to pre-resolve batch fallback base:", e);
+    }
+
+    return { normalized, renderSelection };
+}
+
+async function buildRendererFallbackWorkflowDataWithBase(promptText, promptData, renderSelection, fallbackBase = null) {
+    if (!fallbackBase?.normalized) {
+        return buildRendererFallbackWorkflowData(promptText, promptData, renderSelection);
+    }
+
+    const normalized = fallbackBase.normalized;
+    const clipNames = Array.isArray(normalized?.clip?.names)
+        ? normalized.clip.names.filter((x) => !!x)
+        : [];
+
+    const wf = {
+        family: normalized?.model_family || renderSelection.family,
+        model_a: normalized?.model_a || renderSelection.model,
+        model_b: normalized?.model_b || "",
+        positive_prompt: String(promptText || ""),
+        negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
+        loras_a: normalizeLorasForRenderer(promptData?.loras_a),
+        loras_b: normalizeLorasForRenderer(promptData?.loras_b),
+        vae: String(normalized?.vae?.name || ""),
+        clip: clipNames,
+        clip_type: String(normalized?.clip?.type || ""),
+        loader_type: String(normalized?.loader_type || ""),
+        sampler: normalized?.sampler && typeof normalized.sampler === "object"
+            ? normalized.sampler
+            : getThumbnailFamilySamplerDefaults(renderSelection.family),
+        _source: "PromptManagerAdvancedThumbnail",
+    };
+    return applyThumbnailResolution(wf);
+}
+
+async function fetchRendererFamilies() {
+    const resp = await fetch("/workflow-extractor/list-families");
     const data = await resp.json();
-    if (!data.success || !data.checkpoints?.length) {
-        await showInfo("No Checkpoints", "No checkpoints found in your ComfyUI models folder.");
+    const familiesObj = data?.families && typeof data.families === "object" ? data.families : {};
+    return Object.entries(familiesObj)
+        .map(([key, label]) => ({ key, label: String(label || key) }))
+        .sort((a, b) => {
+            if (a.key === "sdxl") return -1;
+            if (b.key === "sdxl") return 1;
+            return a.label.localeCompare(b.label);
+        });
+}
+
+async function fetchRendererModelsForFamily(familyKey, showAllModels = false) {
+    const baseUrl = familyKey
+        ? `/workflow-extractor/list-models?family=${encodeURIComponent(familyKey)}`
+        : `/workflow-extractor/list-models`;
+    const url = withThumbnailModelFilteringPreference(baseUrl, showAllModels);
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (!Array.isArray(data?.models)) return [];
+    return [...data.models].sort((a, b) => a.localeCompare(b));
+}
+
+function saveThumbnailRenderSelection(selection) {
+    if (!selection?.family || !selection?.model) return;
+    _thumbnailRenderFamily = selection.family;
+    _thumbnailRenderModel = selection.model;
+    _thumbnailLegacyModel = null;
+    try {
+        app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderFamily", selection.family);
+        app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderModel", selection.model);
+    } catch (e) {
+        console.warn("[ThumbnailGen] Could not persist thumbnail render selection:", e);
+    }
+}
+
+async function showThumbnailRenderPicker(preselectedFamily = null, preselectedModel = null) {
+    let families = [];
+    try {
+        families = await fetchRendererFamilies();
+    } catch (e) {
+        console.error("[ThumbnailGen] Failed loading model families:", e);
+        await showInfo("Model Picker Error", "Could not load renderer families.");
         return null;
     }
 
-    const checkpoints = data.checkpoints.sort((a, b) => a.localeCompare(b));
+    if (!families.length) {
+        await showInfo("No Families", "No model families were found for Workflow Renderer.");
+        return null;
+    }
+
+    const validFamily = families.some((f) => f.key === preselectedFamily)
+        ? preselectedFamily
+        : families[0].key;
 
     return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 9999;`;
-
         const dialog = document.createElement("div");
         dialog.style.cssText = `
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: #222; border: 2px solid #444; border-radius: 8px;
-            padding: 20px; z-index: 10000; min-width: 400px; max-width: 500px;
+            background: ${UI.panel}; border: 1px solid ${UI.panelBorder}; border-radius: 10px;
+            padding: 18px; z-index: 10000; width: 634px; min-width: 634px; max-width: 634px;
+            font-family: inherit; font-size: 13px;
+            box-sizing: border-box; overflow: hidden;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         `;
 
-        // Build option list
-        const optionsHtml = checkpoints.map(c => {
-            const shortName = c.includes("\\") ? c.split("\\").pop() : c.includes("/") ? c.split("/").pop() : c;
-            const selected = c === preselected ? ' selected' : '';
-            // Sanitize for HTML attribute
-            const escaped = c.replace(/"/g, '&quot;');
-            return `<option value="${escaped}"${selected}>${shortName}</option>`;
-        }).join('');
-
         dialog.innerHTML = `
-            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">Select Checkpoint</div>
-            <div style="margin-bottom: 10px; color: #aaa; font-size: 13px;">Choose the checkpoint model for generating thumbnails:</div>
-            <input type="text" placeholder="Filter checkpoints..." style="width: 100%; padding: 8px; margin-bottom: 8px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; box-sizing: border-box;" />
-            <select size="10" style="width: 100%; padding: 4px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; box-sizing: border-box; margin-bottom: 15px;">
-                ${optionsHtml}
-            </select>
+            <div style="margin-bottom: 12px; font-size: 18px; font-weight: 600; color: #ddd;">Select Family + Model</div>
+            <div style="display: grid; grid-template-columns: 64px 1fr 34px; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px; font-weight: 600;">Type</label>
+                <select class="family-select" style="padding: 7px; min-width: 0; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; font-family: inherit; font-size: 13px;"></select>
+                <button class="filter-toggle" title="Model filtering ON (by family). Click to show all models." style="height: 32px; background: ${UI.buttonBg}; color: #ddd; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-size: 14px;">👁</button>
+            </div>
+            <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px;">Model</label>
+                <select class="model-select" size="13" style="width: 100%; min-width: 0; padding: 4px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
+            </div>
+            <div class="model-hint" style="min-height: 16px; margin-bottom: 12px; color: #9aa5b4; font-size: 12px;"></div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Select</button>
+                <button class="cancel-btn" style="padding: 8px 16px; background: ${UI.buttonBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: ${UI.accentSoft}; color: #fff; border: 1px solid ${UI.accentBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;">Select</button>
             </div>
         `;
 
-        const filterInput = dialog.querySelector('input[type="text"]');
-        const selectEl = dialog.querySelector('select');
+        const familySel = dialog.querySelector(".family-select");
+        const filterToggle = dialog.querySelector(".filter-toggle");
+        const modelSel = dialog.querySelector(".model-select");
+        const modelHint = dialog.querySelector(".model-hint");
         const okBtn = dialog.querySelector('.ok-btn');
         const cancelBtn = dialog.querySelector('.cancel-btn');
 
-        // Filter checkpoints as user types
-        filterInput.oninput = () => {
-            const filter = filterInput.value.toLowerCase();
-            selectEl.innerHTML = checkpoints
-                .filter(c => c.toLowerCase().includes(filter))
-                .map(c => {
-                    const shortName = c.includes("\\") ? c.split("\\").pop() : c.includes("/") ? c.split("/").pop() : c;
-                    const escaped = c.replace(/"/g, '&quot;');
-                    return `<option value="${escaped}">${shortName}</option>`;
-                }).join('');
+        let familyModels = [];
+        let showAllModels = _thumbnailShowAllModels === true;
+
+        const updateFilterToggleUi = () => {
+            filterToggle.style.color = showAllModels ? "#ffb0b0" : "#e6e6e6";
+            filterToggle.style.background = showAllModels ? "#453339" : UI.buttonBg;
+            filterToggle.style.borderColor = showAllModels ? "#9b727b" : UI.inputBorder;
+            filterToggle.title = showAllModels
+                ? "Model filtering OFF (showing all models). Click to filter by family."
+                : "Model filtering ON (by family). Click to show all models.";
+        };
+        updateFilterToggleUi();
+
+        const setHint = (text, color = "#888") => {
+            modelHint.textContent = text;
+            modelHint.style.color = color;
         };
 
+        const renderModelOptions = (preferredValue = "") => {
+            const filtered = familyModels;
+
+            modelSel.innerHTML = "";
+            filtered.forEach((modelPath) => {
+                const opt = document.createElement("option");
+                opt.value = modelPath;
+                opt.textContent = _thumbnailDisplayName(modelPath);
+                opt.title = modelPath;
+                modelSel.appendChild(opt);
+            });
+
+            if (!filtered.length) {
+                setHint("No compatible models for this family.", "#c66");
+                return;
+            }
+
+            const selectValue = filtered.find((m) => m === preferredValue)
+                || filtered.find((m) => m === preselectedModel)
+                || filtered[0];
+            if (selectValue) {
+                modelSel.value = selectValue;
+            }
+            const famText = familySel.selectedOptions?.[0]?.textContent || familySel.value || "selected family";
+            const modeText = showAllModels
+                ? `Showing all models on disk. Family (${famText}) still controls renderer pipeline.`
+                : `Showing models filtered for family: ${famText}.`;
+            setHint(`${filtered.length} model(s) available. ${modeText}`);
+        };
+
+        const loadFamilyModels = async (familyKey, preferredValue = "") => {
+            setHint("Loading models...");
+            modelSel.innerHTML = "";
+            try {
+                familyModels = await fetchRendererModelsForFamily(familyKey, showAllModels);
+                renderModelOptions(preferredValue);
+            } catch (e) {
+                familyModels = [];
+                setHint("Failed to load models for selected family.", "#c66");
+                console.error("[ThumbnailGen] Error loading family models:", e);
+            }
+        };
+
+        familySel.innerHTML = families
+            .map((f) => `<option value="${f.key}">${f.label}</option>`)
+            .join("");
+        familySel.value = validFamily;
+
         const cleanup = () => {
-            document.body.removeChild(overlay);
-            document.body.removeChild(dialog);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        familySel.onchange = async () => {
+            await loadFamilyModels(familySel.value, "");
+        };
+        filterToggle.onclick = async () => {
+            showAllModels = !showAllModels;
+            _thumbnailShowAllModels = showAllModels;
+            try {
+                app.ui.settings.setSettingValue("PromptManager.ThumbnailShowAllModels", showAllModels);
+            } catch (e) {
+                console.warn("[ThumbnailGen] Could not persist show-all setting:", e);
+            }
+            updateFilterToggleUi();
+            await loadFamilyModels(familySel.value, modelSel.value);
         };
 
         okBtn.onclick = () => {
-            const val = selectEl.value;
-            if (val) { resolve(val); cleanup(); }
+            const family = familySel.value;
+            const model = modelSel.value;
+            if (!family || !model) {
+                setHint("Please select a model before continuing.", "#c66");
+                return;
+            }
+            resolve({ family, model });
+            cleanup();
         };
         cancelBtn.onclick = () => { resolve(null); cleanup(); };
-        overlay.onclick = () => { resolve(null); cleanup(); };
 
-        // Enter to select, Escape to cancel
         dialog.onkeydown = (e) => {
-            if (e.key === 'Enter') { okBtn.click(); }
-            else if (e.key === 'Escape') { cancelBtn.click(); }
+            if (e.key === "Enter") {
+                e.preventDefault();
+                okBtn.click();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelBtn.click();
+            }
         };
 
-        // Double-click to select immediately
-        selectEl.ondblclick = () => { okBtn.click(); };
+        modelSel.ondblclick = () => okBtn.click();
 
-        document.body.appendChild(overlay);
         document.body.appendChild(dialog);
-        filterInput.focus();
+        loadFamilyModels(validFamily, preselectedModel || "");
+        modelSel.focus();
     });
 }
 
-/**
- * Build and queue a thumbnail generation workflow
- * @param {string} promptText - The positive prompt text
- * @param {string} checkpoint - The checkpoint path
- * @param {Array} loras - Array of {path, strength, clip_strength}
- * @returns {Promise<string|null>} Generated image filename or null
- */
-async function generateThumbnailWorkflow(promptText, checkpoint, loras) {
-    const negativePrompt = "blurry, bad quality, worst quality, low resolution, watermark, text, logo, deformed, ugly, disfigured";
+async function ensureThumbnailRenderSelection({ force = false } = {}) {
+    if (!force && _thumbnailRenderFamily && _thumbnailRenderModel) {
+        return { family: _thumbnailRenderFamily, model: _thumbnailRenderModel };
+    }
+    const picked = await showThumbnailRenderPicker(
+        _thumbnailRenderFamily,
+        _thumbnailRenderModel || _thumbnailLegacyModel || null
+    );
+    if (!picked) return null;
+    saveThumbnailRenderSelection(picked);
+    return picked;
+}
 
-    // Build the API workflow
+/**
+ * Build and queue a thumbnail generation workflow using WorkflowRenderer.
+ * Falls back to the basic thumbnail workflow when this path cannot run.
+ * @param {Object} workflowData - Saved workflow_data payload
+ * @returns {Promise<string|null>} Base64 thumbnail data URL or null
+ */
+async function generateThumbnailWorkflowFromWorkflowData(workflowData) {
+    if (!workflowData || typeof workflowData !== "object") {
+        return null;
+    }
+
+    // Enforce thumbnail-safe render sizing before queueing.
+    const wfForThumb = applyThumbnailResolution(workflowData);
+
     const workflow = {};
     let nodeId = 1;
 
-    // 1. Checkpoint loader
-    const checkpointId = String(nodeId++);
-    workflow[checkpointId] = {
-        class_type: "CheckpointLoaderSimple",
-        inputs: { ckpt_name: checkpoint }
-    };
-
-    // Track current model/clip outputs (may chain through LoRAs)
-    let modelOutput = [checkpointId, 0];
-    let clipOutput = [checkpointId, 1];
-
-    // 2. LoRA loaders (chained)
-    for (const lora of loras) {
-        const loraId = String(nodeId++);
-        workflow[loraId] = {
-            class_type: "LoraLoader",
-            inputs: {
-                lora_name: lora.path,
-                strength_model: lora.strength,
-                strength_clip: lora.clip_strength,
-                model: modelOutput,
-                clip: clipOutput
-            }
-        };
-        modelOutput = [loraId, 0];
-        clipOutput = [loraId, 1];
-    }
-
-    // 3. Positive CLIP encode
-    const positiveId = String(nodeId++);
-    workflow[positiveId] = {
-        class_type: "CLIPTextEncode",
+    const rendererId = String(nodeId++);
+    workflow[rendererId] = {
+        class_type: "WorkflowRenderer",
         inputs: {
-            text: promptText,
-            clip: clipOutput
+            workflow_data: wfForThumb,
+            clear_cache_after_render: false,
         }
     };
 
-    // 4. Negative CLIP encode
-    const negativeId = String(nodeId++);
-    workflow[negativeId] = {
-        class_type: "CLIPTextEncode",
-        inputs: {
-            text: negativePrompt,
-            clip: clipOutput
-        }
-    };
-
-    // 5. Empty latent image (768x768)
-    const latentId = String(nodeId++);
-    workflow[latentId] = {
-        class_type: "EmptyLatentImage",
-        inputs: { width: 768, height: 1024, batch_size: 1 }
-    };
-
-    // 6. KSampler with random seed
-    const seed = Math.floor(Math.random() * 2147483647);
-    const samplerId = String(nodeId++);
-    workflow[samplerId] = {
-        class_type: "KSampler",
-        inputs: {
-            seed: seed,
-            steps: 30,
-            cfg: 6.0,
-            sampler_name: "euler",
-            scheduler: "normal",
-            denoise: 1.0,
-            model: modelOutput,
-            positive: [positiveId, 0],
-            negative: [negativeId, 0],
-            latent_image: [latentId, 0]
-        }
-    };
-
-    // 7. VAE Decode
-    const decodeId = String(nodeId++);
-    workflow[decodeId] = {
-        class_type: "VAEDecode",
-        inputs: {
-            samples: [samplerId, 0],
-            vae: [checkpointId, 2]
-        }
-    };
-
-    // 8. Save image to temp
     const saveId = String(nodeId++);
     workflow[saveId] = {
         class_type: "SaveImage",
         inputs: {
-            filename_prefix: "_thumb_gen_",
-            images: [decodeId, 0]
+            filename_prefix: "_thumb_wf_",
+            images: [rendererId, 1]
         }
     };
 
-    // Queue the workflow via ComfyUI API
-    const promptId = await queueThumbnailPrompt(workflow);
+    // Quiet mode: this path is an enhancement and should silently fall back.
+    const promptId = await queueThumbnailPrompt(workflow, { quiet: true });
     if (!promptId) return null;
-
-    // Wait for completion and get the image
     return await waitForThumbnailResult(promptId, saveId);
 }
 
@@ -5675,7 +7596,8 @@ async function generateThumbnailWorkflow(promptText, checkpoint, loras) {
  * Queue a workflow via ComfyUI's /prompt API
  * @returns {Promise<string|null>} prompt_id or null
  */
-async function queueThumbnailPrompt(workflow) {
+async function queueThumbnailPrompt(workflow, options = {}) {
+    const quiet = options?.quiet === true;
     try {
         const body = {
             prompt: workflow,
@@ -5691,7 +7613,7 @@ async function queueThumbnailPrompt(workflow) {
             return data.prompt_id;
         }
         console.error("[ThumbnailGen] Queue failed:", data);
-        if (data.error) {
+        if (!quiet && data.error) {
             const detail = data.node_errors ? Object.values(data.node_errors).map(e => e.errors?.map(err => err.message).join(', ')).join('; ') : data.error;
             await showInfo("Generation Failed", `Could not queue thumbnail: ${detail}`);
         }
@@ -5794,52 +7716,18 @@ async function fetchThumbnailImage(filename, subfolder, type) {
 
 /**
  * Main entry point: generate a thumbnail for a prompt
- * Handles checkpoint selection, LoRA resolution, workflow building, and saving
+ * Uses WorkflowRenderer from saved workflow_data when available, otherwise
+ * builds a renderer-compatible workflow_data payload from prompt + selected model.
  */
-async function generateThumbnailForPrompt(node, category, promptName, onUpdate, { silent = false } = {}) {
+async function generateThumbnailForPrompt(node, category, promptName, onUpdate, options = {}) {
+    const { silent = false, renderSelection: providedRenderSelection = null, fallbackBase = null } = options || {};
     const promptData = node.prompts[category]?.[promptName];
     if (!promptData) {
         if (!silent) await showInfo("Error", "Prompt data not found.");
         return;
     }
 
-    // Ensure a checkpoint is selected
-    if (!_thumbnailCheckpoint) {
-        _thumbnailCheckpoint = await showCheckpointPicker();
-        if (!_thumbnailCheckpoint) return; // User cancelled
-        app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", _thumbnailCheckpoint);
-    }
-
     const promptText = promptData.prompt || promptName;
-
-    // Resolve LoRAs — combine A and B stacks, only active ones
-    const allLoras = [
-        ...(promptData.loras_a || []).filter(l => l.active !== false),
-        ...(promptData.loras_b || []).filter(l => l.active !== false)
-    ];
-
-    let resolvedLoras = [];
-    if (allLoras.length > 0) {
-        try {
-            const resp = await fetch("/prompt-manager-advanced/resolve-loras", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    lora_names: allLoras.map(l => ({
-                        name: l.name,
-                        strength: l.strength ?? 1.0,
-                        clip_strength: l.clip_strength ?? l.strength ?? 1.0
-                    }))
-                })
-            });
-            const data = await resp.json();
-            if (data.success) {
-                resolvedLoras = data.loras;
-            }
-        } catch (e) {
-            console.warn("[ThumbnailGen] Could not resolve LoRAs, continuing without:", e);
-        }
-    }
 
     // Show generating indicator (only in non-silent/single mode)
     let indicator = null;
@@ -5862,7 +7750,46 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
     }
 
     try {
-        const thumbnail = await generateThumbnailWorkflow(promptText, _thumbnailCheckpoint, resolvedLoras);
+        let thumbnail = null;
+
+        // Preferred path: render from saved workflow_data using WorkflowRenderer.
+        const rawWorkflowData = promptData.workflow_data;
+        let parsedWorkflowData = null;
+        if (rawWorkflowData && typeof rawWorkflowData === "object") {
+            parsedWorkflowData = rawWorkflowData;
+        } else if (typeof rawWorkflowData === "string" && rawWorkflowData.trim()) {
+            try {
+                const maybeObj = JSON.parse(rawWorkflowData);
+                if (maybeObj && typeof maybeObj === "object") {
+                    parsedWorkflowData = maybeObj;
+                }
+            } catch {
+                parsedWorkflowData = null;
+            }
+        }
+
+        if (parsedWorkflowData) {
+            try {
+                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData);
+            } catch (e) {
+                console.warn("[ThumbnailGen] WorkflowRenderer thumbnail path failed, falling back:", e);
+                thumbnail = null;
+            }
+        }
+
+        // Fallback path: build renderer workflow_data from prompt + selected family/model.
+        if (!thumbnail) {
+            const renderSelection = providedRenderSelection || await ensureThumbnailRenderSelection();
+            if (!renderSelection) return; // User cancelled
+
+            const fallbackWorkflowData = await buildRendererFallbackWorkflowDataWithBase(
+                promptText,
+                promptData,
+                renderSelection,
+                fallbackBase
+            );
+            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData);
+        }
 
         if (thumbnail) {
             await saveThumbnail(node, category, promptName, thumbnail);
@@ -5975,15 +7902,14 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
         await generateThumbnailForPrompt(node, category, promptName, onUpdate);
     }));
 
-    // Change Thumbnail Model
-    const modelLabel = _thumbnailCheckpoint
-        ? `🔧 Model: ${_thumbnailCheckpoint.split(/[/\\]/).pop()}`
-        : "🔧 Select Thumbnail Model";
+    // Change Thumbnail Family/Model
+    const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
+        ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}`
+        : "🔧 Select Thumbnail Family + Model";
     menu.appendChild(createMenuItem(modelLabel, async () => {
-        const picked = await showCheckpointPicker(_thumbnailCheckpoint);
+        const picked = await showThumbnailRenderPicker(_thumbnailRenderFamily, _thumbnailRenderModel);
         if (picked) {
-            _thumbnailCheckpoint = picked;
-            app.ui.settings.setSettingValue("PromptManager.ThumbnailCheckpoint", picked);
+            saveThumbnailRenderSelection(picked);
         }
     }));
 
@@ -6234,6 +8160,9 @@ function createPromptSelectorWidget(node) {
     // Show/hide thumbnail on hover
     let hoverTimeout = null;
     nameDisplay.addEventListener("mouseenter", () => {
+        if (node._isWorkflowManager) {
+            return;
+        }
         hoverTimeout = setTimeout(() => {
             const category = categoryWidget.value;
             const prompt = promptWidget.value;
@@ -6280,6 +8209,9 @@ function createPromptSelectorWidget(node) {
         }, 300);
     });
     nameDisplay.addEventListener("mouseleave", () => {
+        if (node._isWorkflowManager) {
+            return;
+        }
         if (hoverTimeout) clearTimeout(hoverTimeout);
         thumbnailPreview.style.display = "none";
     });
@@ -6321,22 +8253,62 @@ function createPromptSelectorWidget(node) {
     const updateDisplay = () => {
         const category = categoryWidget.value || "";
         const prompt = promptWidget.value || "new prompt";
-        nameDisplay.textContent = `${category} : ${prompt}`;
-        nameDisplay.title = `${category} : ${prompt}`;
 
-        // Remove existing NSFW label if any
-        const existingLabel = nameDisplay.querySelector('.nsfw-selector-label');
-        if (existingLabel) existingLabel.remove();
+        const wmInputMode = node._isWorkflowManager && hasConnectedWorkflowInput(node);
+        const hasLiveWorkflow = !!(node.lastWorkflowData && typeof node.lastWorkflowData === "object");
 
-        // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible
-        if (node.prompts && category) {
+        if (wmInputMode) {
+            nameDisplay.textContent = hasLiveWorkflow
+                ? "Input connected: save incoming workflow"
+                : "Waiting for workflow_data input...";
+            nameDisplay.title = nameDisplay.textContent;
+            nameDisplay.style.cursor = "default";
+            leftArrow.style.opacity = "0.35";
+            rightArrow.style.opacity = "0.35";
+            leftArrow.style.cursor = "default";
+            rightArrow.style.cursor = "default";
+        } else {
+            nameDisplay.textContent = `${category} : ${prompt}`;
+            nameDisplay.title = `${category} : ${prompt}`;
+            nameDisplay.style.cursor = "pointer";
+            leftArrow.style.opacity = "1";
+            rightArrow.style.opacity = "1";
+            leftArrow.style.cursor = "pointer";
+            rightArrow.style.cursor = "pointer";
+        }
+
+        if (node._isWorkflowManager) {
+            updateWorkflowManagerPreview(node);
+        }
+
+        // Remove existing badges if any
+        const existingNsfwLabel = nameDisplay.querySelector('.nsfw-selector-label');
+        if (existingNsfwLabel) existingNsfwLabel.remove();
+        const existingWorkflowLabel = nameDisplay.querySelector('.workflow-selector-label');
+        if (existingWorkflowLabel) existingWorkflowLabel.remove();
+
+        const createBadge = (className, text, styleBlock) => {
+            const label = document.createElement("span");
+            label.className = className;
+            label.textContent = text;
+            label.style.cssText = styleBlock;
+            nameDisplay.appendChild(label);
+        };
+
+        // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible.
+        // Also show orange WORKFLOW badge when selected prompt contains workflow_data.
+        if (!wmInputMode && node.prompts && category) {
+            const promptData = node.prompts[category]?.[prompt] || null;
             const catIsNSFW = node.prompts[category]?.["__meta__"]?.nsfw === true;
-            const promptIsNSFW = node.prompts[category]?.[prompt]?.nsfw === true;
+            const promptIsNSFW = promptData?.nsfw === true;
+            const rawWorkflowData = promptData?.workflow_data;
+            const hasWorkflowData = (
+                (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+                (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+            );
+
             if (catIsNSFW || promptIsNSFW) {
-                const label = document.createElement("span");
-                label.className = "nsfw-selector-label";
-                label.textContent = "NSFW";
-                label.style.cssText = `
+                createBadge("nsfw-selector-label", "NSFW", `
                     background: rgba(204, 50, 50, 0.85);
                     color: #fff;
                     font-size: 8px;
@@ -6346,8 +8318,25 @@ function createPromptSelectorWidget(node) {
                     margin-left: 6px;
                     flex-shrink: 0;
                     line-height: 12px;
-                `;
-                nameDisplay.appendChild(label);
+                `);
+            }
+
+            if (hasWorkflowData && !node?._isWorkflowManager) {
+                createBadge("workflow-selector-label", "W", `
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 50%;
+                    background: rgba(235, 140, 35, 0.95);
+                    color: #fff;
+                    font-size: 9px;
+                    font-weight: bold;
+                    margin-left: 6px;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                    line-height: 1;
+                `);
             }
         }
     };
@@ -6358,12 +8347,19 @@ function createPromptSelectorWidget(node) {
         if (!node.prompts) return allPrompts;
 
         const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
-        const categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
+        const workflowOnly = node?._isWorkflowManager === true;
+        const categories = getVisibleCategories(node, {
+            hideNSFW: hideNSFW === true,
+            workflowOnly,
+        });
         for (const cat of categories) {
             // Skip NSFW categories when preference is set to hide
             if (hideNSFW && node.prompts[cat]?.["__meta__"]?.nsfw === true) continue;
 
-            const prompts = Object.keys(node.prompts[cat]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+            const prompts = getPromptNamesForCategory(node, cat, {
+                hideNSFW: hideNSFW === true,
+                workflowOnly,
+            });
             for (const prompt of prompts) {
                 // Skip NSFW prompts when preference is set to hide
                 if (hideNSFW && node.prompts[cat][prompt]?.nsfw === true) continue;
@@ -6437,6 +8433,7 @@ function createPromptSelectorWidget(node) {
     // Navigate to previous prompt (wraps across categories)
     leftArrow.onclick = async (e) => {
         e.stopPropagation();
+        if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) return;
         const allPrompts = getAllPromptsFlat();
         if (allPrompts.length === 0) return;
 
@@ -6448,6 +8445,7 @@ function createPromptSelectorWidget(node) {
     // Navigate to next prompt (wraps across categories)
     rightArrow.onclick = async (e) => {
         e.stopPropagation();
+        if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) return;
         const allPrompts = getAllPromptsFlat();
         if (allPrompts.length === 0) return;
 
@@ -6459,6 +8457,10 @@ function createPromptSelectorWidget(node) {
     // Open thumbnail browser on click
     nameDisplay.onclick = async (e) => {
         e.stopPropagation();
+
+        if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) {
+            return;
+        }
 
         try {
             // Check for unsaved changes before opening browser
@@ -6480,7 +8482,9 @@ function createPromptSelectorWidget(node) {
             const category = categoryWidget.value;
             const currentPrompt = promptWidget.value;
 
-            const selection = await showThumbnailBrowser(node, category, currentPrompt);
+            const selection = await showThumbnailBrowser(node, category, currentPrompt, {
+                workflowOnly: node?._isWorkflowManager === true,
+            });
 
             if (selection) {
                 // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)

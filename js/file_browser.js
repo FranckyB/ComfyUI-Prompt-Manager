@@ -2,6 +2,7 @@
  * File Browser Modal for PromptExtractor
  * Shows thumbnails of files in input directory
  */
+import { PM_UI_PALETTE as UI } from './ui_palette.js';
 
 // Track current subfolder for navigation
 let currentSubfolder = '';
@@ -27,7 +28,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
         left: 0;
         width: 100%;
         height: 100%;
-        background: rgba(0, 0, 0, 0.8);
+        background: ${UI.overlay};
         display: flex;
         align-items: center;
         justify-content: center;
@@ -38,8 +39,8 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const modal = document.createElement('div');
     modal.className = 'prompt-extractor-browser-modal';
     modal.style.cssText = `
-        background: rgba(40, 44, 52, 0.98);
-        border: 1px solid rgba(255,255,255,0.1);
+        background: ${UI.panel};
+        border: 1px solid ${UI.panelBorder};
         border-radius: 6px;
         width: 90%;
         max-width: 1200px;
@@ -54,7 +55,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const header = document.createElement('div');
     header.style.cssText = `
         padding: 15px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+        border-bottom: 1px solid ${UI.sectionBorder};
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -63,11 +64,11 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const topRow = document.createElement('div');
     topRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
     topRow.innerHTML = `
-        <h3 style="margin: 0; color: #aaa;">Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder</h3>
+        <h3 style="margin: 0; color: #d3d7de;">Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder</h3>
         <div style="display: flex; gap: 10px; align-items: center;">
             <button class="regenerate-cache-btn" style="
-                background: #333;
-                border: 1px solid #555;
+                background: ${UI.buttonBg};
+                border: 1px solid ${UI.inputBorder};
                 border-radius: 6px;
                 color: #ccc;
                 padding: 5px 12px;
@@ -89,7 +90,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     
     const breadcrumb = document.createElement('div');
     breadcrumb.className = 'folder-breadcrumb';
-    breadcrumb.style.cssText = 'font-size: 12px; color: #888; cursor: pointer;';
+    breadcrumb.style.cssText = `font-size: 12px; color: ${UI.textHint}; cursor: pointer;`;
     breadcrumb.textContent = `${currentSourceFolder}/`;
     breadcrumb.onclick = () => {
         if (currentSubfolder) {
@@ -105,7 +106,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     const filterBar = document.createElement('div');
     filterBar.style.cssText = `
         padding: 10px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+        border-bottom: 1px solid ${UI.sectionBorder};
         display: flex;
         gap: 10px;
     `;
@@ -113,15 +114,15 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
         <input type="text" placeholder="Search files..." class="search-input" style="
             flex: 1;
             padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
+            background: ${UI.inputBg};
+            border: 1px solid ${UI.inputBorder};
             border-radius: 6px;
             color: #ccc;
         ">
         <select class="filter-type" style="
             padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
+            background: ${UI.inputBg};
+            border: 1px solid ${UI.inputBorder};
             border-radius: 6px;
             color: #ccc;
         ">
@@ -281,8 +282,8 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
     const item = document.createElement('div');
     item.className = 'folder-item';
     item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid rgba(226, 232, 240, 0.2);
+        background: ${UI.cardBg};
+        border: 1px solid ${UI.panelBorder};
         border-radius: 6px;
         padding: 8px;
         cursor: pointer;
@@ -296,7 +297,7 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
     preview.style.cssText = `
         width: 100%;
         height: 150px;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgba(16, 18, 22, 0.6);
         border-radius: 4px;
         display: flex;
         align-items: center;
@@ -317,14 +318,14 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
     item.appendChild(label);
     
     item.onmouseenter = () => {
-        item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+        item.style.borderColor = UI.accentBorder;
         item.style.transform = 'translateY(-2px)';
-        item.style.background = 'rgba(50, 112, 163, 0.5)';
+        item.style.background = UI.accentSoft;
     };
     item.onmouseleave = () => {
-        item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
+        item.style.borderColor = UI.panelBorder;
         item.style.transform = 'translateY(0)';
-        item.style.background = 'rgba(45, 55, 72, 0.7)';
+        item.style.background = UI.cardBg;
     };
     
     item.onclick = () => {
@@ -410,8 +411,8 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     const isSelected = filename === currentFile;
     
     item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid ${isSelected ? 'rgba(66, 153, 225, 0.9)' : 'rgba(226, 232, 240, 0.2)'};
+        background: ${UI.cardBg};
+        border: 1px solid ${isSelected ? UI.accent : UI.panelBorder};
         border-radius: 6px;
         padding: 8px;
         cursor: pointer;
@@ -426,7 +427,7 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     preview.style.cssText = `
         width: 100%;
         height: 150px;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgba(16, 18, 22, 0.6);
         border-radius: 4px;
         display: flex;
         align-items: center;
@@ -493,16 +494,16 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     // Hover effect
     item.onmouseenter = () => {
         if (!isSelected) {
-            item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+            item.style.borderColor = UI.accentBorder;
             item.style.transform = 'translateY(-2px)';
-            item.style.background = 'rgba(50, 112, 163, 0.5)';
+            item.style.background = UI.accentSoft;
         }
     };
     item.onmouseleave = () => {
         if (!isSelected) {
-            item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
+            item.style.borderColor = UI.panelBorder;
             item.style.transform = 'translateY(0)';
-            item.style.background = 'rgba(45, 55, 72, 0.7)';
+            item.style.background = UI.cardBg;
         }
     };
 
@@ -557,8 +558,8 @@ function showThumbnailContextMenu(event, filename, previewElement) {
         position: fixed;
         left: ${event.pageX}px;
         top: ${event.pageY}px;
-        background: rgba(30, 30, 30, 0.98);
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: ${UI.panel};
+        border: 1px solid ${UI.panelBorder};
         border-radius: 6px;
         padding: 4px;
         z-index: 10001;
@@ -578,7 +579,7 @@ function showThumbnailContextMenu(event, filename, previewElement) {
         transition: background 0.15s ease;
     `;
     refreshBtn.onmouseenter = () => {
-        refreshBtn.style.background = 'rgba(66, 153, 225, 0.3)';
+        refreshBtn.style.background = UI.accentSoft;
     };
     refreshBtn.onmouseleave = () => {
         refreshBtn.style.background = 'transparent';
@@ -763,3 +764,4 @@ function cleanupOrphanedThumbnailCache(currentFiles) {
         console.error('[FileBrowser] Error cleaning up cache:', error);
     }
 }
+
