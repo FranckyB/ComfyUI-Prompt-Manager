@@ -36,7 +36,7 @@ This release marks version 2.0.0. More polish and quality-of-life improvements a
 
 Builder + Renderer + Workflow Manager provides a streamlined generation path: configure Builder once, connect Renderer and Save Image/Save Video, and save both the output and the resulting workflow.
 
-Built-in workflow support includes Flux 1, Flux 2, SDXL, Wan, Qwen, Z-Image, Wan Image, and Wan Video (I2V and T2V).
+Built-in workflow support includes Flux 1, Flux 2, Ernie, SDXL, Wan, Qwen, Z-Image, Wan Image, and Wan Video (I2V and T2V).
 
 **Workflow Builder + Workflow Manager Reuse Loop** — Build workflow_data from extracted image/video metadata or from Workflow Builder directly, then save and reuse those workflow entries through Workflow Manager.
 ___
@@ -292,6 +292,10 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 
 
 ## Changelog
+
+### version 2.0.2
+- Added Ernie family support in Workflow Builder/Renderer.
+- Bug Fixes
 
 ### version 2.0.1
 - **Added Denoise options to Workflow Pipeline**

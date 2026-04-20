@@ -29,6 +29,23 @@ import folder_paths
 # ─── Family definitions ──────────────────────────────────────────────────────
 
 MODEL_FAMILIES = {
+    # ── Ernie Image (Flux2 template/runtime) ─────────────────────────────────
+    "ernie": {
+        "label":   "Ernie",
+        # Name-only detection to avoid accidental family hits from unrelated
+        # checkpoint folder names.
+        "folders": [],
+        "names":   ["ernie-image-turbo", "ernie-image", "ernie"],
+        # Ernie should be treated as diffusion/UNet family, not checkpoints.
+        "model_folders": ["diffusion_models", "unet", "unet_gguf"],
+        "vae":     ["flux2-vae", "flux2_vae"],
+        "clip_exact": ["ministral-3-3b.safetensors"],
+        "clip":     ["ministral"],
+        "clip_exclude": ["prompt-enhancer", "enhancer", "mistral_3_small_flux2_fp8"],
+        "clip_type": "flux2",
+        "sampler": "flux2",
+    },
+
     # ── Flux 2 / Klein ───────────────────────────────────────────────────────
     "flux2": {
         "label":   "Flux 2",
@@ -146,24 +163,11 @@ MODEL_FAMILIES = {
         "folders": ["illustrious/", "pony/", "sdxl/"],
         "names":   ["sdxl", "illustrious", "noob", "pony"],
         # SDXL uses its own finely-tuned VAE (sdxl_vae / sdxl-vae) or the
-        # widely-used vae-ft-mse-840000 (originally SD1.5 but SDXL-compatible).
+        # widely-used vae-ft-mse-840000 variant.
         "vae":     ["sdxl_vae", "sdxl-vae", "vae-ft-mse"],
         # SDXL uses dual text encoders: CLIP-L + CLIP-G.
         "clip":         ["clip_l", "clip_g"],
         "clip_exclude": ["t5xxl", "umt5", "qwen", "gemma"],
-        "sampler": "standard",
-        "checkpoint": True,
-    },
-    # ── SD 1.5 ───────────────────────────────────────────────────────────────
-    "sd15": {
-        "label":   "SD 1.5",
-        "folders": [],
-        "names":   ["sd-1", "sd_1", "sd1", "v1-5", "v1_5", "v1.5", "dreamshaper", "realistic"],
-        # SD1.5 canonical VAE: vae-ft-mse-840000 or vae-ft-ema-560000.
-        "vae":     ["vae-ft-mse-840000", "vae-ft-ema-560000", "orangemix", "blessed2"],
-        # SD1.5 uses a single CLIP-L encoder only (NOT CLIP-G like SDXL).
-        "clip":         ["clip_l"],
-        "clip_exclude": ["clip_g", "t5xxl", "umt5", "qwen", "gemma"],
         "sampler": "standard",
         "checkpoint": True,
     },
@@ -183,6 +187,7 @@ MODEL_FAMILIES = {
 # Compatibility groups — checkpoint families that can share each other's models.
 # VAE/CLIP are NOT grouped (they differ per family) — model weights only.
 MODEL_COMPAT_GROUPS = [
+    {"ernie"},
     {"sdxl"},                                      # SDXL-arch — all merged into one now
     {"flux1"},                                     # Flux1 variants — all merged into one now
     {"zimage"},                                    # Z-Image — all merged
@@ -193,9 +198,9 @@ MODEL_COMPAT_GROUPS = [
 # Sampling strategy keys (referenced by workflow_builder.py / workflow_renderer.py)
 # Each key maps to a specific sampling code path.
 SAMPLER_STRATEGIES = {
-    "standard":  "standard",   # KSampler — SD1.5, SDXL, Qwen
-    "flux":      "flux",       # SamplerCustomAdvanced + BasicGuider (Flux1, LTX-Video)
-    "flux2":     "flux2",      # SamplerCustomAdvanced + CFGGuider (Klein/Flux2)
+    "standard":  "standard",   # KSampler — SDXL, Qwen
+    "flux":      "flux",       # SamplerCustomAdvanced + BasicGuider (Flux1)
+    "flux2":     "flux2",      # SamplerCustomAdvanced + CFGGuider (Klein/Flux2/Ernie)
     "zimage":    "zimage",     # ModelSamplingAuraFlow + standard KSampler (Z-Image)
     "wan_image": "wan_image",  # Single KSampler — WAN Image
     "wan_video": "wan_video",  # Dual KSamplerAdvanced high/low (WAN Video i2v + t2v)
@@ -204,8 +209,8 @@ SAMPLER_STRATEGIES = {
 # Workflow template filenames (in workflows/api/) keyed by family.
 # Maps each family key to its _api.json and _map.json stem.
 FAMILY_WORKFLOW_STEMS = {
+    "ernie":         "flux_2",
     "sdxl":          "sdxl",
-    "sd15":          None,          # No template yet — falls back to hardcoded
     "flux1":         "flux_1",
     "flux2":         "flux_2",
     "zimage":        "z_image",
@@ -365,7 +370,8 @@ def list_compatible_vaes(family, return_recommended=False):
     Matching order:
       1. vae_exact  — full basename match (e.g. "ae.safetensors"), case-insensitive
       2. vae        — substring match against basename or full relative path
-    Falls back to all VAEs when no patterns are defined or nothing matched.
+    Checkpoint families may fall back to all VAEs when no matches are found.
+    Non-checkpoint families stay strict (empty list) to avoid cross-family leaks.
     """
     def _ret(lst, rec):
         return (sorted(lst), rec) if return_recommended else sorted(lst)
@@ -382,7 +388,8 @@ def list_compatible_vaes(family, return_recommended=False):
 
     if not exact_names and not patterns:
         try:
-            return _ret(folder_paths.get_filename_list("vae"), None)
+            all_vaes = folder_paths.get_filename_list("vae")
+            return _ret(all_vaes if spec.get("checkpoint", False) else [], None)
         except Exception:
             return _ret([], None)
 
@@ -416,7 +423,7 @@ def list_compatible_vaes(family, return_recommended=False):
 
     if matched:
         return _ret(matched, recommended)
-    return _ret(all_vaes, None)
+    return _ret(all_vaes if is_checkpoint else [], None)
 
 
 def list_compatible_clips(family, return_recommended=False):
@@ -427,7 +434,8 @@ def list_compatible_clips(family, return_recommended=False):
       1. clip_exclude — if ANY exclude pattern is found in the basename/path, skip the file
       2. clip_exact   — full basename match, case-insensitive
       3. clip         — substring match against basename or full relative path
-    Falls back to all CLIPs when no patterns are defined or nothing matched.
+    Checkpoint families may fall back to all CLIPs when no matches are found.
+    Non-checkpoint families stay strict (empty list) to avoid cross-family leaks.
     """
     def _ret(lst, rec):
         return (sorted(lst), rec) if return_recommended else sorted(lst)
@@ -443,7 +451,7 @@ def list_compatible_clips(family, return_recommended=False):
 
     if not exact_names and not patterns:
         clips = _gather_all_clips()
-        return _ret(clips, None)
+        return _ret(clips if spec.get("checkpoint", False) else [], None)
 
     all_clips = _gather_all_clips()
 
@@ -476,7 +484,7 @@ def list_compatible_clips(family, return_recommended=False):
 
     if matched:
         return _ret(matched, recommended)
-    return _ret(all_clips, None)
+    return _ret(all_clips if is_checkpoint else [], None)
 
 
 def _gather_all_clips():

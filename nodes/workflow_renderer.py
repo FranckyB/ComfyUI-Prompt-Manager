@@ -50,8 +50,8 @@ except Exception:
 
 # Keep renderer fallback sampler defaults aligned with Workflow Builder family defaults.
 _FAMILY_SAMPLER_DEFAULTS = {
+    "ernie": {"steps_a": 4, "cfg": 1.0, "sampler": "euler_ancestral", "scheduler": "beta"},
     "sdxl": {"steps_a": 20, "cfg": 5.0, "sampler": "dpmpp_2m_sde", "scheduler": "karras"},
-    "sd15": {"steps_a": 20, "cfg": 6.0, "sampler": "euler", "scheduler": "normal"},
     "flux1": {"steps_a": 20, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "flux2": {"steps_a": 4, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "zimage": {"steps_a": 9, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
@@ -223,14 +223,59 @@ class WorkflowRenderer:
                 vaes, rec_vae = list_compatible_vaes(family_key, return_recommended=True)
                 vae_name = rec_vae or (vaes[0] if vaes else "")
 
-            if not clip_type_str:
-                clip_type_str = str(_family_spec.get("clip_type", ""))
+            # Use the family-defined CLIP type for non-checkpoint families to avoid
+            # stale type values from previously selected families.
+            family_clip_type = str(_family_spec.get("clip_type", "") or "")
+            if family_clip_type:
+                clip_type_str = family_clip_type
 
-            if not clip_names or clip_is_placeholder:
-                compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
-                selected = []
-                if compatible_clips:
-                    clip_slots = int(_family_spec.get("clip_slots", 1) or 1)
+            # Validate/repair clip_names against family-compatible CLIPs.
+            # This prevents stale selections from other families (e.g. SDXL) from
+            # reaching the sampler and causing dimension mismatches.
+            compatible_clips, rec_clip = list_compatible_clips(family_key, return_recommended=True)
+            clip_slots = int(_family_spec.get("clip_slots", 1) or 1)
+            selected = []
+
+            if compatible_clips:
+                by_basename = {
+                    os.path.basename(str(c)).lower(): c
+                    for c in compatible_clips
+                }
+
+                if family_key == "ernie":
+                    preferred_ernie = None
+                    for c in compatible_clips:
+                        base = os.path.basename(str(c)).lower()
+                        if base in ("ministral-3-3b.safetensors", "ministral_3_3b.safetensors"):
+                            preferred_ernie = c
+                            break
+                    if not preferred_ernie:
+                        raise ValueError(
+                            "[WorkflowRenderer] Ernie requires the text encoder "
+                            "'ministral-3-3b.safetensors'. Install/select that encoder "
+                            "and retry."
+                        )
+                    rec_clip = preferred_ernie
+
+                incoming = clip_names if isinstance(clip_names, list) else []
+                for raw_name in incoming:
+                    name = str(raw_name or "").strip()
+                    if not name or name.startswith("("):
+                        continue
+
+                    # Accept direct exact match or basename-equivalent match.
+                    chosen = None
+                    if name in compatible_clips:
+                        chosen = name
+                    else:
+                        chosen = by_basename.get(os.path.basename(name).lower())
+
+                    if chosen and chosen not in selected:
+                        selected.append(chosen)
+                    if len(selected) >= clip_slots:
+                        break
+
+                if not selected or clip_is_placeholder:
                     clip_patterns = [p.lower() for p in _family_spec.get("clip", []) if p]
 
                     if clip_patterns and clip_slots >= 2:
@@ -245,7 +290,10 @@ class WorkflowRenderer:
                     if not selected:
                         selected = [rec_clip] if rec_clip in compatible_clips else [compatible_clips[0]]
 
-                clip_names = selected
+                if family_key == "ernie" and rec_clip in compatible_clips:
+                    selected = [rec_clip]
+
+            clip_names = selected
 
         family_defaults = _FAMILY_SAMPLER_DEFAULTS.get(
             family_key,
@@ -408,7 +456,10 @@ class WorkflowRenderer:
         elif family_key == "flux2":
             decoded, out_latent = _render_flux2(**render_args)
 
-        elif family_key in ("sdxl", "sd15"):
+        elif family_key == "ernie":
+            decoded, out_latent = _render_ernie(**render_args)
+
+        elif family_key == "sdxl":
             decoded, out_latent = _render_sdxl(**render_args)
 
         elif family_key == "wan_image":
@@ -1004,7 +1055,7 @@ def _render_sdxl(model, clip, vae, pos_prompt, neg_prompt,
                  input_latent=None,
                  loras_a=None, lora_overrides=None, lora_stack_key=''):
     """
-    SDXL render — also suitable for SD1.5-style image flow if desired.
+    SDXL render.
     """
     if loras_a:
         model, clip = _apply_loras(
@@ -1166,6 +1217,39 @@ def _render_flux2(model, clip, vae, pos_prompt, neg_prompt,
         raise TypeError(f"SamplerCustomAdvanced returned unexpected outputs: {type(sca_result)}")
 
     decoded = _decode_latent_output(vae, latent_out, tag="_render_flux2")
+    return decoded, latent_out
+
+
+def _render_ernie(model, clip, vae, pos_prompt, neg_prompt,
+                  width, height, batch, sampler_params,
+                  input_latent=None,
+                  loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    Ernie render path aligned to the reference Ernie workflow:
+    CLIPTextEncode -> ConditioningZeroOut -> KSampler -> VAEDecode
+    with EmptyFlux2LatentImage-like latent shape (spacial_ratio=16).
+    """
+    from nodes import ConditioningZeroOut
+
+    if loras_a:
+        model, clip = _apply_loras(
+            model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key
+        )
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
+
+    # Match the reference workflow: negative conditioning is zeroed from the
+    # encoded positive path rather than encoded from a separate negative text.
+    (cond_neg,) = ConditioningZeroOut().zero_out(cond_pos)
+
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    latent = input_latent if use_input_latent else _make_latent(16, width, height, batch=batch, spacial_ratio=16)
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
+    latent_out = _run_standard_ksampler(
+        model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise
+    )
+    decoded = _decode_latent_output(vae, latent_out, tag="_render_ernie")
     return decoded, latent_out
 
 
