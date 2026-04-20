@@ -94,22 +94,37 @@ async def api_list_models(request):
             return gathered
 
         if family_key:
-            all_models = _gather_models(['checkpoints', 'diffusion_models', 'unet', 'unet_gguf'])
+            compat = get_compatible_families(family_key)
+            compat_specs = [MODEL_FAMILIES.get(f, {}) for f in compat]
+
+            preferred_folders = []
+            for spec in compat_specs:
+                for folder_name in spec.get('model_folders', []) or []:
+                    if folder_name and folder_name not in preferred_folders:
+                        preferred_folders.append(folder_name)
+
+            # Policy: only SDXL should source from checkpoints.
+            # All other families should stay on diffusion/unet folders.
+            if preferred_folders:
+                model_folders = preferred_folders
+            elif family_key == 'sdxl':
+                model_folders = ['checkpoints']
+            else:
+                model_folders = ['diffusion_models', 'unet', 'unet_gguf']
+            all_models = _gather_models(model_folders)
 
             if show_all:
                 models = list(all_models)
             else:
-                compat = get_compatible_families(family_key)
                 models = [m for m in all_models if get_model_family(m) in compat]
 
                 # Fallbacks for installations with inconsistent folder taxonomy:
                 # 1) Checkpoint families: if no match, show all checkpoints.
                 # 2) Diffusion/UNet families: if no match, do relaxed name/path matching.
                 if not models:
-                    compat_specs = [MODEL_FAMILIES.get(f, {}) for f in compat]
                     compat_has_checkpoint = any(spec.get('checkpoint', False) for spec in compat_specs if spec)
 
-                    if compat_has_checkpoint:
+                    if compat_has_checkpoint and family_key == 'sdxl':
                         models = _gather_models(['checkpoints'])
                     else:
                         folder_patterns = []

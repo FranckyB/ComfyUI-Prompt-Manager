@@ -7178,7 +7178,6 @@ function getThumbnailFamilySamplerDefaults(familyKey) {
     const key = String(familyKey || "").trim().toLowerCase();
     const byFamily = {
         sdxl: { steps_a: 20, steps_b: null, cfg: 5, sampler_name: "dpmpp_2m_sde", scheduler: "karras" },
-        sd15: { steps_a: 20, steps_b: null, cfg: 6, sampler_name: "euler", scheduler: "normal" },
         flux1: { steps_a: 20, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
         flux2: { steps_a: 4, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
         zimage: { steps_a: 9, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },

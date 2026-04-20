@@ -358,16 +358,25 @@ function _ensureOptionValue(sel, value, grouped) {
     sel.appendChild(o);
 }
 
-function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includeEmptyOption = true) {
+function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includeEmptyOption = true, allowMissingInjection = true) {
     const row = makeEl("div", { ...ROW_STYLE });
     row.appendChild(makeEl("span", { color: C.textMuted, width: LABEL_W, flexShrink: "0" }, label));
     let _origVal = initialValue || "";
     let _recolor;
     const resetBtn = makeResetBtn(() => {
         if (![...sel.options].some(o => o.value === _origVal)) {
-            const o = document.createElement("option"); o.value = _origVal;
-            o.textContent = grouped ? cleanModelName(_origVal) : _origVal;
-            sel.insertBefore(o, sel.firstChild);
+            if (allowMissingInjection && _origVal) {
+                const o = document.createElement("option"); o.value = _origVal;
+                o.textContent = grouped ? cleanModelName(_origVal) : _origVal;
+                sel.insertBefore(o, sel.firstChild);
+            } else {
+                sel.value = includeEmptyOption ? "" : (sel.options[0]?.value || "");
+                resetBtn.style.visibility = "hidden";
+                _recolor();
+                if (row._onReset) row._onReset(sel.value);
+                if (onChange) onChange(sel.value);
+                return;
+            }
         }
         sel.value = _origVal;
         resetBtn.style.visibility = "hidden";
@@ -429,18 +438,22 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
             }
             // Keep existing selection stable even if fetched options changed.
             const equivalentBeforeInject = _findEquivalentOptionValue(sel, currentVal);
+            const canInjectMissing = allowMissingInjection && !grouped;
             const shouldMarkMissing = (
+                canInjectMissing &&
                 _origFound === false &&
                 !!currentVal &&
                 !String(currentVal).startsWith("(") &&
                 !equivalentBeforeInject
             );
-            _ensureOptionValue(sel, currentVal, grouped);
-            if (shouldMarkMissing) {
-                const injected = [...sel.options].find(o => o.value === String(currentVal));
-                if (injected) {
-                    injected.style.color = C.error;
-                    injected.dataset.missing = "1";
+            if (canInjectMissing) {
+                _ensureOptionValue(sel, currentVal, grouped);
+                if (shouldMarkMissing) {
+                    const injected = [...sel.options].find(o => o.value === String(currentVal));
+                    if (injected) {
+                        injected.style.color = C.error;
+                        injected.dataset.missing = "1";
+                    }
                 }
             }
             const resolvedCurrent = _findEquivalentOptionValue(sel, currentVal);
@@ -500,6 +513,7 @@ function makeSelectRow(label, initialValue, lazyFetch, onChange, grouped, includ
         resetBtn.style.visibility = "hidden";
     };
     row._getValue = () => sel.value;
+    row._allowMissingInjection = allowMissingInjection;
     row._resetLoaded = () => { _loaded = false; };
     row._markLoaded = () => {
         _loaded = true;
@@ -513,6 +527,7 @@ async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, incl
     const options = await fetchFn();
     const sel = row._sel;
     const previousVal = sel.value;
+    const allowMissingInjection = row?._allowMissingInjection !== false;
     if (grouped) {
         sel.innerHTML = "";
         if (includeEmptyOption) {
@@ -523,7 +538,6 @@ async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, incl
         }
         populateGroupedSelect(sel, options, true);
         if (preservePrevious) {
-            _ensureOptionValue(sel, previousVal, grouped);
             const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
             if (resolvedPrev) {
                 sel.value = resolvedPrev;
@@ -551,7 +565,7 @@ async function reloadGroupedSelect(row, fetchFn, grouped, recommendedValue, incl
                 const resolvedPrev = _findEquivalentOptionValue(sel, previousVal);
                 if (resolvedPrev) {
                     sel.value = resolvedPrev;
-                } else if (previousVal) {
+                } else if (previousVal && allowMissingInjection) {
                     _ensureOptionValue(sel, previousVal, grouped);
                     sel.value = previousVal;
                 } else {
@@ -871,24 +885,23 @@ function _refreshSelectOptions(selectEl, options) {
 // --- Per-family sampler defaults (applied on manual family switch) ---
 // Edit values here to change what each family starts with.
 const FAMILY_DEFAULTS = {
-    sdxl:          { steps_a: 20, cfg: 5.0,  sampler: "dpmpp_2m_sde",  scheduler: "karras" },
-    sd15:          { steps_a: 20, cfg: 6.0,  sampler: "euler",         scheduler: "normal" },
-    flux1:         { steps_a: 20, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    flux2:         { steps_a: 4,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    zimage:        { steps_a: 9,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    // ltxv:       { steps_a: 8,  cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
-    wan_image:     { steps_a: 10, cfg: 1.0,  sampler: "lcm",           scheduler: "simple" },
-    wan_video_t2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",           scheduler: "simple",
+    ernie:         { steps_a: 4,  cfg: 1.0,  sampler: "euler_ancestral", scheduler: "beta" },
+    sdxl:          { steps_a: 20, cfg: 5.0,  sampler: "dpmpp_2m_sde",    scheduler: "karras" },
+    flux1:         { steps_a: 20, cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
+    flux2:         { steps_a: 4,  cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
+    zimage:        { steps_a: 9,  cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
+    // ltxv:       { steps_a: 8,  cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
+    wan_image:     { steps_a: 10, cfg: 1.0,  sampler: "lcm",             scheduler: "simple" },
+    wan_video_t2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",             scheduler: "simple",
                      steps_b: 3 },
-    wan_video_i2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",           scheduler: "simple",
+    wan_video_i2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",             scheduler: "simple",
                      steps_b: 3 },
-    qwen_image:    { steps_a: 10, cfg: 1.0,  sampler: "euler",         scheduler: "simple" },
+    qwen_image:    { steps_a: 10, cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
 };
 
-const BLOCKED_FAMILIES = new Set(["ltxv"]);
 function normalizeSelectableFamily(family, fallback = "sdxl") {
     const f = String(family || "").trim();
-    if (!f || BLOCKED_FAMILIES.has(f)) return fallback;
+    if (!f) return fallback;
     return f;
 }
 
@@ -938,9 +951,7 @@ async function updateUI(node) {
             try {
                 const r = await fetch("/workflow-extractor/list-families");
                 const fd = await r.json();
-                const families = Object.fromEntries(
-                    Object.entries(fd.families || {}).filter(([k]) => !BLOCKED_FAMILIES.has(k))
-                );
+                const families = Object.fromEntries(Object.entries(fd.families || {}));
                 const curVal = sel.value;
                 sel.innerHTML = "";
                 const keys = Object.keys(families).sort((a, b) => {
@@ -959,14 +970,9 @@ async function updateUI(node) {
                 console.warn("[updateUI] Could not pre-load families list:", e);
             }
         }
-        // If the target family still isn't in the list (server gap), add it.
-        if (newFamily && !BLOCKED_FAMILIES.has(newFamily) && ![...sel.options].some(o => o.value === newFamily)) {
-            const o = document.createElement("option");
-            o.value = newFamily; o.textContent = d.model_family_label || newFamily;
-            sel.appendChild(o);
-        }
-        sel.value = normalizeSelectableFamily(newFamily, "sdxl");
-        node._weFamily = normalizeSelectableFamily(newFamily, "sdxl");
+        const resolvedFamily = [...sel.options].some(o => o.value === newFamily) ? newFamily : "sdxl";
+        sel.value = resolvedFamily;
+        node._weFamily = resolvedFamily;
         console.log("[updateUI] familySel set to:", sel.value, "options:", [...sel.options].map(o => o.value));
     }
 
@@ -1806,13 +1812,9 @@ function applyOverrides(node, ovJson, lsJson) {
     if (ov._family && node._weFamilySel) {
         const sel = node._weFamilySel;
         const targetFamily = normalizeSelectableFamily(ov._family, "sdxl");
-        if (!BLOCKED_FAMILIES.has(targetFamily) && ![...sel.options].some(o => o.value === targetFamily)) {
-            const o = document.createElement("option");
-            o.value = targetFamily; o.textContent = targetFamily;
-            sel.appendChild(o);
-        }
-        sel.value = targetFamily;
-        node._weFamily = targetFamily;
+        const resolvedFamily = [...sel.options].some(o => o.value === targetFamily) ? targetFamily : "sdxl";
+        sel.value = resolvedFamily;
+        node._weFamily = resolvedFamily;
     }
 
     if (Object.prototype.hasOwnProperty.call(ov, "_show_all_models")) {
@@ -2943,8 +2945,8 @@ app.registerExtension({
                     return applyWanVideoModelSplit(models, familyKey, { preferLow: true });
                 };
                 await Promise.all([
-                    reloadGroupedSelect(node._weModelRow, fetchModelsForFamilyA, true, null, false),
-                    reloadGroupedSelect(node._weModelBRow, fetchModelsForFamilyB, true, null, false),
+                    reloadGroupedSelect(node._weModelRow, fetchModelsForFamilyA, true, null, false, false),
+                    reloadGroupedSelect(node._weModelBRow, fetchModelsForFamilyB, true, null, false, false),
                 ]);
             };
 
@@ -3048,7 +3050,7 @@ app.registerExtension({
                         const d = await r.json(); return d.vaes || [];
                     } catch { return []; }
                 },
-                (v) => { if (v) node._weOverrides.vae = v; else delete node._weOverrides.vae; _syncS(); }, false);
+                (v) => { if (v) node._weOverrides.vae = v; else delete node._weOverrides.vae; _syncS(); }, false, true, false);
             modelSec._body.appendChild(vaeRow);
             node._weVaeRow = vaeRow;
 
@@ -3061,7 +3063,7 @@ app.registerExtension({
                         const d = await r.json(); return d.clips || [];
                     } catch { return []; }
                 },
-                (v) => { if (v) node._weOverrides.clip_names = [v]; else delete node._weOverrides.clip_names; _syncS(); }, false);
+                (v) => { if (v) node._weOverrides.clip_names = [v]; else delete node._weOverrides.clip_names; _syncS(); }, false, true, false);
             modelSec._body.appendChild(clipRow);
             node._weClipRow = clipRow;
 
