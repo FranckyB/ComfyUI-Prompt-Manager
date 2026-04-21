@@ -176,7 +176,7 @@ class PromptManagerAdvanced:
                 "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
                 "thumbnail_image": ("IMAGE", {"tooltip": "Connect an image to use as thumbnail when saving the prompt"}),
-                "workflow_data": ("WORKFLOW_DATA", {"forceInput": True, "tooltip": "Connect workflow_data from WorkflowBuilder or PromptExtractor"}),
+                "workflow_data": ("WORKFLOW_DATA", {"forceInput": True, "tooltip": "Connect workflow_data from RecipeBuilder or PromptExtractor"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -1298,7 +1298,7 @@ async def save_prompt_advanced(request):
                 prompt_data["prompt"] = wf_to_save.get("positive_prompt", "")
             if isinstance(wf_to_save.get("negative_prompt"), str):
                 prompt_data["negative_prompt"] = wf_to_save.get("negative_prompt", "")
-            prompt_data["saved_from"] = "WorkflowManager"
+            prompt_data["saved_from"] = "RecipeManager"
             prompt_data["saved_at"] = datetime.utcnow().isoformat() + "Z"
 
         if wf_to_save:
@@ -1321,7 +1321,7 @@ async def save_prompt_advanced(request):
             prompt_data["nsfw"] = existing_prompt["nsfw"]
 
         # Preserve any extra fields from an existing prompt that this node does not manage.
-        # This includes workflow_config (added by WorkflowManager) and any future extensions.
+        # This includes workflow_config (added by RecipeManager) and any future extensions.
         # Known managed keys — everything else is preserved verbatim.
         _MANAGED_KEYS = {"prompt", "negative_prompt", "loras_a", "loras_b", "trigger_words", "thumbnail", "nsfw", "workflow_data", "saved_from", "saved_at"}
         for extra_key, extra_val in existing_prompt.items():

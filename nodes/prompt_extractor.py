@@ -27,7 +27,7 @@ except ImportError:
 _file_metadata_cache = {}
 # Cache for video frames extracted by JavaScript
 _video_frames_cache = {}
-# Cache for last extracted info per node (keyed by unique_id) — used by WorkflowBuilder's
+# Cache for last extracted info per node (keyed by unique_id) — used by RecipeBuilder's
 # "Update Workflow" button to pull data without re-executing PromptExtractor.
 _last_extracted_info = {}
 
@@ -416,7 +416,7 @@ async def list_input_files(request):
         return server.web.json_response({"files": [], "error": str(e)}, status=500)
 
 
-# API endpoint to get cached extracted info for WorkflowBuilder's "Update Workflow" button.
+# API endpoint to get cached extracted info for RecipeBuilder's "Update Workflow" button.
 # Accepts ?node_id=<id> for a specific PE node, or returns all cached entries.
 @server.PromptServer.instance.routes.get("/prompt-extractor/get-extracted-data")
 async def get_extracted_data(request):
@@ -443,10 +443,10 @@ async def get_extracted_data(request):
 
 
 # API endpoint to extract metadata from a file on demand (no node execution required).
-# Used by WorkflowBuilder's "Update Workflow" button and PE JS on file selection.
+# Used by RecipeBuilder's "Update Workflow" button and PE JS on file selection.
 @server.PromptServer.instance.routes.get("/prompt-extractor/extract-preview")
 async def extract_preview(request):
-    """Extract metadata from a file and return structured info for WorkflowBuilder."""
+    """Extract metadata from a file and return structured info for RecipeBuilder."""
     try:
         filename = request.rel_url.query.get('filename', '')
         source = request.rel_url.query.get('source', 'input')
@@ -2560,11 +2560,11 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         break
 
     # ========================================
-    # RESOLVE EMBEDDED DATA (PromptExtractor vs WorkflowRenderer)
+    # RESOLVE EMBEDDED DATA (PromptExtractor vs RecipeRenderer)
     # ========================================
     # Priority when multiple embedded sources are present:
-    #   1. WorkflowRenderer / RecipeRenderer (actual render source)
-    #   2. WorkflowBuilder
+    #   1. RecipeRenderer / WorkflowRenderer (actual render source)
+    #   2. RecipeBuilder
     #   3. PromptExtractor
     if _embedded_candidates:
         has_render = any(nt in ('WorkflowRenderer', 'RecipeRenderer') for nt, *_ in _embedded_candidates)
@@ -2577,7 +2577,7 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 if c[0] in ('WorkflowRenderer', 'RecipeRenderer')
             ]
             if len(_embedded_candidates) > len(chosen):
-                print("[PromptExtractor] Multiple embedded sources found — preferring WorkflowRenderer")
+                print("[PromptExtractor] Multiple embedded sources found — preferring RecipeRenderer")
         elif has_builder:
             chosen = [c for c in _embedded_candidates if c[0] in ('WorkflowBuilder', 'RecipeBuilder')]
             if len(_embedded_candidates) > len(chosen):
@@ -3687,7 +3687,7 @@ class PromptExtractor:
                     model_b = os.path.basename(raw_models_b[0].replace('\\', '/'))
                     print(f"[PromptExtractor] Model B: {model_b}")
 
-            # Build workflow_data in the same structured format as WorkflowBuilder
+            # Build workflow_data in the same structured format as RecipeBuilder
             # so both nodes output identical workflow_data that can feed PromptManagerAdvanced.
             if prompt_data or workflow_data:
                 try:
@@ -3806,7 +3806,7 @@ class PromptExtractor:
                         overrides={'_source': 'PromptExtractor'},
                         sampler_params=_sampler,
                     )
-                    # Add model / VAE availability so WorkflowBuilder can show red
+                    # Add model / VAE availability so RecipeBuilder can show red
                     from ..py.workflow_extraction_utils import resolve_model_name, resolve_vae_name
                     if model_a:
                         _res_a, _ = resolve_model_name(model_a)
@@ -3820,7 +3820,7 @@ class PromptExtractor:
                     workflow_data = _simplified
                     print(f"[PromptExtractor] Output structured workflow_data (dict, {len(workflow_data)} keys)")
 
-                    # Cache extracted info for WorkflowBuilder's "Update Workflow" button.
+                    # Cache extracted info for RecipeBuilder's "Update Workflow" button.
                     # Shape matches what WB's updateUI() expects (ui_info['extracted']).
                     if unique_id is not None:
                         from ..py.lora_utils import resolve_lora_path as _resolve_lora
@@ -3951,7 +3951,7 @@ class PromptExtractor:
         # Connected lora_stack inputs may have added LoRAs that weren't in
         # the extracted metadata.  Push the merged set into workflow_data
         # (the _simplified dict) and the _last_extracted_info cache so
-        # WorkflowBuilder's "Update Workflow" button sees the full set.
+        # RecipeBuilder's "Update Workflow" button sees the full set.
         if isinstance(workflow_data, dict) and (final_lora_stack_a or final_lora_stack_b):
             def _tuples_to_lora_dicts(stack_tuples):
                 """Convert (path, model_str, clip_str) tuples to LoRA dicts."""
@@ -4114,7 +4114,7 @@ class PromptExtractor:
 
 class WorkflowExtractor:
     """
-    Simplified extractor for WorkflowBuilder — outputs only workflow_data + image.
+    Simplified extractor for RecipeBuilder — outputs only workflow_data + image.
     No LoRA inputs/outputs, no prompt outputs. Same extraction logic as PromptExtractor.
     Uses composition (not inheritance) to avoid ComfyUI node-type confusion on reload.
     """
@@ -4158,7 +4158,7 @@ class WorkflowExtractor:
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Extract workflow data from images, videos, and workflow files. Simplified version for WorkflowBuilder."
+    DESCRIPTION = "Extract workflow data from images, videos, and workflow files. Simplified version for RecipeBuilder."
     RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE")
     RETURN_NAMES = ("workflow_data", "image")
     FUNCTION = "extract_workflow"
@@ -4181,7 +4181,7 @@ class WorkflowExtractor:
         workflow_data = full[4]
         image_tensor = full[5]
         return {
-            # Keep WorkflowExtractor silent in UI previews for the same reason
+            # Keep RecipeExtractor silent in UI previews for the same reason
             # as PromptExtractor: avoid replacing final generation thumbnails.
             "ui": {},
             "result": (workflow_data, image_tensor),

@@ -2,7 +2,7 @@
 ComfyUI Workflow Bridge - Pure passthrough node.
 Unpacks workflow_data into individual typed outputs.
 Any connected optional input overrides the corresponding field before output.
-Models (MODEL/CLIP/VAE) are passed through only - use WorkflowModelLoader for loading.
+Models (MODEL/CLIP/VAE) are passed through only - use RecipeModelLoader for loading.
 """
 import json
 import os

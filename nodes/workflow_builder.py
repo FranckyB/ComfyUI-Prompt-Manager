@@ -543,7 +543,7 @@ async def api_get_workflow_builder_extracted_data(request):
             return server.web.json_response({
                 "extracted": None,
                 "node_id": node_id,
-                "error": "No cached data for this node. Execute WorkflowBuilder first.",
+                "error": "No cached data for this node. Execute RecipeBuilder first.",
             })
 
         available = {nid: bool(d) for nid, d in _last_workflow_builder_info.items()}
@@ -839,7 +839,7 @@ class WorkflowBuilder:
         section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
         has_workflow_input = wf_data is not None
         upstream_source = str((wf_data or {}).get('_source', '')).strip().lower() if isinstance(wf_data, dict) else ""
-        # Sources that should keep WorkflowBuilder in manual-edit mode while connected.
+        # Sources that should keep RecipeBuilder in manual-edit mode while connected.
         # This includes extractors and manager nodes that users actively edit.
         manual_override_sources = {
             "promptextractor",
@@ -1413,7 +1413,7 @@ class WorkflowBuilder:
         except Exception:
             pass  # Non-critical — JS will still get data from onExecuted
 
-        # Cache last extracted info so downstream WorkflowBuilder nodes can
+        # Cache last extracted info so downstream RecipeBuilder nodes can
         # pull this node's live state via /workflow-builder/get-extracted-data.
         if unique_id is not None:
             _last_workflow_builder_info[str(unique_id)] = ui_info.get('extracted', {})

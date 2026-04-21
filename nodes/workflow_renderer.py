@@ -1,7 +1,7 @@
 """
 Workflow Renderer — render-only node.
 
-Accepts WORKFLOW_DATA (JSON string from Workflow Builder or PromptExtractor),
+Accepts WORKFLOW_DATA (JSON string from Recipe Builder or PromptExtractor),
 loads models, samples, decodes, and outputs IMAGE + LATENT.
 
 No UI, no extraction — purely a render engine.
@@ -42,13 +42,13 @@ from ..py.workflow_extraction_utils import (
 )
 from ..py.lora_utils import resolve_lora_path
 
-# Reuse the robust GGUF loading helper used by WorkflowModelLoader when available.
+# Reuse the robust GGUF loading helper used by RecipeModelLoader when available.
 try:
     from .workflow_model_loader import _load_gguf_unet as _load_gguf_unet_shared
 except Exception:
     _load_gguf_unet_shared = None
 
-# Keep renderer fallback sampler defaults aligned with Workflow Builder family defaults.
+# Keep renderer fallback sampler defaults aligned with Recipe Builder family defaults.
 _FAMILY_SAMPLER_DEFAULTS = {
     "ernie": {"steps_a": 4, "cfg": 1.0, "sampler": "euler_ancestral", "scheduler": "beta"},
     "sdxl": {"steps_a": 20, "cfg": 5.0, "sampler": "dpmpp_2m_sde", "scheduler": "karras"},

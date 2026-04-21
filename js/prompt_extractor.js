@@ -1564,7 +1564,7 @@ async function extractAndUpdateMetadata(node, filename) {
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
 
-        // Extract full preview data for WorkflowBuilder's "Update Workflow" button.
+        // Extract full preview data for RecipeBuilder's "Update Workflow" button.
         // Runs the Python parse+build pipeline on the cached metadata so WB can
         // pull it without executing PromptExtractor (live-menu pattern).
         if (node.hasWorkflow) {

@@ -4330,13 +4330,13 @@ function resolveWorkflowDataForSave(node) {
             }
         }
 
-        // Connected input but no fresh upstream workflow_data: for Workflow Manager,
+        // Connected input but no fresh upstream workflow_data: for Recipe Manager,
         // allow fallback to the latest live payload captured from execution updates.
         if (node?._isWorkflowManager && node.lastWorkflowData && typeof node.lastWorkflowData === "object") {
             return node.lastWorkflowData;
         }
 
-        // For non-WorkflowManager nodes, avoid saving stale local cache from
+        // For non-RecipeManager nodes, avoid saving stale local cache from
         // a previously selected prompt while connected.
         return null;
     }
@@ -4435,7 +4435,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
 
         // Include workflow_data when available.
         // If use_workflow_data is enabled and workflow_data comes from a connected
-        // WorkflowBuilder, pull it directly from Builder UI state so saving works
+        // RecipeBuilder, pull it directly from Builder UI state so saving works
         // even before executing the graph.
         const workflowDataForSave = resolveWorkflowDataForSave(node);
         if (node?._isWorkflowManager && hasConnectedWorkflowInput(node) && !workflowDataForSave) {
@@ -7236,7 +7236,7 @@ async function buildRendererFallbackWorkflowData(promptText, promptData, renderS
             normalized = processData.extracted;
         }
     } catch (e) {
-        console.warn("[ThumbnailGen] Failed to normalize fallback workflow_data via WorkflowBuilder:", e);
+        console.warn("[ThumbnailGen] Failed to normalize fallback workflow_data via RecipeBuilder:", e);
     }
 
     const clipNames = Array.isArray(normalized?.clip?.names)
@@ -7384,7 +7384,7 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
     }
 
     if (!families.length) {
-        await showInfo("No Families", "No model families were found for Workflow Renderer.");
+        await showInfo("No Families", "No model families were found for Recipe Renderer.");
         return null;
     }
 
@@ -7557,7 +7557,7 @@ async function ensureThumbnailRenderSelection({ force = false } = {}) {
 }
 
 /**
- * Build and queue a thumbnail generation workflow using WorkflowRenderer.
+ * Build and queue a thumbnail generation workflow using RecipeRenderer.
  * Falls back to the basic thumbnail workflow when this path cannot run.
  * @param {Object} workflowData - Saved workflow_data payload
  * @returns {Promise<string|null>} Base64 thumbnail data URL or null
@@ -7721,7 +7721,7 @@ async function fetchThumbnailImage(filename, subfolder, type) {
 
 /**
  * Main entry point: generate a thumbnail for a prompt
- * Uses WorkflowRenderer from saved workflow_data when available, otherwise
+ * Uses RecipeRenderer from saved workflow_data when available, otherwise
  * builds a renderer-compatible workflow_data payload from prompt + selected model.
  */
 async function generateThumbnailForPrompt(node, category, promptName, onUpdate, options = {}) {
@@ -7757,7 +7757,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
     try {
         let thumbnail = null;
 
-        // Preferred path: render from saved workflow_data using WorkflowRenderer.
+        // Preferred path: render from saved workflow_data using RecipeRenderer.
         const rawWorkflowData = promptData.workflow_data;
         let parsedWorkflowData = null;
         if (rawWorkflowData && typeof rawWorkflowData === "object") {
@@ -7777,7 +7777,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
             try {
                 thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData);
             } catch (e) {
-                console.warn("[ThumbnailGen] WorkflowRenderer thumbnail path failed, falling back:", e);
+                console.warn("[ThumbnailGen] RecipeRenderer thumbnail path failed, falling back:", e);
                 thumbnail = null;
             }
         }
