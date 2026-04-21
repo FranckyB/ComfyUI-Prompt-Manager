@@ -1630,7 +1630,7 @@ def traverse_to_find_text(node_id, input_slot, node_map, link_map, visited=None,
     # PromptExtractor / WorkflowRenderer — text outputs are computed at runtime,
     # NOT stored in widgets_values (which contain file selector, toggles, etc.).
     # Without this guard the generic fallback below picks up the image filename.
-    if node_type in ['PromptExtractor', 'WorkflowRenderer', 'WorkflowGenerator']:
+    if node_type in ['PromptExtractor', 'RecipeExtractor', 'WorkflowRenderer', 'RecipeRenderer']:
         return ""
 
     # Generic: if node has a text/string output, check widgets
@@ -2532,12 +2532,12 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                             break
 
             # PromptExtractor / WorkflowBuilder / WorkflowRenderer nodes — collect
-            # embedded extracted_data. Also accept legacy WorkflowGenerator.
-            elif node_type in ('PromptExtractor', 'WorkflowBuilder', 'WorkflowRenderer', 'WorkflowGenerator'):
+            # embedded extracted_data. Also accept legacy RecipeRenderer.
+            elif node_type in ('PromptExtractor', 'RecipeExtractor', 'WorkflowBuilder', 'WorkflowRenderer', 'RecipeBuilder', 'RecipeRenderer'):
                 ext_data = None
                 # Builder videos now persist authoritative UI state in properties.
                 # Prefer that over stale extracted_data snapshots when available.
-                if node_type == 'WorkflowBuilder':
+                if node_type in ('WorkflowBuilder', 'RecipeBuilder'):
                     ext_data = _build_embedded_from_builder_ui(node)
                 if not ext_data:
                     ext_data = node.get('extracted_data')
@@ -2563,25 +2563,25 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
     # RESOLVE EMBEDDED DATA (PromptExtractor vs WorkflowRenderer)
     # ========================================
     # Priority when multiple embedded sources are present:
-    #   1. WorkflowRenderer / WorkflowGenerator (actual render source)
+    #   1. WorkflowRenderer / RecipeRenderer (actual render source)
     #   2. WorkflowBuilder
     #   3. PromptExtractor
     if _embedded_candidates:
-        has_render = any(nt in ('WorkflowRenderer', 'WorkflowGenerator') for nt, *_ in _embedded_candidates)
-        has_builder = any(nt == 'WorkflowBuilder' for nt, *_ in _embedded_candidates)
+        has_render = any(nt in ('WorkflowRenderer', 'RecipeRenderer') for nt, *_ in _embedded_candidates)
+        has_builder = any(nt in ('WorkflowBuilder', 'RecipeBuilder') for nt, *_ in _embedded_candidates)
         builder_prompt_candidate = None
 
         if has_render:
             chosen = [
                 c for c in _embedded_candidates
-                if c[0] in ('WorkflowRenderer', 'WorkflowGenerator')
+                if c[0] in ('WorkflowRenderer', 'RecipeRenderer')
             ]
             if len(_embedded_candidates) > len(chosen):
-                print("[PromptExtractor] Multiple embedded sources found — preferring WorkflowRenderer/WorkflowGenerator")
+                print("[PromptExtractor] Multiple embedded sources found — preferring WorkflowRenderer")
         elif has_builder:
-            chosen = [c for c in _embedded_candidates if c[0] == 'WorkflowBuilder']
+            chosen = [c for c in _embedded_candidates if c[0] in ('WorkflowBuilder', 'RecipeBuilder')]
             if len(_embedded_candidates) > len(chosen):
-                print("[PromptExtractor] Both PromptExtractor and WorkflowBuilder found — preferring WorkflowBuilder embedded data")
+                print("[PromptExtractor] Both PromptExtractor and Builder found — preferring Builder embedded data")
 
             # When multiple builder nodes are present, select a single prompt source.
             # Prefer the first builder (stable workflow order), then first non-empty prompt.
@@ -2599,9 +2599,9 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             # Builder-only workflows can contain several builder nodes from
             # multi-branch generation graphs; use one prompt source instead of
             # concatenating all builder prompts.
-            if node_type != 'WorkflowBuilder' or not has_render:
+            if node_type not in ['WorkflowBuilder', 'RecipeBuilder'] or not has_render:
                 use_for_prompt = True
-                if node_type == 'WorkflowBuilder' and builder_prompt_candidate:
+                if node_type in ['WorkflowBuilder', 'RecipeBuilder'] and builder_prompt_candidate:
                     use_for_prompt = (node_id == builder_prompt_candidate[1])
 
                 if use_for_prompt:
