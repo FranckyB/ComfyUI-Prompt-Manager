@@ -46,7 +46,7 @@ def _image_to_base64_thumbnail(image_tensor, max_size=200):
         base64_str = base64.b64encode(buffer.getvalue()).decode("utf-8")
         return f"data:image/jpeg;base64,{base64_str}"
     except Exception as e:
-        print(f"[WorkflowManager] Thumbnail generation failed: {e}")
+        print(f"[RecipeManager] Thumbnail generation failed: {e}")
         return None
 
 

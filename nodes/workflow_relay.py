@@ -117,7 +117,7 @@ DEFAULT_WORKFLOW_DATA = {
 }
 
 
-class WorkflowBridge:
+class WorkflowRelay:
     """
     Pure passthrough bridge node.
     Unpacks workflow_data into individual typed outputs and forwards
@@ -137,7 +137,7 @@ class WorkflowBridge:
             "STRING", "STRING",
             "LORA_STACK", "LORA_STACK",
             "INT", "INT", "INT", "INT",
-            "STRING", "STRING", "STRING", "STRING",
+            "STRING", "STRING",
         )
 
     @classmethod
@@ -175,8 +175,6 @@ class WorkflowBridge:
                 "length":          ("INT",     {"forceInput": True, "tooltip": "Override video length"}),
                 "model_a_name":    ("STRING",  {"forceInput": True, "tooltip": "Optional Model A name/path. Resolves and writes workflow_data['model_a']."}),
                 "model_b_name":    ("STRING",  {"forceInput": True, "tooltip": "Optional Model B name/path. Resolves and writes workflow_data['model_b']."}),
-                "clip_name":       ("STRING",  {"forceInput": True, "tooltip": "Optional CLIP name/path. Resolves and writes workflow_data['clip']."}),
-                "vae_name":        ("STRING",  {"forceInput": True, "tooltip": "Optional VAE name/path. Resolves and writes workflow_data['vae']."}),
             },
         }
 
@@ -188,7 +186,7 @@ class WorkflowBridge:
         "STRING", "STRING",
         "LORA_STACK", "LORA_STACK",
         "INT", "INT", "INT", "INT",
-        "STRING", "STRING", "STRING", "STRING",
+        "STRING", "STRING",
     )
     RETURN_NAMES = (
         "workflow_data",
@@ -198,7 +196,7 @@ class WorkflowBridge:
         "pos_prompt", "neg_prompt",
         "lora_stack_a", "lora_stack_b",
         "width", "height", "batch_size", "length",
-        "model_a_name", "model_b_name", "clip_name", "vae_name",
+        "model_a_name", "model_b_name",
     )
     FUNCTION = "unpack"
     CATEGORY = "Prompt Manager"
@@ -282,8 +280,6 @@ class WorkflowBridge:
         # -- Model/CLIP/VAE name overrides ---------------------------
         model_a_name_in = kwargs.get('model_a_name')
         model_b_name_in = kwargs.get('model_b_name')
-        clip_name_in = kwargs.get('clip_name')
-        vae_name_in = kwargs.get('vae_name')
 
         if isinstance(model_a_name_in, str) and model_a_name_in.strip():
             resolved_a, _ = resolve_model_name(model_a_name_in)
@@ -299,14 +295,6 @@ class WorkflowBridge:
         if isinstance(model_b_name_in, str) and model_b_name_in.strip():
             resolved_b, _ = resolve_model_name(model_b_name_in)
             wf['model_b'] = resolved_b or os.path.basename(model_b_name_in.strip().replace("\\", "/"))
-
-        if isinstance(clip_name_in, str) and clip_name_in.strip():
-            resolved_clip, _ = _resolve_rel_path(clip_name_in, ["text_encoders", "clip", "checkpoints"])
-            wf['clip'] = [resolved_clip] if resolved_clip else []
-
-        if isinstance(vae_name_in, str) and vae_name_in.strip():
-            resolved_vae, _ = _resolve_rel_path(vae_name_in, ["vae", "checkpoints"])
-            wf['vae'] = resolved_vae
 
         # -- Pass-through MODEL / CLIP / VAE -------------------------
         # Priority: explicit connected inputs > embedded objects in workflow_data.
@@ -412,13 +400,6 @@ class WorkflowBridge:
         # -- Extract all output values -------------------------------
         model_a_name = _short_display_name(wf.get('model_a', ''))
         model_b_name = _short_display_name(wf.get('model_b', ''))
-        clip_name = ''
-        clip_field = wf.get('clip', [])
-        if isinstance(clip_field, list) and clip_field:
-            clip_name = _short_display_name(clip_field[0])
-        elif isinstance(clip_field, str):
-            clip_name = _short_display_name(clip_field)
-        vae_name = _short_display_name(wf.get('vae', ''))
 
         return (
             wf,
@@ -441,6 +422,4 @@ class WorkflowBridge:
             resolution.get('length', 0) or 0,
             model_a_name,
             model_b_name,
-            clip_name,
-            vae_name,
         )

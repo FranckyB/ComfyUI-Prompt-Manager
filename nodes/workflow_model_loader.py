@@ -110,6 +110,34 @@ def _build_model_options(weight_dtype):
     return model_options
 
 
+def _is_runtime_object(value):
+    """True when value looks like a live Comfy runtime object, not workflow metadata."""
+    return value is not None and not isinstance(value, (str, int, float, bool, list, tuple, dict))
+
+
+def _extract_preloaded_assets(workflow_data, selected_model_slot):
+    """
+    Reuse already-loaded assets carried in workflow_data (e.g. from RecipeRenderer).
+    Returns (model, clip, vae) or None when passthrough is unavailable.
+    """
+    if not isinstance(workflow_data, dict):
+        return None
+
+    model_key = "MODEL_B" if selected_model_slot == "model_b" else "MODEL_A"
+    model = workflow_data.get(model_key)
+    clip = workflow_data.get("CLIP")
+    vae = workflow_data.get("VAE")
+
+    if not _is_runtime_object(model):
+        return None
+    if not _is_runtime_object(clip):
+        return None
+    if not _is_runtime_object(vae):
+        return None
+
+    return (model, clip, vae)
+
+
 def _resolve_path(name, folder_key_candidates):
     """
     Resolve a model filename against one or more Comfy folder keys.
@@ -274,8 +302,8 @@ def _load_clip_by_names(clip_names, clip_type=""):
 
 class WorkflowModelLoader:
     CATEGORY = "Prompt Manager"
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
-    RETURN_NAMES = ("model", "clip", "vae", "model_name")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
+    RETURN_NAMES = ("model", "clip", "vae")
     FUNCTION = "get_model"
 
     @classmethod
@@ -298,16 +326,41 @@ class WorkflowModelLoader:
         }
 
     def get_model(self, workflow_data, model="model_a", weight_dtype="default"):
-        spec = self._normalize_spec(workflow_data)
         selected_model_slot = model
         if selected_model_slot not in ("model_a", "model_b"):
             selected_model_slot = "model_a"
+
+        passthrough_assets = _extract_preloaded_assets(workflow_data, selected_model_slot)
+
+        spec = self._normalize_spec(workflow_data)
 
         self._model_key = selected_model_slot
         self._weight_dtype = weight_dtype
         loader_type = spec.get("loader_type", "").lower()
         selected_name = spec.get(selected_model_slot, "")
         selected_display_name = _short_display_name(selected_name)
+
+        if passthrough_assets is not None:
+            model_obj, clip_obj, vae_obj = passthrough_assets
+            clip_names = spec.get("clip") or []
+            vae_name = spec.get("vae", "")
+            ui_info = {
+                "model": selected_model_slot,
+                "model_name": selected_display_name or _short_display_name(spec.get("model_name", "")),
+                "loader_type": loader_type or "passthrough",
+                "model_kind": "passthrough",
+                "vae_name": vae_name,
+                "clip_names": clip_names,
+                "status": "ok",
+                "error_message": "",
+                "missing_name": "",
+                "uses_checkpoint_vae": False,
+                "uses_checkpoint_clip": False,
+            }
+            return {
+                "ui": {"workflow_model_loader_info": [ui_info]},
+                "result": (model_obj, clip_obj, vae_obj),
+            }
 
         if loader_type == "checkpoint":
             core_result = self._load_checkpoint_mode(spec)
@@ -318,7 +371,7 @@ class WorkflowModelLoader:
                 f"[WorkflowModelLoader] Unsupported loader_type: {spec.get('loader_type')}"
             )
 
-        result = (*core_result, selected_display_name)
+        result = core_result
 
         clip_names = spec.get("clip") or []
         vae_name = spec.get("vae", "")

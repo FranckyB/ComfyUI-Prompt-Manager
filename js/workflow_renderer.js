@@ -6,7 +6,7 @@ import { app } from "../../scripts/app.js";
 app.registerExtension({
     name: "prompt-manager.workflow-renderer",
     async nodeCreated(node) {
-        if (node.comfyClass !== "WorkflowRenderer") return;
+        if (node.comfyClass !== "RecipeRenderer") return;
         requestAnimationFrame(() => {
             node.setSize([320, node.size[1]]);
             app.graph.setDirtyCanvas(true, true);

@@ -932,7 +932,7 @@ app.registerExtension({
             // Find the node with this filename
             if (app.graph && app.graph._nodes) {
                 for (const node of app.graph._nodes) {
-                    if (node.type === "PromptExtractor" || node.type === "WorkflowExtractor") {
+                    if (node.type === "PromptExtractor" || node.type === "RecipeExtractor") {
                         const imageWidget = node.widgets?.find(w => w.name === "image");
                         const frameWidget = node.widgets?.find(w => w.name === "frame_position");
                         
@@ -954,7 +954,7 @@ app.registerExtension({
     },
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptExtractor" || nodeData.name === "WorkflowExtractor") {
+        if (nodeData.name === "PromptExtractor" || nodeData.name === "RecipeExtractor") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
@@ -1155,7 +1155,7 @@ app.registerExtension({
                     const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
 
                     // ── Migration: remove stale inputs/outputs from old workflows ──
-                    const isWorkflowExtractor = this.type === "WorkflowExtractor";
+                    const isWorkflowExtractor = this.type === "RecipeExtractor";
                     const VALID_INPUTS = isWorkflowExtractor
                         ? new Set([])
                         : new Set(["lora_stack_a", "lora_stack_b"]);

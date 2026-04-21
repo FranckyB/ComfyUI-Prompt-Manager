@@ -319,7 +319,7 @@ app.registerExtension({
     name: "PromptManager.WorkflowModelLoader",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "WorkflowModelLoader") return;
+        if (nodeData.name !== "RecipeModelLoader") return;
 
         const origOnExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {

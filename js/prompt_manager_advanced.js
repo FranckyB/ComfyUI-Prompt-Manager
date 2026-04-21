@@ -118,8 +118,8 @@ app.registerExtension({
     name: "PromptManagerAdvanced",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "WorkflowManager") {
-            const isWorkflowManagerNode = nodeData.name === "WorkflowManager";
+        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "RecipeManager") {
+            const isWorkflowManagerNode = nodeData.name === "RecipeManager";
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
@@ -4309,12 +4309,12 @@ function resolveWorkflowDataForSave(node) {
     if (wfInput?.link != null) {
         const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
-        if (sourceClass === "WorkflowBuilder") {
+        if (sourceClass === "RecipeBuilder") {
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
             if (fromBuilder) return fromBuilder;
         }
 
-        if (sourceClass === "PromptExtractor" || sourceClass === "WorkflowExtractor") {
+        if (sourceClass === "PromptExtractor" || sourceClass === "RecipeExtractor") {
             const fromExtractor = buildWorkflowDataFromExtractorNode(upstream);
             if (fromExtractor) return fromExtractor;
         }
@@ -4354,11 +4354,11 @@ async function resolveWorkflowDataForLive(node) {
     const sourceClass = String(upstream?.comfyClass || upstream?.type || "");
     const sourceClassLower = sourceClass.toLowerCase();
 
-    if (sourceClass === "WorkflowBuilder") {
+    if (sourceClass === "RecipeBuilder") {
         return buildWorkflowDataFromBuilderNode(upstream);
     }
 
-    if (sourceClassLower === "promptextractor" || sourceClassLower === "workflowextractor") {
+    if (sourceClassLower === "promptextractor" || sourceClassLower === "recipeextractor") {
         const fromExtractorCache = buildWorkflowDataFromExtractorNode(upstream);
         if (fromExtractorCache) return fromExtractorCache;
 
@@ -7575,7 +7575,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData) {
 
     const rendererId = String(nodeId++);
     workflow[rendererId] = {
-        class_type: "WorkflowRenderer",
+        class_type: "RecipeRenderer",
         inputs: {
             workflow_data: wfForThumb,
             clear_cache_after_render: false,

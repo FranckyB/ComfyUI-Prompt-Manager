@@ -1943,7 +1943,7 @@ app.registerExtension({
     name: "WorkflowBuilder",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "WorkflowBuilder") return;
+        if (nodeData.name !== "RecipeBuilder") return;
 
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -2103,10 +2103,10 @@ app.registerExtension({
                   const ty = String(n.type || "");
                   const ccNorm = cc.toLowerCase().replace(/\s+/g, "");
                   const tyNorm = ty.toLowerCase().replace(/\s+/g, "");
-                  return ccNorm === "promptextractor" || ccNorm === "workflowextractor" ||
-                      tyNorm === "promptextractor" || tyNorm === "workflowextractor" ||
+                  return ccNorm === "promptextractor" || ccNorm === "recipeextractor" ||
+                      tyNorm === "promptextractor" || tyNorm === "recipeextractor" ||
                                             ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
-                                            ccNorm === "workflowmanager" || tyNorm === "workflowmanager";
+                                            ccNorm === "recipemanager" || tyNorm === "recipemanager";
             };
             const _isRerouteNodeHint = (n) => {
                 if (!n) return false;
@@ -2193,17 +2193,17 @@ app.registerExtension({
             updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
             updateBtn.onclick = async () => {
                 // 1. Find a source node — prefer one connected via workflow_data input
-                // Supported: PromptExtractor, WorkflowExtractor, WorkflowBuilder, WorkflowBridge.
+                // Supported: PromptExtractor, RecipeExtractor, RecipeBuilder, RecipeRelay.
                 const _isSupportedSource = (n) => {
                     if (!n) return false;
                       const cc = String(n.comfyClass || "");
                       const ty = String(n.type || "");
                       const ccNorm = cc.toLowerCase().replace(/\s+/g, "");
                       const tyNorm = ty.toLowerCase().replace(/\s+/g, "");
-                      return ccNorm === "promptextractor" || ccNorm === "workflowextractor" ||
-                          tyNorm === "promptextractor" || tyNorm === "workflowextractor" ||
+                      return ccNorm === "promptextractor" || ccNorm === "recipeextractor" ||
+                          tyNorm === "promptextractor" || tyNorm === "recipeextractor" ||
                                                     ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
-                                                    ccNorm === "workflowmanager" || tyNorm === "workflowmanager";
+                                                    ccNorm === "recipemanager" || tyNorm === "recipemanager";
                 };
                 const _isRerouteNode = (n) => {
                     if (!n) return false;
@@ -2246,7 +2246,7 @@ app.registerExtension({
                     }
                 }
                 if (!sourceNode) {
-                    _showError(node, "No PromptExtractor, WorkflowExtractor, PromptManagerAdvanced, or WorkflowManager connected to workflow_data.");
+                    _showError(node, "No PromptExtractor, RecipeExtractor, PromptManagerAdvanced, or RecipeManager connected to workflow_data.");
                     return;
                 }
 
@@ -2255,10 +2255,10 @@ app.registerExtension({
                 try {
                     let extracted = null;
                     const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
-                    const isBuilderSource = sourceClass === "WorkflowBuilder";
-                    const isContextSource = sourceClass === "WorkflowBridge";
                     const sourceClassNorm = String(sourceClass || "").toLowerCase().replace(/\s+/g, "");
-                    const isPmaSource = sourceClassNorm === "promptmanageradvanced" || sourceClassNorm === "workflowmanager";
+                    const isBuilderSource = sourceClassNorm === "recipebuilder";
+                    const isContextSource = sourceClassNorm === "reciperelay";
+                    const isPmaSource = sourceClassNorm === "promptmanageradvanced" || sourceClassNorm === "recipemanager";
 
                     console.log("[WB UpdateTrace] Update Workflow start", {
                         nodeId: node.id,
@@ -2290,7 +2290,7 @@ app.registerExtension({
                         }
 
                         if (!extracted) {
-                            _showError(node, "Connected WorkflowBuilder has no cached extracted data yet. Execute it once, then click Update Workflow.");
+                            _showError(node, "Connected RecipeBuilder has no cached extracted data yet. Execute it once, then click Update Workflow.");
                             return;
                         }
 
@@ -2362,7 +2362,7 @@ app.registerExtension({
                             console.warn("[WorkflowBuilder] Failed to merge source builder override_data:", e);
                         }
                     } else if (isContextSource) {
-                        // Pull workflow_data from WorkflowBridge output cache.
+                        // Pull workflow_data from RecipeRelay output cache.
                         // This supports Builder -> Context -> Builder update flows.
                         let wfData = null;
                         const wfOutIdx = sourceNode.outputs?.findIndex(o => o.name === "workflow_data");
@@ -2372,14 +2372,14 @@ app.registerExtension({
                         }
 
                         if (!wfData) {
-                            _showError(node, "Connected WorkflowBridge has no cached workflow_data yet. Execute upstream nodes, then click Update Workflow.");
+                            _showError(node, "Connected RecipeRelay has no cached workflow_data yet. Execute upstream nodes, then click Update Workflow.");
                             return;
                         }
 
                         const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
                         extracted = parseWorkflowData(wfJson);
                         if (!extracted) {
-                            _showError(node, "Connected WorkflowBridge workflow_data is unavailable or invalid. Execute upstream nodes, then click Update Workflow.");
+                            _showError(node, "Connected RecipeRelay workflow_data is unavailable or invalid. Execute upstream nodes, then click Update Workflow.");
                             return;
                         }
                     } else if (isPmaSource) {
@@ -2455,7 +2455,7 @@ app.registerExtension({
                         }
 
                         if (extracted) {
-                            extracted._source = (sourceClassNorm === "workflowmanager") ? "WorkflowManager" : "PromptManagerAdvanced";
+                            extracted._source = (sourceClassNorm === "recipemanager") ? "RecipeManager" : "PromptManagerAdvanced";
                         }
                     } else {
 

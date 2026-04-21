@@ -283,7 +283,7 @@ async def api_video_frame(request):
 
         return server.web.Response(status=500)
     except Exception as e:
-        print(f"[WorkflowBuilder] video-frame API error: {e}")
+        print(f"[RecipeBuilder] video-frame API error: {e}")
         return server.web.Response(status=500)
 
 
@@ -521,12 +521,12 @@ async def api_process_extracted(request):
             'lora_availability':  lora_availability,
         }
 
-        print(f"[WorkflowBuilder] process-extracted: family={family_key}, "
+        print(f"[RecipeBuilder] process-extracted: family={family_key}, "
               f"model_a={model_name_a}, vae={vae.get('name', '')}, "
               f"loras={len(extracted.get('loras_a', []))}+{len(extracted.get('loras_b', []))}")
         return server.web.json_response({"extracted": ui_info})
     except Exception as e:
-        print(f"[WorkflowBuilder] process-extracted error: {e}")
+        print(f"[RecipeBuilder] process-extracted error: {e}")
         traceback.print_exc()
         return server.web.json_response({"error": str(e)}, status=500)
 
@@ -549,7 +549,7 @@ async def api_get_workflow_builder_extracted_data(request):
         available = {nid: bool(d) for nid, d in _last_workflow_builder_info.items()}
         return server.web.json_response({"available": available})
     except Exception as e:
-        print(f"[WorkflowBuilder] Error in get-extracted-data: {e}")
+        print(f"[RecipeBuilder] Error in get-extracted-data: {e}")
         return server.web.json_response({"extracted": None, "error": str(e)}, status=500)
 
 
@@ -654,7 +654,7 @@ class WorkflowBuilder:
                 try:
                     wf_data = json.loads(workflow_data)
                 except (json.JSONDecodeError, TypeError):
-                    print("[WorkflowBuilder] Warning: could not parse workflow_data")
+                    print("[RecipeBuilder] Warning: could not parse workflow_data")
 
         # Extractor/Manager sources should be pull-on-demand only via the
         # Update Workflow button, not auto-applied on every execution.
@@ -998,7 +998,7 @@ class WorkflowBuilder:
             family_key = "sdxl"
         strategy = get_family_sampler_strategy(family_key)
 
-        print(f"[WorkflowBuilder] Family: {get_family_label(family_key)} "
+        print(f"[RecipeBuilder] Family: {get_family_label(family_key)} "
               f"(strategy={strategy}), model_a={model_name_a}, "
               f"model_b={model_name_b or '—'}")
 
@@ -1137,7 +1137,7 @@ class WorkflowBuilder:
                 fallback_vae = rec_vae or (vaes[0] if vaes else '')
                 if fallback_vae:
                     simplified_wf['vae'] = fallback_vae
-                    print(f"[WorkflowBuilder] VAE defaulted to: {fallback_vae}")
+                    print(f"[RecipeBuilder] VAE defaulted to: {fallback_vae}")
             clip_val = simplified_wf.get('clip')
             clip_is_placeholder = bool(clip_val) and all(
                 (not n) or str(n).startswith('(') for n in clip_val
@@ -1162,7 +1162,7 @@ class WorkflowBuilder:
                     simplified_wf['clip'] = selected
                     if clip_type_from_spec:
                         simplified_wf['clip_type'] = clip_type_from_spec
-                    print(f"[WorkflowBuilder] CLIP defaulted to: {selected}")
+                    print(f"[RecipeBuilder] CLIP defaulted to: {selected}")
         lora_availability = {}
         for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
             lora_name = lora.get('name', '')
@@ -1194,21 +1194,21 @@ class WorkflowBuilder:
             compat_models = list_compatible_models(model_name_a, family_override=family_key)
             if compat_models:
                 fallback = compat_models[0]
-                print(f"[WorkflowBuilder] Model A '{model_name_a}' not found, workflow_data will use: {fallback}")
+                print(f"[RecipeBuilder] Model A '{model_name_a}' not found, workflow_data will use: {fallback}")
                 simplified_wf['model_a'] = fallback
 
         if model_name_b and not model_b_found:
             compat_models = list_compatible_models(model_name_b, family_override=family_key)
             if compat_models:
                 fallback = compat_models[0]
-                print(f"[WorkflowBuilder] Model B '{model_name_b}' not found, workflow_data will use: {fallback}")
+                print(f"[RecipeBuilder] Model B '{model_name_b}' not found, workflow_data will use: {fallback}")
                 simplified_wf['model_b'] = fallback
 
         if not vae_found and vae_name_str:
             vaes, recommended = list_compatible_vaes(family_key, return_recommended=True)
             fallback_vae = recommended or (vaes[0] if vaes else '')
             if fallback_vae:
-                print(f"[WorkflowBuilder] VAE '{vae_name_str}' not found, workflow_data will use: {fallback_vae}")
+                print(f"[RecipeBuilder] VAE '{vae_name_str}' not found, workflow_data will use: {fallback_vae}")
                 simplified_wf['vae'] = fallback_vae
 
         # CLIP fallback: check each clip name, replace not-found ones
@@ -1222,7 +1222,7 @@ class WorkflowBuilder:
                     fixed_clips = []
                     for i, (name, path) in enumerate(zip(clip_names_out, clip_paths)):
                         if path is None and i < len(compatible_clips):
-                            print(f"[WorkflowBuilder] CLIP '{name}' not found, workflow_data will use: {compatible_clips[i]}")
+                            print(f"[RecipeBuilder] CLIP '{name}' not found, workflow_data will use: {compatible_clips[i]}")
                             fixed_clips.append(compatible_clips[i])
                         else:
                             fixed_clips.append(name)
