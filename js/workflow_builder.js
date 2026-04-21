@@ -260,6 +260,13 @@ function _leafStem(v) {
     return dot > 0 ? leaf.substring(0, dot) : leaf;
 }
 
+function _canonicalInputName(name) {
+    const n = String(name || "").trim().toLowerCase();
+    if (n === "positive_prompt") return "pos_prompt";
+    if (n === "negative_prompt") return "neg_prompt";
+    return n;
+}
+
 function _isLoraAvailableForSort(lora, availabilityMap = null) {
     if (!lora) return true;
     if (lora.available === false || lora.found === false) return false;
@@ -1690,16 +1697,14 @@ function syncHidden(node) {
     if (node._weRatioLandscape) ov._ratio_landscape = true;
     if (sectionLocks.resolution || node._weResLocked) ov._res_locked = true;
     else delete ov._res_locked;
-    // Persist prompts robustly: if textarea is empty but we have remembered
-    // workflow prompts (e.g. connected prompt source), keep that text.
-    const rememberedPrompts = node._weWorkflowPrompts || { positive: "", negative: "" };
+    // Persist prompt boxes as authoritative UI state. Empty string means the
+    // user intentionally cleared the prompt and must not fall back to stale
+    // remembered workflow prompt text.
     if (node._wePosBox) {
-        const pos = node._wePosBox.value || rememberedPrompts.positive || "";
-        ov.positive_prompt = pos;
+        ov.positive_prompt = String(node._wePosBox.value || "");
     }
     if (node._weNegBox) {
-        const neg = node._weNegBox.value || rememberedPrompts.negative || "";
-        ov.negative_prompt = neg;
+        ov.negative_prompt = String(node._weNegBox.value || "");
     }
     if (node._weFamily) ov._family = node._weFamily;
     if (node._weShowAllModels) ov._show_all_models = true;
@@ -2080,6 +2085,17 @@ app.registerExtension({
                 fontFamily: "inherit", marginBottom: "2px",
             }, "Update Workflow");
             node._weUpdateBtn = updateBtn;
+            const _findWorkflowDataInput = (targetNode = node) => {
+                const ins = targetNode?.inputs || [];
+                let fallback = null;
+                for (const inp of ins) {
+                    if (!inp) continue;
+                    if (_canonicalInputName(inp.name) !== "workflow_data") continue;
+                    if (fallback == null) fallback = inp;
+                    if (inp.link != null) return inp;
+                }
+                return fallback;
+            };
 
             const _isUpdateSourceHint = (n) => {
                 if (!n) return false;
@@ -2117,7 +2133,7 @@ app.registerExtension({
             };
             const _refreshUpdateWorkflowButtonVisibility = () => {
                 if (!node._weUpdateBtn) return;
-                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                const wfInput = _findWorkflowDataInput(node);
                 if (wfInput?.link == null) {
                     node._weUpdateBtn.style.display = "none";
                     return;
@@ -2145,7 +2161,7 @@ app.registerExtension({
                     node._weUpdateBtn.title = "";
                     return;
                 }
-                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                const wfInput = _findWorkflowDataInput(node);
                 if (wfInput?.link == null) {
                     node._weUpdateBtn.title = "Connect workflow_data, execute upstream nodes, then click Update Workflow.";
                     return;
@@ -2160,7 +2176,7 @@ app.registerExtension({
                 node._weUpdateBtn.title = "Pull and refresh from connected workflow source.";
             };
             const _isConnectedWorkflowDataExtractor = () => {
-                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                const wfInput = _findWorkflowDataInput(node);
                 if (wfInput?.link == null) return false;
                 const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
                 return _isUpdateSourceHint(upstream);
@@ -2216,7 +2232,7 @@ app.registerExtension({
                     return null;
                 };
                 let sourceNode = null;
-                const wfInput = node.inputs?.find(i => i.name === "workflow_data");
+                const wfInput = _findWorkflowDataInput(node);
                 if (wfInput?.link != null) {
                     sourceNode = _resolveUpstreamSource(node.graph, wfInput.link);
                 }
@@ -3821,8 +3837,7 @@ app.registerExtension({
             if (node.inputs) {
                 for (const inp of node.inputs) {
                     if (!inp || !inp.name) continue;
-                    if (inp.name === "positive_prompt") inp.name = "pos_prompt";
-                    if (inp.name === "negative_prompt") inp.name = "neg_prompt";
+                    inp.name = _canonicalInputName(inp.name);
                 }
 
                 // Deduplicate legacy duplicate inputs by name. Prefer keeping
@@ -3831,29 +3846,33 @@ app.registerExtension({
                 for (let i = 0; i < node.inputs.length; i++) {
                     const inp = node.inputs[i];
                     if (!inp || !inp.name) continue;
-                    if (!keepIndexByName.has(inp.name)) {
-                        keepIndexByName.set(inp.name, i);
+                    const key = _canonicalInputName(inp.name);
+                    if (!VALID_INPUTS.has(key)) continue;
+                    if (!keepIndexByName.has(key)) {
+                        keepIndexByName.set(key, i);
                         continue;
                     }
-                    const keepIdx = keepIndexByName.get(inp.name);
+                    const keepIdx = keepIndexByName.get(key);
                     const keepInp = node.inputs[keepIdx];
                     const curLinked = inp?.link != null;
                     const keepLinked = keepInp?.link != null;
                     if (curLinked && !keepLinked) {
-                        keepIndexByName.set(inp.name, i);
+                        keepIndexByName.set(key, i);
                     }
                 }
                 for (let i = node.inputs.length - 1; i >= 0; i--) {
                     const inp = node.inputs[i];
                     if (!inp || !inp.name) continue;
-                    if (keepIndexByName.get(inp.name) !== i) {
+                    const key = _canonicalInputName(inp.name);
+                    if (VALID_INPUTS.has(key) && keepIndexByName.get(key) !== i) {
                         node.removeInput(i);
                     }
                 }
             }
             if (node.inputs) {
                 for (let i = node.inputs.length - 1; i >= 0; i--) {
-                    if (!VALID_INPUTS.has(node.inputs[i].name)) {
+                    const key = _canonicalInputName(node.inputs[i].name);
+                    if (!VALID_INPUTS.has(key)) {
                         node.removeInput(i);
                     }
                 }

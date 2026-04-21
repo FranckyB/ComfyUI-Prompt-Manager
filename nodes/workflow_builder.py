@@ -656,6 +656,19 @@ class WorkflowBuilder:
                 except (json.JSONDecodeError, TypeError):
                     print("[WorkflowBuilder] Warning: could not parse workflow_data")
 
+        # Extractor/Manager sources should be pull-on-demand only via the
+        # Update Workflow button, not auto-applied on every execution.
+        if isinstance(wf_data, dict):
+            upstream_source = str(wf_data.get('_source', '')).strip().lower()
+            manual_pull_sources = {
+                "promptextractor",
+                "workflowextractor",
+                "promptmanageradvanced",
+                "workflowmanager",
+            }
+            if upstream_source in manual_pull_sources:
+                wf_data = None
+
         # ── Build extracted dict from workflow_data or defaults ───────────
         if wf_data:
             wf_sampler = wf_data.get('sampler', {})
@@ -845,6 +858,51 @@ class WorkflowBuilder:
                 return bool(section_locks.get(section_name, False))
             # Standalone mode (no workflow_data): local UI overrides apply normally.
             return True
+
+        def _normalize_override_lora_list(raw_list):
+            out = []
+            if not isinstance(raw_list, list):
+                return out
+
+            for item in raw_list:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get('name', '')).strip()
+                if not name:
+                    continue
+
+                path = str(item.get('path', name)).strip() or name
+                try:
+                    model_strength = float(item.get('model_strength', item.get('strength', 1.0)))
+                except Exception:
+                    model_strength = 1.0
+                try:
+                    clip_strength = float(item.get('clip_strength', model_strength))
+                except Exception:
+                    clip_strength = model_strength
+
+                row = {
+                    'name': name,
+                    'path': path,
+                    'model_strength': model_strength,
+                    'clip_strength': clip_strength,
+                    'active': item.get('active', True) is not False,
+                }
+                if 'available' in item:
+                    row['available'] = item.get('available', True) is not False
+                if 'found' in item:
+                    row['found'] = item.get('found', True) is not False
+                out.append(row)
+
+            return out
+
+        # If JS persisted full LoRA stacks in override_data, treat those as
+        # authoritative UI state for this run.
+        if _allow_override('loras'):
+            if 'loras_a' in overrides:
+                extracted['loras_a'] = _normalize_override_lora_list(overrides.get('loras_a'))
+            if 'loras_b' in overrides:
+                extracted['loras_b'] = _normalize_override_lora_list(overrides.get('loras_b'))
 
         # ── Apply overrides ──────────────────────────────────────────────
         pos_text = extracted['positive_prompt']
