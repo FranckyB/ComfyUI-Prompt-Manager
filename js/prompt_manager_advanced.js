@@ -4231,7 +4231,7 @@ function buildWorkflowDataFromBuilderNode(builderNode) {
         : (ov.clip_names ? [ov.clip_names] : []);
 
     const workflowData = {
-        _source: "WorkflowBuilder",
+        _source: "RecipeBuilder",
         family: ov._family || "sdxl",
         model_a: ov.model_a || "",
         model_b: ov.model_b || "",
@@ -4453,7 +4453,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
 
             const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasA, lorasB);
             if (node?._isWorkflowManager) {
-                liveWorkflowData._source = "WorkflowManager";
+                liveWorkflowData._source = "RecipeManager";
             }
             node.lastWorkflowData = liveWorkflowData;
             syncSavedWorkflowDataWidget(node);

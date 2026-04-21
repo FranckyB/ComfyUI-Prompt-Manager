@@ -86,7 +86,7 @@ _LIVE_SAMPLERS, _LIVE_SCHEDULERS = _get_live_ksampler_combo_types()
 
 
 DEFAULT_WORKFLOW_DATA = {
-    "_source": "WorkflowBridge",
+    "_source": "RecipeRelay",
     "family": "",
     "model_a": "",
     "model_b": "",

@@ -47,7 +47,7 @@ def _load_gguf_unet(unet_path):
     gguf = _get_gguf_module()
     if gguf is None:
         raise RuntimeError(
-            "[WorkflowModelLoader] This workflow requires ComfyUI-GGUF, "
+            "[RecipeModelLoader] This workflow requires ComfyUI-GGUF, "
             "but UnetLoaderGGUF is not available."
         )
 
@@ -67,7 +67,7 @@ def _load_gguf_unet(unet_path):
 
     if model is None:
         raise RuntimeError(
-            f"[WorkflowModelLoader] Could not detect model type of GGUF: {unet_path}"
+            f"[RecipeModelLoader] Could not detect model type of GGUF: {unet_path}"
         )
 
     model = gguf["GGUFModelPatcher"].clone(model)
@@ -214,7 +214,7 @@ def _load_checkpoint_by_name(ckpt_name):
     """
     ckpt_path = _resolve_path(ckpt_name, ["checkpoints", "diffusion_models", "unet"])
     if not ckpt_path:
-        raise FileNotFoundError(f"[WorkflowModelLoader] Checkpoint not found: {ckpt_name}")
+        raise FileNotFoundError(f"[RecipeModelLoader] Checkpoint not found: {ckpt_name}")
 
     out = comfy.sd.load_checkpoint_guess_config(
         ckpt_path,
@@ -234,7 +234,7 @@ def _load_diffusion_model_by_name(model_name, weight_dtype="default"):
     """
     model_path = _resolve_path(model_name, ["diffusion_models", "unet", "unet_gguf", "checkpoints"])
     if not model_path:
-        raise FileNotFoundError(f"[WorkflowModelLoader] Diffusion model not found: {model_name}")
+        raise FileNotFoundError(f"[RecipeModelLoader] Diffusion model not found: {model_name}")
 
     if model_name.lower().endswith(".gguf"):
         return _load_gguf_unet(model_path)
@@ -242,7 +242,7 @@ def _load_diffusion_model_by_name(model_name, weight_dtype="default"):
     model_options = _build_model_options(weight_dtype)
     model = comfy.sd.load_diffusion_model(model_path, model_options=model_options)
     if model is None:
-        raise RuntimeError(f"[WorkflowModelLoader] Could not load diffusion model: {model_name}")
+        raise RuntimeError(f"[RecipeModelLoader] Could not load diffusion model: {model_name}")
     return model
 
 
@@ -252,7 +252,7 @@ def _load_vae_by_name(vae_name):
     """
     vae_path = _resolve_path(vae_name, ["vae", "checkpoints"])
     if not vae_path:
-        raise FileNotFoundError(f"[WorkflowModelLoader] VAE not found: {vae_name}")
+        raise FileNotFoundError(f"[RecipeModelLoader] VAE not found: {vae_name}")
 
     sd = comfy.utils.load_torch_file(vae_path)
     return comfy.sd.VAE(sd=sd)
@@ -270,7 +270,7 @@ def _load_clip_by_names(clip_names, clip_type=""):
     for name in clip_names:
         clip_path = _resolve_path(name, ["text_encoders", "clip", "checkpoints"])
         if not clip_path:
-            raise FileNotFoundError(f"[WorkflowModelLoader] CLIP not found: {name}")
+            raise FileNotFoundError(f"[RecipeModelLoader] CLIP not found: {name}")
         clip_paths.append(clip_path)
 
     clip_type = (clip_type or "").strip().lower()
@@ -368,7 +368,7 @@ class WorkflowModelLoader:
             core_result = self._load_unet_mode(spec)
         else:
             raise ValueError(
-                f"[WorkflowModelLoader] Unsupported loader_type: {spec.get('loader_type')}"
+                f"[RecipeModelLoader] Unsupported loader_type: {spec.get('loader_type')}"
             )
 
         result = core_result

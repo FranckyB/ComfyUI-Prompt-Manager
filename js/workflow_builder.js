@@ -1173,7 +1173,7 @@ async function checkLoraAvailability(node) {
             updateLoras(node);
         }
     } catch (e) {
-        console.warn("[WorkflowBuilder] Error checking LoRA availability:", e);
+        console.warn("[RecipeBuilder] Error checking LoRA availability:", e);
     }
 }
 
@@ -1930,7 +1930,7 @@ function parseWorkflowData(jsonStr) {
             model_family: d.family || "",
         };
     } catch (e) {
-        console.warn("[WorkflowBuilder] Could not parse workflow_data:", e);
+        console.warn("[RecipeBuilder] Could not parse workflow_data:", e);
         return null;
     }
 }
@@ -2359,7 +2359,7 @@ app.registerExtension({
                                 }
                             }
                         } catch (e) {
-                            console.warn("[WorkflowBuilder] Failed to merge source builder override_data:", e);
+                            console.warn("[RecipeBuilder] Failed to merge source builder override_data:", e);
                         }
                     } else if (isContextSource) {
                         // Pull workflow_data from RecipeRelay output cache.
@@ -2484,7 +2484,7 @@ app.registerExtension({
                                 if (cachedFile === peFilename && cachedFolder === peSource) {
                                     extracted = cacheData.extracted;
                                 } else {
-                                    console.log("[WorkflowBuilder] Execution cache stale — file changed");
+                                    console.log("[RecipeBuilder] Execution cache stale — file changed");
                                 }
                             }
                         } catch { /* fall through */ }
@@ -2520,7 +2520,7 @@ app.registerExtension({
                                     return;
                                 }
                             } catch (e) {
-                                console.warn("[WorkflowBuilder] Preview refresh failed:", e);
+                                console.warn("[RecipeBuilder] Preview refresh failed:", e);
                             }
                         }
 
@@ -2627,7 +2627,7 @@ app.registerExtension({
                     node.setDirtyCanvas(true, true);
                     app.graph.setDirtyCanvas(true, true);
                 } catch (e) {
-                    console.error("[WorkflowBuilder] Update Workflow error:", e);
+                    console.error("[RecipeBuilder] Update Workflow error:", e);
                     _showError(node, "Failed to refresh workflow data from the connected source.");
                 } finally {
                     updateBtn.disabled = false;

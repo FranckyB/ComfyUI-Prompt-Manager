@@ -64,8 +64,8 @@ from ..py.lora_utils import resolve_lora_path, strip_lora_extension
 SAMPLERS   = comfy.samplers.KSampler.SAMPLERS
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS
 
-# Cache for last extracted info per WorkflowBuilder node (keyed by unique_id).
-# Used by another WorkflowBuilder's "Update Workflow" button for live pull.
+# Cache for last extracted info per RecipeBuilder node (keyed by unique_id).
+# Used by another RecipeBuilder's "Update Workflow" button for live pull.
 _last_workflow_builder_info = {}
 
 
@@ -533,7 +533,7 @@ async def api_process_extracted(request):
 
 @server.PromptServer.instance.routes.get("/workflow-builder/get-extracted-data")
 async def api_get_workflow_builder_extracted_data(request):
-    """Return the last extracted info cached by WorkflowBuilder after execution."""
+    """Return the last extracted info cached by RecipeBuilder after execution."""
     try:
         node_id = request.rel_url.query.get('node_id', '')
         if node_id:
@@ -662,8 +662,10 @@ class WorkflowBuilder:
             upstream_source = str(wf_data.get('_source', '')).strip().lower()
             manual_pull_sources = {
                 "promptextractor",
+                "recipeextractor",
                 "workflowextractor",
                 "promptmanageradvanced",
+                "recipemanager",
                 "workflowmanager",
             }
             if upstream_source in manual_pull_sources:
@@ -1012,7 +1014,7 @@ class WorkflowBuilder:
         # This ensures the JS UI is always populated, even if generation
         # fails (e.g. model not found).  The user can then edit settings
         # and re-queue.
-        wf_overrides = {'_source': 'WorkflowBuilder'}
+        wf_overrides = {'_source': 'RecipeBuilder'}
         if _allow_override('model'):
             for key in ('model_a', 'model_b', 'vae', 'clip_names', '_family'):
                 if key in overrides:
