@@ -13,11 +13,11 @@ from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_extractor import PromptExtractor
 from .nodes.prompt_extractor import WorkflowExtractor as RecipeExtractor
-from .nodes.workflow_builder import WorkflowBuilder as RecipeBuilder
-from .nodes.workflow_renderer import WorkflowRenderer as RecipeRenderer
-from .nodes.workflow_relay import WorkflowRelay as RecipeRelay
-from .nodes.workflow_model_loader import WorkflowModelLoader as RecipeModelLoader
-from .nodes.workflow_manager import WorkflowManager as RecipeManager
+from .nodes.recipe_builder import WorkflowBuilder as RecipeBuilder
+from .nodes.recipe_renderer import WorkflowRenderer as RecipeRenderer
+from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
+from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
+from .nodes.recipe_manager import WorkflowManager as RecipeManager
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":       ApplyLoraPlusPlus,

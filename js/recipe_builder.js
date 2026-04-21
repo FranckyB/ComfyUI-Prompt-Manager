@@ -1940,7 +1940,7 @@ function parseWorkflowData(jsonStr) {
 // --- Main extension ---
 // ============================================================
 app.registerExtension({
-    name: "WorkflowBuilder",
+    name: "RecipeBuilder",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "RecipeBuilder") return;

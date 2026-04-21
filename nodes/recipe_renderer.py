@@ -44,7 +44,7 @@ from ..py.lora_utils import resolve_lora_path
 
 # Reuse the robust GGUF loading helper used by RecipeModelLoader when available.
 try:
-    from .workflow_model_loader import _load_gguf_unet as _load_gguf_unet_shared
+    from .recipe_model_loader import _load_gguf_unet as _load_gguf_unet_shared
 except Exception:
     _load_gguf_unet_shared = None
 

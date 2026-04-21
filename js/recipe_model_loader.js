@@ -1,5 +1,5 @@
 /**
- * WorkflowModelLoader extension.
+ * RecipeModelLoader extension.
  * Shows color-coded loaded assets (Model/VAE/CLIP) from workflow_data.
  */
 
@@ -294,7 +294,7 @@ function _refreshInfoFromUpstream(node) {
 
     const inferred = _inferInfoFromWorkflowData(node, wf);
     if (!inferred) return false;
-    node._applyWorkflowModelLoaderInfo(inferred);
+    node._applyRecipeModelLoaderInfo(inferred);
     return true;
 }
 
@@ -316,7 +316,7 @@ function _defaultInfoFromWidgets(node) {
 }
 
 app.registerExtension({
-    name: "PromptManager.WorkflowModelLoader",
+    name: "PromptManager.RecipeModelLoader",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "RecipeModelLoader") return;
@@ -326,12 +326,12 @@ app.registerExtension({
             origOnExecuted?.apply(this, arguments);
             const info = message?.workflow_model_loader_info?.[0];
             if (!info) return;
-            this._applyWorkflowModelLoaderInfo(info);
+            this._applyRecipeModelLoaderInfo(info);
         };
 
-        nodeType.prototype._applyWorkflowModelLoaderInfo = function (info) {
+        nodeType.prototype._applyRecipeModelLoaderInfo = function (info) {
             const selected = _sanitizeChoice(info.model, MODEL_CHOICES, "model_a");
-            this._workflowModelLoaderInfo = {
+            this._recipeModelLoaderInfo = {
                 model: selected,
                 model_name: info.model_name || "",
                 loader_type: info.loader_type || "",
@@ -344,7 +344,7 @@ app.registerExtension({
                 uses_checkpoint_vae: !!info.uses_checkpoint_vae,
                 uses_checkpoint_clip: !!info.uses_checkpoint_clip,
             };
-            this._ensureWorkflowModelInfoWidget();
+            this._ensureRecipeModelInfoWidget();
             this.setDirtyCanvas(true, true);
         };
 
@@ -352,10 +352,10 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated?.apply(this, arguments);
             _restoreOrNormalizeWidgetState(this);
-            if (!this._workflowModelLoaderInfo) {
-                this._workflowModelLoaderInfo = _defaultInfoFromWidgets(this);
+            if (!this._recipeModelLoaderInfo) {
+                this._recipeModelLoaderInfo = _defaultInfoFromWidgets(this);
             }
-            this._ensureWorkflowModelInfoWidget();
+            this._ensureRecipeModelInfoWidget();
             _refreshInfoFromUpstream(this);
             this.setDirtyCanvas(true, true);
             return r;
@@ -387,8 +387,9 @@ app.registerExtension({
             this.properties = this.properties || {};
             this.properties.wfml_model = ws.model;
             this.properties.wfml_weight_dtype = ws.weight_dtype;
-            if (this._workflowModelLoaderInfo) {
-                o._workflowModelLoaderInfo = this._workflowModelLoaderInfo;
+            if (this._recipeModelLoaderInfo) {
+                o._recipeModelLoaderInfo = this._recipeModelLoaderInfo;
+                o._workflowModelLoaderInfo = this._recipeModelLoaderInfo;
             }
             if (o) {
                 o.properties = o.properties || {};
@@ -401,36 +402,36 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function (info) {
             origOnConfigure?.apply(this, arguments);
             _restoreOrNormalizeWidgetState(this);
-            const state = info?._workflowModelLoaderInfo;
+            const state = info?._recipeModelLoaderInfo || info?._workflowModelLoaderInfo;
             if (state) {
                 requestAnimationFrame(() => {
-                    this._applyWorkflowModelLoaderInfo(state);
+                    this._applyRecipeModelLoaderInfo(state);
                     _refreshInfoFromUpstream(this);
                 });
             } else {
                 requestAnimationFrame(() => {
-                    this._workflowModelLoaderInfo = _defaultInfoFromWidgets(this);
-                    this._ensureWorkflowModelInfoWidget();
+                    this._recipeModelLoaderInfo = _defaultInfoFromWidgets(this);
+                    this._ensureRecipeModelInfoWidget();
                     _refreshInfoFromUpstream(this);
                     this.setDirtyCanvas(true, true);
                 });
             }
         };
 
-        nodeType.prototype._ensureWorkflowModelInfoWidget = function () {
-            let widget = this.widgets?.find(w => w.name === "_workflow_model_loader_info");
+        nodeType.prototype._ensureRecipeModelInfoWidget = function () {
+            let widget = this.widgets?.find(w => w.name === "_recipe_model_loader_info");
             if (!widget) {
                 widget = {
-                    name: "_workflow_model_loader_info",
+                    name: "_recipe_model_loader_info",
                     type: "custom",
                     y: 0,
                     computeSize: () => {
-                        const rows = _buildRows(this._workflowModelLoaderInfo || {});
+                        const rows = _buildRows(this._recipeModelLoaderInfo || {});
                         const h = Math.max(26, (rows.length * 22) + 6);
                         return [0, h];
                     },
                     draw: function (ctx, node, widgetWidth, y) {
-                        const info = node._workflowModelLoaderInfo;
+                        const info = node._recipeModelLoaderInfo;
                         if (!info) return;
 
                         const rows = _buildRows(info);
