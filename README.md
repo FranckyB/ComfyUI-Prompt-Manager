@@ -15,6 +15,8 @@ ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, b
 - **LoRA workflow support**: Display and modify added Loras. When reusing Saved presets, values can still be changed.
 - **Model support**: Recipe Renderer supports: Flux 1/2, Ernie, SDXL, Wan, Qwen, Z-Image, Wan Image, Wan Video (I2V/T2V)
 - **Lora Preview**: When [Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager) is installed, LoRAs can be previewed on hover.
+- **Prompt Browser**: Includes a Browser to easily find and select your prompts or Recipes.
+- **Advance Image Loader**:  Extractors can serve as advanced Image loaders, loading from Input or Ouput.
 ---
 
 <div align="center">
@@ -33,8 +35,18 @@ ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, b
 </div>
 
 <div align="center">
-  <figcaption>Complete Recipe creation, with Model, Lora and Prompt all ready to be reused</figcaption>
-  <img src="docs/images/workflow_builder.jpg" alt="Recipe Builder">
+  <figcaption>Recipe creation, with Model, Lora and Prompt, ready to be reused and modified</figcaption>
+  <img src="docs/images/workflow_builder.png" alt="Recipe Builder">
+</div>
+
+<div align="center">
+  <figcaption>Easily find saved Prompts & Recipe using the Built-in File Browser</figcaption>
+  <img src="docs/images/prompt_selector.png" alt="Recipe Builder">
+</div>
+
+<div align="center">
+  <figcaption>Use Extractor Nodes as an Image Loader, allowing browsing from Input and Output folder.</figcaption>
+  <img src="docs/images/adv_file_loading.png" alt="Recipe Builder">
 </div>
 
 ## v2.0 Introduces The Recipe Toolset

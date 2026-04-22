@@ -7578,7 +7578,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData) {
     workflow[rendererId] = {
         class_type: "RecipeRenderer",
         inputs: {
-            workflow_data: wfForThumb,
+            recipe_data: wfForThumb,
             clear_cache_after_render: false,
         }
     };
