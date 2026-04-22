@@ -3462,12 +3462,13 @@ function refreshPmaPromptGhosting(node) {
     const textWidget = node.widgets?.find((w) => w.name === "text");
     const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
     const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
-    if (!textWidget || !useExternalWidget || !useWorkflowWidget) return;
+    if (!textWidget || !useExternalWidget) return;
 
     const promptInputConnection = node.inputs?.find((inp) => inp.name === "prompt");
     const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
     const workflowConnection = node.inputs?.find((inp) => inp.name === "recipe_data");
     const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
+    const useWorkflow = useWorkflowWidget?.value === true && isWorkflowConnected;
 
     if (useExternalWidget.value && isLlmConnected) {
         textWidget.disabled = true;
@@ -3475,7 +3476,7 @@ function refreshPmaPromptGhosting(node) {
             textWidget.inputEl.style.pointerEvents = "auto";
             textWidget.inputEl.readOnly = true;
         }
-    } else if (useWorkflowWidget.value && isWorkflowConnected) {
+    } else if (useWorkflow) {
         textWidget.disabled = true;
         if (textWidget.inputEl) {
             textWidget.inputEl.style.pointerEvents = "auto";
