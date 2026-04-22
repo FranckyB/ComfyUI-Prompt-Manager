@@ -1,7 +1,7 @@
 # ComfyUI Prompt Manager
 ## A comprehensive prompt and recipe toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
 
-ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, built for both creating recipes from scratch and extracting reusable setups from images, videos, and workflows. It includes local LLM-powered prompt generation (llama.cpp or Ollama) with automatic download of Qwen3.5 models, LoRA stack tooling, and end-to-end Recipe nodes to build, edit, render, save, and reuse repeatable generation pipelines.
+ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, built for creating recipes from scratch or by extracting core workflow elements from Images and Videos with embedded workflows. It includes local LLM-powered prompt generation (llama.cpp or Ollama) with automatic download of Qwen3.5 models, LoRA stack tooling, and end-to-end Recipe nodes to build, edit, render, save, and reuse repeatable generation pipelines. It can extract core metadata from media generated in ComfyUI, A1111, and Forge, supporting Wan Workflows with dual model/stack support.
 
 > **Naming Update (v2.1):**
 > We have shifted from using the term "Workflow" to "Recipe" for this toolset.
@@ -35,7 +35,7 @@ ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, b
 </div>
 
 <div align="center">
-  <figcaption>Recipe creation, with Model, Lora and Prompt, ready to be reused and modified</figcaption>
+  <figcaption>Recipe extraction and modifcation (Adding a Style Lora)</figcaption>
   <img src="docs/images/workflow_builder.png" alt="Recipe Builder">
 </div>
 
