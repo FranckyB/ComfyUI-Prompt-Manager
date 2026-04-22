@@ -1051,9 +1051,17 @@ function filterPromptDropdown(node) {
 
         const currentCategory = categoryWidget.value;
         const promptNames = getPromptNamesForCategory(node, currentCategory, { hideNSFW, workflowOnly });
-        promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
-        if (!promptNames.includes(promptWidget.value)) {
-            promptWidget.value = promptNames[0] || "";
+
+        // Preserve explicit empty selection (New Prompt) across tab-switch restore.
+        const wantsEmptySelection = String(promptWidget.value || "") === "";
+        let promptOptions = promptNames.length > 0 ? [...promptNames] : [""];
+        if (wantsEmptySelection && !promptOptions.includes("")) {
+            promptOptions = ["", ...promptOptions];
+        }
+
+        promptWidget.options.values = promptOptions;
+        if (!promptOptions.includes(promptWidget.value)) {
+            promptWidget.value = wantsEmptySelection ? "" : (promptOptions[0] || "");
         }
     }
 }
