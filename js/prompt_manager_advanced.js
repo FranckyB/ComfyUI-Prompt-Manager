@@ -2924,6 +2924,11 @@ function addButtonBar(node) {
         // Clear the last saved state since this is a brand new prompt
         node.lastSavedState = null;
 
+        // Force next backend update to be applied even when connected inputs
+        // produce the same payload as before this New Prompt reset.
+        node._lastExecutionUpdateSig = null;
+        node._lastLiveWorkflowPickupSig = null;
+
         node.serialize_widgets = true;
         app.graph.setDirtyCanvas(true, true);
     });
