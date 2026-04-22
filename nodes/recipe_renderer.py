@@ -1,7 +1,7 @@
 """
 Workflow Renderer — render-only node.
 
-Accepts WORKFLOW_DATA (JSON string from Workflow Builder or PromptExtractor),
+Accepts RECIPE_DATA (JSON string from Recipe Builder or PromptExtractor),
 loads models, samples, decodes, and outputs IMAGE + LATENT.
 
 No UI, no extraction — purely a render engine.
@@ -42,13 +42,13 @@ from ..py.workflow_extraction_utils import (
 )
 from ..py.lora_utils import resolve_lora_path
 
-# Reuse the robust GGUF loading helper used by WorkflowModelLoader when available.
+# Reuse the robust GGUF loading helper used by RecipeModelLoader when available.
 try:
-    from .workflow_model_loader import _load_gguf_unet as _load_gguf_unet_shared
+    from .recipe_model_loader import _load_gguf_unet as _load_gguf_unet_shared
 except Exception:
     _load_gguf_unet_shared = None
 
-# Keep renderer fallback sampler defaults aligned with Workflow Builder family defaults.
+# Keep renderer fallback sampler defaults aligned with Recipe Builder family defaults.
 _FAMILY_SAMPLER_DEFAULTS = {
     "ernie": {"steps_a": 4, "cfg": 1.0, "sampler": "euler_ancestral", "scheduler": "beta"},
     "sdxl": {"steps_a": 20, "cfg": 5.0, "sampler": "dpmpp_2m_sde", "scheduler": "karras"},
@@ -70,7 +70,7 @@ class WorkflowRenderer:
     """
     Render-only generation node.
 
-    Takes WORKFLOW_DATA (from Workflow Builder or PromptExtractor),
+    Takes RECIPE_DATA (from Workflow Builder or PromptExtractor),
     loads models, applies LoRAs, samples, decodes.
     Outputs IMAGE + LATENT.
     """
@@ -81,13 +81,13 @@ class WorkflowRenderer:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "workflow_data": ("WORKFLOW_DATA", {
+                "recipe_data": ("RECIPE_DATA", {
                     "forceInput": True,
-                    "tooltip": "Connect workflow_data from Workflow Builder or PromptExtractor",
+                    "tooltip": "Connect recipe_data from Recipe Builder or PromptExtractor",
                 }),
                 "clear_cache_after_render": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Clear WorkflowRenderer model cache and request memory cleanup after rendering completes.",
+                    "tooltip": "Clear Renderer model cache and request memory cleanup after rendering completes.",
                 }),
             },
             "optional": {
@@ -100,26 +100,26 @@ class WorkflowRenderer:
             },
         }
 
-    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE", "LATENT")
-    RETURN_NAMES = ("workflow_data", "output_image", "output_latent")
+    RETURN_TYPES = ("RECIPE_DATA", "IMAGE", "LATENT")
+    RETURN_NAMES = ("recipe_data", "output_image", "output_latent")
     FUNCTION = "execute"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = False
     DESCRIPTION = (
-        "Render-only node. Accepts workflow_data, loads models, samples, "
-        "and decodes. Outputs IMAGE + LATENT + WORKFLOW_DATA "
+        "Render-only node. Accepts recipe_data, loads models, samples, "
+        "and decodes. Outputs IMAGE + LATENT + RECIPE_DATA "
         "(with MODEL/CLIP/VAE passthrough)."
     )
 
     @classmethod
-    def IS_CHANGED(cls, workflow_data, source_image=None, **kwargs):
+    def IS_CHANGED(cls, recipe_data, source_image=None, **kwargs):
         """Return a stable fingerprint so ComfyUI skips re-execution when nothing changed."""
         import hashlib, json as _json, time
         h = hashlib.sha256()
-        if isinstance(workflow_data, dict):
-            h.update(_json.dumps(workflow_data, sort_keys=True, default=str).encode())
-        elif isinstance(workflow_data, str):
-            h.update(workflow_data.encode())
+        if isinstance(recipe_data, dict):
+            h.update(_json.dumps(recipe_data, sort_keys=True, default=str).encode())
+        elif isinstance(recipe_data, str):
+            h.update(recipe_data.encode())
         clear_cache_after_render = bool(kwargs.get("clear_cache_after_render", False))
         h.update(str(clear_cache_after_render).encode())
         if source_image is not None:
@@ -138,12 +138,12 @@ class WorkflowRenderer:
         _class_vae_cache.clear()
         cleared_clips = len(_class_clip_cache)
         _class_clip_cache.clear()
-        print(f"[WorkflowRenderer] Cleared caches (models={cleared}, vaes={cleared_vaes}, clips={cleared_clips})")
+        print(f"[RecipeRenderer] Cleared caches (models={cleared}, vaes={cleared_vaes}, clips={cleared_clips})")
 
         try:
             comfy.model_management.soft_empty_cache()
         except Exception as e:
-            print(f"[WorkflowRenderer] Cache cleanup call failed: {e}")
+            print(f"[RecipeRenderer] Cache cleanup call failed: {e}")
 
         try:
             import gc
@@ -155,9 +155,10 @@ class WorkflowRenderer:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception as e:
-            print(f"[WorkflowRenderer] CUDA cache clear failed: {e}")
+            print(f"[RecipeRenderer] CUDA cache clear failed: {e}")
 
-    def execute(self, workflow_data, clear_cache_after_render=False, source_image=None, unique_id=None):
+    def execute(self, recipe_data, clear_cache_after_render=False, source_image=None, unique_id=None):
+        workflow_data = recipe_data
 
         # ── Parse workflow_data ───────────────────────────────────────────
         if isinstance(workflow_data, dict):
@@ -166,9 +167,9 @@ class WorkflowRenderer:
             try:
                 wf = json.loads(workflow_data)
             except (json.JSONDecodeError, TypeError) as e:
-                raise ValueError(f"[WorkflowRenderer] Invalid workflow_data: {e}")
+                raise ValueError(f"[RecipeRenderer] Invalid workflow_data: {e}")
         else:
-            raise ValueError(f"[WorkflowRenderer] Invalid workflow_data type: {type(workflow_data)}")
+            raise ValueError(f"[RecipeRenderer] Invalid workflow_data type: {type(workflow_data)}")
 
         wf_out = dict(wf)
         wf_sampler = wf.get("sampler", {})
@@ -251,7 +252,7 @@ class WorkflowRenderer:
                             break
                     if not preferred_ernie:
                         raise ValueError(
-                            "[WorkflowRenderer] Ernie requires the text encoder "
+                            "[RecipeRenderer] Ernie requires the text encoder "
                             "'ministral-3-3b.safetensors'. Install/select that encoder "
                             "and retry."
                         )
@@ -321,7 +322,7 @@ class WorkflowRenderer:
         if family_key not in ("wan_video_t2v", "wan_video_i2v"):
             model_name_b = None
 
-        print(f"[WorkflowRenderer] Family: {get_family_label(family_key)} "
+        print(f"[RecipeRenderer] Family: {get_family_label(family_key)} "
               f"(strategy={strategy}), model_a={model_name_a}, "
               f"model_b={model_name_b or '—'}")
 
@@ -350,7 +351,7 @@ class WorkflowRenderer:
                 compat_check = get_compatible_families(family_key)
                 resolved_family = get_model_family(resolved_a)
                 if resolved_family is not None and resolved_family not in compat_check:
-                    print(f"[WorkflowRenderer] Resolved model {resolved_a} is family "
+                    print(f"[RecipeRenderer] Resolved model {resolved_a} is family "
                           f"{resolved_family}, not compatible with {family_key} — rejecting")
                     resolved_a, folder_a = None, None
             if resolved_a is None:
@@ -371,7 +372,7 @@ class WorkflowRenderer:
                 if fallbacks:
                     model_name_a = sorted(fallbacks)[0]
                     resolved_a, folder_a = resolve_model_name(model_name_a)
-                    print(f"[WorkflowRenderer] Using fallback model: {model_name_a}")
+                    print(f"[RecipeRenderer] Using fallback model: {model_name_a}")
                 else:
                     raise FileNotFoundError(
                         f"Model A not found and no fallback for family {family_key}: {model_name_a}"
@@ -380,7 +381,7 @@ class WorkflowRenderer:
             full_path_a = folder_paths.get_full_path(folder_a, resolved_a)
             _cache_key_a = (str(unique_id), full_path_a, family_key)
             if _cache_key_a not in _cache:
-                print(f"[WorkflowRenderer] Loading model: {resolved_a}")
+                print(f"[RecipeRenderer] Loading model: {resolved_a}")
                 _cache[_cache_key_a] = _load_model_from_path(resolved_a, folder_a, full_path_a, family_is_checkpoint=_family_is_ckpt)
             model_a, clip_a, vae_a = _cache[_cache_key_a]
         has_both_stacks = bool(loras_a) and bool(loras_b)
@@ -440,7 +441,7 @@ class WorkflowRenderer:
         unsupported = ("ltxv",)
         if family_key in unsupported:
             raise ValueError(
-                f"[WorkflowRenderer] Family '{family_key}' is not yet supported. "
+                f"[RecipeRenderer] Family '{family_key}' is not yet supported. "
                 f"Unsupported families: {', '.join(unsupported)}"
             )
 
@@ -477,7 +478,7 @@ class WorkflowRenderer:
                     full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
                     _cache_key_b = (str(unique_id), full_path_b, family_key + "_b")
                     if _cache_key_b not in _cache:
-                        print(f"[WorkflowRenderer] Loading model B: {resolved_b}")
+                        print(f"[RecipeRenderer] Loading model B: {resolved_b}")
                         _cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b, family_is_checkpoint=_family_is_ckpt)
                     model_b_obj, _, _ = _cache[_cache_key_b]
 
@@ -516,7 +517,7 @@ class WorkflowRenderer:
 
         else:
             raise ValueError(
-                f"[WorkflowRenderer] Unsupported family '{family_key}'. "
+                f"[RecipeRenderer] Unsupported family '{family_key}'. "
                 f"No render function available."
             )
 
@@ -528,7 +529,7 @@ class WorkflowRenderer:
             out_w = int(decoded.shape[2])
             if family_key in ("flux1", "flux2") and out_w == width * 2 and out_h == height * 2:
                 print(
-                    f"[WorkflowRenderer] Flux decode size {out_w}x{out_h} is 2x requested "
+                    f"[RecipeRenderer] Flux decode size {out_w}x{out_h} is 2x requested "
                     f"{width}x{height}; resizing output to requested resolution."
                 )
                 decoded_nchw = decoded.permute(0, 3, 1, 2)
@@ -579,14 +580,14 @@ def _encode_text_conditioning(clip, positive_prompt, negative_prompt):
         tokens_pos = clip.tokenize(str(positive_prompt or ""))
         cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
     except Exception as e:
-        print(f"[WorkflowRenderer] Failed to encode positive conditioning: {e}")
+        print(f"[RecipeRenderer] Failed to encode positive conditioning: {e}")
         cond_pos = None
 
     try:
         tokens_neg = clip.tokenize(str(negative_prompt or ""))
         cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
     except Exception as e:
-        print(f"[WorkflowRenderer] Failed to encode negative conditioning: {e}")
+        print(f"[RecipeRenderer] Failed to encode negative conditioning: {e}")
         cond_neg = None
 
     return cond_pos, cond_neg
@@ -618,25 +619,25 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path, famil
     model = clip = vae = None
 
     if is_gguf:
-        print(f"[WorkflowRenderer] Loading GGUF model: {resolved_path}")
+        print(f"[RecipeRenderer] Loading GGUF model: {resolved_path}")
         if _load_gguf_unet_shared is not None:
             model = _load_gguf_unet_shared(full_model_path)
         elif GGUF_SUPPORT and _load_gguf_unet:
             model = _load_gguf_unet(full_model_path)
         else:
             raise RuntimeError(
-                "[WorkflowRenderer] GGUF model selected but no GGUF loader is available. "
+                "[RecipeRenderer] GGUF model selected but no GGUF loader is available. "
                 "Install/enable ComfyUI-GGUF (UnetLoaderGGUF)."
             )
     elif is_checkpoint:
-        print(f"[WorkflowRenderer] Loading checkpoint: {resolved_path}")
+        print(f"[RecipeRenderer] Loading checkpoint: {resolved_path}")
         out   = comfy.sd.load_checkpoint_guess_config(
             full_model_path, output_vae=True, output_clip=True,
             embedding_directory=folder_paths.get_folder_paths("embeddings"),
         )
         model, clip, vae = out[0], out[1], out[2]
     else:
-        print(f"[WorkflowRenderer] Loading diffusion model: {resolved_path}")
+        print(f"[RecipeRenderer] Loading diffusion model: {resolved_path}")
         # ComfyUI's load_diffusion_model internally calls load_torch_file
         # which always uses weights_only=True in PyTorch >= 2.6. Some model
         # formats (e.g. Klein .pt/.bin) contain non-standard objects that
@@ -647,14 +648,14 @@ def _load_model_from_path(resolved_path, resolved_folder, full_model_path, famil
             model = comfy.sd.load_diffusion_model(full_model_path)
         except Exception as e:
             if 'weights_only' in str(e).lower() or 'unpickling' in str(e).lower() or 'unsupported operand' in str(e).lower():
-                print(f"[WorkflowRenderer] weights_only load failed, retrying with weights_only=False: {e}")
+                print(f"[RecipeRenderer] weights_only load failed, retrying with weights_only=False: {e}")
                 pl_sd = torch.load(full_model_path, map_location='cpu', weights_only=False)
                 sd = pl_sd.get('state_dict', pl_sd)
                 if hasattr(comfy.sd, 'load_diffusion_model_state_dict'):
                     model = comfy.sd.load_diffusion_model_state_dict(sd)
                 else:
                     raise RuntimeError(
-                        f"[WorkflowRenderer] Cannot load model '{resolved_path}': "
+                        f"[RecipeRenderer] Cannot load model '{resolved_path}': "
                         f"weights_only=False is needed but load_diffusion_model_state_dict "
                         f"is not available in this ComfyUI version. Update ComfyUI."
                     ) from e
@@ -676,7 +677,7 @@ def _load_vae(vae_name, existing_vae=None):
             cached_vae = _class_vae_cache.get(cache_key)
             if cached_vae is not None:
                 return cached_vae
-            print(f"[WorkflowRenderer] Loading VAE: {vae_name}")
+            print(f"[RecipeRenderer] Loading VAE: {vae_name}")
             sd, metadata = comfy.utils.load_torch_file(vae_path, return_metadata=True)
             v = comfy.sd.VAE(sd=sd, metadata=metadata)
             v.throw_exception_if_invalid()
@@ -722,7 +723,7 @@ def _load_clip(clip_info, overrides, existing_clip=None):
     else:
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
 
-    print(f"[WorkflowRenderer] Loading CLIP: {clip_names}")
+    print(f"[RecipeRenderer] Loading CLIP: {clip_names}")
     cache_key = (tuple(os.path.realpath(p) for p in valid_paths), str(clip_type))
     cached_clip = _class_clip_cache.get(cache_key)
     if cached_clip is not None:
@@ -761,7 +762,7 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
         if not found:
             continue
 
-        print(f"[WorkflowRenderer] Applying LoRA: {lora_name} "
+        print(f"[RecipeRenderer] Applying LoRA: {lora_name} "
               f"(model={model_strength:.2f}, clip={clip_strength:.2f})")
         lora_data = comfy.utils.load_torch_file(lora_path, safe_load=True)
         model, clip = comfy.sd.load_lora_for_models(model, clip, lora_data, model_strength, clip_strength)
@@ -866,7 +867,7 @@ def _build_denoise_latent_from_image(vae, image, family_key):
         else:
             encoded = vae.encode(image_rgb)
     except Exception as e:
-        print(f"[WorkflowRenderer] Failed to VAE-encode IMAGE for denoise latent: {e}")
+        print(f"[RecipeRenderer] Failed to VAE-encode IMAGE for denoise latent: {e}")
         return None
 
     if not isinstance(encoded, torch.Tensor):

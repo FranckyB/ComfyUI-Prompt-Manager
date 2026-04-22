@@ -4,7 +4,7 @@ Shared LoRA resolution utilities for ComfyUI-Prompt-Manager.
 Provides fuzzy matching logic for finding LoRA files on disk, handling
 renamed LoRAs, WAN-related tokens, and partial name matches.
 
-Used by: PromptManagerAdvanced, PromptExtractor, WorkflowBuilder, WorkflowRenderer.
+Used by: PromptManagerAdvanced, PromptExtractor, RecipeBuilder, RecipeRenderer.
 """
 import os
 import re

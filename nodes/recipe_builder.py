@@ -1,7 +1,7 @@
 """
 ComfyUI Workflow Builder
 Extracts ALL generation parameters from an image/video, provides a full UI
-for editing them, and outputs WORKFLOW_DATA (JSON) for the Workflow Renderer
+for editing them, and outputs RECIPE_DATA (JSON) for the Workflow Renderer
 render node.
 
 Part of ComfyUI-Prompt-Manager — shares extraction logic with PromptExtractor.
@@ -64,8 +64,8 @@ from ..py.lora_utils import resolve_lora_path, strip_lora_extension
 SAMPLERS   = comfy.samplers.KSampler.SAMPLERS
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS
 
-# Cache for last extracted info per WorkflowBuilder node (keyed by unique_id).
-# Used by another WorkflowBuilder's "Update Workflow" button for live pull.
+# Cache for last extracted info per RecipeBuilder node (keyed by unique_id).
+# Used by another RecipeBuilder's "Update Workflow" button for live pull.
 _last_workflow_builder_info = {}
 
 
@@ -283,7 +283,7 @@ async def api_video_frame(request):
 
         return server.web.Response(status=500)
     except Exception as e:
-        print(f"[WorkflowBuilder] video-frame API error: {e}")
+        print(f"[RecipeBuilder] video-frame API error: {e}")
         return server.web.Response(status=500)
 
 
@@ -521,19 +521,19 @@ async def api_process_extracted(request):
             'lora_availability':  lora_availability,
         }
 
-        print(f"[WorkflowBuilder] process-extracted: family={family_key}, "
+        print(f"[RecipeBuilder] process-extracted: family={family_key}, "
               f"model_a={model_name_a}, vae={vae.get('name', '')}, "
               f"loras={len(extracted.get('loras_a', []))}+{len(extracted.get('loras_b', []))}")
         return server.web.json_response({"extracted": ui_info})
     except Exception as e:
-        print(f"[WorkflowBuilder] process-extracted error: {e}")
+        print(f"[RecipeBuilder] process-extracted error: {e}")
         traceback.print_exc()
         return server.web.json_response({"error": str(e)}, status=500)
 
 
 @server.PromptServer.instance.routes.get("/workflow-builder/get-extracted-data")
 async def api_get_workflow_builder_extracted_data(request):
-    """Return the last extracted info cached by WorkflowBuilder after execution."""
+    """Return the last extracted info cached by RecipeBuilder after execution."""
     try:
         node_id = request.rel_url.query.get('node_id', '')
         if node_id:
@@ -543,13 +543,13 @@ async def api_get_workflow_builder_extracted_data(request):
             return server.web.json_response({
                 "extracted": None,
                 "node_id": node_id,
-                "error": "No cached data for this node. Execute WorkflowBuilder first.",
+                "error": "No cached data for this node. Execute RecipeBuilder first.",
             })
 
         available = {nid: bool(d) for nid, d in _last_workflow_builder_info.items()}
         return server.web.json_response({"available": available})
     except Exception as e:
-        print(f"[WorkflowBuilder] Error in get-extracted-data: {e}")
+        print(f"[RecipeBuilder] Error in get-extracted-data: {e}")
         return server.web.json_response({"extracted": None, "error": str(e)}, status=500)
 
 
@@ -559,11 +559,11 @@ class WorkflowBuilder:
     """
     Workflow Builder — UI and extraction node.
 
-    Can run standalone with manual settings, or accept workflow_data (from
+    Can run standalone with manual settings, or accept recipe_data (from
     PromptExtractor) and/or lora_stack inputs to pre-fill all parameters.
 
     Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
-    Outputs WORKFLOW_DATA (JSON string) for the Workflow Renderer render node.
+    Outputs RECIPE_DATA (JSON string) for the Workflow Renderer render node.
     """
 
     # Class-level cache so models persist across executions.
@@ -584,8 +584,8 @@ class WorkflowBuilder:
             "required": {},
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
-                "workflow_data": ("WORKFLOW_DATA", {
-                    "tooltip": "Optional workflow_data input for prefill/update.",
+                "recipe_data": ("RECIPE_DATA", {
+                    "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
                 "pos_prompt": ("STRING", {
                     "forceInput": True,
@@ -620,18 +620,18 @@ class WorkflowBuilder:
             },
         }
 
-    RETURN_TYPES  = ("WORKFLOW_DATA",)
-    RETURN_NAMES  = ("workflow_data",)
+    RETURN_TYPES  = ("RECIPE_DATA",)
+    RETURN_NAMES  = ("recipe_data",)
     FUNCTION      = "execute"
     CATEGORY      = "Prompt Manager"
     OUTPUT_NODE   = True
     DESCRIPTION   = (
         "Workflow Builder. Extracts parameters from images/workflows, provides "
-        "a full editing UI, and outputs workflow_data for the Workflow Renderer."
+        "a full editing UI, and outputs recipe_data for the Workflow Renderer."
     )
 
     def execute(self,
-                workflow_data=None,
+                recipe_data=None,
                 pos_prompt=None, neg_prompt=None,
                 seed_a=None, seed_b=None, denoise=None,
                 lora_stack_a=None, lora_stack_b=None,
@@ -639,24 +639,39 @@ class WorkflowBuilder:
                 unique_id=None, extra_pnginfo=None, prompt=None):
         """
         Main execution:
-          1. Parse workflow_data (if connected)
+          1. Parse recipe_data (if connected)
           2. Apply JS overrides
           3. Merge connected lora inputs (always)
-          4. Build workflow_data JSON
-          5. Return WORKFLOW_DATA
+          4. Build recipe_data JSON
+          5. Return RECIPE_DATA
         """
-        # ── Parse workflow_data input (if connected) ─────────────────────
+        # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
-        if workflow_data is not None:
-            if isinstance(workflow_data, dict):
-                wf_data = workflow_data
-            elif isinstance(workflow_data, str):
+        if recipe_data is not None:
+            if isinstance(recipe_data, dict):
+                wf_data = recipe_data
+            elif isinstance(recipe_data, str):
                 try:
-                    wf_data = json.loads(workflow_data)
+                    wf_data = json.loads(recipe_data)
                 except (json.JSONDecodeError, TypeError):
-                    print("[WorkflowBuilder] Warning: could not parse workflow_data")
+                    print("[RecipeBuilder] Warning: could not parse recipe_data")
 
-        # ── Build extracted dict from workflow_data or defaults ───────────
+        # Extractor/Manager sources should be pull-on-demand only via the
+        # Update Workflow button, not auto-applied on every execution.
+        if isinstance(wf_data, dict):
+            upstream_source = str(wf_data.get('_source', '')).strip().lower()
+            manual_pull_sources = {
+                "promptextractor",
+                "recipeextractor",
+                "workflowextractor",
+                "promptmanageradvanced",
+                "recipemanager",
+                "workflowmanager",
+            }
+            if upstream_source in manual_pull_sources:
+                wf_data = None
+
+        # ── Build extracted dict from recipe_data or defaults ───────────
         if wf_data:
             wf_sampler = wf_data.get('sampler', {})
             wf_res = wf_data.get('resolution', {})
@@ -824,7 +839,7 @@ class WorkflowBuilder:
         section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
         has_workflow_input = wf_data is not None
         upstream_source = str((wf_data or {}).get('_source', '')).strip().lower() if isinstance(wf_data, dict) else ""
-        # Sources that should keep WorkflowBuilder in manual-edit mode while connected.
+        # Sources that should keep RecipeBuilder in manual-edit mode while connected.
         # This includes extractors and manager nodes that users actively edit.
         manual_override_sources = {
             "promptextractor",
@@ -845,6 +860,51 @@ class WorkflowBuilder:
                 return bool(section_locks.get(section_name, False))
             # Standalone mode (no workflow_data): local UI overrides apply normally.
             return True
+
+        def _normalize_override_lora_list(raw_list):
+            out = []
+            if not isinstance(raw_list, list):
+                return out
+
+            for item in raw_list:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get('name', '')).strip()
+                if not name:
+                    continue
+
+                path = str(item.get('path', name)).strip() or name
+                try:
+                    model_strength = float(item.get('model_strength', item.get('strength', 1.0)))
+                except Exception:
+                    model_strength = 1.0
+                try:
+                    clip_strength = float(item.get('clip_strength', model_strength))
+                except Exception:
+                    clip_strength = model_strength
+
+                row = {
+                    'name': name,
+                    'path': path,
+                    'model_strength': model_strength,
+                    'clip_strength': clip_strength,
+                    'active': item.get('active', True) is not False,
+                }
+                if 'available' in item:
+                    row['available'] = item.get('available', True) is not False
+                if 'found' in item:
+                    row['found'] = item.get('found', True) is not False
+                out.append(row)
+
+            return out
+
+        # If JS persisted full LoRA stacks in override_data, treat those as
+        # authoritative UI state for this run.
+        if _allow_override('loras'):
+            if 'loras_a' in overrides:
+                extracted['loras_a'] = _normalize_override_lora_list(overrides.get('loras_a'))
+            if 'loras_b' in overrides:
+                extracted['loras_b'] = _normalize_override_lora_list(overrides.get('loras_b'))
 
         # ── Apply overrides ──────────────────────────────────────────────
         pos_text = extracted['positive_prompt']
@@ -940,7 +1000,7 @@ class WorkflowBuilder:
             family_key = "sdxl"
         strategy = get_family_sampler_strategy(family_key)
 
-        print(f"[WorkflowBuilder] Family: {get_family_label(family_key)} "
+        print(f"[RecipeBuilder] Family: {get_family_label(family_key)} "
               f"(strategy={strategy}), model_a={model_name_a}, "
               f"model_b={model_name_b or '—'}")
 
@@ -954,7 +1014,7 @@ class WorkflowBuilder:
         # This ensures the JS UI is always populated, even if generation
         # fails (e.g. model not found).  The user can then edit settings
         # and re-queue.
-        wf_overrides = {'_source': 'WorkflowBuilder'}
+        wf_overrides = {'_source': 'RecipeBuilder'}
         if _allow_override('model'):
             for key in ('model_a', 'model_b', 'vae', 'clip_names', '_family'):
                 if key in overrides:
@@ -1079,7 +1139,7 @@ class WorkflowBuilder:
                 fallback_vae = rec_vae or (vaes[0] if vaes else '')
                 if fallback_vae:
                     simplified_wf['vae'] = fallback_vae
-                    print(f"[WorkflowBuilder] VAE defaulted to: {fallback_vae}")
+                    print(f"[RecipeBuilder] VAE defaulted to: {fallback_vae}")
             clip_val = simplified_wf.get('clip')
             clip_is_placeholder = bool(clip_val) and all(
                 (not n) or str(n).startswith('(') for n in clip_val
@@ -1104,7 +1164,7 @@ class WorkflowBuilder:
                     simplified_wf['clip'] = selected
                     if clip_type_from_spec:
                         simplified_wf['clip_type'] = clip_type_from_spec
-                    print(f"[WorkflowBuilder] CLIP defaulted to: {selected}")
+                    print(f"[RecipeBuilder] CLIP defaulted to: {selected}")
         lora_availability = {}
         for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
             lora_name = lora.get('name', '')
@@ -1136,21 +1196,21 @@ class WorkflowBuilder:
             compat_models = list_compatible_models(model_name_a, family_override=family_key)
             if compat_models:
                 fallback = compat_models[0]
-                print(f"[WorkflowBuilder] Model A '{model_name_a}' not found, workflow_data will use: {fallback}")
+                print(f"[RecipeBuilder] Model A '{model_name_a}' not found, workflow_data will use: {fallback}")
                 simplified_wf['model_a'] = fallback
 
         if model_name_b and not model_b_found:
             compat_models = list_compatible_models(model_name_b, family_override=family_key)
             if compat_models:
                 fallback = compat_models[0]
-                print(f"[WorkflowBuilder] Model B '{model_name_b}' not found, workflow_data will use: {fallback}")
+                print(f"[RecipeBuilder] Model B '{model_name_b}' not found, workflow_data will use: {fallback}")
                 simplified_wf['model_b'] = fallback
 
         if not vae_found and vae_name_str:
             vaes, recommended = list_compatible_vaes(family_key, return_recommended=True)
             fallback_vae = recommended or (vaes[0] if vaes else '')
             if fallback_vae:
-                print(f"[WorkflowBuilder] VAE '{vae_name_str}' not found, workflow_data will use: {fallback_vae}")
+                print(f"[RecipeBuilder] VAE '{vae_name_str}' not found, workflow_data will use: {fallback_vae}")
                 simplified_wf['vae'] = fallback_vae
 
         # CLIP fallback: check each clip name, replace not-found ones
@@ -1164,7 +1224,7 @@ class WorkflowBuilder:
                     fixed_clips = []
                     for i, (name, path) in enumerate(zip(clip_names_out, clip_paths)):
                         if path is None and i < len(compatible_clips):
-                            print(f"[WorkflowBuilder] CLIP '{name}' not found, workflow_data will use: {compatible_clips[i]}")
+                            print(f"[RecipeBuilder] CLIP '{name}' not found, workflow_data will use: {compatible_clips[i]}")
                             fixed_clips.append(compatible_clips[i])
                         else:
                             fixed_clips.append(name)
@@ -1353,7 +1413,7 @@ class WorkflowBuilder:
         except Exception:
             pass  # Non-critical — JS will still get data from onExecuted
 
-        # Cache last extracted info so downstream WorkflowBuilder nodes can
+        # Cache last extracted info so downstream RecipeBuilder nodes can
         # pull this node's live state via /workflow-builder/get-extracted-data.
         if unique_id is not None:
             _last_workflow_builder_info[str(unique_id)] = ui_info.get('extracted', {})

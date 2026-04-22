@@ -1,5 +1,5 @@
 """
-Utility functions for WORKFLOW_DATA dicts.
+Utility functions for RECIPE_DATA dicts.
 Runtime object keys (MODEL_A, MODEL_B, CLIP, VAE, POSITIVE, NEGATIVE, etc.)
 store non-serializable ComfyUI objects and must be stripped before JSON
 serialization.

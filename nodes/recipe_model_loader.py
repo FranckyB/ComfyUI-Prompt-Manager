@@ -47,7 +47,7 @@ def _load_gguf_unet(unet_path):
     gguf = _get_gguf_module()
     if gguf is None:
         raise RuntimeError(
-            "[WorkflowModelLoader] This workflow requires ComfyUI-GGUF, "
+            "[RecipeModelLoader] This workflow requires ComfyUI-GGUF, "
             "but UnetLoaderGGUF is not available."
         )
 
@@ -67,7 +67,7 @@ def _load_gguf_unet(unet_path):
 
     if model is None:
         raise RuntimeError(
-            f"[WorkflowModelLoader] Could not detect model type of GGUF: {unet_path}"
+            f"[RecipeModelLoader] Could not detect model type of GGUF: {unet_path}"
         )
 
     model = gguf["GGUFModelPatcher"].clone(model)
@@ -108,6 +108,34 @@ def _build_model_options(weight_dtype):
     elif weight_dtype == "fp8_e5m2":
         model_options["dtype"] = torch.float8_e5m2
     return model_options
+
+
+def _is_runtime_object(value):
+    """True when value looks like a live Comfy runtime object, not workflow metadata."""
+    return value is not None and not isinstance(value, (str, int, float, bool, list, tuple, dict))
+
+
+def _extract_preloaded_assets(workflow_data, selected_model_slot):
+    """
+    Reuse already-loaded assets carried in workflow_data (e.g. from RecipeRenderer).
+    Returns (model, clip, vae) or None when passthrough is unavailable.
+    """
+    if not isinstance(workflow_data, dict):
+        return None
+
+    model_key = "MODEL_B" if selected_model_slot == "model_b" else "MODEL_A"
+    model = workflow_data.get(model_key)
+    clip = workflow_data.get("CLIP")
+    vae = workflow_data.get("VAE")
+
+    if not _is_runtime_object(model):
+        return None
+    if not _is_runtime_object(clip):
+        return None
+    if not _is_runtime_object(vae):
+        return None
+
+    return (model, clip, vae)
 
 
 def _resolve_path(name, folder_key_candidates):
@@ -186,7 +214,7 @@ def _load_checkpoint_by_name(ckpt_name):
     """
     ckpt_path = _resolve_path(ckpt_name, ["checkpoints", "diffusion_models", "unet"])
     if not ckpt_path:
-        raise FileNotFoundError(f"[WorkflowModelLoader] Checkpoint not found: {ckpt_name}")
+        raise FileNotFoundError(f"[RecipeModelLoader] Checkpoint not found: {ckpt_name}")
 
     out = comfy.sd.load_checkpoint_guess_config(
         ckpt_path,
@@ -206,7 +234,7 @@ def _load_diffusion_model_by_name(model_name, weight_dtype="default"):
     """
     model_path = _resolve_path(model_name, ["diffusion_models", "unet", "unet_gguf", "checkpoints"])
     if not model_path:
-        raise FileNotFoundError(f"[WorkflowModelLoader] Diffusion model not found: {model_name}")
+        raise FileNotFoundError(f"[RecipeModelLoader] Diffusion model not found: {model_name}")
 
     if model_name.lower().endswith(".gguf"):
         return _load_gguf_unet(model_path)
@@ -214,7 +242,7 @@ def _load_diffusion_model_by_name(model_name, weight_dtype="default"):
     model_options = _build_model_options(weight_dtype)
     model = comfy.sd.load_diffusion_model(model_path, model_options=model_options)
     if model is None:
-        raise RuntimeError(f"[WorkflowModelLoader] Could not load diffusion model: {model_name}")
+        raise RuntimeError(f"[RecipeModelLoader] Could not load diffusion model: {model_name}")
     return model
 
 
@@ -224,7 +252,7 @@ def _load_vae_by_name(vae_name):
     """
     vae_path = _resolve_path(vae_name, ["vae", "checkpoints"])
     if not vae_path:
-        raise FileNotFoundError(f"[WorkflowModelLoader] VAE not found: {vae_name}")
+        raise FileNotFoundError(f"[RecipeModelLoader] VAE not found: {vae_name}")
 
     sd = comfy.utils.load_torch_file(vae_path)
     return comfy.sd.VAE(sd=sd)
@@ -242,7 +270,7 @@ def _load_clip_by_names(clip_names, clip_type=""):
     for name in clip_names:
         clip_path = _resolve_path(name, ["text_encoders", "clip", "checkpoints"])
         if not clip_path:
-            raise FileNotFoundError(f"[WorkflowModelLoader] CLIP not found: {name}")
+            raise FileNotFoundError(f"[RecipeModelLoader] CLIP not found: {name}")
         clip_paths.append(clip_path)
 
     clip_type = (clip_type or "").strip().lower()
@@ -274,21 +302,21 @@ def _load_clip_by_names(clip_names, clip_type=""):
 
 class WorkflowModelLoader:
     CATEGORY = "Prompt Manager"
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING")
-    RETURN_NAMES = ("model", "clip", "vae", "model_name")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
+    RETURN_NAMES = ("model", "clip", "vae")
     FUNCTION = "get_model"
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "workflow_data": ("WORKFLOW_DATA", {
-                    "tooltip": "Workflow data containing model name strings to load.",
+                "recipe_data": ("RECIPE_DATA", {
+                    "tooltip": "Recipe data containing model name strings to load.",
                     "forceInput": True,
                 }),
                 "model": (["model_a", "model_b"], {
                     "default": "model_a",
-                    "tooltip": "Which model slot to load from workflow_data.",
+                    "tooltip": "Which model slot to load from recipe_data.",
                 }),
                 "weight_dtype": (WEIGHT_DTYPE_OPTIONS, {
                     "default": "default",
@@ -297,11 +325,15 @@ class WorkflowModelLoader:
             }
         }
 
-    def get_model(self, workflow_data, model="model_a", weight_dtype="default"):
-        spec = self._normalize_spec(workflow_data)
+    def get_model(self, recipe_data, model="model_a", weight_dtype="default"):
+        workflow_data = recipe_data
         selected_model_slot = model
         if selected_model_slot not in ("model_a", "model_b"):
             selected_model_slot = "model_a"
+
+        passthrough_assets = _extract_preloaded_assets(workflow_data, selected_model_slot)
+
+        spec = self._normalize_spec(workflow_data)
 
         self._model_key = selected_model_slot
         self._weight_dtype = weight_dtype
@@ -309,16 +341,38 @@ class WorkflowModelLoader:
         selected_name = spec.get(selected_model_slot, "")
         selected_display_name = _short_display_name(selected_name)
 
+        if passthrough_assets is not None:
+            model_obj, clip_obj, vae_obj = passthrough_assets
+            clip_names = spec.get("clip") or []
+            vae_name = spec.get("vae", "")
+            ui_info = {
+                "model": selected_model_slot,
+                "model_name": selected_display_name or _short_display_name(spec.get("model_name", "")),
+                "loader_type": loader_type or "passthrough",
+                "model_kind": "passthrough",
+                "vae_name": vae_name,
+                "clip_names": clip_names,
+                "status": "ok",
+                "error_message": "",
+                "missing_name": "",
+                "uses_checkpoint_vae": False,
+                "uses_checkpoint_clip": False,
+            }
+            return {
+                "ui": {"workflow_model_loader_info": [ui_info]},
+                "result": (model_obj, clip_obj, vae_obj),
+            }
+
         if loader_type == "checkpoint":
             core_result = self._load_checkpoint_mode(spec)
         elif loader_type in ("unet", "diffusion"):
             core_result = self._load_unet_mode(spec)
         else:
             raise ValueError(
-                f"[WorkflowModelLoader] Unsupported loader_type: {spec.get('loader_type')}"
+                f"[RecipeModelLoader] Unsupported loader_type: {spec.get('loader_type')}"
             )
 
-        result = (*core_result, selected_display_name)
+        result = core_result
 
         clip_names = spec.get("clip") or []
         vae_name = spec.get("vae", "")

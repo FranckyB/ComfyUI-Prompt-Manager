@@ -118,8 +118,8 @@ app.registerExtension({
     name: "PromptManagerAdvanced",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "WorkflowManager") {
-            const isWorkflowManagerNode = nodeData.name === "WorkflowManager";
+        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "RecipeManager") {
+            const isWorkflowManagerNode = nodeData.name === "RecipeManager";
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
@@ -212,7 +212,7 @@ app.registerExtension({
                         const inputLorasB = event.detail.input_loras_b || [];
                         const wfDataEvent = event.detail.workflow_data || null;
                         const useWorkflowEvent = event.detail.use_workflow_data === true;
-                        const workflowInput = this.inputs?.find((inp) => inp.name === "workflow_data");
+                        const workflowInput = this.inputs?.find((inp) => inp.name === "recipe_data");
                         const hasWorkflowInputConnected = workflowInput?.link != null;
                         const shouldIngestWorkflowExecution = useWorkflowEvent && !this._isWorkflowManager;
 
@@ -982,7 +982,7 @@ function hasWorkflowDataPayload(rawWorkflowData) {
 }
 
 function hasConnectedWorkflowInput(node) {
-    const wfInput = node?.inputs?.find((inp) => inp?.name === "workflow_data");
+    const wfInput = node?.inputs?.find((inp) => inp?.name === "recipe_data");
     return wfInput?.link != null;
 }
 
@@ -1830,7 +1830,7 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
             menu.remove();
             // Open CivitAI search in new tab
             const searchQuery = encodeURIComponent(loraName);
-            window.open(`https://civitai.com/search/models?sortBy=models_v9&query=${searchQuery}&modelType=LORA`, "_blank");
+            window.open(`https://civitai.red/search/models?sortBy=models_v9&query=${searchQuery}&modelType=LORA`, "_blank");
         });
         menu.appendChild(searchItem);
     }
@@ -3374,7 +3374,7 @@ async function applyLoraFoundState(loras) {
 }
 
 async function pullWorkflowIntoNode(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (!wfInput || wfInput.link == null) {
         await showInfo("Workflow Data", "No workflow_data is connected.");
         return;
@@ -3462,12 +3462,13 @@ function refreshPmaPromptGhosting(node) {
     const textWidget = node.widgets?.find((w) => w.name === "text");
     const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
     const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
-    if (!textWidget || !useExternalWidget || !useWorkflowWidget) return;
+    if (!textWidget || !useExternalWidget) return;
 
     const promptInputConnection = node.inputs?.find((inp) => inp.name === "prompt");
     const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
-    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "recipe_data");
     const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
+    const useWorkflow = useWorkflowWidget?.value === true && isWorkflowConnected;
 
     if (useExternalWidget.value && isLlmConnected) {
         textWidget.disabled = true;
@@ -3475,7 +3476,7 @@ function refreshPmaPromptGhosting(node) {
             textWidget.inputEl.style.pointerEvents = "auto";
             textWidget.inputEl.readOnly = true;
         }
-    } else if (useWorkflowWidget.value && isWorkflowConnected) {
+    } else if (useWorkflow) {
         textWidget.disabled = true;
         if (textWidget.inputEl) {
             textWidget.inputEl.style.pointerEvents = "auto";
@@ -3512,7 +3513,7 @@ function getWorkflowDataLiveSig(workflowData) {
 
 async function tryLiveWorkflowPickup(node, { force = false } = {}) {
     const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
-    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (!useWorkflowWidget?.value || workflowConnection?.link == null) return false;
 
     const wfData = (await resolveWorkflowDataForLive(node)) || resolveWorkflowDataForSave(node);
@@ -3554,7 +3555,7 @@ function setupWorkflowLivePickupHandler(node) {
     node._workflowLivePickupHandlerSetup = true;
 
     const getWorkflowInputLink = (n) => {
-        const wfInput = n.inputs?.find((inp) => inp.name === "workflow_data");
+        const wfInput = n.inputs?.find((inp) => inp.name === "recipe_data");
         return wfInput?.link ?? null;
     };
     node._lastWorkflowInputLink = getWorkflowInputLink(node);
@@ -3650,7 +3651,7 @@ function setupUseExternalToggleHandler(node) {
 
         // Also check use_workflow_data toggle
         const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
-        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const workflowConnection = node.inputs?.find(inp => inp.name === "recipe_data");
         const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
         const useWorkflow = useWorkflowWidget?.value && isWorkflowConnected;
 
@@ -3791,7 +3792,7 @@ function setupUseWorkflowToggleHandler(node) {
     const originalCallback = useWorkflowWidget.callback;
     useWorkflowWidget.callback = async function(value) {
         // Prevent turning on if workflow_data is not connected
-        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const workflowConnection = node.inputs?.find(inp => inp.name === "recipe_data");
         const isConnected = workflowConnection && workflowConnection.link != null;
 
         if (value && !isConnected) {
@@ -4231,7 +4232,7 @@ function buildWorkflowDataFromBuilderNode(builderNode) {
         : (ov.clip_names ? [ov.clip_names] : []);
 
     const workflowData = {
-        _source: "WorkflowBuilder",
+        _source: "RecipeBuilder",
         family: ov._family || "sdxl",
         model_a: ov.model_a || "",
         model_b: ov.model_b || "",
@@ -4305,21 +4306,21 @@ function buildWorkflowDataFromExtractorNode(extractorNode) {
 }
 
 function resolveWorkflowDataForSave(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (wfInput?.link != null) {
         const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
-        if (sourceClass === "WorkflowBuilder") {
+        if (sourceClass === "RecipeBuilder") {
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
             if (fromBuilder) return fromBuilder;
         }
 
-        if (sourceClass === "PromptExtractor" || sourceClass === "WorkflowExtractor") {
+        if (sourceClass === "PromptExtractor" || sourceClass === "RecipeExtractor") {
             const fromExtractor = buildWorkflowDataFromExtractorNode(upstream);
             if (fromExtractor) return fromExtractor;
         }
 
-        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
+        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
         if (wfOutIdx >= 0) {
             const out = upstream.outputs[wfOutIdx];
             const data = out?._data ?? out?.value ?? null;
@@ -4330,13 +4331,13 @@ function resolveWorkflowDataForSave(node) {
             }
         }
 
-        // Connected input but no fresh upstream workflow_data: for Workflow Manager,
+        // Connected input but no fresh upstream workflow_data: for Recipe Manager,
         // allow fallback to the latest live payload captured from execution updates.
         if (node?._isWorkflowManager && node.lastWorkflowData && typeof node.lastWorkflowData === "object") {
             return node.lastWorkflowData;
         }
 
-        // For non-WorkflowManager nodes, avoid saving stale local cache from
+        // For non-RecipeManager nodes, avoid saving stale local cache from
         // a previously selected prompt while connected.
         return null;
     }
@@ -4345,7 +4346,7 @@ function resolveWorkflowDataForSave(node) {
 }
 
 async function resolveWorkflowDataForLive(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (wfInput?.link == null) return null;
 
     const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
@@ -4354,11 +4355,11 @@ async function resolveWorkflowDataForLive(node) {
     const sourceClass = String(upstream?.comfyClass || upstream?.type || "");
     const sourceClassLower = sourceClass.toLowerCase();
 
-    if (sourceClass === "WorkflowBuilder") {
+    if (sourceClass === "RecipeBuilder") {
         return buildWorkflowDataFromBuilderNode(upstream);
     }
 
-    if (sourceClassLower === "promptextractor" || sourceClassLower === "workflowextractor") {
+    if (sourceClassLower === "promptextractor" || sourceClassLower === "recipeextractor") {
         const fromExtractorCache = buildWorkflowDataFromExtractorNode(upstream);
         if (fromExtractorCache) return fromExtractorCache;
 
@@ -4387,7 +4388,7 @@ async function resolveWorkflowDataForLive(node) {
         }
     }
 
-    const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
+    const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
     if (wfOutIdx >= 0) {
         const out = upstream.outputs[wfOutIdx];
         const data = out?._data ?? out?.value ?? null;
@@ -4435,7 +4436,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
 
         // Include workflow_data when available.
         // If use_workflow_data is enabled and workflow_data comes from a connected
-        // WorkflowBuilder, pull it directly from Builder UI state so saving works
+        // RecipeBuilder, pull it directly from Builder UI state so saving works
         // even before executing the graph.
         const workflowDataForSave = resolveWorkflowDataForSave(node);
         if (node?._isWorkflowManager && hasConnectedWorkflowInput(node) && !workflowDataForSave) {
@@ -4453,7 +4454,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
 
             const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasA, lorasB);
             if (node?._isWorkflowManager) {
-                liveWorkflowData._source = "WorkflowManager";
+                liveWorkflowData._source = "RecipeManager";
             }
             node.lastWorkflowData = liveWorkflowData;
             syncSavedWorkflowDataWidget(node);
@@ -7236,7 +7237,7 @@ async function buildRendererFallbackWorkflowData(promptText, promptData, renderS
             normalized = processData.extracted;
         }
     } catch (e) {
-        console.warn("[ThumbnailGen] Failed to normalize fallback workflow_data via WorkflowBuilder:", e);
+        console.warn("[ThumbnailGen] Failed to normalize fallback workflow_data via RecipeBuilder:", e);
     }
 
     const clipNames = Array.isArray(normalized?.clip?.names)
@@ -7384,7 +7385,7 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
     }
 
     if (!families.length) {
-        await showInfo("No Families", "No model families were found for Workflow Renderer.");
+        await showInfo("No Families", "No model families were found for Recipe Renderer.");
         return null;
     }
 
@@ -7557,7 +7558,7 @@ async function ensureThumbnailRenderSelection({ force = false } = {}) {
 }
 
 /**
- * Build and queue a thumbnail generation workflow using WorkflowRenderer.
+ * Build and queue a thumbnail generation workflow using RecipeRenderer.
  * Falls back to the basic thumbnail workflow when this path cannot run.
  * @param {Object} workflowData - Saved workflow_data payload
  * @returns {Promise<string|null>} Base64 thumbnail data URL or null
@@ -7575,7 +7576,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData) {
 
     const rendererId = String(nodeId++);
     workflow[rendererId] = {
-        class_type: "WorkflowRenderer",
+        class_type: "RecipeRenderer",
         inputs: {
             workflow_data: wfForThumb,
             clear_cache_after_render: false,
@@ -7721,7 +7722,7 @@ async function fetchThumbnailImage(filename, subfolder, type) {
 
 /**
  * Main entry point: generate a thumbnail for a prompt
- * Uses WorkflowRenderer from saved workflow_data when available, otherwise
+ * Uses RecipeRenderer from saved workflow_data when available, otherwise
  * builds a renderer-compatible workflow_data payload from prompt + selected model.
  */
 async function generateThumbnailForPrompt(node, category, promptName, onUpdate, options = {}) {
@@ -7757,7 +7758,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
     try {
         let thumbnail = null;
 
-        // Preferred path: render from saved workflow_data using WorkflowRenderer.
+        // Preferred path: render from saved workflow_data using RecipeRenderer.
         const rawWorkflowData = promptData.workflow_data;
         let parsedWorkflowData = null;
         if (rawWorkflowData && typeof rawWorkflowData === "object") {
@@ -7777,7 +7778,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
             try {
                 thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData);
             } catch (e) {
-                console.warn("[ThumbnailGen] WorkflowRenderer thumbnail path failed, falling back:", e);
+                console.warn("[ThumbnailGen] RecipeRenderer thumbnail path failed, falling back:", e);
                 thumbnail = null;
             }
         }

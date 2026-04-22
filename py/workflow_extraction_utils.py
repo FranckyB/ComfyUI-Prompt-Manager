@@ -1,7 +1,7 @@
 """
 Shared extraction helpers for ComfyUI Prompt Manager.
 
-Used by both WorkflowExtractor and WorkflowBuilder / WorkflowRenderer nodes.
+Used by both RecipeExtractor and RecipeBuilder / RecipeRenderer nodes.
 Handles: sampler params, VAE info, CLIP info, resolution, model resolution,
 and the full extract_all_from_file() entry point.
 """
@@ -33,12 +33,13 @@ VIDEO_LATENT_TYPES = ['WanVideoLatentImage', 'WanImageToVideo', 'EmptyHunyuanLat
 CHECKPOINT_TYPES = ('CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderNF4')
 
 # Node types that carry embedded extracted_data.
-# Keep 'WorkflowGenerator' for backward compat with images generated before rename.
-# WorkflowBuilder stores authoritative extracted_data for Builder+Renderer graphs.
+# Keep both Workflow* and Recipe* names for compatibility across renamed graphs.
 _EMBEDDED_NODE_TYPES = (
     'WorkflowRenderer',
-    'WorkflowGenerator',
+    'RecipeRenderer',
     'WorkflowBuilder',
+    'RecipeBuilder',
+    'WorkflowGenerator',
     'PromptExtractor',
 )
 
@@ -46,8 +47,8 @@ _EMBEDDED_NODE_TYPES = (
 def _get_embedded_extracted_data(workflow_data):
     """Return the best ``extracted_data`` dict from a WR/WG or PE node, or *None*.
 
-    Prioritises WorkflowRenderer/WorkflowGenerator over WorkflowBuilder over
-    PromptExtractor, and only returns data that actually contains ``sampler``
+    Prioritises WorkflowRenderer/RecipeRenderer over WorkflowBuilder/RecipeBuilder
+    over PromptExtractor, and only returns data that actually contains ``sampler``
     or ``resolution`` keys.
     """
     if not workflow_data or not isinstance(workflow_data, dict):
@@ -66,9 +67,9 @@ def _get_embedded_extracted_data(workflow_data):
         has_useful = bool(ed.get('sampler') or ed.get('resolution'))
         if not has_useful:
             continue
-        if ntype in ('WorkflowRenderer', 'WorkflowGenerator'):
+        if ntype in ('WorkflowRenderer', 'RecipeRenderer'):
             rank = 3
-        elif ntype == 'WorkflowBuilder':
+        elif ntype in ('WorkflowBuilder', 'RecipeBuilder'):
             rank = 2
         else:
             rank = 1
@@ -547,8 +548,8 @@ def resolve_clip_names(clip_names, clip_type=''):
 
 def _find_embedded_generation_data(workflow_data, prompt_data):
     """
-    Look for sampler / resolution / model data embedded by WorkflowRenderer
-    (or legacy WorkflowGenerator) or PromptExtractor.  Checks (in priority order):
+    Look for sampler / resolution / model data embedded by RecipeRenderer
+    (or legacy WorkflowRenderer) or PromptExtractor.  Checks (in priority order):
 
     1. WR/WG/WB node ``extracted_data`` (full dict with sampler + resolution)
     2. WR/WG/WB node ``widgets_values`` containing the ``override_data`` JSON
@@ -629,7 +630,7 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
     if workflow_data and isinstance(workflow_data, dict):
         for wf_node in workflow_data.get('nodes', []):
             ntype = wf_node.get('type', '')
-            if ntype in ('WorkflowRenderer', 'WorkflowGenerator', 'WorkflowBuilder'):
+            if ntype in ('WorkflowRenderer', 'RecipeRenderer', 'RecipeBuilder', 'WorkflowBuilder'):
                 # Priority 1: extracted_data
                 ed = wf_node.get('extracted_data')
                 if ed and isinstance(ed, dict):
@@ -659,7 +660,7 @@ def _find_embedded_generation_data(workflow_data, prompt_data):
         for node_id, node_data in prompt_data.items():
             if not isinstance(node_data, dict):
                 continue
-            if node_data.get('class_type') in ('WorkflowRenderer', 'WorkflowGenerator', 'WorkflowBuilder'):
+            if node_data.get('class_type') in ('WorkflowRenderer', 'RecipeRenderer', 'RecipeBuilder', 'WorkflowBuilder'):
                 inp = node_data.get('inputs', {})
                 _apply_override_json(inp.get('override_data', ''), node_data['class_type'])
                 break
@@ -766,8 +767,8 @@ def extract_all_from_file(file_path, source_folder='input'):
             _r['width'] = prompt_data['width']
             _r['height'] = prompt_data['height']
 
-    # ── Embedded data override (WorkflowRenderer / PromptExtractor) ──────
-    # When a WorkflowRenderer generated the image there are no standalone
+    # ── Embedded data override (RecipeRenderer / PromptExtractor) ──────
+    # When a RecipeRenderer generated the image there are no standalone
     # KSampler / EmptyLatentImage nodes.  Look for authoritative values in:
     #   1. extracted_data on the WG or PE node
     #   2. widgets_values override_data JSON on the WG node
@@ -880,7 +881,7 @@ def _build_sampler_dict(sampler, family):
 
 def build_simplified_workflow_data(extracted, overrides=None, sampler_params=None):
     """
-    Build the shared workflow_data dict that both WorkflowBuilder and PromptExtractor output.
+    Build the shared workflow_data dict that both RecipeBuilder and PromptExtractor output.
 
     Parameters
     ----------
