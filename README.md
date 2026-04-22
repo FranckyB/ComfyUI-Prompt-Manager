@@ -1,7 +1,8 @@
 # ComfyUI Prompt Manager
-## A comprehensive prompt and recipe toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) — Save, Generate, Extract, Build, and Reuse recipes with full LoRA support.
+## A comprehensive prompt and recipe toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
 
-A complete prompt and recipe management suite featuring:
+ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, built for both creating recipes from scratch and extracting reusable setups from images, videos, and workflows.
+It includes local LLM-powered prompt generation (llama.cpp or Ollama), LoRA stack tooling, and end-to-end Recipe nodes to build, edit, render, save, and reuse repeatable generation pipelines.
 
 > **Naming Update (v2.x):**
 > We have shifted from using the term "Workflow" to "Recipe" for this toolset.
@@ -12,38 +13,32 @@ A complete prompt and recipe management suite featuring:
 
 The goal of this Recipe Toolset is to create reusable recipes that are easy to build, edit, generate, and reuse.
 
-- Build recipes directly from scratch in Recipe Builder
-- Distill complex workflows into their base elements to form a clean recipe core
-- Use Recipe Builder as the central node to view and modify the full recipe
-- Use Recipe Extractor to import recipe-ready metadata from images, videos, and workflows (ComfyUI or A1111/Forge)
+- Recipe Builder is the central node to create, view or modify recipes.
+- Use Recipe Extractor to import recipe-ready metadata from images, videos, and workflows (Supports ComfyUI and A1111/Forge)
 - Generate from those recipes with Recipe Renderer
-- Save and reuse recipe entries through Recipe Manager
+- Save and reuse recipe through Recipe Manager
 - Combine with Prompt tools (Prompt Manager and Prompt Generator) for faster prompt creation and generation
 
-This release marks version 2.0.0. More polish and quality-of-life improvements are planned.
+A complete prompt and recipe management suite featuring:
 
 **Prompt Manager** — Save and organize prompts with categories, complete with matching LoRA stacks, trigger words, and thumbnail previews. Supports dual LoRA stacks for complex workflows like Wan videos. Toggle LoRAs on/off or adjust strengths directly from saved presets. Supports workflow_data input from Recipe Builder or Prompt Extractor to pull workflow prompts and LoRA stacks directly into PMA. Will also remap LoRAs if paths differ.
 
 **Prompt Generator** — Generate and enhance prompts using local LLMs via [llama.cpp](https://github.com/ggerganov/llama.cpp) or [Ollama](https://ollama.com). Supports text enhancement, image analysis with vision models (Qwen3.5), and thinking mode for deeper reasoning. Analyze up to 5 images at once.
 
-**Prompt Extractor** — Extract prompts, LoRA configurations, and checkpoint/model paths from existing images, videos, or JSON workflow files. Extracts the first frame from any video. Automatically parses embedded metadata and outputs active LoRAs as LoRA stacks, plus resolved model paths (High/Low for dual-model workflows like Wan). Supports ComfyUI, A1111/Forge, and WebP metadata formats. When used with Prompt Manager Advanced, LoRAs are automatically found if available, regardless of path. For those that are not, right-click offers the option to look for them on Civitai. Browse files from both your input and output folders.
+**Prompt Extractor** — Extract prompts, LoRA configurations, and model used from existing images, videos, or JSON workflow files. Extracts frames from any video. Automatically parses embedded metadata with supports for ComfyUI and A1111/Forge. When used with Prompt Manager Advanced, LoRAs are automatically found if available, regardless of path. For those that are not, right-click offers the option to look for them on Civitai. Browse files from both your input and output folders. Can also doubles as an advanced Image loader, being able to read from both Input or Output, with file browser.
 
-**Prompt Model Loader** — Load checkpoints, diffusion, or GGUF models from a string path output by Prompt Extractor. Auto-detects whether the model is a checkpoint (outputs MODEL + CLIP + VAE) or a diffusion/UNET/GGUF model (outputs MODEL only). Displays model type badge and name directly on the node. Works around ComfyUI's combo type limitation, allowing extracted model paths to connect directly to a loader. Supports [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) models when the extension is installed.
+***New Recipe Toolset*** — Build, Extract and render recipes with dedicated nodes:
 
-**Recipe Toolset** — Build and re-render extracted recipes with dedicated nodes:
-
-- **Recipe Extractor**: Reads workflow metadata and normalizes it into reusable workflow_data.
-- **Recipe Builder**: Lets you edit and assemble a clean core workflow from extracted metadata.
+- **Recipe Extractor**: Reads workflow metadata and normalizes it into a reusable recipe. Similar Prompt Extractor, but more task focused. 
+- **Recipe Builder**: Lets you create, edit and review recipes. Can be used Standole, or with Recipe Manager, Reciper Extractor or Prompt Manager.
 - **Recipe Renderer**: Runs built-in workflow templates for near one-click generation after Builder setup.
-- **Recipe Relay**: Passes workflow context and routing data between nodes cleanly.
-- **Recipe Model Loader**: Resolves and loads the right model/checkpoint from workflow data.
-- **Recipe Manager**: Saves and reuses cleaned workflow entries for fast reruns.
+- **Recipe Relay**: Allows easily extracting or modifying our recipe data while also serving as a relay node that can pass along everything with a single connection.
+- **Recipe Model Loader**: Loads the models or checkpoint found in our recipe data.
+- **Recipe Manager**: Saves and reuses recipes for easy reuse. Connect to Builder to view the data and modify as you see fit.
 
-Builder + Renderer + Recipe Manager provides a streamlined generation path: configure Builder once, connect Renderer and Save Image/Save Video, and save both the output and the resulting workflow.
+Manager + Builder + Renderer provides a streamlined generation path.  For example, create Wan i2v recipes, select and tweak them in builder. Then connect new source image in renderer to generate new videos.
 
 Built-in workflow support includes Flux 1, Flux 2, Ernie, SDXL, Wan, Qwen, Z-Image, Wan Image, and Wan Video (I2V and T2V).
-
-**Recipe Builder + Recipe Manager Reuse Loop** — Build workflow_data from extracted image/video metadata or from Recipe Builder directly, then save and reuse those workflow entries through Recipe Manager.
 ___
 
 <div align="center">
@@ -108,17 +103,6 @@ ___
 - **Active LoRA Filtering**: Only extracts LoRAs that are marked as active in the source workflow
 - **Wide Node Compatibility**: Supports 11+ model loader types including CheckpointLoader, UNETLoader, UnetLoaderGGUF, DiffusionModelLoader, WanVideoModelLoader, CyberdyneModelHub, and more
 - **Preview in Manager**: View extracted data and repathed LoRAs using Manager Advanced.
-
-### Prompt Model Loader:
-- **String-to-Model Loading**: Takes a model path string (from Prompt Extractor) and loads the model directly
-- **Auto-Detection**: Automatically detects whether the path is a checkpoint (returns MODEL + CLIP + VAE) or diffusion/UNET/GGUF model (returns MODEL only)
-- **GGUF Support**: Loads GGUF models when [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) is installed, with automatic runtime detection
-- **Visual Model Info**: Displays model type badge (Checkpoint/Diffusion/GGUF) and model name directly on the node
-- **State Persistence**: Model info display and output slot visibility persist across tab switches and workflow reloads
-- **Graceful Error Handling**: Displays a red "NOT FOUND" badge instead of crashing when a model path cannot be resolved
-- **Model Path Resolution**: Works with both full paths and relative paths, searching checkpoints, diffusion_models, and unet folders
-- **Weight Dtype Support**: Optional weight dtype selection for memory optimization
-- **Family Filtering Tip**: Family filtering works best when model families are separated into clear folder structures (for example folders that include family cues like i2v/t2v/high/low).
 
 ### Prompt Generator
 - **Three Generation Modes**: Enhance text prompts, analyze images, or analyze images with custom instructions
