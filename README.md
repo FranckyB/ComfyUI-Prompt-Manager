@@ -14,7 +14,7 @@ It includes local LLM-powered prompt generation (llama.cpp or Ollama), LoRA stac
 - **Recipe tools**: Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Model Loader, Recipe Manager
 - **Local LLM support**: Prompt Generator + Prompt Generator Options using llama.cpp or Ollama
 - **LoRA workflow support**: dual stack editing, toggles, strength control, missing LoRA detection
-- **Family support**: Flux 1/2, Ernie, SDXL, Wan, Qwen, Z-Image, Wan Image, Wan Video (I2V/T2V)
+- **Model support**: Recipe Renderer supports: Flux 1/2, Ernie, SDXL, Wan, Qwen, Z-Image, Wan Image, Wan Video (I2V/T2V)
 
 ## Quick Start
 
@@ -75,7 +75,8 @@ It includes local LLM-powered prompt generation (llama.cpp or Ollama), LoRA stac
      ```bash
      brew install llama.cpp
      ```
-5. Place `.gguf` models in your preferred models folder (or configure one in settings).
+5. Place custom `.gguf` models in models/gguf.
+   - Or use preferences to set a custom path.
 6. Restart ComfyUI.
 
 ## Requirements
