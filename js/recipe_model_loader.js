@@ -200,7 +200,7 @@ function _isRerouteNode(n) {
 }
 
 function _resolveWorkflowUpstreamLink(node) {
-    const wfInputIdx = (node.inputs || []).findIndex((i) => i?.name === "workflow_data");
+    const wfInputIdx = (node.inputs || []).findIndex((i) => i?.name === "recipe_data");
     if (wfInputIdx < 0) return null;
     let linkId = node.inputs[wfInputIdx]?.link;
     if (linkId == null) return null;

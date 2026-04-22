@@ -3556,8 +3556,8 @@ class PromptExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
-    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "WORKFLOW_DATA", "IMAGE")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "workflow_data", "image")
+    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA", "IMAGE")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "recipe_data", "image")
     FUNCTION = "extract"
     OUTPUT_NODE = False
 
@@ -4159,8 +4159,8 @@ class WorkflowExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract workflow data from images, videos, and workflow files. Simplified version for RecipeBuilder."
-    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE")
-    RETURN_NAMES = ("workflow_data", "image")
+    RETURN_TYPES = ("RECIPE_DATA", "IMAGE")
+    RETURN_NAMES = ("recipe_data", "image")
     FUNCTION = "extract_workflow"
     OUTPUT_NODE = False
 

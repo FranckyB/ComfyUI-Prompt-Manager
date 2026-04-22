@@ -19,7 +19,7 @@
 - **Prompt Manager becomes Prompt + Workflow Manager**
   - Workflow Manager allows saving workflow and integrates with Prompt Manager save/reuse behavior.
   - Extractor/Builder/Manager workflow loop focused on simplified reusable workflow cores.
-  - workflow_data-first persistence improvements.
+  - recipe_data-first persistence improvements.
   - Documentation updates.
 
 ## version 1.25.0

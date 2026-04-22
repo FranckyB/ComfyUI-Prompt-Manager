@@ -1,7 +1,7 @@
 """
 Workflow Renderer — render-only node.
 
-Accepts WORKFLOW_DATA (JSON string from Recipe Builder or PromptExtractor),
+Accepts RECIPE_DATA (JSON string from Recipe Builder or PromptExtractor),
 loads models, samples, decodes, and outputs IMAGE + LATENT.
 
 No UI, no extraction — purely a render engine.
@@ -70,7 +70,7 @@ class WorkflowRenderer:
     """
     Render-only generation node.
 
-    Takes WORKFLOW_DATA (from Workflow Builder or PromptExtractor),
+    Takes RECIPE_DATA (from Workflow Builder or PromptExtractor),
     loads models, applies LoRAs, samples, decodes.
     Outputs IMAGE + LATENT.
     """
@@ -81,9 +81,9 @@ class WorkflowRenderer:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "workflow_data": ("WORKFLOW_DATA", {
+                "recipe_data": ("RECIPE_DATA", {
                     "forceInput": True,
-                    "tooltip": "Connect workflow_data from Workflow Builder or PromptExtractor",
+                    "tooltip": "Connect recipe_data from Recipe Builder or PromptExtractor",
                 }),
                 "clear_cache_after_render": ("BOOLEAN", {
                     "default": False,
@@ -100,26 +100,26 @@ class WorkflowRenderer:
             },
         }
 
-    RETURN_TYPES = ("WORKFLOW_DATA", "IMAGE", "LATENT")
-    RETURN_NAMES = ("workflow_data", "output_image", "output_latent")
+    RETURN_TYPES = ("RECIPE_DATA", "IMAGE", "LATENT")
+    RETURN_NAMES = ("recipe_data", "output_image", "output_latent")
     FUNCTION = "execute"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = False
     DESCRIPTION = (
-        "Render-only node. Accepts workflow_data, loads models, samples, "
-        "and decodes. Outputs IMAGE + LATENT + WORKFLOW_DATA "
+        "Render-only node. Accepts recipe_data, loads models, samples, "
+        "and decodes. Outputs IMAGE + LATENT + RECIPE_DATA "
         "(with MODEL/CLIP/VAE passthrough)."
     )
 
     @classmethod
-    def IS_CHANGED(cls, workflow_data, source_image=None, **kwargs):
+    def IS_CHANGED(cls, recipe_data, source_image=None, **kwargs):
         """Return a stable fingerprint so ComfyUI skips re-execution when nothing changed."""
         import hashlib, json as _json, time
         h = hashlib.sha256()
-        if isinstance(workflow_data, dict):
-            h.update(_json.dumps(workflow_data, sort_keys=True, default=str).encode())
-        elif isinstance(workflow_data, str):
-            h.update(workflow_data.encode())
+        if isinstance(recipe_data, dict):
+            h.update(_json.dumps(recipe_data, sort_keys=True, default=str).encode())
+        elif isinstance(recipe_data, str):
+            h.update(recipe_data.encode())
         clear_cache_after_render = bool(kwargs.get("clear_cache_after_render", False))
         h.update(str(clear_cache_after_render).encode())
         if source_image is not None:
@@ -157,7 +157,8 @@ class WorkflowRenderer:
         except Exception as e:
             print(f"[RecipeRenderer] CUDA cache clear failed: {e}")
 
-    def execute(self, workflow_data, clear_cache_after_render=False, source_image=None, unique_id=None):
+    def execute(self, recipe_data, clear_cache_after_render=False, source_image=None, unique_id=None):
+        workflow_data = recipe_data
 
         # ── Parse workflow_data ───────────────────────────────────────────
         if isinstance(workflow_data, dict):

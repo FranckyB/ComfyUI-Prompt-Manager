@@ -51,7 +51,7 @@ def _image_to_base64_thumbnail(image_tensor, max_size=200):
 
 
 class WorkflowManager(PromptManagerAdvanced):
-    """Workflow-focused manager that edits and forwards WORKFLOW_DATA."""
+    """Workflow-focused manager that edits and forwards RECIPE_DATA."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -84,11 +84,11 @@ class WorkflowManager(PromptManagerAdvanced):
                     "default": first_prompt_text,
                     "placeholder": "Enter prompt text",
                     "dynamicPrompts": False,
-                    "tooltip": "Edit workflow_data prompt text directly",
+                    "tooltip": "Edit recipe_data prompt text directly",
                 }),
             },
             "optional": {
-                "workflow_data": ("WORKFLOW_DATA", {"forceInput": True, "tooltip": "Connected workflow_data to edit/forward"}),
+                "recipe_data": ("RECIPE_DATA", {"forceInput": True, "tooltip": "Connected recipe_data to edit/forward"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -100,14 +100,14 @@ class WorkflowManager(PromptManagerAdvanced):
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Workflow-data focused manager (no use switches, no trigger words)."
-    RETURN_TYPES = ("WORKFLOW_DATA",)
-    RETURN_NAMES = ("workflow_data",)
+    RETURN_TYPES = ("RECIPE_DATA",)
+    RETURN_NAMES = ("recipe_data",)
     FUNCTION = "get_workflow"
     OUTPUT_NODE = True
 
     @classmethod
     def IS_CHANGED(cls, category, name, text="", **kwargs):
-        workflow_data = kwargs.get("workflow_data", None)
+        recipe_data = kwargs.get("recipe_data", None)
         loras_a_toggle = kwargs.get("loras_a_toggle", "")
         loras_b_toggle = kwargs.get("loras_b_toggle", "")
         saved_workflow_data = kwargs.get("saved_workflow_data", "")
@@ -115,7 +115,7 @@ class WorkflowManager(PromptManagerAdvanced):
             category,
             name,
             text,
-            str(workflow_data) if workflow_data else None,
+            str(recipe_data) if recipe_data else None,
             loras_a_toggle or "",
             loras_b_toggle or "",
             saved_workflow_data or "",
@@ -126,7 +126,7 @@ class WorkflowManager(PromptManagerAdvanced):
         category,
         name,
         text="",
-        workflow_data=None,
+        recipe_data=None,
         unique_id=None,
         loras_a_toggle=None,
         loras_b_toggle=None,
@@ -137,11 +137,11 @@ class WorkflowManager(PromptManagerAdvanced):
         stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
 
         live_workflow_data = None
-        if isinstance(workflow_data, dict):
-            live_workflow_data = workflow_data
-        elif isinstance(workflow_data, str) and workflow_data.strip():
+        if isinstance(recipe_data, dict):
+            live_workflow_data = recipe_data
+        elif isinstance(recipe_data, str) and recipe_data.strip():
             try:
-                parsed = json.loads(workflow_data)
+                parsed = json.loads(recipe_data)
                 if isinstance(parsed, dict):
                     live_workflow_data = parsed
             except (json.JSONDecodeError, TypeError):
@@ -215,7 +215,7 @@ class WorkflowManager(PromptManagerAdvanced):
                 "use_prompt_input": False,
                 "use_workflow_data": True,
                 "prompt_input": "",
-                "workflow_data": to_json_safe_workflow_data(incoming_wf) if isinstance(incoming_wf, dict) else (
+                "workflow_data": to_json_safe_workflow_data(recipe_data) if isinstance(recipe_data, dict) else (
                     to_json_safe_workflow_data(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None
                 ),
                 "loras_a": loras_a_display,

@@ -212,7 +212,7 @@ app.registerExtension({
                         const inputLorasB = event.detail.input_loras_b || [];
                         const wfDataEvent = event.detail.workflow_data || null;
                         const useWorkflowEvent = event.detail.use_workflow_data === true;
-                        const workflowInput = this.inputs?.find((inp) => inp.name === "workflow_data");
+                        const workflowInput = this.inputs?.find((inp) => inp.name === "recipe_data");
                         const hasWorkflowInputConnected = workflowInput?.link != null;
                         const shouldIngestWorkflowExecution = useWorkflowEvent && !this._isWorkflowManager;
 
@@ -982,7 +982,7 @@ function hasWorkflowDataPayload(rawWorkflowData) {
 }
 
 function hasConnectedWorkflowInput(node) {
-    const wfInput = node?.inputs?.find((inp) => inp?.name === "workflow_data");
+    const wfInput = node?.inputs?.find((inp) => inp?.name === "recipe_data");
     return wfInput?.link != null;
 }
 
@@ -3374,7 +3374,7 @@ async function applyLoraFoundState(loras) {
 }
 
 async function pullWorkflowIntoNode(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (!wfInput || wfInput.link == null) {
         await showInfo("Workflow Data", "No workflow_data is connected.");
         return;
@@ -3466,7 +3466,7 @@ function refreshPmaPromptGhosting(node) {
 
     const promptInputConnection = node.inputs?.find((inp) => inp.name === "prompt");
     const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
-    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "recipe_data");
     const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
 
     if (useExternalWidget.value && isLlmConnected) {
@@ -3512,7 +3512,7 @@ function getWorkflowDataLiveSig(workflowData) {
 
 async function tryLiveWorkflowPickup(node, { force = false } = {}) {
     const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
-    const workflowConnection = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const workflowConnection = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (!useWorkflowWidget?.value || workflowConnection?.link == null) return false;
 
     const wfData = (await resolveWorkflowDataForLive(node)) || resolveWorkflowDataForSave(node);
@@ -3554,7 +3554,7 @@ function setupWorkflowLivePickupHandler(node) {
     node._workflowLivePickupHandlerSetup = true;
 
     const getWorkflowInputLink = (n) => {
-        const wfInput = n.inputs?.find((inp) => inp.name === "workflow_data");
+        const wfInput = n.inputs?.find((inp) => inp.name === "recipe_data");
         return wfInput?.link ?? null;
     };
     node._lastWorkflowInputLink = getWorkflowInputLink(node);
@@ -3650,7 +3650,7 @@ function setupUseExternalToggleHandler(node) {
 
         // Also check use_workflow_data toggle
         const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
-        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const workflowConnection = node.inputs?.find(inp => inp.name === "recipe_data");
         const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
         const useWorkflow = useWorkflowWidget?.value && isWorkflowConnected;
 
@@ -3791,7 +3791,7 @@ function setupUseWorkflowToggleHandler(node) {
     const originalCallback = useWorkflowWidget.callback;
     useWorkflowWidget.callback = async function(value) {
         // Prevent turning on if workflow_data is not connected
-        const workflowConnection = node.inputs?.find(inp => inp.name === "workflow_data");
+        const workflowConnection = node.inputs?.find(inp => inp.name === "recipe_data");
         const isConnected = workflowConnection && workflowConnection.link != null;
 
         if (value && !isConnected) {
@@ -4305,7 +4305,7 @@ function buildWorkflowDataFromExtractorNode(extractorNode) {
 }
 
 function resolveWorkflowDataForSave(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (wfInput?.link != null) {
         const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
@@ -4319,7 +4319,7 @@ function resolveWorkflowDataForSave(node) {
             if (fromExtractor) return fromExtractor;
         }
 
-        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
+        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
         if (wfOutIdx >= 0) {
             const out = upstream.outputs[wfOutIdx];
             const data = out?._data ?? out?.value ?? null;
@@ -4345,7 +4345,7 @@ function resolveWorkflowDataForSave(node) {
 }
 
 async function resolveWorkflowDataForLive(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "workflow_data");
+    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
     if (wfInput?.link == null) return null;
 
     const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
@@ -4387,7 +4387,7 @@ async function resolveWorkflowDataForLive(node) {
         }
     }
 
-    const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "workflow_data");
+    const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
     if (wfOutIdx >= 0) {
         const out = upstream.outputs[wfOutIdx];
         const data = out?._data ?? out?.value ?? null;

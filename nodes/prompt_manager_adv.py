@@ -176,7 +176,7 @@ class PromptManagerAdvanced:
                 "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
                 "thumbnail_image": ("IMAGE", {"tooltip": "Connect an image to use as thumbnail when saving the prompt"}),
-                "workflow_data": ("WORKFLOW_DATA", {"forceInput": True, "tooltip": "Connect workflow_data from RecipeBuilder or PromptExtractor"}),
+                "recipe_data": ("RECIPE_DATA", {"forceInput": True, "tooltip": "Connect recipe_data from RecipeBuilder or PromptExtractor"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -189,8 +189,8 @@ class PromptManagerAdvanced:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Full-featured prompt manager with dual LoRA stack support, trigger words, and thumbnail browser."
-    RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK", "WORKFLOW_DATA")
-    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "workflow_data")
+    RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA")
+    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "recipe_data")
     FUNCTION = "get_prompt"
     OUTPUT_NODE = True
 
@@ -206,7 +206,7 @@ class PromptManagerAdvanced:
         lora_stack_a = kwargs.get('lora_stack_a', None)
         lora_stack_b = kwargs.get('lora_stack_b', None)
         trigger_words = kwargs.get('trigger_words', None)
-        workflow_data = kwargs.get('workflow_data', None)
+        recipe_data = kwargs.get('recipe_data', None)
         # Return tuple of all values that should trigger re-execution when changed
         # Convert lists/objects to strings for hashable comparison
         return (
@@ -221,7 +221,7 @@ class PromptManagerAdvanced:
             str(lora_stack_a) if lora_stack_a else None,
             str(lora_stack_b) if lora_stack_b else None,
             trigger_words,
-            str(workflow_data) if workflow_data else None,
+            str(recipe_data) if recipe_data else None,
         )
 
     @classmethod
@@ -470,7 +470,7 @@ class PromptManagerAdvanced:
 
     def get_prompt(self, category, name, use_prompt_input, use_lora_input=True, use_workflow_data=False, text="", swap_lora_outputs=False,
                    prompt=None, lora_stack_a=None, lora_stack_b=None,
-                   trigger_words=None, thumbnail_image=None, workflow_data=None,
+                   trigger_words=None, thumbnail_image=None, recipe_data=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None,
                    saved_workflow_data=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
@@ -544,6 +544,7 @@ class PromptManagerAdvanced:
         stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
 
         live_workflow_data = None
+        workflow_data = recipe_data
         if isinstance(workflow_data, dict):
             live_workflow_data = workflow_data
         elif isinstance(workflow_data, str) and workflow_data.strip():
@@ -768,7 +769,7 @@ class PromptManagerAdvanced:
 
     def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=True, use_workflow_data=False, text="", swap_lora_outputs=False,
                           prompt=None, lora_stack_a=None, lora_stack_b=None,
-                          trigger_words=None, thumbnail_image=None, workflow_data=None,
+                          trigger_words=None, thumbnail_image=None, recipe_data=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None,
                           trigger_words_toggle=None, saved_workflow_data=None):
         """Tell ComfyUI which lazy inputs are needed based on current settings.

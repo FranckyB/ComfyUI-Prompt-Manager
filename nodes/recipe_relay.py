@@ -1,6 +1,6 @@
 """
 ComfyUI Workflow Bridge - Pure passthrough node.
-Unpacks workflow_data into individual typed outputs.
+Unpacks recipe_data into individual typed outputs.
 Any connected optional input overrides the corresponding field before output.
 Models (MODEL/CLIP/VAE) are passed through only - use RecipeModelLoader for loading.
 """
@@ -85,7 +85,7 @@ def _get_live_ksampler_combo_types():
 _LIVE_SAMPLERS, _LIVE_SCHEDULERS = _get_live_ksampler_combo_types()
 
 
-DEFAULT_WORKFLOW_DATA = {
+DEFAULT_RECIPE_DATA = {
     "_source": "RecipeRelay",
     "family": "",
     "model_a": "",
@@ -120,7 +120,7 @@ DEFAULT_WORKFLOW_DATA = {
 class WorkflowRelay:
     """
     Pure passthrough bridge node.
-    Unpacks workflow_data into individual typed outputs and forwards
+    Unpacks recipe_data into individual typed outputs and forwards
     any connected MODEL/CLIP/VAE inputs. No model loading.
     """
 
@@ -130,7 +130,7 @@ class WorkflowRelay:
         cls._SAMPLER_ENUM = samplers
         cls._SCHEDULER_ENUM = schedulers
         cls.RETURN_TYPES = (
-            "WORKFLOW_DATA",
+            "RECIPE_DATA",
             "MODEL", "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", ANY_TYPE,
             "INT", "INT", "INT", "INT", "FLOAT",
             cls._SAMPLER_ENUM, cls._SCHEDULER_ENUM, "FLOAT",
@@ -146,7 +146,7 @@ class WorkflowRelay:
         return {
             "required": {},
             "optional": {
-                "workflow_data":   ("WORKFLOW_DATA", {"forceInput": True, "tooltip": "Optional workflow data input. If omitted, bridge starts from an empty workflow_data dict."}),
+                "recipe_data":     ("RECIPE_DATA", {"forceInput": True, "tooltip": "Optional recipe_data input. If omitted, bridge starts from an empty payload dict."}),
                 "model_a":         ("MODEL",        {"tooltip": "Pass-through Model A"}),
                 "model_b":         ("MODEL",        {"tooltip": "Pass-through Model B"}),
                 "clip":            ("CLIP",         {"tooltip": "Pass-through CLIP"}),
@@ -173,13 +173,13 @@ class WorkflowRelay:
                 "height":          ("INT",     {"forceInput": True, "tooltip": "Override height"}),
                 "batch_size":      ("INT",     {"forceInput": True, "tooltip": "Override batch size"}),
                 "length":          ("INT",     {"forceInput": True, "tooltip": "Override video length"}),
-                "model_a_name":    ("STRING",  {"forceInput": True, "tooltip": "Optional Model A name/path. Resolves and writes workflow_data['model_a']."}),
-                "model_b_name":    ("STRING",  {"forceInput": True, "tooltip": "Optional Model B name/path. Resolves and writes workflow_data['model_b']."}),
+                "model_a_name":    ("STRING",  {"forceInput": True, "tooltip": "Optional Model A name/path. Resolves and writes recipe_data['model_a']."}),
+                "model_b_name":    ("STRING",  {"forceInput": True, "tooltip": "Optional Model B name/path. Resolves and writes recipe_data['model_b']."}),
             },
         }
 
     RETURN_TYPES = (
-        "WORKFLOW_DATA",
+        "RECIPE_DATA",
         "MODEL", "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", ANY_TYPE,
         "INT", "INT", "INT", "INT", "FLOAT",
         _LIVE_SAMPLERS, _LIVE_SCHEDULERS, "FLOAT",
@@ -189,7 +189,7 @@ class WorkflowRelay:
         "STRING", "STRING",
     )
     RETURN_NAMES = (
-        "workflow_data",
+        "recipe_data",
         "model_a", "model_b", "clip", "positive", "negative", "vae", "latent", "image", "mask", "extra",
         "seed_a", "seed_b", "steps_a", "steps_b", "cfg",
         "sampler_name", "scheduler", "denoise",
@@ -201,13 +201,13 @@ class WorkflowRelay:
     FUNCTION = "unpack"
     CATEGORY = "Prompt Manager"
     DESCRIPTION = (
-        "Pure passthrough bridge node. Unpacks workflow_data into individual "
+        "Pure passthrough bridge node. Unpacks recipe_data into individual "
         "typed outputs. Models are forwarded from connected inputs only."
     )
 
     # ------------------------------------------------------------------
 
-    def unpack(self, workflow_data=None, **kwargs):
+    def unpack(self, recipe_data=None, **kwargs):
         def _short_display_name(name):
             raw = str(name or "").strip()
             if not raw:
@@ -216,33 +216,33 @@ class WorkflowRelay:
             return os.path.splitext(base)[0]
 
         # Accept both dict and JSON string
-        if isinstance(workflow_data, str):
+        if isinstance(recipe_data, str):
             try:
-                incoming_wf = json.loads(workflow_data)
+                incoming_wf = json.loads(recipe_data)
             except (json.JSONDecodeError, TypeError):
                 incoming_wf = {}
-        elif isinstance(workflow_data, dict):
-            incoming_wf = dict(workflow_data)
+        elif isinstance(recipe_data, dict):
+            incoming_wf = dict(recipe_data)
         else:
             incoming_wf = {}
 
         # Start from a full empty-workflow template, then layer incoming values.
-        wf = dict(DEFAULT_WORKFLOW_DATA)
+        wf = dict(DEFAULT_RECIPE_DATA)
         if isinstance(incoming_wf, dict):
             wf.update(incoming_wf)
 
             incoming_sampler = incoming_wf.get('sampler')
             if isinstance(incoming_sampler, dict):
-                wf['sampler'] = dict(DEFAULT_WORKFLOW_DATA['sampler'])
+                wf['sampler'] = dict(DEFAULT_RECIPE_DATA['sampler'])
                 wf['sampler'].update(incoming_sampler)
 
             incoming_resolution = incoming_wf.get('resolution')
             if isinstance(incoming_resolution, dict):
-                wf['resolution'] = dict(DEFAULT_WORKFLOW_DATA['resolution'])
+                wf['resolution'] = dict(DEFAULT_RECIPE_DATA['resolution'])
                 wf['resolution'].update(incoming_resolution)
 
-        sampler = dict(wf.get('sampler', DEFAULT_WORKFLOW_DATA['sampler']))
-        resolution = dict(wf.get('resolution', DEFAULT_WORKFLOW_DATA['resolution']))
+        sampler = dict(wf.get('sampler', DEFAULT_RECIPE_DATA['sampler']))
+        resolution = dict(wf.get('resolution', DEFAULT_RECIPE_DATA['resolution']))
 
         # -- Apply top-level overrides -------------------------------
         pos_text = kwargs.get('pos_prompt')

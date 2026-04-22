@@ -18,7 +18,7 @@ This page contains the detailed feature overview that was moved out of the main 
 - Toggle active state per LoRA without rewiring
 - Save LoRAs with prompt entries
 - Override/merge behavior for connected vs saved LoRAs
-- Optional workflow_data input integration
+- Optional recipe_data input integration
 - Missing LoRA highlighting and LoRA Manager preview support
 - Thumbnail generation from saved prompt entries
 

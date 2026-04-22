@@ -1,7 +1,7 @@
 """
 ComfyUI Workflow Builder
 Extracts ALL generation parameters from an image/video, provides a full UI
-for editing them, and outputs WORKFLOW_DATA (JSON) for the Workflow Renderer
+for editing them, and outputs RECIPE_DATA (JSON) for the Workflow Renderer
 render node.
 
 Part of ComfyUI-Prompt-Manager — shares extraction logic with PromptExtractor.
@@ -559,11 +559,11 @@ class WorkflowBuilder:
     """
     Workflow Builder — UI and extraction node.
 
-    Can run standalone with manual settings, or accept workflow_data (from
+    Can run standalone with manual settings, or accept recipe_data (from
     PromptExtractor) and/or lora_stack inputs to pre-fill all parameters.
 
     Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
-    Outputs WORKFLOW_DATA (JSON string) for the Workflow Renderer render node.
+    Outputs RECIPE_DATA (JSON string) for the Workflow Renderer render node.
     """
 
     # Class-level cache so models persist across executions.
@@ -584,8 +584,8 @@ class WorkflowBuilder:
             "required": {},
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
-                "workflow_data": ("WORKFLOW_DATA", {
-                    "tooltip": "Optional workflow_data input for prefill/update.",
+                "recipe_data": ("RECIPE_DATA", {
+                    "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
                 "pos_prompt": ("STRING", {
                     "forceInput": True,
@@ -620,18 +620,18 @@ class WorkflowBuilder:
             },
         }
 
-    RETURN_TYPES  = ("WORKFLOW_DATA",)
-    RETURN_NAMES  = ("workflow_data",)
+    RETURN_TYPES  = ("RECIPE_DATA",)
+    RETURN_NAMES  = ("recipe_data",)
     FUNCTION      = "execute"
     CATEGORY      = "Prompt Manager"
     OUTPUT_NODE   = True
     DESCRIPTION   = (
         "Workflow Builder. Extracts parameters from images/workflows, provides "
-        "a full editing UI, and outputs workflow_data for the Workflow Renderer."
+        "a full editing UI, and outputs recipe_data for the Workflow Renderer."
     )
 
     def execute(self,
-                workflow_data=None,
+                recipe_data=None,
                 pos_prompt=None, neg_prompt=None,
                 seed_a=None, seed_b=None, denoise=None,
                 lora_stack_a=None, lora_stack_b=None,
@@ -639,22 +639,22 @@ class WorkflowBuilder:
                 unique_id=None, extra_pnginfo=None, prompt=None):
         """
         Main execution:
-          1. Parse workflow_data (if connected)
+          1. Parse recipe_data (if connected)
           2. Apply JS overrides
           3. Merge connected lora inputs (always)
-          4. Build workflow_data JSON
-          5. Return WORKFLOW_DATA
+          4. Build recipe_data JSON
+          5. Return RECIPE_DATA
         """
-        # ── Parse workflow_data input (if connected) ─────────────────────
+        # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
-        if workflow_data is not None:
-            if isinstance(workflow_data, dict):
-                wf_data = workflow_data
-            elif isinstance(workflow_data, str):
+        if recipe_data is not None:
+            if isinstance(recipe_data, dict):
+                wf_data = recipe_data
+            elif isinstance(recipe_data, str):
                 try:
-                    wf_data = json.loads(workflow_data)
+                    wf_data = json.loads(recipe_data)
                 except (json.JSONDecodeError, TypeError):
-                    print("[RecipeBuilder] Warning: could not parse workflow_data")
+                    print("[RecipeBuilder] Warning: could not parse recipe_data")
 
         # Extractor/Manager sources should be pull-on-demand only via the
         # Update Workflow button, not auto-applied on every execution.
@@ -671,7 +671,7 @@ class WorkflowBuilder:
             if upstream_source in manual_pull_sources:
                 wf_data = None
 
-        # ── Build extracted dict from workflow_data or defaults ───────────
+        # ── Build extracted dict from recipe_data or defaults ───────────
         if wf_data:
             wf_sampler = wf_data.get('sampler', {})
             wf_res = wf_data.get('resolution', {})

@@ -1168,7 +1168,7 @@ app.registerExtension({
                     }
                     const VALID_OUTPUTS = isWorkflowExtractor
                         ? [
-                            { name: "workflow_data",   type: "WORKFLOW_DATA" },
+                            { name: "recipe_data",     type: "RECIPE_DATA" },
                             { name: "image",           type: "IMAGE" },
                         ]
                         : [
@@ -1176,7 +1176,7 @@ app.registerExtension({
                             { name: "negative_prompt", type: "STRING" },
                             { name: "lora_stack_a",    type: "LORA_STACK" },
                             { name: "lora_stack_b",    type: "LORA_STACK" },
-                            { name: "workflow_data",   type: "WORKFLOW_DATA" },
+                            { name: "recipe_data",     type: "RECIPE_DATA" },
                             { name: "image",           type: "IMAGE" },
                         ];
                     if (this.outputs) {
@@ -1478,7 +1478,7 @@ app.registerExtension({
 });
 
 /**
- * Extract metadata and update workflow indicator (without affecting display)
+ * Extract metadata and update recipe indicator (without affecting display)
  */
 async function extractAndUpdateMetadata(node, filename) {
     if (!filename || filename === "(none)") {
@@ -1552,7 +1552,7 @@ async function extractAndUpdateMetadata(node, filename) {
             await cacheFileMetadata(filename, metadata);
         }
 
-        // Update workflow status
+        // Update recipe status
         if (ext === 'json') {
             node.hasWorkflow = !!(metadata && (metadata.workflow || (metadata.nodes && metadata.links)));
         } else {
@@ -1564,7 +1564,7 @@ async function extractAndUpdateMetadata(node, filename) {
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
 
-        // Extract full preview data for RecipeBuilder's "Update Workflow" button.
+        // Extract full preview data for RecipeBuilder's "Update Recipe" button.
         // Runs the Python parse+build pipeline on the cached metadata so WB can
         // pull it without executing PromptExtractor (live-menu pattern).
         if (node.hasWorkflow) {
@@ -1667,7 +1667,7 @@ async function loadImageFile(node, filename) {
         // Cache metadata (or lack thereof) for Python backend
         await cacheFileMetadata(filename, metadata);
 
-        // Update workflow status flag - check for workflow or parameters
+        // Update recipe status flag - check for workflow or parameters
         node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
         
         // Force canvas redraw to update indicator immediately
@@ -1731,7 +1731,7 @@ async function loadJSONFile(node, filename) {
         // Cache metadata (or lack thereof) for Python backend
         await cacheFileMetadata(filename, metadata);
 
-        // Update workflow status flag
+        // Update recipe status flag
         // Check if metadata has workflow property OR if metadata itself is a workflow (has nodes/links)
         node.hasWorkflow = !!(metadata && (metadata.workflow || (metadata.nodes && metadata.links)));
         // Track that this JSON is now loaded
@@ -1841,7 +1841,7 @@ async function loadVideoFrame(node, filename) {
                 await cacheFileMetadata(filename, metadata);
                 node._metadataCached = true;
 
-                // Update workflow status flag - check for workflow or parameters
+                // Update recipe status flag - check for workflow or parameters
                 node.hasWorkflow = !!(metadata && (metadata.workflow || metadata.parameters));
 
                 // Force canvas redraw to update indicator immediately
