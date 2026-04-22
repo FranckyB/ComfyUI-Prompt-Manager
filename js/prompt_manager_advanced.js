@@ -1830,7 +1830,7 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
             menu.remove();
             // Open CivitAI search in new tab
             const searchQuery = encodeURIComponent(loraName);
-            window.open(`https://civitai.com/search/models?sortBy=models_v9&query=${searchQuery}&modelType=LORA`, "_blank");
+            window.open(`https://civitai.red/search/models?sortBy=models_v9&query=${searchQuery}&modelType=LORA`, "_blank");
         });
         menu.appendChild(searchItem);
     }

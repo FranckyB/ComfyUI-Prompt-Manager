@@ -778,7 +778,7 @@ function makeLoraTag(lora, avail, onToggle, onStrength) {
             searchItem.addEventListener("mouseleave", () => { searchItem.style.backgroundColor = "transparent"; });
             searchItem.addEventListener("click", (ev) => {
                 ev.stopPropagation(); menu.remove();
-                window.open(`https://civitai.com/search/models?sortBy=models_v9&query=${encodeURIComponent(name)}&modelType=LORA`, "_blank");
+                window.open(`https://civitai.red/search/models?sortBy=models_v9&query=${encodeURIComponent(name)}&modelType=LORA`, "_blank");
             });
             menu.appendChild(searchItem);
         }
