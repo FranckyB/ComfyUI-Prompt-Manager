@@ -335,7 +335,7 @@ class PromptGenerator:
                     "tooltip": "Enable thinking/reasoning mode for compatible models (DeepSeek format)"
                 }),
                 "stop_server_after": ("BOOLEAN", {
-                    "default": False,
+                    "default": True,
                     "tooltip": "Stop the llama.cpp server after each prompt (for resource saving, but slower)."
                 }),
                 "options": ("OPTIONS", {
@@ -660,16 +660,32 @@ class PromptGenerator:
         # Always attempt to fetch defaults; fetch_model_defaults() will fall back to built-in defaults on error, ensuring a dict is
         return PromptGenerator.fetch_model_defaults()
 
-    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=False, options=None, **kwargs) -> str:
+    @staticmethod
+    def cleanup_vram_before_run():
+        """Best-effort VRAM cleanup before generation starts."""
+        try:
+            # Preferred in modern Comfy builds: release cached GPU memory without tearing down runtime state.
+            if hasattr(comfy.model_management, "soft_empty_cache"):
+                comfy.model_management.soft_empty_cache()
+            # Fallback for older builds where only model cleanup helpers are exposed.
+            elif hasattr(comfy.model_management, "cleanup_models"):
+                comfy.model_management.cleanup_models()
+            print_pg("Pre-run VRAM cleanup executed.")
+        except Exception as e:
+            # Cleanup should never block generation.
+            print_pg(f"Warning: Pre-run VRAM cleanup failed: {e}", RED)
+
+    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, options=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 
         print_pg_header()  # Print header for this execution
+        self.cleanup_vram_before_run()
 
         # Determine LLM backend: "ollama" or "llama.cpp"
         use_ollama = (
-            (options and options.get("llm_backend") == "ollama")
-            or _preferences_cache.get("llm_backend", "llama.cpp") == "ollama"
+            (options and options.get("llm_backend") == "ollama") or
+            _preferences_cache.get("llm_backend", "llama.cpp") == "ollama"
         )
 
         # Extract console option from connected options node

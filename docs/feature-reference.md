@@ -5,13 +5,6 @@ This page contains the detailed feature overview that was moved out of the main 
 ## Prompt Toolset
 
 ### Prompt Manager
-- Category-based prompt organization
-- Save/load prompts quickly
-- NSFW tagging and filtering
-- LLM input toggle
-- Persistent storage in your ComfyUI user folder
-
-### Prompt Manager Advanced
 - All Prompt Manager features, plus LoRA and trigger-word integration
 - Dual LoRA stack support for complex pipelines (for example Wan video)
 - LoRA tags with inline strength editing
@@ -21,6 +14,13 @@ This page contains the detailed feature overview that was moved out of the main 
 - Optional recipe_data input integration
 - Missing LoRA highlighting and LoRA Manager preview support
 - Thumbnail generation from saved prompt entries
+
+### Prompt Manager (Basic)
+- Category-based prompt organization
+- Save/load prompts quickly
+- NSFW tagging and filtering
+- LLM input toggle
+- Persistent storage in your ComfyUI user folder
 
 ### Prompt Extractor
 - Extract prompt/model/LoRA metadata from image, video, and JSON workflow files

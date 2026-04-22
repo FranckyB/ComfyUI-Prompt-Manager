@@ -1,50 +1,111 @@
 # ComfyUI Prompt Manager
 ## A comprehensive prompt and recipe toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
 
-ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, built for both creating recipes from scratch and extracting reusable setups from images, videos, and workflows.
-It includes local LLM-powered prompt generation (llama.cpp or Ollama), LoRA stack tooling, and end-to-end Recipe nodes to build, edit, render, save, and reuse repeatable generation pipelines.
+ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, built for both creating recipes from scratch and extracting reusable setups from images, videos, and workflows. It includes local LLM-powered prompt generation (llama.cpp or Ollama) with automatic download of Qwen3.5 models, LoRA stack tooling, and end-to-end Recipe nodes to build, edit, render, save, and reuse repeatable generation pipelines.
 
-> **Naming Update (v2.x):**
+> **Naming Update (v2.1):**
 > We have shifted from using the term "Workflow" to "Recipe" for this toolset.
 > This is an unfortunate but needed naming change to better represent the purpose of this tool.
 
 ## What This Provides
 
-- **Prompt tools**: Prompt Manager, Prompt Manager Advanced, Prompt Extractor
+- **Prompt tools**: Prompt Manager, Prompt Extractor
+- **Local LLM support**: Prompt Generator using llama.cpp or Ollama. Supports text enhancement and image analysis with vision models (Qwen3.5)
 - **Recipe tools**: Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Model Loader, Recipe Manager
-- **Local LLM support**: Prompt Generator + Prompt Generator Options using llama.cpp or Ollama
-- **LoRA workflow support**: dual stack editing, toggles, strength control, missing LoRA detection
+- **LoRA workflow support**: Display and modify added Loras. When reusing Saved presets, values can still be changed.
 - **Model support**: Recipe Renderer supports: Flux 1/2, Ernie, SDXL, Wan, Qwen, Z-Image, Wan Image, Wan Video (I2V/T2V)
-
-## Quick Start
-
-1. Extract or build recipe data.
-2. Edit and validate in Recipe Builder.
-3. Render with Recipe Renderer.
-4. Save and reuse with Recipe Manager.
-
-## Screenshots
+- **Lora Preview**: When [Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager) is installed, LoRAs can be previewed on hover.
+---
 
 <div align="center">
-  <figcaption>Prompt Manager Advanced, with LoRA and trigger word support</figcaption>
-  <img src="docs/images/prompt_manager_advanced.png" alt="Prompt Manager Advanced">
+  <figcaption>Prompt Creation With Lora and Trigger Words</figcaption>
+  <img src="docs/images/prompt_generator_text.png" alt="Prompt Manager">
 </div>
+
 <div align="center">
-  <figcaption>Prompt Extractor connected to Prompt Manager Advanced</figcaption>
-  <img src="docs/images/prompt_extractor.png" alt="Prompt Extractor">
+  <figcaption>Generating Prompts based on Images</figcaption>
+  <img src="docs/images/prompt_generator_image.png" alt="Prompt Generator">
 </div>
+
 <div align="center">
-  <figcaption>Advanced Prompt Generator</figcaption>
-  <img src="docs/images/prompt_generator_advanced.png" alt="Prompt Generator Advanced">
+  <figcaption>Advanced Prompt Generation using Multiple Images</figcaption>
+  <img src="docs/images/prompt_generator_advanced.png" alt="Prompt Generator">
 </div>
+
 <div align="center">
-  <figcaption>Simple Prompt Generator</figcaption>
-  <img src="docs/images/prompt_manager.png" alt="Prompt Generator">
-</div>
-<div align="center">
-  <figcaption>Recipe Builder</figcaption>
+  <figcaption>Complete Recipe creation, with Model, Lora and Prompt all ready to be reused</figcaption>
   <img src="docs/images/workflow_builder.jpg" alt="Recipe Builder">
 </div>
+
+## v2.0 Introduces The Recipe Toolset
+
+Version 2.x introduces a Recipe toolset that can be used on its own, or in combination with the Prompt toolset.
+
+- Use the Recipe toolset when you want repeatable generation pipelines from extracted or hand-edited recipe data.
+  - Recipe Data includes prompts (pos & neg), LoRA stack, mode used, KSampler settings, resolution, seed, and more.
+  - This data can be created using Recipe Builder or extracted from existing media with Recipe Extractor.
+  - Recipe Renderer provides an easy way to render this recipe.
+  - Recipe data can also be used traditionally with the Recipe Relay node, which can access all of it.
+- Use the Prompt toolset when you want fast prompt library management and local LLM-assisted prompt creation.
+  - Prompt Generator allows creation of new prompts using the LLM model of your choice.
+  - Prompt Manager can save these to be reusable later.
+  - Prompt Extractor is similar to Recipe Extractor, but can individually output prompts or LoRAs.
+- Use both together when you want to create Recipes, but use different prompts.
+
+In short: Prompt tools help you author and manage Prompts + LoRA intent, while Recipe tools help you build, execute and reuse full generation configurations.
+
+## Toolset Overview
+
+### Prompt Toolset
+
+- Prompt Manager: dual LoRA stacks, trigger words, thumbnail workflows, and advanced save flows.
+- Prompt Extractor: reads metadata from images/videos/JSON and outputs prompt + LoRA + recipe context.
+- Prompt Generator + Options: local LLM prompt creation and enhancement using llama.cpp or Ollama.
+- Prompt Manager (Basic): category-based prompt save/load. A no-frills basic version (The OG).
+
+### Recipe Toolset
+
+- Recipe Extractor: normalizes extracted metadata into reusable recipe_data.
+- Recipe Builder: edit and validate recipe_data in a cleaner authoring surface.
+- Recipe Renderer: execute recipe_data through built-in generation templates.
+- Recipe Relay: route and override recipe context components between nodes.
+- Recipe Model Loader: resolve and load models from recipe_data.
+- Recipe Manager: save and reuse recipe entries.
+
+## Common Pipelines
+
+### Prompt-first Pipeline
+
+1. Write or generate prompts and connect LoRA stacks into Prompt Manager.
+2. Generate with your normal ComfyUI graph.
+3. Save reusable prompt entries when satisfied.
+
+### Recipe-first Pipeline
+
+1. Create preset in Recipe Builder
+  - By extracting recipe_data from media or JSON, using Recipe Extractor
+   - Or by directly modifying Recipe Builder to the values you want.
+2. Render in Recipe Renderer.
+3. Save reusable recipe entries with Recipe Manager.
+   - To include Thumbnail, add after the Renderer node.
+
+### Hybrid Pipeline
+
+1. Extract or build recipe_data.
+2. Add Prompt Generator or Save prompts into Builder.
+3. Add LoRAs, either using LoRA stackers or saved LoRA stacks in Prompt Manager.
+4. Render through Recipe Renderer.
+5. Save final reusable entries in Recipe Manager.
+
+## Preferences And Settings
+
+- Addon settings are available in ComfyUI Preferences (Settings) under Prompt Manager.
+- This is where you set model/backend defaults, NSFW visibility defaults, view preferences, and related addon behavior.
+- Prompt Generator backend choices (llama.cpp or Ollama) and related options are configured there.
+
+## Workflow Examples
+
+Workflow examples are provided to help understand the basics.
 
 ## Documentation
 
