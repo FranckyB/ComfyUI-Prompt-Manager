@@ -8,7 +8,7 @@ import json
 import os
 import folder_paths
 import comfy.samplers
-from ..py.lora_utils import resolve_lora_path
+from ..py.lora_utils import resolve_lora_path, get_lora_relative_path, strip_lora_extension
 from ..py.workflow_extraction_utils import resolve_model_name
 from ..py.workflow_families import get_model_family, MODEL_FAMILIES
 
@@ -208,6 +208,60 @@ class WorkflowRelay:
     # ------------------------------------------------------------------
 
     def unpack(self, recipe_data=None, **kwargs):
+        def _normalize_lora_stack_input(raw_stack):
+            rows = []
+            if raw_stack is None:
+                return rows
+
+            for entry in raw_stack:
+                if not (isinstance(entry, (list, tuple)) and len(entry) >= 1):
+                    continue
+
+                raw_name = str(entry[0] or "").strip()
+                if not raw_name:
+                    continue
+
+                try:
+                    model_strength = float(entry[1]) if len(entry) >= 2 else 1.0
+                except Exception:
+                    model_strength = 1.0
+
+                try:
+                    clip_strength = float(entry[2]) if len(entry) >= 3 else model_strength
+                except Exception:
+                    clip_strength = model_strength
+
+                rel_path, available = get_lora_relative_path(raw_name)
+                if not available or not rel_path:
+                    rel_path = raw_name
+
+                display_name = strip_lora_extension(os.path.basename(str(rel_path).replace("\\", "/")))
+                rows.append({
+                    'name': display_name,
+                    'path': rel_path,
+                    'model_strength': model_strength,
+                    'clip_strength': clip_strength,
+                    'active': True,
+                    'available': bool(available),
+                })
+
+            return rows
+
+        def _resolve_lora_output_path(lora_item):
+            if not isinstance(lora_item, dict):
+                return "", False
+
+            candidate = str(lora_item.get('path') or lora_item.get('name') or '').strip()
+            if not candidate:
+                return "", False
+
+            rel_path, available = get_lora_relative_path(candidate)
+            if available and rel_path:
+                return rel_path, True
+
+            _, resolved_available = resolve_lora_path(candidate)
+            return candidate, bool(resolved_available)
+
         def _short_display_name(name):
             raw = str(name or "").strip()
             if not raw:
@@ -226,20 +280,18 @@ class WorkflowRelay:
         else:
             incoming_wf = {}
 
-        # Start from a full empty-workflow template, then layer incoming values.
-        wf = dict(DEFAULT_RECIPE_DATA)
-        if isinstance(incoming_wf, dict):
-            wf.update(incoming_wf)
-
-            incoming_sampler = incoming_wf.get('sampler')
-            if isinstance(incoming_sampler, dict):
-                wf['sampler'] = dict(DEFAULT_RECIPE_DATA['sampler'])
-                wf['sampler'].update(incoming_sampler)
-
-            incoming_resolution = incoming_wf.get('resolution')
-            if isinstance(incoming_resolution, dict):
-                wf['resolution'] = dict(DEFAULT_RECIPE_DATA['resolution'])
-                wf['resolution'].update(incoming_resolution)
+        # Preserve incoming recipe_data exactly when present.
+        # Only fall back to the empty template when no input payload exists.
+        if isinstance(incoming_wf, dict) and incoming_wf:
+            wf = dict(incoming_wf)
+            if isinstance(incoming_wf.get('sampler'), dict):
+                wf['sampler'] = dict(incoming_wf['sampler'])
+            if isinstance(incoming_wf.get('resolution'), dict):
+                wf['resolution'] = dict(incoming_wf['resolution'])
+        else:
+            wf = dict(DEFAULT_RECIPE_DATA)
+            wf['sampler'] = dict(DEFAULT_RECIPE_DATA['sampler'])
+            wf['resolution'] = dict(DEFAULT_RECIPE_DATA['resolution'])
 
         sampler = dict(wf.get('sampler', DEFAULT_RECIPE_DATA['sampler']))
         resolution = dict(wf.get('resolution', DEFAULT_RECIPE_DATA['resolution']))
@@ -255,15 +307,9 @@ class WorkflowRelay:
 
         # -- LoRA stack overrides ------------------------------------
         if kwargs.get('lora_stack_a') is not None:
-            wf['loras_a'] = [
-                {'name': n, 'model_strength': ms, 'clip_strength': cs}
-                for n, ms, cs in kwargs['lora_stack_a']
-            ]
+            wf['loras_a'] = _normalize_lora_stack_input(kwargs['lora_stack_a'])
         if kwargs.get('lora_stack_b') is not None:
-            wf['loras_b'] = [
-                {'name': n, 'model_strength': ms, 'clip_strength': cs}
-                for n, ms, cs in kwargs['lora_stack_b']
-            ]
+            wf['loras_b'] = _normalize_lora_stack_input(kwargs['lora_stack_b'])
 
         # -- Resolution overrides ------------------------------------
         for key in ('width', 'height', 'batch_size', 'length'):
@@ -363,38 +409,28 @@ class WorkflowRelay:
         # Filter not-found LoRAs here so downstream nodes receiving
         # LORA_STACK don't get unavailable entries. Keep wf['loras_*']
         # unchanged to preserve authored workflow_data for chaining.
-        _lora_found_cache = {}
 
-        def _lora_is_found(name):
-            if not name:
-                return False
-            if name in _lora_found_cache:
-                return _lora_found_cache[name]
-            _, found = resolve_lora_path(name)
-            _lora_found_cache[name] = bool(found)
-            return _lora_found_cache[name]
-
-        def _is_active_available_found(lora_item):
+        def _is_active_available(lora_item):
             if not isinstance(lora_item, dict):
                 return False
-            lora_name = lora_item.get('name')
-            if not lora_name:
+            resolved_path, available = _resolve_lora_output_path(lora_item)
+            if not resolved_path:
                 return False
             if lora_item.get('active', True) is False:
                 return False
             if lora_item.get('available', True) is False:
                 return False
-            return _lora_is_found(lora_name)
+            return available
 
         lora_stack_a = [
-            (item['name'], item.get('model_strength', 1.0), item.get('clip_strength', 1.0))
+            (_resolve_lora_output_path(item)[0], item.get('model_strength', 1.0), item.get('clip_strength', 1.0))
             for item in wf.get('loras_a', [])
-            if _is_active_available_found(item)
+            if _is_active_available(item)
         ]
         lora_stack_b = [
-            (item['name'], item.get('model_strength', 1.0), item.get('clip_strength', 1.0))
+            (_resolve_lora_output_path(item)[0], item.get('model_strength', 1.0), item.get('clip_strength', 1.0))
             for item in wf.get('loras_b', [])
-            if _is_active_available_found(item)
+            if _is_active_available(item)
         ]
 
         # -- Extract all output values -------------------------------

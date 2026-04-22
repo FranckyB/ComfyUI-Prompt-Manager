@@ -4018,14 +4018,14 @@ class PromptExtractor:
                 enriched = []
                 for lora_path, strength, clip_strength in stack_tuples:
                     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                    _, found = resolve_lora_path(lora_name)
+                    _, available = resolve_lora_path(lora_name)
                     enriched.append({
                         'name': lora_name,
                         'path': lora_path,
                         'strength': strength,
                         'clip_strength': clip_strength,
                         'active': True,
-                        'available': found,
+                        'available': available,
                     })
                 return enriched
 

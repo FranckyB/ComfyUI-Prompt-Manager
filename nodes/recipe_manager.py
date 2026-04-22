@@ -248,7 +248,6 @@ class WorkflowManager(PromptManagerAdvanced):
                 "clip_strength": lora.get("clip_strength", lora.get("strength", 1.0)),
                 "active": lora.get("active", True),
                 "available": lora.get("available", True),
-                "found": lora.get("found", lora.get("available", True)),
             }
             for lora in loras_a_display
             if isinstance(lora, dict) and lora.get("name")
@@ -260,7 +259,6 @@ class WorkflowManager(PromptManagerAdvanced):
                 "clip_strength": lora.get("clip_strength", lora.get("strength", 1.0)),
                 "active": lora.get("active", True),
                 "available": lora.get("available", True),
-                "found": lora.get("found", lora.get("available", True)),
             }
             for lora in loras_b_display
             if isinstance(lora, dict) and lora.get("name")

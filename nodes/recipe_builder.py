@@ -892,8 +892,6 @@ class WorkflowBuilder:
                 }
                 if 'available' in item:
                     row['available'] = item.get('available', True) is not False
-                if 'found' in item:
-                    row['found'] = item.get('found', True) is not False
                 out.append(row)
 
             return out
@@ -1169,8 +1167,8 @@ class WorkflowBuilder:
         for lora in extracted.get('loras_a', []) + extracted.get('loras_b', []):
             lora_name = lora.get('name', '')
             if lora_name and lora_name not in lora_availability:
-                _, found = resolve_lora_path(lora_name)
-                lora_availability[lora_name] = found
+                _, available = resolve_lora_path(lora_name)
+                lora_availability[lora_name] = available
 
         # ── Check model / VAE availability for JS display ─────────────────
         model_a_found = True
@@ -1270,15 +1268,15 @@ class WorkflowBuilder:
                     simplified_wf[key] = wf_data.get(key)
 
         # Keep missing LoRAs in workflow_data (Prompt Manager-compatible).
-        # Annotate each LoRA with found flag so downstream nodes can
+        # Annotate each LoRA with available flag so downstream nodes can
         # skip missing entries without losing authored stack information.
         for lora_key in ('loras_a', 'loras_b'):
             annotated = []
             for lora in list(simplified_wf.get(lora_key, [])):
                 row = dict(lora or {})
                 name = str(row.get('name', '')).strip()
-                found = lora_availability.get(name, True) if name else True
-                row['found'] = bool(found)
+                available = lora_availability.get(name, True) if name else True
+                row['available'] = bool(available)
                 annotated.append(row)
 
             simplified_wf[lora_key] = annotated
@@ -1378,7 +1376,7 @@ class WorkflowBuilder:
                             'strength': float(ov.get('model_strength', lora.get('model_strength', 1.0))),
                             'clip_strength': float(ov.get('clip_strength', lora.get('clip_strength', 1.0))),
                             'active': active,
-                            'found': lora_availability.get(name, True),
+                            'available': lora_availability.get(name, True),
                         })
                     return enriched
 

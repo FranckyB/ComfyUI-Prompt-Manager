@@ -172,6 +172,7 @@ class WorkflowRenderer:
             raise ValueError(f"[RecipeRenderer] Invalid workflow_data type: {type(workflow_data)}")
 
         wf_out = dict(wf)
+
         wf_sampler = wf.get("sampler", {})
         wf_res = wf.get("resolution", {})
 
@@ -185,6 +186,7 @@ class WorkflowRenderer:
         if isinstance(clip_names, str):
             clip_names = [clip_names] if clip_names else []
         clip_type_str = wf.get("clip_type", "")
+        loader_type_str = wf.get("loader_type", "")
         loras_a = wf.get("loras_a", [])
         loras_b = wf.get("loras_b", [])
 
@@ -752,14 +754,14 @@ def _apply_loras(model, clip, loras, lora_overrides, stack_key=''):
         if lora_st.get('active') is False or lora.get('active') is False:
             continue
 
-        if lora.get('found') is False:
+        if lora.get('available', lora.get('available', True)) is False:
             continue
 
         model_strength = float(lora_st.get('model_strength', lora.get('model_strength', 1.0)))
         clip_strength  = float(lora_st.get('clip_strength',  lora.get('clip_strength',  1.0)))
 
-        lora_path, found = resolve_lora_path(lora_name)
-        if not found:
+        lora_path, available = resolve_lora_path(lora_name)
+        if not available:
             continue
 
         print(f"[RecipeRenderer] Applying LoRA: {lora_name} "

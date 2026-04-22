@@ -981,6 +981,24 @@ function hasWorkflowDataPayload(rawWorkflowData) {
     );
 }
 
+function hasMeaningfulWorkflowData(rawWorkflowData) {
+    const wf = parseJsonObjectSafe(rawWorkflowData, null);
+    if (!wf || typeof wf !== "object") return false;
+
+    // Renderer passthrough payloads may carry runtime objects but omit textual
+    // fields. Treat these as meaningful for save-time extraction.
+    const hasRuntimeCarrier = ["MODEL_A", "CLIP", "VAE", "POSITIVE", "NEGATIVE", "LATENT", "IMAGE"]
+        .some((key) => wf[key] != null);
+
+    const positivePrompt = String(wf.positive_prompt || "").trim();
+    const modelA = String(wf.model_a || "").trim();
+    const modelB = String(wf.model_b || "").trim();
+    const hasLorasA = Array.isArray(wf.loras_a) && wf.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
+    const hasLorasB = Array.isArray(wf.loras_b) && wf.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
+
+    return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB;
+}
+
 function hasConnectedWorkflowInput(node) {
     const wfInput = node?.inputs?.find((inp) => inp?.name === "recipe_data");
     return wfInput?.link != null;
@@ -4312,28 +4330,28 @@ function resolveWorkflowDataForSave(node) {
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
         if (sourceClass === "RecipeBuilder") {
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
-            if (fromBuilder) return fromBuilder;
+            if (hasMeaningfulWorkflowData(fromBuilder)) return fromBuilder;
         }
 
         if (sourceClass === "PromptExtractor" || sourceClass === "RecipeExtractor") {
             const fromExtractor = buildWorkflowDataFromExtractorNode(upstream);
-            if (fromExtractor) return fromExtractor;
+            if (hasMeaningfulWorkflowData(fromExtractor)) return fromExtractor;
         }
 
         const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
         if (wfOutIdx >= 0) {
             const out = upstream.outputs[wfOutIdx];
             const data = out?._data ?? out?.value ?? null;
-            if (data && typeof data === "object") return data;
+            if (hasMeaningfulWorkflowData(data)) return data;
             if (typeof data === "string") {
                 const parsed = parseJsonObjectSafe(data, null);
-                if (parsed) return parsed;
+                if (hasMeaningfulWorkflowData(parsed)) return parsed;
             }
         }
 
         // Connected input but no fresh upstream workflow_data: for Recipe Manager,
         // allow fallback to the latest live payload captured from execution updates.
-        if (node?._isWorkflowManager && node.lastWorkflowData && typeof node.lastWorkflowData === "object") {
+        if (node?._isWorkflowManager && hasMeaningfulWorkflowData(node.lastWorkflowData)) {
             return node.lastWorkflowData;
         }
 
@@ -4342,7 +4360,7 @@ function resolveWorkflowDataForSave(node) {
         return null;
     }
 
-    return node.lastWorkflowData || null;
+    return hasMeaningfulWorkflowData(node.lastWorkflowData) ? node.lastWorkflowData : null;
 }
 
 async function resolveWorkflowDataForLive(node) {
@@ -4438,16 +4456,22 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
         // If use_workflow_data is enabled and workflow_data comes from a connected
         // RecipeBuilder, pull it directly from Builder UI state so saving works
         // even before executing the graph.
-        const workflowDataForSave = resolveWorkflowDataForSave(node);
-        if (node?._isWorkflowManager && hasConnectedWorkflowInput(node) && !workflowDataForSave) {
+        const hasWorkflowInput = hasConnectedWorkflowInput(node);
+        const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
+        const workflowDataForSave = hasMeaningfulWorkflowData(liveWorkflowData)
+            ? liveWorkflowData
+            : resolveWorkflowDataForSave(node);
+
+        if (node?._isWorkflowManager && hasWorkflowInput && !hasMeaningfulWorkflowData(workflowDataForSave)) {
             await showInfo("Workflow Data", "No live workflow_data available to save yet. Execute upstream nodes and try again.");
             return;
         }
         if (workflowDataForSave) {
             const effectivePromptText = (
                 node?._isWorkflowManager &&
-                hasConnectedWorkflowInput(node) &&
-                typeof workflowDataForSave?.positive_prompt === "string"
+                hasWorkflowInput &&
+                typeof workflowDataForSave?.positive_prompt === "string" &&
+                workflowDataForSave.positive_prompt.trim().length > 0
             )
                 ? workflowDataForSave.positive_prompt
                 : text;

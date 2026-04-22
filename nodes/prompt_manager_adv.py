@@ -73,6 +73,30 @@ def image_to_base64_thumbnail(image_tensor, max_size=200):
         return None
 
 
+def _has_meaningful_workflow_data(workflow_data):
+    """Return True when workflow_data contains authored prompt/model/lora content."""
+    if not isinstance(workflow_data, dict):
+        return False
+
+    positive_prompt = str(workflow_data.get("positive_prompt", "")).strip()
+    model_a = str(workflow_data.get("model_a", "")).strip()
+    model_b = str(workflow_data.get("model_b", "")).strip()
+
+    loras_a = workflow_data.get("loras_a")
+    has_loras_a = isinstance(loras_a, list) and any(
+        isinstance(lora_item, dict) and str(lora_item.get("name", "")).strip()
+        for lora_item in loras_a
+    )
+
+    loras_b = workflow_data.get("loras_b")
+    has_loras_b = isinstance(loras_b, list) and any(
+        isinstance(lora_item, dict) and str(lora_item.get("name", "")).strip()
+        for lora_item in loras_b
+    )
+
+    return bool(positive_prompt or model_a or model_b or has_loras_a or has_loras_b)
+
+
 # ── Shared LoRA utilities ─────────────────────────────────────────────────────
 from ..py.lora_utils import (
     get_available_loras,
@@ -670,7 +694,6 @@ class PromptManagerAdvanced:
                 'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
                 'active': lora.get('active', True),
                 'available': lora.get('available', True),
-                'found': lora.get('available', True),
             }
             for lora in loras_a_display
             if isinstance(lora, dict) and lora.get('name')
@@ -682,7 +705,6 @@ class PromptManagerAdvanced:
                 'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
                 'active': lora.get('active', True),
                 'available': lora.get('available', True),
-                'found': lora.get('available', True),
             }
             for lora in loras_b_display
             if isinstance(lora, dict) and lora.get('name')
@@ -800,7 +822,6 @@ class PromptManagerAdvanced:
                 "active": True,
                 "strength": model_strength,
                 "available": available,
-                "found": available
             })
             seen_names.add(lora_name_lower)
 
@@ -843,7 +864,6 @@ class PromptManagerAdvanced:
                 "clip_strength": float(item.get('clip_strength', item.get('strength', 1.0))),
                 "active": item.get('active', True),
                 "available": found,
-                "found": found
             })
 
         return all_loras
@@ -869,7 +889,6 @@ class PromptManagerAdvanced:
                     "active": lora['active'],
                     "strength": lora['strength'],
                     "available": lora['available'],
-                    "found": lora.get('found', lora['available'])
                 })
                 seen_names.add(lora_name_lower)
 
@@ -1106,15 +1125,13 @@ async def save_prompt_advanced(request):
             normalized = []
             for lora in loras:
                 if isinstance(lora, dict) and lora.get('name'):
-                    available = lora.get('available', lora.get('found', True))
-                    found = lora.get('found', available)
+                    available = lora.get('available', lora.get('available', True))
                     normalized.append({
                         "name": lora.get('name'),
                         "strength": lora.get('strength', lora.get('model_strength', 1.0)),
                         "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0)),
                         "active": lora.get('active', True),
                         "available": bool(available),
-                        "found": bool(found),
                     })
             return normalized
 
@@ -1131,15 +1148,13 @@ async def save_prompt_advanced(request):
                     continue
                 strength = lora.get('strength', lora.get('model_strength', 1.0))
                 clip_strength = lora.get('clip_strength', strength)
-                available = lora.get('available', lora.get('found', True))
-                found = lora.get('found', available)
+                available = lora.get('available', lora.get('available', True))
                 normalized.append({
                     "name": name,
                     "strength": strength,
                     "clip_strength": clip_strength,
                     "active": lora.get('active', True),
                     "available": bool(available),
-                    "found": bool(found),
                 })
             return normalized
 
@@ -1187,17 +1202,19 @@ async def save_prompt_advanced(request):
         normalized_loras_a = normalize_lora_data(loras_a)
         normalized_loras_b = normalize_lora_data(loras_b)
 
-        # Workflow Saver parity: when workflow_data is present, treat its LoRA lists
-        # as authoritative for persistence.
+        workflow_has_meaningful_data = _has_meaningful_workflow_data(wf_to_save)
+
+        # Workflow Saver parity: when meaningful workflow_data is present, treat
+        # its LoRA lists as authoritative for persistence.
         wf_loras_a = normalize_workflow_lora_data((wf_to_save or {}).get("loras_a", []))
         wf_loras_b = normalize_workflow_lora_data((wf_to_save or {}).get("loras_b", []))
-        if isinstance(wf_to_save, dict):
-            if "loras_a" in wf_to_save:
+        if isinstance(wf_to_save, dict) and workflow_has_meaningful_data:
+            if "loras_a" in wf_to_save and wf_loras_a:
                 normalized_loras_a = wf_loras_a
             elif not normalized_loras_a and wf_loras_a:
                 normalized_loras_a = wf_loras_a
 
-            if "loras_b" in wf_to_save:
+            if "loras_b" in wf_to_save and wf_loras_b:
                 normalized_loras_b = wf_loras_b
             elif not normalized_loras_b and wf_loras_b:
                 normalized_loras_b = wf_loras_b
@@ -1219,7 +1236,7 @@ async def save_prompt_advanced(request):
 
         # Persist prompt fields from workflow_data snapshot when available.
         if isinstance(wf_to_save, dict):
-            if isinstance(wf_to_save.get("positive_prompt"), str):
+            if isinstance(wf_to_save.get("positive_prompt"), str) and wf_to_save.get("positive_prompt", "").strip():
                 prompt_data["prompt"] = wf_to_save.get("positive_prompt", "")
             if isinstance(wf_to_save.get("negative_prompt"), str):
                 prompt_data["negative_prompt"] = wf_to_save.get("negative_prompt", "")
@@ -1410,8 +1427,8 @@ async def get_prompt_data_advanced(request):
             result = []
             for lora in loras:
                 lora_copy = dict(lora)
-                _, found = get_lora_relative_path(lora.get('name', ''))
-                lora_copy['available'] = found
+                _, available = get_lora_relative_path(lora.get('name', ''))
+                lora_copy['available'] = available
                 result.append(lora_copy)
             return result
 

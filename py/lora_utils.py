@@ -70,7 +70,7 @@ def fuzzy_match_lora(lora_name, lora_files):
 
     Example: "DR34LAY_HIGH_V2" can match "DR34LAY_I2V_14B_HIGH_V2"
 
-    Returns (matched_file, True) if found, (None, False) otherwise.
+    Returns (matched_file, True) if available, (None, False) otherwise.
     """
     # Normalize the search name
     search_parts = _normalize_name_for_fuzzy(strip_lora_extension(lora_name))
@@ -121,7 +121,7 @@ def fuzzy_match_lora(lora_name, lora_files):
 def get_lora_relative_path(lora_name):
     """
     Get the relative path for a LoRA that ComfyUI expects for loading.
-    Returns (relative_path, found) tuple.
+    Returns (relative_path, available) tuple.
     Supports fuzzy matching for renamed LoRAs.
     """
     lora_files = get_available_loras()
@@ -135,11 +135,11 @@ def get_lora_relative_path(lora_name):
             return lora_file, True
 
     # Try fuzzy match for renamed LoRAs
-    fuzzy_match, found = fuzzy_match_lora(lora_name, lora_files)
-    if found:
+    fuzzy_match, available = fuzzy_match_lora(lora_name, lora_files)
+    if available:
         return fuzzy_match, True
 
-    # Not found
+    # Not available
     return lora_name, False
 
 
@@ -147,7 +147,7 @@ def resolve_lora_path(lora_name):
     """
     Resolve a LoRA name to its full path using ComfyUI's folder system.
     Uses exact matching first, then fuzzy matching with WAN token handling.
-    Returns (full_path_or_name, found) tuple.
+    Returns (full_path_or_name, available) tuple.
     """
     lora_files = get_available_loras()
 
@@ -164,8 +164,8 @@ def resolve_lora_path(lora_name):
             return folder_paths.get_full_path("loras", lora_file), True
 
     # Fuzzy match for renamed LoRAs
-    fuzzy_match, found = fuzzy_match_lora(lora_name, lora_files)
-    if found:
+    fuzzy_match, available = fuzzy_match_lora(lora_name, lora_files)
+    if available:
         return folder_paths.get_full_path("loras", fuzzy_match), True
 
     return None, False
