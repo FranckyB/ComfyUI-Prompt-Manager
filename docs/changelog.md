@@ -1,5 +1,9 @@
 # Changelog
 
+## version 2.1.1
+- Updated Documentation
+- Bug fixes
+
 ## version 2.1.0
 - **Naming Migration: Workflow -> Recipe**
   - Renamed node/toolset terminology to Recipe naming across the addon UI and docs.
