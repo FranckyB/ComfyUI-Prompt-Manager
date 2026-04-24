@@ -1119,8 +1119,10 @@ async function updateUI(node) {
         ]);
     }
 
-    // Guard: never leave Model A visually empty when models are available.
-    if (node._weEnsureModelSelection) {
+    // Keep pulled-empty slots truly empty on Update Recipe; otherwise preserve
+    // existing safety behavior that ensures a visible model selection.
+    const pulledModelAEmpty = String(d.model_a || "").trim() === "";
+    if (node._weEnsureModelSelection && !pulledModelAEmpty) {
         await node._weEnsureModelSelection({ reloadIfEmpty: true, sync: false });
     }
 
@@ -2060,7 +2062,7 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
             ? _normalizeModelPairStartKey(modelSlot)
             : _normalizeModelSlotKey(modelSlot);
 
-        if (Number(d?.version || 0) >= 2 && d?.models && typeof d.models === "object") {
+        if (d?.models && typeof d.models === "object") {
             const primary = d.models[selectedSlot] && typeof d.models[selectedSlot] === "object"
                 ? d.models[selectedSlot]
                 : {};
@@ -2118,14 +2120,47 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
             };
         }
 
+        // Legacy flat schema fallback.
+        const selectedModel = String(d?.[selectedSlot] ?? "").trim();
+        const secondaryLegacySlot = isWanBuilder ? _nextModelSlotKey(selectedSlot) : null;
+        const secondaryModel = secondaryLegacySlot ? String(d?.[secondaryLegacySlot] ?? "").trim() : "";
+        const isExtendedSlot = selectedSlot === "model_c" || selectedSlot === "model_d";
+
+        const slotPrompt = (slot, kind) => {
+            const slotVal = String(d?.[`${slot}_${kind}`] ?? "").trim();
+            if (slotVal) return slotVal;
+            const altVal = String(d?.[`${kind}_${slot}`] ?? "").trim();
+            if (altVal) return altVal;
+            return "";
+        };
+
+        const legacyPositive = isExtendedSlot ? slotPrompt(selectedSlot, "positive_prompt") : String(d.positive_prompt || "");
+        const legacyNegative = isExtendedSlot ? slotPrompt(selectedSlot, "negative_prompt") : String(d.negative_prompt || "");
+
+        const legacyPrimaryModel = selectedModel || (
+            selectedSlot === "model_a" ? String(d.model_a || "") :
+                selectedSlot === "model_b" ? String(d.model_b || "") : ""
+        );
+        const legacySecondaryModel = secondaryModel || (
+            isWanBuilder && selectedSlot === "model_a" ? String(d.model_b || "") : ""
+        );
+
+        const lorasBySlot = (slot) => {
+            if (slot === "model_a") return Array.isArray(d.loras_a) ? d.loras_a : [];
+            if (slot === "model_b") return Array.isArray(d.loras_b) ? d.loras_b : [];
+            if (slot === "model_c") return Array.isArray(d.loras_c) ? d.loras_c : [];
+            if (slot === "model_d") return Array.isArray(d.loras_d) ? d.loras_d : [];
+            return [];
+        };
+
         // Map from build_simplified_workflow_data schema to extracted schema
         return {
-            positive_prompt: d.positive_prompt || "",
-            negative_prompt: d.negative_prompt || "",
-            loras_a: d.loras_a || [],
-            loras_b: d.loras_b || [],
-            model_a: d.model_a || "",
-            model_b: d.model_b || "",
+            positive_prompt: legacyPositive,
+            negative_prompt: legacyNegative,
+            loras_a: lorasBySlot(selectedSlot),
+            loras_b: isWanBuilder && secondaryLegacySlot ? lorasBySlot(secondaryLegacySlot) : [],
+            model_a: legacyPrimaryModel,
+            model_b: isWanBuilder ? legacySecondaryModel : "",
             model_slot: selectedSlot,
             model_a_found: d.model_a_found,
             model_b_found: d.model_b_found,
@@ -2436,7 +2471,10 @@ app.registerExtension({
                 return ccNorm === "promptextractor" || ccNorm === "recipeextractor" ||
                     tyNorm === "promptextractor" || tyNorm === "recipeextractor" ||
                     ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
-                    ccNorm === "recipemanager" || tyNorm === "recipemanager";
+                    ccNorm === "recipemanager" || tyNorm === "recipemanager" ||
+                    ccNorm === "recipebuilder" || tyNorm === "recipebuilder" ||
+                    ccNorm === "recipebuilderwan" || tyNorm === "recipebuilderwan" ||
+                    ccNorm === "reciperelay" || tyNorm === "reciperelay";
             };
             const _isRerouteNodeHint = (n) => {
                 if (!n) return false;
@@ -2461,11 +2499,37 @@ app.registerExtension({
                 }
                 return null;
             };
+            const _syncPullFromOptionMode = (updateVisible) => {
+                const row = node._wePullModelSlotRow;
+                const sel = row?._inp;
+                if (!sel) return;
+
+                const hasNone = [...sel.options].some((o) => o.value === NO_PULL_SLOT);
+                if (!updateVisible && !hasNone) {
+                    const noneOpt = document.createElement("option");
+                    noneOpt.value = NO_PULL_SLOT;
+                    noneOpt.textContent = "none";
+                    sel.insertBefore(noneOpt, sel.firstChild || null);
+                } else if (updateVisible && hasNone) {
+                    for (const opt of [...sel.options]) {
+                        if (opt.value === NO_PULL_SLOT) opt.remove();
+                    }
+                }
+
+                const forced = updateVisible
+                    ? (node._weBuilderVariant === "wan" ? _normalizePullModelPairStartKey("model_a") : _normalizePullModelSlotKey("model_a"))
+                    : NO_PULL_SLOT;
+                sel.value = forced;
+                node._wePullModelSlot = forced;
+                if (row._setOriginal) row._setOriginal(forced);
+                syncHidden(node);
+            };
             const _refreshUpdateWorkflowButtonVisibility = () => {
                 if (!node._weUpdateBtn) return;
                 const wfInput = _findWorkflowDataInput(node);
                 if (wfInput?.link == null) {
                     node._weUpdateBtn.style.display = "none";
+                    _syncPullFromOptionMode(false);
                     return;
                 }
                 const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
@@ -2474,10 +2538,12 @@ app.registerExtension({
                 // recipe_data in that transient state and refine on the next pass.
                 if (!upstream) {
                     node._weUpdateBtn.style.display = "";
+                    _syncPullFromOptionMode(true);
                     return;
                 }
                 const show = _isUpdateSourceHint(upstream);
                 node._weUpdateBtn.style.display = show ? "" : "none";
+                _syncPullFromOptionMode(show);
             };
             const _deferUpdateWorkflowButtonRefresh = () => {
                 if (!node._weUpdateBtn) return;
@@ -2523,6 +2589,80 @@ app.registerExtension({
             updateBtn.onmouseenter = () => { updateBtn.style.background = C.accentDim; };
             updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
             updateBtn.onclick = async () => {
+                const isWanBuilder = node._weBuilderVariant === "wan";
+                const selectedPullSlot = node._weBuilderVariant === "wan"
+                    ? _normalizePullModelPairStartKey(node._wePullModelSlotRow?._inp?.value ?? node._wePullModelSlot ?? NO_PULL_SLOT)
+                    : _normalizePullModelSlotKey(node._wePullModelSlotRow?._inp?.value ?? node._wePullModelSlot ?? NO_PULL_SLOT);
+                node._wePullModelSlot = selectedPullSlot;
+                if (node._wePullModelSlotRow?._inp) {
+                    node._wePullModelSlotRow._inp.value = selectedPullSlot;
+                }
+
+                // Explicit clear mode: Pull From = none should clear Builder UI
+                // and must not fetch or infer data from any connected source.
+                if (selectedPullSlot === NO_PULL_SLOT) {
+                    try {
+                        updateBtn.disabled = true;
+                        updateBtn.textContent = "Clearing...";
+
+                        _showError(node, null);
+                        const cleared = {
+                            positive_prompt: "",
+                            negative_prompt: "",
+                            loras_a: [],
+                            loras_b: [],
+                            model_a: "",
+                            model_b: "",
+                            model_slot: NO_PULL_SLOT,
+                            pull_model_slot: NO_PULL_SLOT,
+                            vae: { name: "", source: "workflow_data" },
+                            clip: { names: [], type: "", source: "workflow_data" },
+                            sampler: {
+                                steps_a: 20,
+                                steps_b: isWanBuilder ? 3 : undefined,
+                                cfg: 5.0,
+                                denoise: 1.0,
+                                seed_a: 0,
+                                seed_b: isWanBuilder ? 0 : undefined,
+                                sampler_name: "euler",
+                                scheduler: "simple",
+                            },
+                            resolution: {
+                                width: 768,
+                                height: 1280,
+                                batch_size: 1,
+                                length: isWanBuilder ? 81 : null,
+                            },
+                            model_family: node._weFamily || "sdxl",
+                        };
+
+                        node._weWorkflowPrompts = { positive: "", negative: "" };
+                        node._weExtracted = cleared;
+                        node._wePopulated = true;
+                        node._weWorkflowLoras = { a: [], b: [] };
+                        node._weInputLoras = node._weInputLoras || { a: [], b: [] };
+                        node._weExtracted.loras_a = [];
+                        node._weExtracted.loras_b = [];
+                        node._weLoraState = {};
+                        node._weOverrides = {};
+                        node.properties = node.properties || {};
+                        node.properties.we_extracted_cache = JSON.stringify(cleared);
+                        delete node.properties.we_override_data;
+                        delete node.properties.we_lora_state;
+                        await updateUI(node);
+                        syncHidden(node);
+                        node.setDirtyCanvas(true, true);
+                        app.graph.setDirtyCanvas(true, true);
+                    } catch (e) {
+                        console.error("[RecipeBuilder] Update Recipe clear error:", e);
+                        _showError(node, "Failed to clear builder data for Pull From = none.");
+                    } finally {
+                        updateBtn.disabled = false;
+                        updateBtn.textContent = "Update Recipe";
+                    }
+                    return;
+                }
+
                 // 1. Find a source node — prefer one connected via recipe_data input
                 // Supported: PromptExtractor, RecipeExtractor, RecipeBuilder, RecipeRelay.
                 const _isSupportedSource = (n) => {
@@ -2532,7 +2672,10 @@ app.registerExtension({
                     return ccNorm === "promptextractor" || ccNorm === "recipeextractor" ||
                         tyNorm === "promptextractor" || tyNorm === "recipeextractor" ||
                         ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
-                        ccNorm === "recipemanager" || tyNorm === "recipemanager";
+                        ccNorm === "recipemanager" || tyNorm === "recipemanager" ||
+                        ccNorm === "recipebuilder" || tyNorm === "recipebuilder" ||
+                        ccNorm === "recipebuilderwan" || tyNorm === "recipebuilderwan" ||
+                        ccNorm === "reciperelay" || tyNorm === "reciperelay";
                 };
                 const _isRerouteNode = (n) => {
                     if (!n) return false;
@@ -2575,7 +2718,7 @@ app.registerExtension({
                     }
                 }
                 if (!sourceNode) {
-                    _showError(node, "No PromptExtractor, RecipeExtractor, PromptManagerAdvanced, or RecipeManager connected to recipe_data.");
+                    _showError(node, "No supported source connected to recipe_data (PromptExtractor, RecipeExtractor, PromptManagerAdvanced, RecipeManager, RecipeBuilder, or RecipeRelay).");
                     return;
                 }
 
@@ -2706,7 +2849,7 @@ app.registerExtension({
                         }
 
                         const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
-                        extracted = parseWorkflowData(wfJson, node._wePullModelSlot || "model_a", node._weBuilderVariant || "simple");
+                        extracted = parseWorkflowData(wfJson, selectedPullSlot || "model_a", node._weBuilderVariant || "simple");
                         if (!extracted) {
                             _showError(node, "Connected RecipeRelay recipe_data is unavailable or invalid. Execute upstream nodes, then click Update Recipe.");
                             return;
@@ -2725,7 +2868,7 @@ app.registerExtension({
 
                         if (wfData) {
                             const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
-                            extracted = parseWorkflowData(wfJson, node._wePullModelSlot || "model_a", node._weBuilderVariant || "simple");
+                            extracted = parseWorkflowData(wfJson, selectedPullSlot || "model_a", node._weBuilderVariant || "simple");
                         }
 
                         if (!extracted) {
@@ -2896,6 +3039,10 @@ app.registerExtension({
                         return;
                     }
                     const processed = processData.extracted || extracted;
+                    if (processed && typeof processed === "object") {
+                        processed.pull_model_slot = selectedPullSlot;
+                        processed.model_slot = selectedPullSlot;
+                    }
                     const sectionLocks = node._weSectionLocks || {};
                     const lorasLocked = !!sectionLocks.loras;
                     const positiveLocked = !!sectionLocks.positive;
