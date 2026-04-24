@@ -3,6 +3,7 @@ import subprocess
 import time
 import os
 import sys
+import gc
 import atexit
 import signal
 import psutil
@@ -10,6 +11,7 @@ import json
 import base64
 import ctypes
 import numpy as np
+import torch
 from colorama import Fore, Style
 from PIL import Image
 from io import BytesIO
@@ -661,19 +663,43 @@ class PromptGenerator:
         return PromptGenerator.fetch_model_defaults()
 
     @staticmethod
-    def cleanup_vram_before_run():
-        """Best-effort VRAM cleanup before generation starts."""
-        try:
-            # Preferred in modern Comfy builds: release cached GPU memory without tearing down runtime state.
-            if hasattr(comfy.model_management, "soft_empty_cache"):
+    def _comfy_cache_cleanup_compat(force=True):
+        """Call Comfy cache cleanup with compatibility across versions."""
+        if hasattr(comfy.model_management, "soft_empty_cache"):
+            try:
+                # Newer Comfy builds may accept a force flag.
+                comfy.model_management.soft_empty_cache(force)
+            except TypeError:
+                # Older builds expose no-arg soft_empty_cache.
                 comfy.model_management.soft_empty_cache()
-            # Fallback for older builds where only model cleanup helpers are exposed.
-            elif hasattr(comfy.model_management, "cleanup_models"):
-                comfy.model_management.cleanup_models()
-            print_pg("Pre-run VRAM cleanup executed.")
+        elif hasattr(comfy.model_management, "cleanup_models"):
+            comfy.model_management.cleanup_models()
+
+    @staticmethod
+    def flush_vram(unload_models=True):
+        """Aggressive VRAM cleanup for low-headroom systems."""
+        try:
+            if unload_models and hasattr(comfy.model_management, "unload_all_models"):
+                comfy.model_management.unload_all_models()
+
+            PromptGenerator._comfy_cache_cleanup_compat(force=True)
+            gc.collect()
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                try:
+                    torch.cuda.ipc_collect()
+                except Exception:
+                    pass
+
+            print_pg(f"VRAM flush executed (unload_models={'ON' if unload_models else 'OFF'}).")
         except Exception as e:
-            # Cleanup should never block generation.
-            print_pg(f"Warning: Pre-run VRAM cleanup failed: {e}", RED)
+            print_pg(f"Warning: VRAM flush failed: {e}", RED)
+
+    @staticmethod
+    def cleanup_vram_before_run():
+        """Aggressive pre-run VRAM cleanup before generation starts."""
+        PromptGenerator.flush_vram(unload_models=True)
 
     def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, options=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
@@ -1089,6 +1115,9 @@ class PromptGenerator:
                 print_pg("Perhaps your query requires a larger context size.\nConsider increasing it using the Generator Options node.", RED)
                 error_msg += "\nConsider increasing context size using Generator Options node."
             raise RuntimeError(error_msg)
+        finally:
+            # Aggressive post-run cleanup to release VRAM pressure for Comfy pipelines.
+            self.flush_vram(unload_models=True)
 
     # ================================================================
     # Ollama generation helper
@@ -1257,6 +1286,9 @@ class PromptGenerator:
             error_msg = f"Error (Ollama): {e}"
             print_pg(error_msg, RED)
             raise RuntimeError(error_msg)
+        finally:
+            # Aggressive post-run cleanup to release VRAM pressure for Comfy pipelines.
+            self.flush_vram(unload_models=True)
 
     def print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):
         """Print token statistics using pre-cached counts"""

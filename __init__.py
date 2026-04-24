@@ -2,7 +2,7 @@
 ComfyUI Prompt Manager - A comprehensive prompt and workflow management system for ComfyUI.
 Features: prompt & workflow management, LoRA stacks, workflow extraction, workflow generation.
 """
-__version__ = "2.1.1"
+__version__ = "2.2.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
@@ -55,6 +55,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 WEB_DIRECTORY = "./js"
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
-
 print("[PromptManager] Nodes registered: Apply LoRA++, Prompt Manager (Basic), Prompt Manager, Prompt Generator, Prompt Generator Options, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Builder (WAN), Recipe Merge, Recipe Renderer, Recipe Relay, Recipe Model Loader, Recipe Manager")
+# End of module
 

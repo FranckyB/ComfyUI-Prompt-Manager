@@ -1,5 +1,23 @@
 # Changelog
 
+## version 2.2.0
+- **Recipe_data v2 expansion and slot-aware workflows**
+  - Expanded v2 compatibility across Builder, Relay, Renderer, Manager, and extraction utilities.
+  - Improved model slot behavior for `model_a`/`model_b`/`model_c`/`model_d`, including WAN pair handling.
+- **Recipe Builder Update flow and persistence improvements**
+  - Update Recipe now respects Pull From selection consistently and supports expected clear behavior for empty/none selections.
+  - Pull From / Send To state persistence improved across tab switches and workflow reloads.
+  - Update Recipe visibility refined to avoid incomplete Builder-to-Builder pull paths.
+- **LoRA synchronization and execution-order fixes**
+  - Fixed connected LoRA add/remove timing so `recipe_data` reflects changes on first execute.
+  - Improved LoRA state authority between connected inputs and persisted UI overrides.
+- **Renderer validation hardening**
+  - Renderer now fails fast with a clear error when the selected model slot is undefined.
+  - Prevents silent renders from empty/non-existent selected model slots.
+- **Prompt Generator GPU utilization and VRAM prep**
+  - Ensured llama.cpp server launch uses `-ngl 100` so generation is pushed to GPU as much as possible.
+  - Added more aggressive cache/VRAM flushing before generation to reduce memory pressure and improve run reliability.
+
 ## version 2.1.1
 - Updated Documentation
 - Bug fixes
