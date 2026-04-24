@@ -1111,6 +1111,22 @@ function updateWorkflowManagerPreview(node) {
     const liveWorkflow = (node.lastWorkflowData && typeof node.lastWorkflowData === "object") ? node.lastWorkflowData : null;
     const workflowInputConnected = hasConnectedWorkflowInput(node);
 
+    // Keep info button in the preview corner, active only when recipe data is available.
+    const rawInfoData = workflowInputConnected
+        ? liveWorkflow
+        : (promptData?.workflow_data || liveWorkflow || null);
+    const infoData = parseJsonObjectSafe(rawInfoData, null);
+    const infoSummary = _summarizeWorkflowDataDiscovery(infoData);
+    const infoEnabled = infoSummary.modelCount > 0;
+    if (ui.infoBtn) {
+        ui.infoBtn.disabled = !infoEnabled;
+        ui.infoBtn.style.background = infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)";
+        ui.infoBtn.style.color = infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)";
+        ui.infoBtn.style.cursor = infoEnabled ? "pointer" : "default";
+        ui.infoBtn.style.opacity = infoEnabled ? "1" : "0.8";
+        ui.infoBtn.title = infoEnabled ? "Show workflow summary" : "No workflow metadata";
+    }
+
     // Input-connected mode should not show saved/random prompt thumbnails while waiting.
     // Use the placeholder image until live workflow_data arrives.
     if (workflowInputConnected && !liveWorkflow) {
@@ -1139,7 +1155,13 @@ function updateWorkflowManagerPreview(node) {
 
     const liveThumbnail = pickThumbnail(liveWorkflow) || (typeof node.connectedThumbnail === "string" ? node.connectedThumbnail : "");
     const savedThumbnail = pickThumbnail(promptData);
-    const thumbnail = liveThumbnail || savedThumbnail || DEFAULT_THUMBNAIL;
+
+    // In input-connected mode, never fall back to saved prompt thumbnails.
+    // If incoming workflow_data has no thumbnail, keep placeholder/empty state
+    // instead of showing stale image from a previously selected recipe.
+    const thumbnail = workflowInputConnected
+        ? (liveThumbnail || DEFAULT_THUMBNAIL)
+        : (liveThumbnail || savedThumbnail || DEFAULT_THUMBNAIL);
 
     if (thumbnail && thumbnail !== DEFAULT_THUMBNAIL) {
         ui.image.src = thumbnail;
@@ -1225,9 +1247,46 @@ function addWorkflowManagerPreview(node) {
         box-sizing: border-box;
     `;
 
+    const infoBtn = document.createElement("button");
+    const infoBtnLabel = document.createElement("span");
+    infoBtnLabel.textContent = "info";
+    infoBtnLabel.style.cssText = "display:block; ";
+    infoBtn.appendChild(infoBtnLabel);
+    infoBtn.style.cssText = `
+        position: absolute;
+        right: 4px;
+        bottom: 4px;
+        width: 28px;
+        height: 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(240, 248, 255, 0.95);
+        background: rgba(120, 130, 140, 0.35);
+        color: rgba(220, 226, 234, 0.75);
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        font-family: inherit;
+        appearance: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        cursor: default;
+        z-index: 2;
+        opacity: 0.8;
+        padding: 0;
+    `;
+    infoBtn.onclick = async (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        if (infoBtn.disabled) return;
+        await showWorkflowDiscoverySummary(node);
+    };
+
     container.appendChild(title);
     previewBox.appendChild(image);
     previewBox.appendChild(emptyLabel);
+    previewBox.appendChild(infoBtn);
     container.appendChild(previewBox);
 
     const widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
@@ -1236,7 +1295,7 @@ function addWorkflowManagerPreview(node) {
     // Keep width behavior unchanged; make preview area ~20% taller.
     widget.computeSize = (width) => [Math.max(width || 260, 260), 320];
 
-    node._workflowManagerPreview = { container, image, emptyLabel, widget };
+    node._workflowManagerPreview = { container, image, emptyLabel, infoBtn, widget };
     node.workflowManagerPreviewAttached = true;
     updateWorkflowManagerPreview(node);
 }
@@ -1498,25 +1557,25 @@ function _showWorkflowSummaryDialog(summary) {
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            width: min(820px, 92vw);
-            max-height: 82vh;
+            width: min(442px, 92vw);
+            max-height: 78vh;
             overflow: auto;
             background: #232930;
             border: 1px solid #3c4b59;
             border-radius: 10px;
-            padding: 16px;
+            padding: 12px;
             z-index: 10000;
             box-shadow: 0 8px 28px rgba(0,0,0,0.55);
         `;
 
         const title = document.createElement("div");
         title.textContent = "Summary";
-        title.style.cssText = "margin-bottom: 10px; font-size: 18px; font-weight: 700; color: #e7eef6;";
+        title.style.cssText = "margin-bottom: 8px; font-size: 17px; font-weight: 700; color: #e7eef6;";
         dialog.appendChild(title);
 
         const meta = document.createElement("div");
         meta.style.cssText = "margin-bottom: 12px; color: #9eb2c6; font-size: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(115, 144, 170, 0.35);";
-        meta.innerHTML = `<b style=\"color:#c5d8ea;\">Models found:</b> ${summary.modelCount} &nbsp; | &nbsp; <b style=\"color:#c5d8ea;\">Source:</b> ${summary.source || "unknown"}`;
+        meta.innerHTML = `<b style=\"color:#c5d8ea;\">Models found:</b> ${summary.modelCount}`;
         dialog.appendChild(meta);
 
         const modelsSection = document.createElement("div");
@@ -1556,7 +1615,7 @@ function _showWorkflowSummaryDialog(summary) {
             for (const item of summary.modelDetails) {
                 if (!Array.isArray(item.loras) || item.loras.length === 0) continue;
                 const stackCard = document.createElement("div");
-                stackCard.style.cssText = "background: rgba(30, 40, 52, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 8px; padding: 8px; margin-bottom: 8px;";
+                stackCard.style.cssText = "background: rgba(30, 40, 52, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 8px; padding: 6px; margin-bottom: 6px;";
 
                 const stackTitle = document.createElement("div");
                 stackTitle.textContent = `Stack ${item.slotLabel}:`;
@@ -1564,7 +1623,7 @@ function _showWorkflowSummaryDialog(summary) {
                 stackCard.appendChild(stackTitle);
 
                 const stackTags = document.createElement("div");
-                stackTags.style.cssText = "display:flex; flex-wrap:wrap; gap:6px;";
+                stackTags.style.cssText = "display:grid; grid-template-columns: 200px 200px; justify-content:start; gap:2px;";
                 for (const lora of item.loras) {
                     stackTags.appendChild(_createSummaryLoraTag(lora));
                 }
@@ -1619,6 +1678,97 @@ async function showWorkflowDiscoverySummary(node) {
 
     const summary = _summarizeWorkflowDataDiscovery(workflowData);
     await _showWorkflowSummaryDialog(summary);
+}
+
+function attachWorkflowCornerInfoHandlers(node) {
+    if (!node?._isWorkflowManager || node._workflowCornerInfoAttached) return;
+
+    const previousDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function(ctx) {
+        const result = previousDrawForeground ? previousDrawForeground.apply(this, arguments) : undefined;
+
+        if (this.flags?.collapsed) {
+            this._workflowInfoBounds = null;
+            return result;
+        }
+
+        const summary = _summarizeWorkflowDataDiscovery(this.lastWorkflowData);
+        const infoEnabled = summary.modelCount > 0;
+        const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+        const infoWidth = 30;
+        const infoHeight = 14;
+        const infoX = this.size[0] - infoWidth - 8;
+        const infoY = (titleHeight / 2) - 37;
+        const cornerRadius = 7;
+
+        const drawRoundRect = (x, y, w, h, r) => {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+        };
+
+        ctx.save();
+        drawRoundRect(infoX, infoY, infoWidth, infoHeight, cornerRadius);
+        ctx.fillStyle = infoEnabled ? 'rgba(55, 142, 255, 0.92)' : 'rgba(120, 130, 140, 0.35)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(240, 248, 255, 0.95)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = infoEnabled ? '#ffffff' : 'rgba(220, 226, 234, 0.75)';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('info', infoX + (infoWidth / 2), infoY + (infoHeight / 2) + 0.5);
+        ctx.restore();
+
+        this._workflowInfoBounds = {
+            x: infoX,
+            y: infoY,
+            width: infoWidth,
+            height: infoHeight,
+            enabled: infoEnabled,
+        };
+        return result;
+    };
+
+    const previousMouseMove = node.onMouseMove;
+    node.onMouseMove = function(e, localPos, canvas) {
+        const result = previousMouseMove ? previousMouseMove.apply(this, arguments) : undefined;
+        const b = this._workflowInfoBounds;
+        if (!b) return result;
+
+        const hovering = localPos[0] >= b.x && localPos[0] <= b.x + b.width &&
+            localPos[1] >= b.y && localPos[1] <= b.y + b.height;
+        if (hovering) {
+            canvas.canvas.title = b.enabled ? 'Workflow metadata found (info available)' : 'No workflow metadata';
+            canvas.canvas.style.cursor = b.enabled ? 'pointer' : '';
+        }
+        return result;
+    };
+
+    const previousMouseDown = node.onMouseDown;
+    node.onMouseDown = function(e, localPos, canvas) {
+        const b = this._workflowInfoBounds;
+        if (b) {
+            const hit = localPos[0] >= b.x && localPos[0] <= b.x + b.width &&
+                localPos[1] >= b.y && localPos[1] <= b.y + b.height;
+            if (hit && b.enabled) {
+                void showWorkflowDiscoverySummary(this);
+                return true;
+            }
+        }
+        return previousMouseDown ? previousMouseDown.apply(this, arguments) : undefined;
+    };
+
+    node._workflowCornerInfoAttached = true;
 }
 
 // ========================
@@ -3386,13 +3536,8 @@ function addButtonBar(node) {
         }
     ]);
 
-    const infoBtn = createButton("Info", async () => {
-        await showWorkflowDiscoverySummary(node);
-    });
-
     buttonContainer.appendChild(savePromptBtn);
     buttonContainer.appendChild(newPromptBtn);
-    buttonContainer.appendChild(infoBtn);
     buttonContainer.appendChild(moreBtn);
 
     // Add button bar to node
@@ -6130,7 +6275,9 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         `;
 
         const title = document.createElement("div");
-        title.textContent = mode === "save" ? saveTitle : "Select Prompt";
+        title.textContent = mode === "save"
+            ? saveTitle
+            : (workflowOnly ? "Select Recipe" : "Select Prompt");
         title.style.cssText = `
             font-size: 18px;
             font-weight: bold;
@@ -6825,8 +6972,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
                     if (showWorkflowBadge) {
                         const workflowBadge = document.createElement("div");
-                        workflowBadge.textContent = "W";
-                        workflowBadge.title = "Has workflow data";
+                        workflowBadge.textContent = "R";
+                        workflowBadge.title = "Has Recipe Data";
                         workflowBadge.style.cssText = `
                             width: 14px;
                             height: 14px;
@@ -7061,8 +7208,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 const showWorkflowBadge = !workflowOnly && hasWorkflowData;
                 if (showWorkflowBadge) {
                     const workflowBadge = document.createElement("div");
-                    workflowBadge.textContent = "W";
-                    workflowBadge.title = "Has workflow data";
+                    workflowBadge.textContent = "R";
+                    workflowBadge.title = "Has Recipe Data";
                     workflowBadge.style.cssText = `
                         position: absolute;
                         right: -2px;
@@ -8778,13 +8925,23 @@ function createPromptSelectorWidget(node) {
         if (existingWorkflowLabel) existingWorkflowLabel.remove();
         const existingFoundLabel = nameDisplay.querySelector('.workflow-found-label');
         if (existingFoundLabel) existingFoundLabel.remove();
+        const existingInfoLabel = nameDisplay.querySelector('.workflow-info-label');
+        if (existingInfoLabel) existingInfoLabel.remove();
 
-        const createBadge = (className, text, styleBlock) => {
+        const createBadge = (className, text, styleBlock, onClick = null) => {
             const label = document.createElement("span");
             label.className = className;
             label.textContent = text;
             label.style.cssText = styleBlock;
+            if (typeof onClick === "function") {
+                label.style.pointerEvents = "auto";
+                label.onclick = (evt) => {
+                    evt.stopPropagation();
+                    onClick(evt);
+                };
+            }
             nameDisplay.appendChild(label);
+            return label;
         };
 
         // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible.
@@ -8814,7 +8971,7 @@ function createPromptSelectorWidget(node) {
             }
 
             if (hasWorkflowData && !node?._isWorkflowManager) {
-                createBadge("workflow-selector-label", "W", `
+                createBadge("workflow-selector-label", "R", `
                     width: 14px;
                     height: 14px;
                     border-radius: 50%;
@@ -8832,21 +8989,37 @@ function createPromptSelectorWidget(node) {
             }
         }
 
+        let infoEnabled = false;
         if (node._isWorkflowManager) {
             const summary = _summarizeWorkflowDataDiscovery(node.lastWorkflowData);
-            if (summary.modelCount > 0) {
-                createBadge("workflow-found-label", `M${summary.modelCount}`, `
-                    background: rgba(50, 170, 220, 0.95);
-                    color: #fff;
-                    font-size: 8px;
-                    font-weight: bold;
-                    padding: 0px 4px;
-                    border-radius: 2px;
-                    margin-left: 6px;
-                    flex-shrink: 0;
-                    line-height: 12px;
-                `);
-            }
+            infoEnabled = summary.modelCount > 0;
+        } else if (!wmInputMode && node.prompts && category) {
+            const promptData = node.prompts[category]?.[prompt] || null;
+            infoEnabled = hasMeaningfulWorkflowData(promptData?.workflow_data);
+        }
+
+        if (!node._isWorkflowManager) {
+            createBadge("workflow-info-label", "info", `
+                margin-left: 6px;
+                width: 28px;
+                height: 14px;
+                border-radius: 999px;
+                border: 1px solid rgba(235, 245, 255, 0.95);
+                background: ${infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)"};
+                color: ${infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)"};
+                font-size: 8px;
+                font-weight: 700;
+                letter-spacing: 0.2px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                line-height: 1;
+                flex-shrink: 0;
+                cursor: ${infoEnabled ? "pointer" : "default"};
+                opacity: ${infoEnabled ? "1" : "0.75"};
+            `, infoEnabled ? () => {
+                void showWorkflowDiscoverySummary(node);
+            } : null);
         }
     };
 
