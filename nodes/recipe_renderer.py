@@ -208,6 +208,7 @@ class WorkflowRenderer:
         primary = None
         secondary = None
         selected_slot = _normalize_model_slot(model_slot)
+        slot_model_defined = False
 
         if int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict):
             models = wf.get("models", {})
@@ -241,6 +242,9 @@ class WorkflowRenderer:
                     merged_res.update(primary.get("resolution", {}))
                     wf_res = merged_res
 
+                if str(primary.get("model", "")).strip() or primary.get("MODEL") is not None:
+                    slot_model_defined = True
+
             if isinstance(secondary, dict):
                 model_name_b = secondary.get("model", model_name_b)
                 if isinstance(secondary.get("loras"), list):
@@ -252,6 +256,17 @@ class WorkflowRenderer:
                             wf_sampler["steps_b"] = sec_sampler.get("steps")
                         if "seed_b" not in wf_sampler and sec_sampler.get("seed") is not None:
                             wf_sampler["seed_b"] = sec_sampler.get("seed")
+        else:
+            # Legacy schema supports root model_a/model_b only.
+            if selected_slot == "model_a":
+                slot_model_defined = bool(str(model_name_a or "").strip()) or (wf.get("MODEL_A") is not None)
+            elif selected_slot == "model_b":
+                slot_model_defined = bool(str(model_name_b or "").strip()) or (wf.get("MODEL_B") is not None)
+            else:
+                slot_model_defined = False
+
+        if not slot_model_defined:
+            raise ValueError(f"[RecipeRenderer] Selected model is not defined for slot '{selected_slot}'.")
 
         if isinstance(clip_names, str):
             clip_names = [clip_names] if clip_names else []
