@@ -10,7 +10,7 @@ import torch
 import server
 import comfy.samplers
 from ..py.workflow_families import get_family_label
-from ..py.workflow_data_utils import strip_runtime_objects, to_json_safe_workflow_data
+from ..py.workflow_data_utils import ensure_v2_recipe_data, strip_runtime_objects, to_json_safe_workflow_data
 
 # Import PIL for image metadata reading
 try:
@@ -3857,9 +3857,74 @@ class PromptExtractor:
                     print(f"[PromptExtractor] Error building structured workflow_data: {e}")
                     import traceback
                     traceback.print_exc()
-                    workflow_data = {}
+                    sampler_fallback = {
+                        "steps_a": 20,
+                        "cfg": 5.0,
+                        "denoise": 1.0,
+                        "seed_a": 0,
+                        "sampler_name": "euler",
+                        "scheduler": "simple",
+                    }
+                    try:
+                        if isinstance(_sampler, dict):
+                            sampler_fallback.update(_sampler)
+                    except Exception:
+                        pass
+
+                    resolution_fallback = {
+                        "width": 768,
+                        "height": 1280,
+                        "batch_size": 1,
+                        "length": None,
+                    }
+                    try:
+                        if isinstance(_res, dict):
+                            resolution_fallback.update(_res)
+                    except Exception:
+                        pass
+
+                    vae_name = ""
+                    clip_names = []
+                    clip_type = ""
+                    family_fallback = "sdxl"
+                    try:
+                        if isinstance(_vae, dict):
+                            vae_name = str(_vae.get("name", "") or "")
+                    except Exception:
+                        pass
+                    try:
+                        if isinstance(_clip, dict):
+                            raw_clip_names = _clip.get("names", [])
+                            if isinstance(raw_clip_names, list):
+                                clip_names = raw_clip_names
+                            elif isinstance(raw_clip_names, str) and raw_clip_names:
+                                clip_names = [raw_clip_names]
+                            clip_type = str(_clip.get("type", "") or "")
+                    except Exception:
+                        pass
+                    try:
+                        if isinstance(_family, str) and _family:
+                            family_fallback = _family
+                    except Exception:
+                        pass
+
+                    workflow_data = ensure_v2_recipe_data({
+                        "_source": "PromptExtractor",
+                        "family": family_fallback,
+                        "model_a": model_a,
+                        "model_b": model_b,
+                        "positive_prompt": positive_prompt,
+                        "negative_prompt": negative_prompt,
+                        "loras_a": loras_a if isinstance(loras_a, list) else [],
+                        "loras_b": loras_b if isinstance(loras_b, list) else [],
+                        "vae": vae_name,
+                        "clip": clip_names,
+                        "clip_type": clip_type,
+                        "sampler": sampler_fallback,
+                        "resolution": resolution_fallback,
+                    }, source="PromptExtractor")
             else:
-                workflow_data = {}
+                workflow_data = ensure_v2_recipe_data({}, source="PromptExtractor")
 
             # Process loras only if use_lora_input_only is disabled (extract mode)
             if not use_lora_input_only:
@@ -3984,6 +4049,9 @@ class PromptExtractor:
                         _, _found = resolve_lora_path(_ln)
                         avail[_ln] = _found
                 _last_extracted_info[uid_str]['lora_availability'] = avail
+
+        if isinstance(workflow_data, dict):
+            workflow_data = ensure_v2_recipe_data(workflow_data, source="PromptExtractor")
 
         # Provide placeholder image tensor if none loaded (e.g., for JSON files)
         if image_tensor is None:

@@ -113,6 +113,56 @@ def _has_meaningful_workflow_data(workflow_data):
     return bool(positive_prompt or model_a or model_b or has_loras_a or has_loras_b)
 
 
+def _normalize_workflow_loras_for_prompt(loras):
+    """Normalize workflow_data LoRA list to prompt-manager LoRA schema."""
+    normalized = []
+    if not isinstance(loras, list):
+        return normalized
+    for lora in loras:
+        if not isinstance(lora, dict):
+            continue
+        name = str(lora.get("name", "")).strip()
+        if not name:
+            continue
+        strength = lora.get("strength", lora.get("model_strength", 1.0))
+        clip_strength = lora.get("clip_strength", strength)
+        normalized.append({
+            "name": name,
+            "strength": strength,
+            "clip_strength": clip_strength,
+            "active": lora.get("active", True),
+            "available": bool(lora.get("available", True)),
+        })
+    return normalized
+
+
+def _derive_prompt_fields_from_workflow_data(workflow_data):
+    """Derive prompt + LoRA compatibility fields from v2 workflow_data model blocks."""
+    if not isinstance(workflow_data, dict):
+        return {
+            "prompt": "",
+            "negative_prompt": "",
+            "loras_a": [],
+            "loras_b": [],
+            "model_a": "",
+            "model_b": "",
+        }
+
+    wf_v2 = ensure_v2_recipe_data(workflow_data, source="PromptManagerAdvanced")
+    wf_models = wf_v2.get("models", {}) if isinstance(wf_v2.get("models"), dict) else {}
+    model_a_block = wf_models.get("model_a") if isinstance(wf_models.get("model_a"), dict) else {}
+    model_b_block = wf_models.get("model_b") if isinstance(wf_models.get("model_b"), dict) else {}
+
+    return {
+        "prompt": str(model_a_block.get("positive_prompt", "") or ""),
+        "negative_prompt": str(model_a_block.get("negative_prompt", "") or ""),
+        "loras_a": _normalize_workflow_loras_for_prompt(model_a_block.get("loras", [])),
+        "loras_b": _normalize_workflow_loras_for_prompt(model_b_block.get("loras", [])),
+        "model_a": str(model_a_block.get("model", "") or ""),
+        "model_b": str(model_b_block.get("model", "") or ""),
+    }
+
+
 # ── Shared LoRA utilities ─────────────────────────────────────────────────────
 from ..py.lora_utils import (
     get_available_loras,
@@ -569,6 +619,7 @@ class PromptManagerAdvanced:
         prompt_entry = prompts_data.get(category, {}).get(name, {}) if isinstance(prompts_data, dict) else {}
         stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
         resolved_workflow_data = ensure_v2_recipe_data(stored_prompt_wf, source="PromptManagerAdvanced") if isinstance(stored_prompt_wf, dict) else None
+        workflow_fields = _derive_prompt_fields_from_workflow_data(resolved_workflow_data)
 
         # Choose which text to use based on the toggles
         # Priority: use_prompt_input > internal text
@@ -576,6 +627,9 @@ class PromptManagerAdvanced:
             output_text = prompt
         else:
             output_text = text if text else ""
+            if not output_text.strip() and workflow_fields.get("prompt"):
+                # Compatibility fallback: v2 prompt is authoritative in model_a block.
+                output_text = workflow_fields.get("prompt", "")
 
         # Capture the original input loras BEFORE any processing
         # These are used by the frontend to detect when inputs change
@@ -621,6 +675,29 @@ class PromptManagerAdvanced:
         # Build preset stacks from saved toggle data (these are what we display/manage)
         preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
         preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if loras_b_toggle else []
+
+        # Compatibility fallback: when no saved toggle payload exists, seed
+        # PMA stack defaults from v2 model_a/model_b LoRA blocks.
+        if not preset_stack_a and not loras_a_toggle:
+            preset_stack_a = [
+                (
+                    lora.get("name", ""),
+                    lora.get("strength", lora.get("model_strength", 1.0)),
+                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
+                )
+                for lora in workflow_fields.get("loras_a", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
+        if not preset_stack_b and not loras_b_toggle:
+            preset_stack_b = [
+                (
+                    lora.get("name", ""),
+                    lora.get("strength", lora.get("model_strength", 1.0)),
+                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
+                )
+                for lora in workflow_fields.get("loras_b", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
 
         # Get ALL preset loras including unavailable ones (for display purposes)
         all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
@@ -1441,6 +1518,21 @@ async def get_prompt_data_advanced(request):
 
         prompt_data = prompts[category][name]
 
+        # Compatibility: if prompt/loras are missing at top-level, derive them
+        # from v2 workflow_data model_a/model_b blocks.
+        prompt_response = dict(prompt_data)
+        workflow_data = prompt_response.get("workflow_data")
+        derived = _derive_prompt_fields_from_workflow_data(workflow_data)
+
+        if not str(prompt_response.get("prompt", "")).strip() and derived.get("prompt"):
+            prompt_response["prompt"] = derived.get("prompt", "")
+
+        if not isinstance(prompt_response.get("loras_a"), list) or len(prompt_response.get("loras_a") or []) == 0:
+            prompt_response["loras_a"] = derived.get("loras_a", [])
+
+        if not isinstance(prompt_response.get("loras_b"), list) or len(prompt_response.get("loras_b") or []) == 0:
+            prompt_response["loras_b"] = derived.get("loras_b", [])
+
         # Add availability info to loras
         def add_availability(loras):
             result = []
@@ -1454,11 +1546,11 @@ async def get_prompt_data_advanced(request):
         return server.web.json_response({
             "success": True,
             "data": {
-                "prompt": prompt_data.get("prompt", ""),
-                "loras_a": add_availability(prompt_data.get("loras_a", [])),
-                "loras_b": add_availability(prompt_data.get("loras_b", [])),
-                "trigger_words": prompt_data.get("trigger_words", []),
-                "workflow_data": prompt_data.get("workflow_data")
+                "prompt": prompt_response.get("prompt", ""),
+                "loras_a": add_availability(prompt_response.get("loras_a", [])),
+                "loras_b": add_availability(prompt_response.get("loras_b", [])),
+                "trigger_words": prompt_response.get("trigger_words", []),
+                "workflow_data": prompt_response.get("workflow_data")
             }
         })
     except Exception as e:

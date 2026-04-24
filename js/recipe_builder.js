@@ -1992,10 +1992,10 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
     if (!jsonStr) return null;
     try {
         const d = JSON.parse(jsonStr);
+        const isWanBuilder = String(builderVariant || "simple").toLowerCase() === "wan";
         const selectedSlot = isWanBuilder
             ? _normalizeModelPairStartKey(modelSlot)
             : _normalizeModelSlotKey(modelSlot);
-        const isWanBuilder = String(builderVariant || "simple").toLowerCase() === "wan";
 
         if (Number(d?.version || 0) >= 2 && d?.models && typeof d.models === "object") {
             const primary = d.models[selectedSlot] && typeof d.models[selectedSlot] === "object"

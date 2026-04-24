@@ -437,7 +437,7 @@ class PromptGenerator:
                     print_pg(error_msg, RED)
 
             # Build command arguments
-            cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-ngl", "10", "-c", str(context_size)]
+            cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-ngl", "100", "-c", str(context_size)]
 
             # Add vision flags for models with mmproj
             if use_vision_model:
