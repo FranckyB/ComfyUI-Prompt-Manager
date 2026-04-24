@@ -341,12 +341,14 @@ class WorkflowModelLoader:
         if selected_model_slot not in ("model_a", "model_b", "model_c", "model_d"):
             selected_model_slot = "model_a"
 
+        # Initialize selected slot before normalization so v2 parsing can
+        # safely resolve per-slot loader/clip/vae fields.
+        self._model_key = selected_model_slot
+        self._weight_dtype = weight_dtype
+
         passthrough_assets = _extract_preloaded_assets(workflow_data, selected_model_slot)
 
         spec = self._normalize_spec(workflow_data)
-
-        self._model_key = selected_model_slot
-        self._weight_dtype = weight_dtype
         loader_type = spec.get("loader_type", "").lower()
         selected_name = spec.get(selected_model_slot, "")
         selected_display_name = _short_display_name(selected_name)
@@ -437,7 +439,9 @@ class WorkflowModelLoader:
                     if model_name:
                         spec[key] = model_name
 
-            selected_key = self._model_key if self._model_key in ("model_a", "model_b", "model_c", "model_d") else "model_a"
+            selected_key = getattr(self, "_model_key", "model_a")
+            if selected_key not in ("model_a", "model_b", "model_c", "model_d"):
+                selected_key = "model_a"
             selected_block = models.get(selected_key) if isinstance(models.get(selected_key), dict) else None
             if isinstance(selected_block, dict):
                 loader_type = (selected_block.get("loader_type") or "").strip() if isinstance(selected_block.get("loader_type"), str) else ""
