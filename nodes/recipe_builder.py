@@ -999,6 +999,7 @@ class WorkflowBuilder:
 
         input_loras_a = _normalize_input_lora_stack(lora_stack_a)
         input_loras_b = _normalize_input_lora_stack(lora_stack_b)
+        has_connected_lora_input = (lora_stack_a is not None) or (lora_stack_b is not None)
         extracted['loras_a'] = _merge_lora_lists(workflow_loras_a, input_loras_a)
         extracted['loras_b'] = _merge_lora_lists(workflow_loras_b, input_loras_b)
 
@@ -1102,8 +1103,10 @@ class WorkflowBuilder:
             return out
 
         # If JS persisted full LoRA stacks in override_data, treat those as
-        # authoritative UI state for this run.
-        if _allow_override('loras'):
+        # authoritative UI state for this run only when no connected LoRA
+        # inputs are present. Connected stacks must be authoritative on the
+        # current execute so add/remove changes apply immediately.
+        if _allow_override('loras') and not has_connected_lora_input:
             if 'loras_a' in overrides:
                 extracted['loras_a'] = _normalize_override_lora_list(overrides.get('loras_a'))
             if 'loras_b' in overrides:

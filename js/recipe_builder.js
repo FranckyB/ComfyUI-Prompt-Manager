@@ -4037,7 +4037,6 @@ app.registerExtension({
 
                 _updatePromptGhosting();
                 _updateSeedGhosting();
-                syncHidden(node);
 
                 // Show/hide Update Recipe button based on recipe_data connection
                 if (node._weUpdateBtn) {
@@ -4068,9 +4067,12 @@ app.registerExtension({
                     _captureLoraOriginalStrengths(node, node._weExtracted.loras_a, node._weExtracted.loras_b);
                     _resetChangedLoraState(node, oldMergedLorasA, oldMergedLorasB, node._weExtracted.loras_a, node._weExtracted.loras_b);
                     updateLoras(node);
-                    syncHidden(node);
                     node.setDirtyCanvas(true, true);
                 }
+
+                // Persist after connection-driven LoRA cleanup so execute()
+                // reads current stacks on the same run.
+                syncHidden(node);
             };
             // Apply initial ghosting state
             _updatePromptGhosting();
