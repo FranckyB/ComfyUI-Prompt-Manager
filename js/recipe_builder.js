@@ -2472,8 +2472,6 @@ app.registerExtension({
                     tyNorm === "promptextractor" || tyNorm === "recipeextractor" ||
                     ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
                     ccNorm === "recipemanager" || tyNorm === "recipemanager" ||
-                    ccNorm === "recipebuilder" || tyNorm === "recipebuilder" ||
-                    ccNorm === "recipebuilderwan" || tyNorm === "recipebuilderwan" ||
                     ccNorm === "reciperelay" || tyNorm === "reciperelay";
             };
             const _isRerouteNodeHint = (n) => {
@@ -2504,6 +2502,16 @@ app.registerExtension({
                 const sel = row?._inp;
                 if (!sel) return;
 
+                const wasVisible = node._weUpdateBtnVisibleState;
+                const hasPrevState = typeof wasVisible === "boolean";
+                const visibilityChanged = !hasPrevState || wasVisible !== updateVisible;
+                node._weUpdateBtnVisibleState = updateVisible;
+
+                const current = String(sel.value || node._wePullModelSlot || "");
+                const preferredConnected = node._weBuilderVariant === "wan"
+                    ? _normalizePullModelPairStartKey(current && current !== NO_PULL_SLOT ? current : "model_a")
+                    : _normalizePullModelSlotKey(current && current !== NO_PULL_SLOT ? current : "model_a");
+
                 const hasNone = [...sel.options].some((o) => o.value === NO_PULL_SLOT);
                 if (!updateVisible && !hasNone) {
                     const noneOpt = document.createElement("option");
@@ -2516,13 +2524,24 @@ app.registerExtension({
                     }
                 }
 
-                const forced = updateVisible
-                    ? (node._weBuilderVariant === "wan" ? _normalizePullModelPairStartKey("model_a") : _normalizePullModelSlotKey("model_a"))
-                    : NO_PULL_SLOT;
-                sel.value = forced;
-                node._wePullModelSlot = forced;
-                if (row._setOriginal) row._setOriginal(forced);
-                syncHidden(node);
+                // Auto-select defaults only when visibility actually changes and
+                // never during workflow hydration (restore should win).
+                let nextVal = sel.value || current;
+                if (!node._weHydrating && visibilityChanged) {
+                    nextVal = updateVisible ? preferredConnected : NO_PULL_SLOT;
+                }
+                if (!node._weHydrating && updateVisible && nextVal === NO_PULL_SLOT) {
+                    nextVal = preferredConnected;
+                }
+                if (!updateVisible && ![...sel.options].some((o) => o.value === nextVal)) {
+                    nextVal = NO_PULL_SLOT;
+                }
+
+                const prevVal = node._wePullModelSlot;
+                sel.value = nextVal;
+                node._wePullModelSlot = nextVal;
+                if (row._setOriginal) row._setOriginal(nextVal);
+                if (!node._weHydrating && prevVal !== nextVal) syncHidden(node);
             };
             const _refreshUpdateWorkflowButtonVisibility = () => {
                 if (!node._weUpdateBtn) return;
