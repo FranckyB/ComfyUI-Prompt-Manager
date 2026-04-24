@@ -209,6 +209,271 @@ function _normalizeExtractedLoraOrder(extracted) {
     return normalized;
 }
 
+function _extractorParseJsonObjectSafe(rawValue, fallback = null) {
+    if (rawValue && typeof rawValue === "object") return rawValue;
+    if (typeof rawValue !== "string") return fallback;
+    const trimmed = rawValue.trim();
+    if (!trimmed) return fallback;
+    try {
+        const parsed = JSON.parse(trimmed);
+        return parsed && typeof parsed === "object" ? parsed : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function _extractorModelNameForSummary(pathLike) {
+    const raw = String(pathLike || "").trim();
+    if (!raw) return "";
+    const parts = raw.replace(/\\/g, "/").split("/");
+    const base = parts[parts.length - 1] || raw;
+    return base.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, "");
+}
+
+function _extractorNormalizeSummaryLoras(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const name = String(item.name || "").trim();
+            if (!name) return null;
+            const strengthRaw = Number(item.model_strength ?? item.strength ?? 1.0);
+            const strength = Number.isFinite(strengthRaw) ? strengthRaw : 1.0;
+            const available = item.available !== false && item.found !== false;
+            return {
+                name,
+                strength,
+                active: item.active !== false,
+                available,
+                found: item.found !== false,
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+function _extractorSummarizeWorkflowDataDiscovery(rawWorkflowData) {
+    const empty = {
+        modelCount: 0,
+        modelDetails: [],
+        source: "RecipeExtractor",
+    };
+
+    const wf = _extractorParseJsonObjectSafe(rawWorkflowData, null);
+    if (!wf || typeof wf !== "object") return empty;
+
+    const slotOrder = ["model_a", "model_b", "model_c", "model_d"];
+    const modelDetails = [];
+    const models = (wf.models && typeof wf.models === "object") ? wf.models : null;
+
+    if (models) {
+        for (const slot of slotOrder) {
+            const block = models[slot];
+            if (!block || typeof block !== "object") continue;
+            const modelName = String(block.model || "").trim();
+            const loras = _extractorNormalizeSummaryLoras(block.loras);
+            if (!modelName && loras.length === 0) continue;
+            modelDetails.push({
+                slotLabel: String(slot).replace("model_", "").toUpperCase(),
+                modelDisplay: _extractorModelNameForSummary(modelName),
+                family: String(block.family || "").trim(),
+                loras,
+            });
+        }
+    } else {
+        const modelA = String(wf.model_a || "").trim();
+        const modelB = String(wf.model_b || "").trim();
+        const lorasA = _extractorNormalizeSummaryLoras(wf.loras_a);
+        const lorasB = _extractorNormalizeSummaryLoras(wf.loras_b);
+
+        if (modelA || lorasA.length > 0) {
+            modelDetails.push({
+                slotLabel: "A",
+                modelDisplay: _extractorModelNameForSummary(modelA),
+                family: "",
+                loras: lorasA,
+            });
+        }
+        if (modelB || lorasB.length > 0) {
+            modelDetails.push({
+                slotLabel: "B",
+                modelDisplay: _extractorModelNameForSummary(modelB),
+                family: "",
+                loras: lorasB,
+            });
+        }
+    }
+
+    return {
+        modelCount: modelDetails.length,
+        modelDetails,
+        source: String(wf._source || "RecipeExtractor"),
+    };
+}
+
+function _createExtractorSummaryLoraTag(lora) {
+    const tag = document.createElement("div");
+    const isAvailable = lora?.available !== false && lora?.found !== false;
+    const strength = Number(lora?.strength ?? 1.0);
+
+    tag.style.cssText = `
+        display:inline-flex;
+        align-items:center;
+        gap:6px;
+        width:200px;
+        height:24px;
+        padding:4px 10px;
+        box-sizing:border-box;
+        border-radius:6px;
+        border:1px solid ${isAvailable ? "rgba(71,145,220,0.85)" : "rgba(220,53,69,0.9)"};
+        background:${isAvailable ? "rgba(61,134,210,0.9)" : "rgba(220,53,69,0.9)"};
+        color:#fff;
+        flex-shrink:0;
+        font-size:12px;
+    `;
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = String(lora?.name || "");
+    nameSpan.style.cssText = "flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
+    tag.appendChild(nameSpan);
+
+    const strengthBadge = document.createElement("span");
+    strengthBadge.textContent = Number.isFinite(strength) ? strength.toFixed(2) : "1.00";
+    strengthBadge.style.cssText = "font-size:10px; font-weight:600; padding:1px 6px; border-radius:999px; background:rgba(255,255,255,0.15);";
+    tag.appendChild(strengthBadge);
+
+    return tag;
+}
+
+function _showExtractorWorkflowSummaryDialog(summary) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = "position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999;";
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = "position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); width:min(452px, 92vw); max-height:78vh; overflow:auto; background:#232930; border:1px solid #3c4b59; border-radius:10px; padding:12px; z-index:10000; box-shadow:0 8px 28px rgba(0,0,0,0.55);";
+
+        const title = document.createElement("div");
+        title.textContent = "Summary";
+        title.style.cssText = "margin-bottom:8px; font-size:17px; font-weight:700; color:#e7eef6;";
+        dialog.appendChild(title);
+
+        const meta = document.createElement("div");
+        meta.style.cssText = "margin-bottom:12px; color:#9eb2c6; font-size:12px; padding-bottom:10px; border-bottom:1px solid rgba(115,144,170,0.35);";
+        meta.innerHTML = `<b style=\"color:#c5d8ea;\">Models found:</b> ${summary.modelCount}`;
+        dialog.appendChild(meta);
+
+        const modelsSection = document.createElement("div");
+        modelsSection.style.cssText = "margin-bottom:14px;";
+        modelsSection.innerHTML = `<div style=\"color:#8fb8dc; font-weight:700; margin-bottom:6px;\">Models</div>`;
+        const modelsList = document.createElement("div");
+        modelsList.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+        if (!summary.modelDetails.length) {
+            const none = document.createElement("div");
+            none.textContent = "No models found.";
+            none.style.cssText = "color:#9aa8b7; font-size:12px;";
+            modelsList.appendChild(none);
+        } else {
+            for (const item of summary.modelDetails) {
+                const row = document.createElement("div");
+                const familyText = item.family ? ` (${item.family})` : "";
+                row.textContent = `${item.slotLabel}: ${item.modelDisplay || "(none)"}${familyText}`;
+                row.style.cssText = "color:#d9e6f3; font-size:13px; background:rgba(37,48,60,0.55); border:1px solid rgba(96,124,150,0.35); border-radius:6px; padding:6px 8px;";
+                modelsList.appendChild(row);
+            }
+        }
+        modelsSection.appendChild(modelsList);
+        dialog.appendChild(modelsSection);
+
+        const loraDivider = document.createElement("div");
+        loraDivider.style.cssText = "height:1px; background:rgba(115,144,170,0.35); margin:2px 0 12px 0;";
+        dialog.appendChild(loraDivider);
+
+        const loraSection = document.createElement("div");
+        loraSection.innerHTML = `<div style=\"color:#8fb8dc; font-weight:700; margin-bottom:8px;\">LoRAs</div>`;
+        if (!summary.modelDetails.some((m) => Array.isArray(m.loras) && m.loras.length > 0)) {
+            const none = document.createElement("div");
+            none.textContent = "No LoRAs found.";
+            none.style.cssText = "color:#9aa8b7; font-size:12px; margin-bottom:8px;";
+            loraSection.appendChild(none);
+        } else {
+            for (const item of summary.modelDetails) {
+                if (!Array.isArray(item.loras) || item.loras.length === 0) continue;
+                const stackCard = document.createElement("div");
+                stackCard.style.cssText = "background:rgba(30,40,52,0.55); border:1px solid rgba(96,124,150,0.35); border-radius:8px; padding:6px; margin-bottom:6px;";
+
+                const stackTitle = document.createElement("div");
+                stackTitle.textContent = `Stack ${item.slotLabel}:`;
+                stackTitle.style.cssText = "color:#c5d8ea; font-size:12px; margin:0 0 6px 0;";
+                stackCard.appendChild(stackTitle);
+
+                const stackTags = document.createElement("div");
+                stackTags.style.cssText = "display:grid; grid-template-columns: 200px 200px; justify-content:start; gap:2px;";
+                for (const lora of item.loras) {
+                    stackTags.appendChild(_createExtractorSummaryLoraTag(lora));
+                }
+                stackCard.appendChild(stackTags);
+                loraSection.appendChild(stackCard);
+            }
+        }
+        dialog.appendChild(loraSection);
+
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex; justify-content:flex-end; margin-top:14px;";
+        const okBtn = document.createElement("button");
+        okBtn.textContent = "OK";
+        okBtn.style.cssText = "padding:8px 16px; background:#2f7dbf; color:#fff; border:none; border-radius:6px; cursor:pointer;";
+        actions.appendChild(okBtn);
+        dialog.appendChild(actions);
+
+        const cleanup = () => {
+            if (overlay.parentNode) document.body.removeChild(overlay);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        okBtn.onclick = () => { cleanup(); resolve(true); };
+        overlay.onclick = () => { cleanup(); resolve(true); };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        okBtn.focus();
+    });
+}
+
+async function showExtractorWorkflowDiscoverySummary(node) {
+    const rawCached = node?.properties?.pe_extracted_data;
+    let workflowData = _extractorParseJsonObjectSafe(rawCached, null);
+
+    if (!workflowData) {
+        const imageWidget = node?.widgets?.find((w) => w.name === "image");
+        const filename = String(imageWidget?.value || "").trim();
+        const sourceFolder = node?._sourceFolder || "input";
+        if (filename && filename !== "(none)") {
+            try {
+                const previewResp = await fetch(`/prompt-extractor/extract-preview?filename=${encodeURIComponent(filename)}&source=${encodeURIComponent(sourceFolder)}`);
+                if (previewResp.ok) {
+                    const previewData = await previewResp.json();
+                    if (previewData?.extracted && typeof previewData.extracted === "object") {
+                        workflowData = _normalizeExtractedLoraOrder(previewData.extracted);
+                        node.properties = node.properties || {};
+                        node.properties.pe_extracted_data = JSON.stringify(workflowData);
+                    }
+                }
+            } catch (error) {
+                console.warn('[PromptExtractor] Could not refresh extracted preview data:', error);
+            }
+        }
+    }
+
+    if (!workflowData || typeof workflowData !== "object") {
+        await _showExtractorWorkflowSummaryDialog({ modelCount: 0, modelDetails: [], source: "RecipeExtractor" });
+        return;
+    }
+
+    const summary = _extractorSummarizeWorkflowDataDiscovery(workflowData);
+    await _showExtractorWorkflowSummaryDialog(summary);
+}
+
 /**
  * Extract metadata from JPEG/WebP file
  * Reads EXIF UserComment field (0x9286) for workflow metadata
@@ -1354,29 +1619,57 @@ app.registerExtension({
 
                     // Draw status indicator if we have an image and node is not minimized
                     if (node.imgs && node.imgs.length > 0 && !(node.flags && node.flags.collapsed)) {
-                        const radius = 7;
+                        ctx.save();
                         const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
-                        // Position in top-right, raised 20px to be in title bar
-                        const x = node.size[0] - radius - 8;
-                        const y = (titleHeight / 2) - 30;
+                        const infoWidth = 30;
+                        const infoHeight = 14;
+                        const infoX = node.size[0] - infoWidth - 8;
+                        const infoY = (titleHeight / 2) - 37;
+                        const cornerRadius = 7;
 
-                        // Draw indicator circle
-                        ctx.beginPath();
-                        ctx.arc(x, y, radius, 0, Math.PI * 2);
-                        ctx.fillStyle = node.hasWorkflow ? '#00ff00' : '#ff3333';
+                        // Draw compact info pill (blue active, gray inactive)
+                        const drawRoundRect = (x, y, w, h, r) => {
+                            ctx.beginPath();
+                            ctx.moveTo(x + r, y);
+                            ctx.lineTo(x + w - r, y);
+                            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                            ctx.lineTo(x + w, y + h - r);
+                            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                            ctx.lineTo(x + r, y + h);
+                            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                            ctx.lineTo(x, y + r);
+                            ctx.quadraticCurveTo(x, y, x + r, y);
+                            ctx.closePath();
+                        };
+
+                        drawRoundRect(infoX, infoY, infoWidth, infoHeight, cornerRadius);
+                        ctx.fillStyle = node.hasWorkflow ? 'rgba(55, 142, 255, 0.92)' : 'rgba(120, 130, 140, 0.35)';
                         ctx.fill();
-                        ctx.strokeStyle = node.hasWorkflow ? '#054405' : '#550505';
+                        ctx.strokeStyle = 'rgba(240, 248, 255, 0.95)';
                         ctx.lineWidth = 1;
                         ctx.stroke();
+
+                        ctx.fillStyle = node.hasWorkflow ? '#ffffff' : 'rgba(220, 226, 234, 0.75)';
+                        ctx.font = 'bold 8px sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText('info', infoX + (infoWidth / 2), infoY + (infoHeight / 2) + 0.5);
+
+                        node._workflowInfoBounds = {
+                            x: infoX,
+                            y: infoY,
+                            width: infoWidth,
+                            height: infoHeight,
+                        };
 
                         // Draw preview play icon (simple triangle) left of workflow indicator - only for images/videos
                         const imageWidget = node.widgets?.find(w => w.name === "image");
                         const currentFile = imageWidget?.value;
                         
                         if (isPreviewableFile(currentFile)) {
-                            const playX = node.size[0] - radius - 8 - 34;
-                            const playY = (titleHeight / 2) - 30;
-                            const triSize = 8;
+                            const playX = infoX - 14;
+                            const playY = infoY + (infoHeight / 2);
+                            const triSize = 7;
                             
                             ctx.beginPath();
                             ctx.moveTo(playX - triSize, playY - triSize);
@@ -1396,7 +1689,9 @@ app.registerExtension({
                         } else {
                             node._previewIconBounds = null;
                         }
+                        ctx.restore();
                     } else {
+                        node._workflowInfoBounds = null;
                         node._previewIconBounds = null;
                     }
 
@@ -1407,23 +1702,15 @@ app.registerExtension({
                 const onMouseMove = node.onMouseMove;
                 node.onMouseMove = function(e, localPos, canvas) {
                     const result = onMouseMove ? onMouseMove.apply(this, arguments) : undefined;
-                    
-                    // Check if hovering over indicator
-                    const radius = 7;
-                    const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
-                    // Position raised 20px to be in title bar
-                    const indicatorX = node.size[0] - radius - 8;
-                    const indicatorY = (titleHeight / 2) - 30;
-                    
-                    const dist = Math.sqrt(
-                        Math.pow(localPos[0] - indicatorX, 2) + 
-                        Math.pow(localPos[1] - indicatorY, 2)
-                    );
-                    
-                    if (dist <= radius) {
-                        canvas.canvas.title = node.hasWorkflow ? 
-                            'Workflow metadata found' : 
+
+                    const infoBounds = node._workflowInfoBounds;
+                    if (infoBounds &&
+                        localPos[0] >= infoBounds.x && localPos[0] <= infoBounds.x + infoBounds.width &&
+                        localPos[1] >= infoBounds.y && localPos[1] <= infoBounds.y + infoBounds.height) {
+                        canvas.canvas.title = node.hasWorkflow ?
+                            'Workflow metadata found (info available)' :
                             'No workflow metadata';
+                        canvas.canvas.style.cursor = node.hasWorkflow ? 'pointer' : '';
                         node._hoverPreviewIcon = false;
                     } else if (node._previewIconBounds) {
                         // Check if hovering over preview icon
@@ -1450,6 +1737,18 @@ app.registerExtension({
                 const onMouseDown = node.onMouseDown;
                 node.onMouseDown = function(e, localPos, canvas) {
                     // Check if clicking on preview icon
+                    if (node._workflowInfoBounds) {
+                        const b = node._workflowInfoBounds;
+                        if (localPos[0] >= b.x && localPos[0] <= b.x + b.width &&
+                            localPos[1] >= b.y && localPos[1] <= b.y + b.height) {
+                            if (node.hasWorkflow) {
+                                void showExtractorWorkflowDiscoverySummary(node);
+                                return true;
+                            }
+                            return onMouseDown ? onMouseDown.apply(this, arguments) : undefined;
+                        }
+                    }
+
                     if (node._previewIconBounds && node.imgs && node.imgs.length > 0) {
                         const bounds = node._previewIconBounds;
                         if (localPos[0] >= bounds.x && localPos[0] <= bounds.x + bounds.width &&

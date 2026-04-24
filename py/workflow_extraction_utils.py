@@ -44,6 +44,156 @@ _EMBEDDED_NODE_TYPES = (
 )
 
 
+def _parse_json_object(value):
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text.startswith('{'):
+        return None
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_builder_model_slot(value):
+    key = str(value or '').strip().lower().replace('-', '_')
+    if key in ('model_a', 'a'):
+        return 'model_a'
+    if key in ('model_b', 'b'):
+        return 'model_b'
+    if key in ('model_c', 'c'):
+        return 'model_c'
+    if key in ('model_d', 'd'):
+        return 'model_d'
+    return 'model_a'
+
+
+def _normalize_builder_lora_list(raw_list):
+    if not isinstance(raw_list, list):
+        return []
+    out = []
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get('name', '') or '').strip()
+        if not name:
+            continue
+        model_strength = item.get('model_strength', item.get('strength', 1.0))
+        clip_strength = item.get('clip_strength', item.get('strength', model_strength))
+        try:
+            model_strength = float(model_strength)
+        except Exception:
+            model_strength = 1.0
+        try:
+            clip_strength = float(clip_strength)
+        except Exception:
+            clip_strength = model_strength
+        out.append({
+            'name': name,
+            'path': item.get('path', ''),
+            'model_strength': model_strength,
+            'clip_strength': clip_strength,
+            'active': item.get('active', True) is not False,
+            'available': item.get('available', True) is not False,
+        })
+    return out
+
+
+def extract_recipe_builder_models_from_workflow(workflow_data):
+    """Extract v2 model blocks from RecipeBuilder/WorkflowBuilder nodes.
+
+    Mapping rule: builder ``_send_model_slot`` decides which model block to fill.
+    If multiple builders send to the same slot, the last builder wins.
+    """
+    if not isinstance(workflow_data, dict):
+        return {}
+    nodes = workflow_data.get('nodes', [])
+    if not isinstance(nodes, list):
+        return {}
+
+    builders = []
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        ntype = str(node.get('type', '') or '')
+        if ntype not in ('RecipeBuilder', 'WorkflowBuilder'):
+            continue
+        order = node.get('order', index)
+        try:
+            order = int(order)
+        except Exception:
+            order = index
+        builders.append((order, index, node))
+
+    if not builders:
+        return {}
+
+    builders.sort(key=lambda x: (x[0], x[1]))
+    models = {}
+    for _, _, node in builders:
+        props = node.get('properties', {}) if isinstance(node.get('properties'), dict) else {}
+        raw = _parse_json_object(props.get('we_override_data'))
+        if not raw:
+            raw = _parse_json_object(props.get('we_ui_state'))
+        if not raw:
+            raw = {}
+        if not raw:
+            for widget_val in (node.get('widgets_values') or []):
+                parsed = _parse_json_object(widget_val)
+                if parsed:
+                    raw = parsed
+                    break
+        if not raw:
+            continue
+
+        target_slot = _normalize_builder_model_slot(raw.get('_send_model_slot', raw.get('send_model_slot')))
+        family = str(raw.get('_family', raw.get('family', 'sdxl')) or 'sdxl')
+        model_name = str(raw.get('model_a', raw.get('model', '')) or '')
+        vae_name = str(raw.get('vae', '') or '')
+        clip_raw = raw.get('clip_names', raw.get('clip', []))
+        if isinstance(clip_raw, list):
+            clip_names = [str(x) for x in clip_raw if str(x or '').strip()]
+        elif isinstance(clip_raw, str) and clip_raw.strip():
+            clip_names = [clip_raw]
+        else:
+            clip_names = []
+
+        sampler = {
+            'steps': raw.get('steps_a', raw.get('steps', 20)),
+            'cfg': raw.get('cfg', 5.0),
+            'denoise': raw.get('denoise', 1.0),
+            'seed': raw.get('seed_a', raw.get('seed', 0)),
+            'sampler_name': raw.get('sampler_name', 'euler'),
+            'scheduler': raw.get('scheduler', 'simple'),
+        }
+        resolution = {
+            'width': raw.get('width', 768),
+            'height': raw.get('height', 1280),
+            'batch_size': raw.get('batch_size', 1),
+            'length': raw.get('length'),
+        }
+
+        models[target_slot] = {
+            'positive_prompt': str(raw.get('positive_prompt', '') or ''),
+            'negative_prompt': str(raw.get('negative_prompt', '') or ''),
+            'family': family,
+            'model': model_name,
+            'loras': _normalize_builder_lora_list(raw.get('loras_a', [])),
+            'clip_type': str(raw.get('clip_type', '') or ''),
+            'loader_type': str(raw.get('loader_type', '') or ''),
+            'vae': vae_name,
+            'clip': clip_names,
+            'sampler': sampler,
+            'resolution': resolution,
+        }
+
+    return models
+
+
 def _get_embedded_extracted_data(workflow_data):
     """Return the best ``extracted_data`` dict from a WR/WG or PE node, or *None*.
 
@@ -703,6 +853,9 @@ def extract_all_from_file(file_path, source_folder='input'):
         'loras_b':  [],
         'model_a':  '',
         'model_b':  '',
+        'model_c':  '',
+        'model_d':  '',
+        'models':   {},
         'vae':      {'name': '', 'source': 'unknown'},
         'clip':     {'names': [], 'type': '', 'source': 'unknown'},
         'sampler':  {
@@ -745,6 +898,34 @@ def extract_all_from_file(file_path, source_folder='input'):
     result['vae']        = extract_vae_info(prompt_data, workflow_data)
     result['clip']       = extract_clip_info(prompt_data, workflow_data)
     result['resolution'] = extract_resolution(prompt_data, workflow_data)
+
+    # Prefer explicit builder slot mapping when the workflow contains RecipeBuilder nodes.
+    builder_models = extract_recipe_builder_models_from_workflow(workflow_data)
+    if builder_models:
+        result['models'] = builder_models
+        for slot in ('model_a', 'model_b', 'model_c', 'model_d'):
+            block = builder_models.get(slot)
+            if isinstance(block, dict):
+                result[slot] = str(block.get('model', '') or '')
+
+        model_a_block = builder_models.get('model_a') if isinstance(builder_models.get('model_a'), dict) else None
+        model_b_block = builder_models.get('model_b') if isinstance(builder_models.get('model_b'), dict) else None
+        if model_a_block:
+            result['positive_prompt'] = str(model_a_block.get('positive_prompt', result['positive_prompt']) or '')
+            result['negative_prompt'] = str(model_a_block.get('negative_prompt', result['negative_prompt']) or '')
+            result['loras_a'] = model_a_block.get('loras', result['loras_a']) if isinstance(model_a_block.get('loras'), list) else result['loras_a']
+            result['sampler'] = model_a_block.get('sampler', result['sampler']) if isinstance(model_a_block.get('sampler'), dict) else result['sampler']
+            result['resolution'] = model_a_block.get('resolution', result['resolution']) if isinstance(model_a_block.get('resolution'), dict) else result['resolution']
+            if model_a_block.get('vae'):
+                result['vae'] = {'name': str(model_a_block.get('vae') or ''), 'source': 'RecipeBuilder'}
+            if isinstance(model_a_block.get('clip'), list):
+                result['clip'] = {
+                    'names': model_a_block.get('clip') or [],
+                    'type': str(model_a_block.get('clip_type', result['clip'].get('type', '')) or ''),
+                    'source': 'RecipeBuilder',
+                }
+        if model_b_block and isinstance(model_b_block.get('loras'), list):
+            result['loras_b'] = model_b_block.get('loras', result['loras_b'])
 
     # ── A1111 / Forge override ────────────────────────────────────────────
     # When prompt_data is a parsed A1111 dict (has 'prompt' + 'loras' keys)
@@ -958,11 +1139,13 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
                 (len(clip_val) == 1 and (not clip_val[0] or clip_val[0].startswith('('))):
             clip_val = ['(from checkpoint)']
 
-    return {
+    output = {
         "_source":         overrides.get('_source', 'PromptExtractor'),
         "family":          family,
         "model_a":         overrides.get('model_a',   extracted.get('model_a', '')),
         "model_b":         overrides.get('model_b',   extracted.get('model_b', '')),
+        "model_c":         overrides.get('model_c',   extracted.get('model_c', '')),
+        "model_d":         overrides.get('model_d',   extracted.get('model_d', '')),
         "positive_prompt": overrides.get('positive_prompt', extracted.get('positive_prompt', '')),
         "negative_prompt": overrides.get('negative_prompt', extracted.get('negative_prompt', '')),
         "loras_a":         extracted.get('loras_a', []),
@@ -979,3 +1162,11 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
             "length":     overrides.get('length',     extracted.get('resolution', {}).get('length',     None)),
         },
     }
+
+    # Preserve full v2 model blocks when available from RecipeBuilder-based workflows.
+    extracted_models = extracted.get('models', {}) if isinstance(extracted.get('models'), dict) else {}
+    if extracted_models:
+        output['version'] = 2
+        output['models'] = extracted_models
+
+    return output

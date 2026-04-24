@@ -506,7 +506,9 @@ app.registerExtension({
 
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
-                    filterPromptDropdown(node);
+                    // Preserve serialized selection during initial async hydrate so
+                    // archived workflow names are not replaced by filtered library values.
+                    filterPromptDropdown(node, { preserveDanglingSelection: true });
 
                     // Update custom prompt selector display
                     if (node.updatePromptSelectorDisplay) {
@@ -648,35 +650,44 @@ app.registerExtension({
                 }
 
                 // Load prompts data asynchronously (data only, widgets already added)
+                node._restoringFromWorkflow = true;
                 loadPrompts(node).then(async () => {
-                    filterPromptDropdown(node);
+                    try {
+                        filterPromptDropdown(node, { preserveDanglingSelection: true });
 
-                    // Re-check LoRA availability after restoring from serialized state.
-                    // The 'available' field is not serialized in toggle widgets, so after
-                    // a tab switch all restored loras would show as "not found" without this.
-                    await recheckLoraAvailability(node);
+                        // Archival-safe restore: never auto-load prompt-library data during
+                        // onConfigure. The serialized workflow payload is authoritative and
+                        // must not be overwritten even if a same-named prompt exists.
 
-                    updateLoraDisplays(node);
-                    updateTriggerWordsDisplay(node);
+                        // Re-check LoRA availability after restoring from serialized state.
+                        // The 'available' field is not serialized in toggle widgets, so after
+                        // a tab switch all restored loras would show as "not found" without this.
+                        await recheckLoraAvailability(node);
 
-                    // Snapshot restored state so unsaved-changes detection
-                    // doesn't falsely trigger after a reload
-                    updateLastSavedState(node);
+                        updateLoraDisplays(node);
+                        updateTriggerWordsDisplay(node);
 
-                    // Update custom prompt selector display
-                    if (node.updatePromptSelectorDisplay) {
-                        node.updatePromptSelectorDisplay();
-                    }
+                        // Snapshot restored state so unsaved-changes detection
+                        // doesn't falsely trigger after a reload
+                        updateLastSavedState(node);
 
-                    if (node._isWorkflowManager) {
-                        const computedSize = node.computeSize();
-                        const minHeight = Math.max(420, computedSize[1] + 20);
-                        if (node.size[1] > 560 || node.size[1] < minHeight) {
-                            node.setSize([Math.max(440, node.size[0]), minHeight]);
+                        // Update custom prompt selector display
+                        if (node.updatePromptSelectorDisplay) {
+                            node.updatePromptSelectorDisplay();
                         }
-                    }
 
-                    app.graph.setDirtyCanvas(true, true);
+                        if (node._isWorkflowManager) {
+                            const computedSize = node.computeSize();
+                            const minHeight = Math.max(420, computedSize[1] + 20);
+                            if (node.size[1] > 560 || node.size[1] < minHeight) {
+                                node.setSize([Math.max(440, node.size[0]), minHeight]);
+                            }
+                        }
+
+                        app.graph.setDirtyCanvas(true, true);
+                    } finally {
+                        node._restoringFromWorkflow = false;
+                    }
                 });
 
                 return result;
@@ -985,9 +996,29 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
     const wf = parseJsonObjectSafe(rawWorkflowData, null);
     if (!wf || typeof wf !== "object") return false;
 
+    if ((Number(wf.version || 0) >= 2) && wf.models && typeof wf.models === "object") {
+        for (const slot of ["model_a", "model_b", "model_c", "model_d"]) {
+            const block = wf.models[slot];
+            if (!block || typeof block !== "object") continue;
+            const positivePrompt = String(block.positive_prompt || "").trim();
+            const modelName = String(block.model || "").trim();
+            const hasLoras = Array.isArray(block.loras) && block.loras.some((lora) => String(lora?.name || "").trim().length > 0);
+            const hasRuntimeCarrier = ["MODEL", "CLIP", "VAE", "POSITIVE", "NEGATIVE"]
+                .some((key) => block[key] != null);
+            if (positivePrompt.length > 0 || modelName.length > 0 || hasLoras || hasRuntimeCarrier) {
+                return true;
+            }
+        }
+
+        if (["LATENT", "IMAGE", "MASK"].some((key) => wf[key] != null)) {
+            return true;
+        }
+        return false;
+    }
+
     // Renderer passthrough payloads may carry runtime objects but omit textual
     // fields. Treat these as meaningful for save-time extraction.
-    const hasRuntimeCarrier = ["MODEL_A", "CLIP", "VAE", "POSITIVE", "NEGATIVE", "LATENT", "IMAGE"]
+    const hasRuntimeCarrier = ["MODEL", "MODEL_A", "CLIP", "VAE", "POSITIVE", "NEGATIVE", "LATENT", "IMAGE"]
         .some((key) => wf[key] != null);
 
     const positivePrompt = String(wf.positive_prompt || "").trim();
@@ -1034,7 +1065,8 @@ function getVisibleCategories(node, options = {}) {
     return categories;
 }
 
-function filterPromptDropdown(node) {
+function filterPromptDropdown(node, options = {}) {
+    const preserveDanglingSelection = options?.preserveDanglingSelection === true;
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
 
@@ -1043,9 +1075,14 @@ function filterPromptDropdown(node) {
         const workflowOnly = node?._isWorkflowManager === true;
         const visibleCategories = getVisibleCategories(node, { hideNSFW, workflowOnly });
 
-        categoryWidget.options.values = visibleCategories.length > 0 ? visibleCategories : ["Default"];
+        const currentCategoryValue = String(categoryWidget.value || "");
+        let categoryOptions = visibleCategories.length > 0 ? [...visibleCategories] : ["Default"];
+        if (preserveDanglingSelection && currentCategoryValue && !categoryOptions.includes(currentCategoryValue)) {
+            categoryOptions = [currentCategoryValue, ...categoryOptions];
+        }
+        categoryWidget.options.values = categoryOptions;
 
-        if (!visibleCategories.includes(categoryWidget.value)) {
+        if (!categoryOptions.includes(categoryWidget.value)) {
             categoryWidget.value = visibleCategories[0] || "Default";
         }
 
@@ -1053,10 +1090,14 @@ function filterPromptDropdown(node) {
         const promptNames = getPromptNamesForCategory(node, currentCategory, { hideNSFW, workflowOnly });
 
         // Preserve explicit empty selection (New Prompt) across tab-switch restore.
-        const wantsEmptySelection = String(promptWidget.value || "") === "";
+        const currentPromptValue = String(promptWidget.value || "");
+        const wantsEmptySelection = currentPromptValue === "";
         let promptOptions = promptNames.length > 0 ? [...promptNames] : [""];
         if (wantsEmptySelection && !promptOptions.includes("")) {
             promptOptions = ["", ...promptOptions];
+        }
+        if (preserveDanglingSelection && currentPromptValue && !promptOptions.includes(currentPromptValue)) {
+            promptOptions = [currentPromptValue, ...promptOptions];
         }
 
         promptWidget.options.values = promptOptions;
@@ -1077,6 +1118,22 @@ function updateWorkflowManagerPreview(node) {
     const promptData = node.prompts?.[category]?.[prompt] || null;
     const liveWorkflow = (node.lastWorkflowData && typeof node.lastWorkflowData === "object") ? node.lastWorkflowData : null;
     const workflowInputConnected = hasConnectedWorkflowInput(node);
+
+    // Keep info button in the preview corner, active only when recipe data is available.
+    const rawInfoData = workflowInputConnected
+        ? liveWorkflow
+        : (promptData?.workflow_data || liveWorkflow || null);
+    const infoData = parseJsonObjectSafe(rawInfoData, null);
+    const infoSummary = _summarizeWorkflowDataDiscovery(infoData);
+    const infoEnabled = infoSummary.modelCount > 0;
+    if (ui.infoBtn) {
+        ui.infoBtn.disabled = !infoEnabled;
+        ui.infoBtn.style.background = infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)";
+        ui.infoBtn.style.color = infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)";
+        ui.infoBtn.style.cursor = infoEnabled ? "pointer" : "default";
+        ui.infoBtn.style.opacity = infoEnabled ? "1" : "0.8";
+        ui.infoBtn.title = infoEnabled ? "Show workflow summary" : "No workflow metadata";
+    }
 
     // Input-connected mode should not show saved/random prompt thumbnails while waiting.
     // Use the placeholder image until live workflow_data arrives.
@@ -1106,7 +1163,13 @@ function updateWorkflowManagerPreview(node) {
 
     const liveThumbnail = pickThumbnail(liveWorkflow) || (typeof node.connectedThumbnail === "string" ? node.connectedThumbnail : "");
     const savedThumbnail = pickThumbnail(promptData);
-    const thumbnail = liveThumbnail || savedThumbnail || DEFAULT_THUMBNAIL;
+
+    // In input-connected mode, never fall back to saved prompt thumbnails.
+    // If incoming workflow_data has no thumbnail, keep placeholder/empty state
+    // instead of showing stale image from a previously selected recipe.
+    const thumbnail = workflowInputConnected
+        ? (liveThumbnail || DEFAULT_THUMBNAIL)
+        : (liveThumbnail || savedThumbnail || DEFAULT_THUMBNAIL);
 
     if (thumbnail && thumbnail !== DEFAULT_THUMBNAIL) {
         ui.image.src = thumbnail;
@@ -1192,9 +1255,46 @@ function addWorkflowManagerPreview(node) {
         box-sizing: border-box;
     `;
 
+    const infoBtn = document.createElement("button");
+    const infoBtnLabel = document.createElement("span");
+    infoBtnLabel.textContent = "info";
+    infoBtnLabel.style.cssText = "display:block; ";
+    infoBtn.appendChild(infoBtnLabel);
+    infoBtn.style.cssText = `
+        position: absolute;
+        right: 4px;
+        bottom: 4px;
+        width: 28px;
+        height: 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(240, 248, 255, 0.95);
+        background: rgba(120, 130, 140, 0.35);
+        color: rgba(220, 226, 234, 0.75);
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        font-family: inherit;
+        appearance: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        cursor: default;
+        z-index: 2;
+        opacity: 0.8;
+        padding: 0;
+    `;
+    infoBtn.onclick = async (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        if (infoBtn.disabled) return;
+        await showWorkflowDiscoverySummary(node);
+    };
+
     container.appendChild(title);
     previewBox.appendChild(image);
     previewBox.appendChild(emptyLabel);
+    previewBox.appendChild(infoBtn);
     container.appendChild(previewBox);
 
     const widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
@@ -1203,9 +1303,480 @@ function addWorkflowManagerPreview(node) {
     // Keep width behavior unchanged; make preview area ~20% taller.
     widget.computeSize = (width) => [Math.max(width || 260, 260), 320];
 
-    node._workflowManagerPreview = { container, image, emptyLabel, widget };
+    node._workflowManagerPreview = { container, image, emptyLabel, infoBtn, widget };
     node.workflowManagerPreviewAttached = true;
     updateWorkflowManagerPreview(node);
+}
+
+function _normalizeModelSlotLabel(slotKey) {
+    const key = String(slotKey || "").toLowerCase();
+    if (key === "model_a") return "A";
+    if (key === "model_b") return "B";
+    if (key === "model_c") return "C";
+    if (key === "model_d") return "D";
+    return String(slotKey || "?");
+}
+
+function _modelNameForSummary(pathLike) {
+    const raw = String(pathLike || "").trim();
+    if (!raw) return "";
+    const parts = raw.replace(/\\/g, "/").split("/");
+    const base = parts[parts.length - 1] || raw;
+    return base.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, "");
+}
+
+function _normalizeSummaryLoras(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const name = String(item.name || "").trim();
+            if (!name) return null;
+            const strengthRaw = Number(item.model_strength ?? item.strength ?? 1.0);
+            const strength = Number.isFinite(strengthRaw) ? strengthRaw : 1.0;
+            const available = item.available !== false && item.found !== false;
+            return {
+                name,
+                strength,
+                active: item.active !== false,
+                available,
+                found: item.found !== false,
+            };
+        })
+        .filter(Boolean)
+        .sort(compareLorasMissingLast);
+}
+
+function _summarizeWorkflowDataDiscovery(rawWorkflowData) {
+    const empty = {
+        modelCount: 0,
+        modelDetails: [],
+        modelSlots: [],
+        loraSlots: [],
+        positivePromptPresent: false,
+        source: "",
+    };
+
+    if (!rawWorkflowData || typeof rawWorkflowData !== "object") return empty;
+
+    const slotOrder = ["model_a", "model_b", "model_c", "model_d"];
+    const modelSlots = [];
+    const loraSlots = [];
+    const modelDetails = [];
+    const source = String(rawWorkflowData._source || "");
+
+    const models = (rawWorkflowData.models && typeof rawWorkflowData.models === "object")
+        ? rawWorkflowData.models
+        : null;
+
+    if (models) {
+        for (const slot of slotOrder) {
+            const block = models[slot];
+            if (!block || typeof block !== "object") continue;
+            const modelName = String(block.model || "").trim();
+            const loras = _normalizeSummaryLoras(block.loras);
+            if (modelName) modelSlots.push(slot);
+            if (loras.length > 0) loraSlots.push(slot);
+            if (modelName || loras.length > 0) {
+                modelDetails.push({
+                    slot,
+                    slotLabel: _normalizeModelSlotLabel(slot),
+                    model: modelName,
+                    modelDisplay: _modelNameForSummary(modelName),
+                    family: String(block.family || ""),
+                    loras,
+                    promptPresent: String(block.positive_prompt || "").trim().length > 0,
+                });
+            }
+        }
+    } else {
+        const modelA = String(rawWorkflowData.model_a || "").trim();
+        const modelB = String(rawWorkflowData.model_b || "").trim();
+        if (modelA) modelSlots.push("model_a");
+        if (modelB) modelSlots.push("model_b");
+        const lorasA = _normalizeSummaryLoras(rawWorkflowData.loras_a);
+        const lorasB = _normalizeSummaryLoras(rawWorkflowData.loras_b);
+        if (lorasA.length > 0) loraSlots.push("model_a");
+        if (lorasB.length > 0) loraSlots.push("model_b");
+
+        if (modelA || lorasA.length > 0) {
+            modelDetails.push({
+                slot: "model_a",
+                slotLabel: "A",
+                model: modelA,
+                modelDisplay: _modelNameForSummary(modelA),
+                family: String(rawWorkflowData.family || ""),
+                loras: lorasA,
+                promptPresent: String(rawWorkflowData.positive_prompt || "").trim().length > 0,
+            });
+        }
+        if (modelB || lorasB.length > 0) {
+            modelDetails.push({
+                slot: "model_b",
+                slotLabel: "B",
+                model: modelB,
+                modelDisplay: _modelNameForSummary(modelB),
+                family: String(rawWorkflowData.family || ""),
+                loras: lorasB,
+                promptPresent: String(rawWorkflowData.negative_prompt || "").trim().length > 0,
+            });
+        }
+    }
+
+    const positivePromptPresent = models
+        ? modelSlots.some((slot) => String((models[slot] || {}).positive_prompt || "").trim().length > 0)
+        : String(rawWorkflowData.positive_prompt || "").trim().length > 0;
+
+    return {
+        modelCount: modelSlots.length,
+        modelDetails,
+        modelSlots,
+        loraSlots,
+        positivePromptPresent,
+        source,
+    };
+}
+
+function _createSummaryLoraTag(lora) {
+    const tag = document.createElement("div");
+    const isActive = lora?.active !== false;
+    const isAvailable = lora?.available !== false && lora?.found !== false;
+    const strength = Number(lora?.strength ?? 1.0);
+
+    let bgColor, textColor, borderColor;
+    if (!isAvailable) {
+        bgColor = isActive ? "rgba(220, 53, 69, 0.9)" : "rgba(220, 53, 69, 0.4)";
+        textColor = isActive ? "white" : "rgba(255, 200, 200, 0.8)";
+        borderColor = "rgba(220, 53, 69, 0.9)";
+    } else if (isActive) {
+        bgColor = "rgba(66, 153, 225, 0.9)";
+        textColor = "white";
+        borderColor = "rgba(122, 188, 243, 0.9)";
+    } else {
+        bgColor = "rgba(45, 55, 72, 0.7)";
+        textColor = "rgba(226, 232, 240, 0.6)";
+        borderColor = "rgba(226, 232, 240, 0.2)";
+    }
+
+    Object.assign(tag.style, {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "4px 10px",
+        borderRadius: "6px",
+        fontSize: "12px",
+        transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease",
+        backgroundColor: bgColor,
+        color: textColor,
+        border: `1px solid ${borderColor}`,
+        width: "200px",
+        height: "24px",
+        boxSizing: "border-box",
+        userSelect: "none",
+        cursor: "default",
+        flexShrink: "0",
+    });
+
+    if (!isAvailable) {
+        const warningIcon = document.createElement("span");
+        warningIcon.textContent = "⚠️";
+        warningIcon.style.fontSize = "11px";
+        warningIcon.style.marginRight = "-2px";
+        tag.appendChild(warningIcon);
+    }
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = String(lora?.name || "");
+    Object.assign(nameSpan.style, {
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        flexGrow: "1",
+        textDecoration: !isAvailable ? "line-through" : "none",
+        opacity: !isAvailable ? "0.8" : "1",
+    });
+    tag.appendChild(nameSpan);
+
+    const strengthBadge = document.createElement("span");
+    strengthBadge.textContent = Number.isFinite(strength) ? strength.toFixed(2) : "1.00";
+    Object.assign(strengthBadge.style, {
+        fontSize: "10px",
+        fontWeight: "600",
+        padding: "1px 6px",
+        borderRadius: "999px",
+        backgroundColor: "rgba(255,255,255,0.15)",
+        color: "rgba(255,255,255,0.9)",
+        border: "1px solid transparent",
+        flexShrink: "0",
+    });
+    tag.appendChild(strengthBadge);
+
+    let hoverTimeout = null;
+    tag.addEventListener("mouseenter", () => {
+        tag.style.transform = "translateY(-1px)";
+        tag.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
+        if (loraManagerAvailable && isAvailable) {
+            const tagRect = tag.getBoundingClientRect();
+            hoverTimeout = setTimeout(async () => {
+                const tooltip = await getLoraManagerPreviewTooltip();
+                if (tooltip) {
+                    tooltip.show(String(lora?.name || ""), tagRect.right, tagRect.top);
+                }
+            }, 250);
+        }
+    });
+    tag.addEventListener("mouseleave", () => {
+        tag.style.transform = "translateY(0)";
+        tag.style.boxShadow = "none";
+        if (hoverTimeout) {
+            clearTimeout(hoverTimeout);
+            hoverTimeout = null;
+        }
+        if (loraManagerPreviewTooltip) {
+            loraManagerPreviewTooltip.hide();
+        }
+    });
+
+    if (!loraManagerAvailable || !isAvailable) {
+        tag.title = !isAvailable
+            ? `${lora?.name || ""}\nNot found`
+            : `${lora?.name || ""}\nStrength: ${Number.isFinite(strength) ? strength.toFixed(2) : "1.00"}`;
+    }
+
+    return tag;
+}
+
+function _showWorkflowSummaryDialog(summary) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(442px, 92vw);
+            max-height: 78vh;
+            overflow: auto;
+            background: #232930;
+            border: 1px solid #3c4b59;
+            border-radius: 10px;
+            padding: 12px;
+            z-index: 10000;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.55);
+        `;
+
+        const title = document.createElement("div");
+        title.textContent = "Summary";
+        title.style.cssText = "margin-bottom: 8px; font-size: 17px; font-weight: 700; color: #e7eef6;";
+        dialog.appendChild(title);
+
+        const meta = document.createElement("div");
+        meta.style.cssText = "margin-bottom: 12px; color: #9eb2c6; font-size: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(115, 144, 170, 0.35);";
+        meta.innerHTML = `<b style=\"color:#c5d8ea;\">Models found:</b> ${summary.modelCount}`;
+        dialog.appendChild(meta);
+
+        const modelsSection = document.createElement("div");
+        modelsSection.style.cssText = "margin-bottom: 14px;";
+        modelsSection.innerHTML = `<div style=\"color:#8fb8dc; font-weight:700; margin-bottom:6px;\">Models</div>`;
+        const modelsList = document.createElement("div");
+        modelsList.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+        if (!summary.modelDetails.length) {
+            const none = document.createElement("div");
+            none.textContent = "No models found.";
+            none.style.cssText = "color:#9aa8b7; font-size:12px;";
+            modelsList.appendChild(none);
+        } else {
+            for (const item of summary.modelDetails) {
+                const row = document.createElement("div");
+                const familyText = item.family ? ` (${item.family})` : "";
+                row.textContent = `${item.slotLabel}: ${item.modelDisplay || "(none)"}${familyText}`;
+                row.style.cssText = "color:#d9e6f3; font-size:13px; background: rgba(37, 48, 60, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 6px; padding: 6px 8px;";
+                modelsList.appendChild(row);
+            }
+        }
+        modelsSection.appendChild(modelsList);
+        dialog.appendChild(modelsSection);
+
+        const loraDivider = document.createElement("div");
+        loraDivider.style.cssText = "height: 1px; background: rgba(115, 144, 170, 0.35); margin: 2px 0 12px 0;";
+        dialog.appendChild(loraDivider);
+
+        const loraSection = document.createElement("div");
+        loraSection.innerHTML = `<div style=\"color:#8fb8dc; font-weight:700; margin-bottom:8px;\">LoRAs</div>`;
+        if (!summary.modelDetails.some((m) => Array.isArray(m.loras) && m.loras.length > 0)) {
+            const none = document.createElement("div");
+            none.textContent = "No LoRAs found.";
+            none.style.cssText = "color:#9aa8b7; font-size:12px; margin-bottom:8px;";
+            loraSection.appendChild(none);
+        } else {
+            for (const item of summary.modelDetails) {
+                if (!Array.isArray(item.loras) || item.loras.length === 0) continue;
+                const stackCard = document.createElement("div");
+                stackCard.style.cssText = "background: rgba(30, 40, 52, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 8px; padding: 6px; margin-bottom: 6px;";
+
+                const stackTitle = document.createElement("div");
+                stackTitle.textContent = `Stack ${item.slotLabel}:`;
+                stackTitle.style.cssText = "color:#c5d8ea; font-size:12px; margin:0 0 6px 0;";
+                stackCard.appendChild(stackTitle);
+
+                const stackTags = document.createElement("div");
+                stackTags.style.cssText = "display:grid; grid-template-columns: 200px 200px; justify-content:start; gap:2px;";
+                for (const lora of item.loras) {
+                    stackTags.appendChild(_createSummaryLoraTag(lora));
+                }
+                stackCard.appendChild(stackTags);
+                loraSection.appendChild(stackCard);
+            }
+        }
+        dialog.appendChild(loraSection);
+
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex; justify-content:flex-end; margin-top:14px;";
+        const okBtn = document.createElement("button");
+        okBtn.textContent = "OK";
+        okBtn.style.cssText = "padding:8px 16px; background:#2f7dbf; color:#fff; border:none; border-radius:6px; cursor:pointer;";
+        actions.appendChild(okBtn);
+        dialog.appendChild(actions);
+
+        const cleanup = () => {
+            if (loraManagerPreviewTooltip) {
+                loraManagerPreviewTooltip.hide();
+            }
+            if (overlay.parentNode) document.body.removeChild(overlay);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        okBtn.onclick = () => {
+            cleanup();
+            resolve(true);
+        };
+        overlay.onclick = () => {
+            cleanup();
+            resolve(true);
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        okBtn.focus();
+    });
+}
+
+async function showWorkflowDiscoverySummary(node) {
+    const hasWorkflowInput = hasConnectedWorkflowInput(node);
+    const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
+    const workflowData = (liveWorkflowData && typeof liveWorkflowData === "object")
+        ? liveWorkflowData
+        : resolveWorkflowDataForSave(node);
+
+    if (!workflowData || typeof workflowData !== "object") {
+        await showInfo("Summary", "No recipe_data available yet. Execute upstream or select a saved workflow prompt.");
+        return;
+    }
+
+    const summary = _summarizeWorkflowDataDiscovery(workflowData);
+    await _showWorkflowSummaryDialog(summary);
+}
+
+function attachWorkflowCornerInfoHandlers(node) {
+    if (!node?._isWorkflowManager || node._workflowCornerInfoAttached) return;
+
+    const previousDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function(ctx) {
+        const result = previousDrawForeground ? previousDrawForeground.apply(this, arguments) : undefined;
+
+        if (this.flags?.collapsed) {
+            this._workflowInfoBounds = null;
+            return result;
+        }
+
+        const summary = _summarizeWorkflowDataDiscovery(this.lastWorkflowData);
+        const infoEnabled = summary.modelCount > 0;
+        const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+        const infoWidth = 30;
+        const infoHeight = 14;
+        const infoX = this.size[0] - infoWidth - 8;
+        const infoY = (titleHeight / 2) - 37;
+        const cornerRadius = 7;
+
+        const drawRoundRect = (x, y, w, h, r) => {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+        };
+
+        ctx.save();
+        drawRoundRect(infoX, infoY, infoWidth, infoHeight, cornerRadius);
+        ctx.fillStyle = infoEnabled ? 'rgba(55, 142, 255, 0.92)' : 'rgba(120, 130, 140, 0.35)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(240, 248, 255, 0.95)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = infoEnabled ? '#ffffff' : 'rgba(220, 226, 234, 0.75)';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('info', infoX + (infoWidth / 2), infoY + (infoHeight / 2) + 0.5);
+        ctx.restore();
+
+        this._workflowInfoBounds = {
+            x: infoX,
+            y: infoY,
+            width: infoWidth,
+            height: infoHeight,
+            enabled: infoEnabled,
+        };
+        return result;
+    };
+
+    const previousMouseMove = node.onMouseMove;
+    node.onMouseMove = function(e, localPos, canvas) {
+        const result = previousMouseMove ? previousMouseMove.apply(this, arguments) : undefined;
+        const b = this._workflowInfoBounds;
+        if (!b) return result;
+
+        const hovering = localPos[0] >= b.x && localPos[0] <= b.x + b.width &&
+            localPos[1] >= b.y && localPos[1] <= b.y + b.height;
+        if (hovering) {
+            canvas.canvas.title = b.enabled ? 'Workflow metadata found (info available)' : 'No workflow metadata';
+            canvas.canvas.style.cursor = b.enabled ? 'pointer' : '';
+        }
+        return result;
+    };
+
+    const previousMouseDown = node.onMouseDown;
+    node.onMouseDown = function(e, localPos, canvas) {
+        const b = this._workflowInfoBounds;
+        if (b) {
+            const hit = localPos[0] >= b.x && localPos[0] <= b.x + b.width &&
+                localPos[1] >= b.y && localPos[1] <= b.y + b.height;
+            if (hit && b.enabled) {
+                void showWorkflowDiscoverySummary(this);
+                return true;
+            }
+        }
+        return previousMouseDown ? previousMouseDown.apply(this, arguments) : undefined;
+    };
+
+    node._workflowCornerInfoAttached = true;
 }
 
 // ========================
@@ -2980,7 +3551,7 @@ function addButtonBar(node) {
     // Add button bar to node
     const htmlWidget = node.addDOMWidget("buttons", "div", buttonContainer);
     htmlWidget.computeSize = function(width) {
-        return [width, 36];
+        return [width, 40];
     };
 
     node.buttonBarAttached = true;
@@ -3000,6 +3571,13 @@ function setupCategoryChangeHandler(node) {
     const originalCallback = categoryWidget.callback;
 
     categoryWidget.callback = async function(value) {
+        if (node._restoringFromWorkflow) {
+            if (originalCallback) {
+                originalCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         // Skip callback reload during save operations
         if (node._skipCallbackReload) {
             if (originalCallback) {
@@ -3108,6 +3686,13 @@ function setupCategoryChangeHandler(node) {
     const originalPromptCallback = promptWidget.callback;
 
     promptWidget.callback = async function(value) {
+        if (node._restoringFromWorkflow) {
+            if (originalPromptCallback) {
+                originalPromptCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         // Skip callback reload during save operations
         if (node._skipCallbackReload) {
             if (originalPromptCallback) {
@@ -3220,7 +3805,7 @@ function setupCategoryChangeHandler(node) {
 
                     if (hasOtherCategoryPrompts) {
                         setTimeout(() => {
-                            filterPromptDropdown(node);
+                            filterPromptDropdown(node, { preserveDanglingSelection: node._restoringFromWorkflow === true });
                         }, 50);
                     }
                 }
@@ -4341,7 +4926,18 @@ function resolveWorkflowDataForSave(node) {
     if (wfInput?.link != null) {
         const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
-        if (sourceClass === "RecipeBuilder") {
+        if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
+            const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+            if (wfOutIdx >= 0) {
+                const out = upstream.outputs[wfOutIdx];
+                const data = out?._data ?? out?.value ?? null;
+                if (hasMeaningfulWorkflowData(data)) return data;
+                if (typeof data === "string") {
+                    const parsed = parseJsonObjectSafe(data, null);
+                    if (hasMeaningfulWorkflowData(parsed)) return parsed;
+                }
+            }
+
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
             if (hasMeaningfulWorkflowData(fromBuilder)) return fromBuilder;
         }
@@ -4386,7 +4982,18 @@ async function resolveWorkflowDataForLive(node) {
     const sourceClass = String(upstream?.comfyClass || upstream?.type || "");
     const sourceClassLower = sourceClass.toLowerCase();
 
-    if (sourceClass === "RecipeBuilder") {
+    if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
+        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+        if (wfOutIdx >= 0) {
+            const out = upstream.outputs[wfOutIdx];
+            const data = out?._data ?? out?.value ?? null;
+            if (hasMeaningfulWorkflowData(data)) return data;
+            if (typeof data === "string") {
+                const parsed = parseJsonObjectSafe(data, null);
+                if (hasMeaningfulWorkflowData(parsed)) return parsed;
+            }
+        }
+
         return buildWorkflowDataFromBuilderNode(upstream);
     }
 
@@ -4467,7 +5074,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
 
         // Include workflow_data when available.
         // If use_workflow_data is enabled and workflow_data comes from a connected
-        // RecipeBuilder, pull it directly from Builder UI state so saving works
+        // RecipeBuilder / RecipeBuilderWan, pull it directly from Builder UI state so saving works
         // even before executing the graph.
         const hasWorkflowInput = hasConnectedWorkflowInput(node);
         const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
@@ -5690,7 +6297,9 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         `;
 
         const title = document.createElement("div");
-        title.textContent = mode === "save" ? saveTitle : "Select Prompt";
+        title.textContent = mode === "save"
+            ? saveTitle
+            : (workflowOnly ? "Select Recipe" : "Select Prompt");
         title.style.cssText = `
             font-size: 18px;
             font-weight: bold;
@@ -6385,8 +6994,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
                     if (showWorkflowBadge) {
                         const workflowBadge = document.createElement("div");
-                        workflowBadge.textContent = "W";
-                        workflowBadge.title = "Has workflow data";
+                        workflowBadge.textContent = "R";
+                        workflowBadge.title = "Has Recipe Data";
                         workflowBadge.style.cssText = `
                             width: 14px;
                             height: 14px;
@@ -6621,8 +7230,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 const showWorkflowBadge = !workflowOnly && hasWorkflowData;
                 if (showWorkflowBadge) {
                     const workflowBadge = document.createElement("div");
-                    workflowBadge.textContent = "W";
-                    workflowBadge.title = "Has workflow data";
+                    workflowBadge.textContent = "R";
+                    workflowBadge.title = "Has Recipe Data";
                     workflowBadge.style.cssText = `
                         position: absolute;
                         right: -2px;
@@ -8336,13 +8945,25 @@ function createPromptSelectorWidget(node) {
         if (existingNsfwLabel) existingNsfwLabel.remove();
         const existingWorkflowLabel = nameDisplay.querySelector('.workflow-selector-label');
         if (existingWorkflowLabel) existingWorkflowLabel.remove();
+        const existingFoundLabel = nameDisplay.querySelector('.workflow-found-label');
+        if (existingFoundLabel) existingFoundLabel.remove();
+        const existingInfoLabel = nameDisplay.querySelector('.workflow-info-label');
+        if (existingInfoLabel) existingInfoLabel.remove();
 
-        const createBadge = (className, text, styleBlock) => {
+        const createBadge = (className, text, styleBlock, onClick = null) => {
             const label = document.createElement("span");
             label.className = className;
             label.textContent = text;
             label.style.cssText = styleBlock;
+            if (typeof onClick === "function") {
+                label.style.pointerEvents = "auto";
+                label.onclick = (evt) => {
+                    evt.stopPropagation();
+                    onClick(evt);
+                };
+            }
             nameDisplay.appendChild(label);
+            return label;
         };
 
         // Show red NSFW badge for NSFW prompts (or prompts in NSFW categories) — always visible.
@@ -8372,7 +8993,7 @@ function createPromptSelectorWidget(node) {
             }
 
             if (hasWorkflowData && !node?._isWorkflowManager) {
-                createBadge("workflow-selector-label", "W", `
+                createBadge("workflow-selector-label", "R", `
                     width: 14px;
                     height: 14px;
                     border-radius: 50%;
@@ -8388,6 +9009,39 @@ function createPromptSelectorWidget(node) {
                     line-height: 1;
                 `);
             }
+        }
+
+        let infoEnabled = false;
+        if (node._isWorkflowManager) {
+            const summary = _summarizeWorkflowDataDiscovery(node.lastWorkflowData);
+            infoEnabled = summary.modelCount > 0;
+        } else if (!wmInputMode && node.prompts && category) {
+            const promptData = node.prompts[category]?.[prompt] || null;
+            infoEnabled = hasMeaningfulWorkflowData(promptData?.workflow_data);
+        }
+
+        if (!node._isWorkflowManager) {
+            createBadge("workflow-info-label", "info", `
+                margin-left: 6px;
+                width: 28px;
+                height: 14px;
+                border-radius: 999px;
+                border: 1px solid rgba(235, 245, 255, 0.95);
+                background: ${infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)"};
+                color: ${infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)"};
+                font-size: 8px;
+                font-weight: 700;
+                letter-spacing: 0.2px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                line-height: 1;
+                flex-shrink: 0;
+                cursor: ${infoEnabled ? "pointer" : "default"};
+                opacity: ${infoEnabled ? "1" : "0.75"};
+            `, infoEnabled ? () => {
+                void showWorkflowDiscoverySummary(node);
+            } : null);
         }
     };
 
