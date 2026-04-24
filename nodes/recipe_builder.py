@@ -76,6 +76,11 @@ def _normalize_model_slot(slot):
     return key if key in _MODEL_KEYS else "model_a"
 
 
+def _normalize_model_pair_start(slot):
+    key = _normalize_model_slot(slot)
+    return "model_c" if key in ("model_c", "model_d") else "model_a"
+
+
 def _next_model_slot(slot):
     key = _normalize_model_slot(slot)
     try:
@@ -152,8 +157,9 @@ def _builder_output_to_v2(legacy_wf, mode="simple", send_as_slot="model_a", base
             if isinstance(block, dict):
                 out["models"][key] = copy.deepcopy(block)
 
-    primary_slot = _normalize_model_slot(send_as_slot)
-    secondary_slot = _next_model_slot(primary_slot) if str(mode or "simple").strip().lower() == "wan" else None
+    is_wan_mode = str(mode or "simple").strip().lower() == "wan"
+    primary_slot = _normalize_model_pair_start(send_as_slot) if is_wan_mode else _normalize_model_slot(send_as_slot)
+    secondary_slot = _next_model_slot(primary_slot) if is_wan_mode else None
 
     out["models"][primary_slot] = _make_model_block("model_a")
     if secondary_slot:
@@ -776,6 +782,9 @@ class WorkflowBuilder:
             overrides = {}
         pull_model_slot = _normalize_model_slot(overrides.get("_pull_model_slot", overrides.get("_model_slot", "model_a")))
         send_model_slot = _normalize_model_slot(overrides.get("_send_model_slot", overrides.get("_model_slot", pull_model_slot)))
+        if is_wan_mode:
+            pull_model_slot = _normalize_model_pair_start(pull_model_slot)
+            send_model_slot = _normalize_model_pair_start(send_model_slot)
         secondary_pull_slot = _next_model_slot(pull_model_slot)
 
         # ── Parse recipe_data input (if connected) ─────────────────────

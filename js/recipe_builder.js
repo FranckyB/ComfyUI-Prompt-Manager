@@ -273,6 +273,10 @@ function _findInput(node, ...names) {
 }
 
 const MODEL_SLOT_KEYS = ["model_a", "model_b", "model_c", "model_d"];
+const MODEL_SLOT_PAIR_OPTIONS = [
+    { value: "model_a", label: "model_a | model_b" },
+    { value: "model_c", label: "model_c | model_d" },
+];
 
 function _normalizeModelSlotKey(v) {
     const key = String(v || "model_a").trim().toLowerCase();
@@ -284,6 +288,11 @@ function _nextModelSlotKey(v) {
     const idx = MODEL_SLOT_KEYS.indexOf(key);
     if (idx < 0 || idx >= MODEL_SLOT_KEYS.length - 1) return null;
     return MODEL_SLOT_KEYS[idx + 1];
+}
+
+function _normalizeModelPairStartKey(v) {
+    const key = _normalizeModelSlotKey(v);
+    return (key === "model_c" || key === "model_d") ? "model_c" : "model_a";
 }
 
 function _isLoraAvailableForSort(lora, availabilityMap = null) {
@@ -621,7 +630,15 @@ function makeInput(label, type, value, attrs, onChange) {
         inp = document.createElement("select");
         for (const opt of (attrs?.options || [])) {
             const o = document.createElement("option");
-            o.value = opt; o.textContent = opt;
+            if (opt && typeof opt === "object") {
+                const val = String(opt.value ?? opt.label ?? "");
+                const text = String(opt.label ?? opt.value ?? "");
+                o.value = val;
+                o.textContent = text;
+            } else {
+                o.value = opt;
+                o.textContent = opt;
+            }
             inp.appendChild(o);
         }
         inp.value = value;
@@ -949,13 +966,17 @@ async function updateUI(node) {
     if (!d) return;
 
     if (node._wePullModelSlotRow?._inp) {
-        const pullSlot = _normalizeModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a");
+        const pullSlot = node._weBuilderVariant === "wan"
+            ? _normalizeModelPairStartKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a")
+            : _normalizeModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a");
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(pullSlot);
         node._wePullModelSlotRow._inp.value = pullSlot;
         node._wePullModelSlot = pullSlot;
     }
     if (node._weSendModelSlotRow?._inp) {
-        const sendSlot = _normalizeModelSlotKey(d.send_model_slot || node._weSendModelSlot || node._wePullModelSlot || "model_a");
+        const sendSlot = node._weBuilderVariant === "wan"
+            ? _normalizeModelPairStartKey(d.send_model_slot || node._weSendModelSlot || node._wePullModelSlot || "model_a")
+            : _normalizeModelSlotKey(d.send_model_slot || node._weSendModelSlot || node._wePullModelSlot || "model_a");
         if (node._weSendModelSlotRow._setOriginal) node._weSendModelSlotRow._setOriginal(sendSlot);
         node._weSendModelSlotRow._inp.value = sendSlot;
         node._weSendModelSlot = sendSlot;
@@ -1744,9 +1765,13 @@ function syncHidden(node) {
         ov.negative_prompt = String(node._weNegBox.value || "");
     }
     if (node._weFamily) ov._family = node._weFamily;
-    if (node._wePullModelSlot) ov._pull_model_slot = _normalizeModelSlotKey(node._wePullModelSlot);
+    if (node._wePullModelSlot) ov._pull_model_slot = node._weBuilderVariant === "wan"
+        ? _normalizeModelPairStartKey(node._wePullModelSlot)
+        : _normalizeModelSlotKey(node._wePullModelSlot);
     else delete ov._pull_model_slot;
-    if (node._weSendModelSlot) ov._send_model_slot = _normalizeModelSlotKey(node._weSendModelSlot);
+    if (node._weSendModelSlot) ov._send_model_slot = node._weBuilderVariant === "wan"
+        ? _normalizeModelPairStartKey(node._weSendModelSlot)
+        : _normalizeModelSlotKey(node._weSendModelSlot);
     else delete ov._send_model_slot;
     // Backward compatibility for older saved workflows.
     delete ov._model_slot;
@@ -1878,14 +1903,18 @@ function applyOverrides(node, ovJson, lsJson) {
     }
 
     if (node._wePullModelSlotRow?._inp) {
-        const slot = _normalizeModelSlotKey(ov._pull_model_slot || ov._model_slot || "model_a");
+        const slot = node._weBuilderVariant === "wan"
+            ? _normalizeModelPairStartKey(ov._pull_model_slot || ov._model_slot || "model_a")
+            : _normalizeModelSlotKey(ov._pull_model_slot || ov._model_slot || "model_a");
         node._wePullModelSlotRow._inp.value = slot;
         node._wePullModelSlot = slot;
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(slot);
     }
 
     if (node._weSendModelSlotRow?._inp) {
-        const slot = _normalizeModelSlotKey(ov._send_model_slot || ov._model_slot || node._wePullModelSlot || "model_a");
+        const slot = node._weBuilderVariant === "wan"
+            ? _normalizeModelPairStartKey(ov._send_model_slot || ov._model_slot || node._wePullModelSlot || "model_a")
+            : _normalizeModelSlotKey(ov._send_model_slot || ov._model_slot || node._wePullModelSlot || "model_a");
         node._weSendModelSlotRow._inp.value = slot;
         node._weSendModelSlot = slot;
         if (node._weSendModelSlotRow._setOriginal) node._weSendModelSlotRow._setOriginal(slot);
@@ -1963,7 +1992,9 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
     if (!jsonStr) return null;
     try {
         const d = JSON.parse(jsonStr);
-        const selectedSlot = _normalizeModelSlotKey(modelSlot);
+        const selectedSlot = isWanBuilder
+            ? _normalizeModelPairStartKey(modelSlot)
+            : _normalizeModelSlotKey(modelSlot);
         const isWanBuilder = String(builderVariant || "simple").toLowerCase() === "wan";
 
         if (Number(d?.version || 0) >= 2 && d?.models && typeof d.models === "object") {
@@ -2279,10 +2310,14 @@ app.registerExtension({
             }, "Update Recipe");
             node._weUpdateBtn = updateBtn;
 
+            const slotOptions = isWanBuilder ? MODEL_SLOT_PAIR_OPTIONS : MODEL_SLOT_KEYS;
+
             const pullModelSlotRow = makeInput("Pull From", "select", "model_a", {
-                options: MODEL_SLOT_KEYS,
+                options: slotOptions,
             }, () => {
-                const picked = _normalizeModelSlotKey(pullModelSlotRow._inp?.value || "model_a");
+                const picked = isWanBuilder
+                    ? _normalizeModelPairStartKey(pullModelSlotRow._inp?.value || "model_a")
+                    : _normalizeModelSlotKey(pullModelSlotRow._inp?.value || "model_a");
                 pullModelSlotRow._inp.value = picked;
                 node._wePullModelSlot = picked;
                 _syncS();
@@ -2295,9 +2330,11 @@ app.registerExtension({
             node._wePullModelSlot = "model_a";
 
             const sendModelSlotRow = makeInput("Send To", "select", "model_a", {
-                options: MODEL_SLOT_KEYS,
+                options: slotOptions,
             }, () => {
-                const picked = _normalizeModelSlotKey(sendModelSlotRow._inp?.value || "model_a");
+                const picked = isWanBuilder
+                    ? _normalizeModelPairStartKey(sendModelSlotRow._inp?.value || "model_a")
+                    : _normalizeModelSlotKey(sendModelSlotRow._inp?.value || "model_a");
                 sendModelSlotRow._inp.value = picked;
                 node._weSendModelSlot = picked;
                 _syncS();
