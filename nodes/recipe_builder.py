@@ -147,15 +147,23 @@ def _builder_output_to_v2(legacy_wf, mode="simple", send_as_slot="model_a", base
         "models": {},
     }
 
+    def _safe_deepcopy(value):
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            return value
+
     if isinstance(base_recipe_data, dict) and int(base_recipe_data.get("version", 0) or 0) >= 2 and isinstance(base_recipe_data.get("models"), dict):
         out["_source"] = str(base_recipe_data.get("_source") or out["_source"])
         for key, val in base_recipe_data.items():
             if key in ("_source", "version", "models"):
                 continue
-            out[key] = copy.deepcopy(val)
+            out[key] = _safe_deepcopy(val)
         for key, block in (base_recipe_data.get("models") or {}).items():
             if isinstance(block, dict):
-                out["models"][key] = copy.deepcopy(block)
+                # Preserve runtime objects without deep-copying Comfy internals
+                # (e.g. ModelPatcher), which can raise during deepcopy.
+                out["models"][key] = dict(block)
 
     is_wan_mode = str(mode or "simple").strip().lower() == "wan"
     primary_slot = _normalize_model_pair_start(send_as_slot) if is_wan_mode else _normalize_model_slot(send_as_slot)

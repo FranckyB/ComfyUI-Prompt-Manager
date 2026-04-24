@@ -364,12 +364,12 @@ class PromptGenerator:
             return False
 
     @staticmethod
-    def start_server(model_name, context_size=4096, use_vision_model=False):
+    def start_server(model_name, context_size=2048, use_vision_model=False):
         """Start llama.cpp server with specified model
 
         Args:
             model_name: Name of the model to use
-            context_size: Context size (default 4096)
+            context_size: Context size (default 2048)
             use_vision_model: Whether to use the vision model's mmproj
 
         Returns:
@@ -437,7 +437,7 @@ class PromptGenerator:
                     print_pg(error_msg, RED)
 
             # Build command arguments
-            cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-c", str(context_size)]
+            cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-ngl", "10", "-c", str(context_size)]
 
             # Add vision flags for models with mmproj
             if use_vision_model:
@@ -634,19 +634,19 @@ class PromptGenerator:
                 data = response.json()
                 params = data.get("default_generation_settings", {}).get("params", {})
                 _model_default_params = {
-                    "temperature": round(params.get("temperature", 0.8), 4),
-                    "top_k": int(params.get("top_k", 40)),
-                    "top_p": round(params.get("top_p", 0.95), 4),
-                    "min_p": round(params.get("min_p", 0.05), 4),
+                    "temperature": round(params.get("temperature", 0.7), 4),
+                    "top_k": int(params.get("top_k", 20)),
+                    "top_p": round(params.get("top_p", 0.9), 4),
+                    "min_p": round(params.get("min_p", 0.0), 4),
                     "repeat_penalty": round(params.get("repeat_penalty", 1.0), 4),
                 }
                 return _model_default_params
         except Exception:
             _model_default_params = {
-                "temperature": 0.8,
-                "top_k": 40,
-                "top_p": 0.95,
-                "min_p": 0.05,
+                "temperature": 0.7,
+                "top_k": 20,
+                "top_p": 0.9,
+                "min_p": 0.0,
                 "repeat_penalty": 1.0
             }
         return _model_default_params
@@ -800,7 +800,7 @@ class PromptGenerator:
 
         # If the current model is not the one we want, or server is not running, restart
         # Also restart if context_size has changed (llama.cpp only)
-        context_size = options.get("context_size", 4096) if options else 4096
+        context_size = options.get("context_size", 2048) if options else 2048
         if not use_ollama:
             if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
                 self.stop_server()

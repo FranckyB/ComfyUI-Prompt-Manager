@@ -7,6 +7,7 @@ Models (MODEL/CLIP/VAE) are passed through only - use RecipeModelLoader for load
 import json
 import os
 import folder_paths
+import nodes
 import comfy.samplers
 from ..py.lora_utils import resolve_lora_path, get_lora_relative_path, strip_lora_extension
 from ..py.workflow_extraction_utils import resolve_model_name
@@ -82,7 +83,47 @@ def _get_live_ksampler_combo_types():
         return default_samplers, default_schedulers
 
 
+def _get_live_loader_combo_types():
+    """Mirror active loader combo socket types so Relay connects to core load nodes."""
+    def _from_node(node_names, key, fallback):
+        for node_name in node_names:
+            try:
+                cls = nodes.NODE_CLASS_MAPPINGS.get(node_name)
+                if cls is None:
+                    continue
+                required = cls.INPUT_TYPES().get("required", {})
+                combo = required.get(key)
+                if isinstance(combo, tuple) and len(combo) >= 1:
+                    return combo[0]
+            except Exception:
+                continue
+        return fallback
+
+    ckpt_enum = _from_node(
+        ["CheckpointLoaderSimple", "CheckpointLoader"],
+        "ckpt_name",
+        folder_paths.get_filename_list("checkpoints"),
+    )
+    unet_enum = _from_node(
+        ["UNETLoader", "UnetLoader", "DiffusionModelLoader"],
+        "unet_name",
+        folder_paths.get_filename_list("diffusion_models"),
+    )
+    vae_enum = _from_node(
+        ["VAELoader"],
+        "vae_name",
+        folder_paths.get_filename_list("vae"),
+    )
+    clip_enum = _from_node(
+        ["CLIPLoader"],
+        "clip_name",
+        folder_paths.get_filename_list("text_encoders"),
+    )
+    return ckpt_enum, unet_enum, vae_enum, clip_enum
+
+
 _LIVE_SAMPLERS, _LIVE_SCHEDULERS = _get_live_ksampler_combo_types()
+_LIVE_CKPTS, _LIVE_UNETS, _LIVE_VAES, _LIVE_CLIPS = _get_live_loader_combo_types()
 
 
 _MODEL_KEYS = ("model_a", "model_b", "model_c", "model_d")
@@ -167,8 +208,13 @@ class WorkflowRelay:
     @classmethod
     def _sync_combo_types(cls):
         samplers, schedulers = _get_live_ksampler_combo_types()
+        ckpts, unets, vaes, clips = _get_live_loader_combo_types()
         cls._SAMPLER_ENUM = samplers
         cls._SCHEDULER_ENUM = schedulers
+        cls._UNET_ENUM = unets
+        cls._CKPT_ENUM = ckpts
+        cls._VAE_ENUM = vaes
+        cls._CLIP_ENUM = clips
         cls.RETURN_TYPES = (
             "RECIPE_DATA",
             "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", ANY_TYPE,
@@ -178,6 +224,7 @@ class WorkflowRelay:
             "LORA_STACK",
             "INT", "INT", "INT", "INT",
             "STRING",
+            cls._CKPT_ENUM, cls._UNET_ENUM, cls._VAE_ENUM, cls._CLIP_ENUM,
         )
 
     @classmethod
@@ -211,6 +258,10 @@ class WorkflowRelay:
                 "batch_size":      ("INT",     {"forceInput": True, "tooltip": "Override batch size"}),
                 "length":          ("INT",     {"forceInput": True, "tooltip": "Override video length"}),
                 "model_name":      ("STRING",  {"forceInput": True, "tooltip": "Optional model name/path. Resolves and writes recipe model field(s)."}),
+                "ckpt":            (cls._CKPT_ENUM, {"forceInput": True, "tooltip": "Optional checkpoint model name override."}),
+                "unet":            (cls._UNET_ENUM, {"forceInput": True, "tooltip": "Optional UNET/diffusion model name override."}),
+                "load_vae":        (cls._VAE_ENUM,  {"forceInput": True, "tooltip": "Optional VAE name override for Load VAE."}),
+                "load_clip":       (cls._CLIP_ENUM, {"forceInput": True, "tooltip": "Optional CLIP name override for Load CLIP."}),
             },
         }
 
@@ -223,6 +274,7 @@ class WorkflowRelay:
         "LORA_STACK",
         "INT", "INT", "INT", "INT",
         "STRING",
+        _LIVE_CKPTS, _LIVE_UNETS, _LIVE_VAES, _LIVE_CLIPS,
     )
     RETURN_NAMES = (
         "recipe_data",
@@ -233,6 +285,7 @@ class WorkflowRelay:
         "lora_stack",
         "width", "height", "batch_size", "length",
         "model_name",
+        "ckpt", "unet", "vae", "clip",
     )
     FUNCTION = "unpack"
     CATEGORY = "Prompt Manager"
@@ -466,6 +519,12 @@ class WorkflowRelay:
         if model is None:
             model = wf.get('MODEL_A')
 
+        selected_loader_type = (
+            str((selected_block or {}).get('loader_type', '')).strip().lower()
+            if isinstance(selected_block, dict)
+            else str(wf.get('loader_type', '')).strip().lower()
+        )
+
         clip = kwargs.get('clip')
         if clip is None:
             clip = selected_block.get('CLIP') if isinstance(selected_block, dict) else None
@@ -590,8 +649,57 @@ class WorkflowRelay:
         final_pos = (final_selected.get('positive_prompt', '') if isinstance(final_selected, dict) else '') or wf.get('positive_prompt', '') or v2_positive
         final_neg = (final_selected.get('negative_prompt', '') if isinstance(final_selected, dict) else '') or wf.get('negative_prompt', '') or v2_negative
 
+        ckpt_name_in = kwargs.get('ckpt')
+        unet_name_in = kwargs.get('unet')
+        vae_name_in = kwargs.get('load_vae')
+        clip_name_in = kwargs.get('load_clip')
+
+        selected_model_raw = (final_selected.get('model', '') if isinstance(final_selected, dict) else '') or wf.get('model_a', '') or v2_model_name or ''
+        selected_vae_raw = (final_selected.get('vae', '') if isinstance(final_selected, dict) else '') or wf.get('vae', '') or v2_vae or ''
+        selected_clip_raw = ''
+        if isinstance(final_selected, dict) and isinstance(final_selected.get('clip'), list) and final_selected.get('clip'):
+            selected_clip_raw = str(final_selected.get('clip')[0] or '').strip()
+        elif isinstance(wf.get('clip'), list) and wf.get('clip'):
+            selected_clip_raw = str(wf.get('clip')[0] or '').strip()
+        elif isinstance(v2_clip, list) and v2_clip:
+            selected_clip_raw = str(v2_clip[0] or '').strip()
+
+        selected_model_name = str(selected_model_raw or '').strip()
+        selected_vae_name = str(selected_vae_raw or '').strip()
+        selected_clip_name = str(selected_clip_raw or '').strip()
+
+        if isinstance(unet_name_in, str) and unet_name_in.strip() and selected_loader_type in ('unet', 'diffusion'):
+            selected_model_name = unet_name_in.strip()
+        if isinstance(ckpt_name_in, str) and ckpt_name_in.strip() and selected_loader_type == 'checkpoint':
+            selected_model_name = ckpt_name_in.strip()
+        if isinstance(vae_name_in, str) and vae_name_in.strip():
+            selected_vae_name = vae_name_in.strip()
+        if isinstance(clip_name_in, str) and clip_name_in.strip():
+            selected_clip_name = clip_name_in.strip()
+
+        if int(wf.get('version', 0) or 0) >= 2:
+            target_block = _selected_v2_block(wf, selected_slot, create=True)
+            if selected_model_name:
+                target_block['model'] = selected_model_name
+            if selected_vae_name:
+                target_block['vae'] = selected_vae_name
+            if selected_clip_name:
+                target_block['clip'] = [selected_clip_name]
+
+        if selected_model_name:
+            wf['model_a'] = selected_model_name
+        if selected_vae_name:
+            wf['vae'] = selected_vae_name
+        if selected_clip_name:
+            wf['clip'] = [selected_clip_name]
+
         # -- Extract all output values -------------------------------
         model_name = final_model_name
+
+        unet_out = selected_model_name if selected_loader_type in ('unet', 'diffusion') else None
+        ckpt_out = selected_model_name if selected_loader_type == 'checkpoint' else None
+        vae_name_out = selected_vae_name or None
+        clip_name_out = selected_clip_name or None
 
         return (
             wf,
@@ -610,4 +718,8 @@ class WorkflowRelay:
             final_resolution.get('batch_size', 1),
             final_resolution.get('length', 0) or 0,
             model_name,
+            ckpt_out,
+            unet_out,
+            vae_name_out,
+            clip_name_out,
         )

@@ -58,21 +58,21 @@ class PromptGenOptions:
                     "tooltip": "Use the model's default sampling parameters (overrides temperature, top_p, etc)"
                 }),
                 "temperature": ("FLOAT", {
-                    "default": 0.8,
+                    "default": 0.7,
                     "min": 0.0,
                     "max": 2.0,
                     "step": 0.01,
                     "tooltip": "Controls randomness (0.0 = deterministic, 2.0 = very random)"
                 }),
                 "top_k": ("INT", {
-                    "default": 40,
+                    "default": 20,
                     "min": 0,
                     "max": 100,
                     "step": 1,
                     "tooltip": "Sample from top K most likely tokens (0 = disabled)"
                 }),
                 "top_p": ("FLOAT", {
-                    "default": 0.95,
+                    "default": 0.9,
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.01,

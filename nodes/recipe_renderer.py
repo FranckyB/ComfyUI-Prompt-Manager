@@ -205,6 +205,8 @@ class WorkflowRenderer:
         loras_b = wf.get("loras_b", [])
         primary_key = None
         secondary_key = None
+        primary = None
+        secondary = None
         selected_slot = _normalize_model_slot(model_slot)
 
         if int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict):
@@ -404,11 +406,21 @@ class WorkflowRenderer:
         resolved_a = None
         folder_a = None
         _cache = WorkflowRenderer._class_model_cache
-        passthrough_model_a = wf.get("MODEL_A", None)
+        passthrough_model_a = primary.get("MODEL") if isinstance(primary, dict) else None
+        passthrough_clip = primary.get("CLIP") if isinstance(primary, dict) else None
+        passthrough_vae = primary.get("VAE") if isinstance(primary, dict) else None
+
+        if passthrough_model_a is None:
+            passthrough_model_a = wf.get("MODEL_A", None)
+        if passthrough_clip is None:
+            passthrough_clip = wf.get("CLIP", None)
+        if passthrough_vae is None:
+            passthrough_vae = wf.get("VAE", None)
+
         if passthrough_model_a is not None:
             model_a = passthrough_model_a
-            clip_a = wf.get("CLIP", None)
-            vae_a = wf.get("VAE", None)
+            clip_a = passthrough_clip
+            vae_a = passthrough_vae
         else:
             resolved_a, folder_a = resolve_model_name(model_name_a)
             # Verify resolved model belongs to a compatible family — resolve_model_name
@@ -535,7 +547,9 @@ class WorkflowRenderer:
         elif family_key in ("wan_video_t2v", "wan_video_i2v"):
             # Load Model B for dual-sampler
             model_b_obj = None
-            passthrough_model_b = wf.get("MODEL_B", None)
+            passthrough_model_b = secondary.get("MODEL") if isinstance(secondary, dict) else None
+            if passthrough_model_b is None:
+                passthrough_model_b = wf.get("MODEL_B", None)
             if passthrough_model_b is not None:
                 model_b_obj = passthrough_model_b
             elif model_name_b:

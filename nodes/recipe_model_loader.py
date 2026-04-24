@@ -123,6 +123,16 @@ def _extract_preloaded_assets(workflow_data, selected_model_slot):
     if not isinstance(workflow_data, dict):
         return None
 
+    # v2 recipe_data: runtime assets are model-scoped.
+    if int(workflow_data.get("version", 0) or 0) >= 2 and isinstance(workflow_data.get("models"), dict):
+        block = workflow_data.get("models", {}).get(selected_model_slot)
+        if isinstance(block, dict):
+            model = block.get("MODEL")
+            clip = block.get("CLIP")
+            vae = block.get("VAE")
+            if _is_runtime_object(model) and _is_runtime_object(clip) and _is_runtime_object(vae):
+                return (model, clip, vae)
+
     model_key = "MODEL_B" if selected_model_slot == "model_b" else "MODEL_A"
     model = workflow_data.get(model_key)
     clip = workflow_data.get("CLIP")
@@ -314,7 +324,7 @@ class WorkflowModelLoader:
                     "tooltip": "Recipe data containing model name strings to load.",
                     "forceInput": True,
                 }),
-                "model": (["model_a", "model_b"], {
+                "model": (["model_a", "model_b", "model_c", "model_d"], {
                     "default": "model_a",
                     "tooltip": "Which model slot to load from recipe_data.",
                 }),
@@ -328,7 +338,7 @@ class WorkflowModelLoader:
     def get_model(self, recipe_data, model="model_a", weight_dtype="default"):
         workflow_data = recipe_data
         selected_model_slot = model
-        if selected_model_slot not in ("model_a", "model_b"):
+        if selected_model_slot not in ("model_a", "model_b", "model_c", "model_d"):
             selected_model_slot = "model_a"
 
         passthrough_assets = _extract_preloaded_assets(workflow_data, selected_model_slot)
@@ -397,6 +407,7 @@ class WorkflowModelLoader:
             "uses_checkpoint_vae": (loader_type == "checkpoint" and not vae_name),
             "uses_checkpoint_clip": (loader_type == "checkpoint" and len(clip_names) == 0),
         }
+
         return {
             "ui": {"workflow_model_loader_info": [ui_info]},
             "result": result,
@@ -411,8 +422,39 @@ class WorkflowModelLoader:
         spec = dict(spec or {})
         spec["model_a"] = (spec.get("model_a") or "").strip()
         spec["model_b"] = (spec.get("model_b") or "").strip()
+        spec["model_c"] = (spec.get("model_c") or "").strip()
+        spec["model_d"] = (spec.get("model_d") or "").strip()
         spec["loader_type"] = (spec.get("loader_type") or "").strip()
         spec["clip_type"] = (spec.get("clip_type") or "").strip()
+
+        # v2 recipe_data stores model config in per-slot blocks.
+        if int(spec.get("version", 0) or 0) >= 2 and isinstance(spec.get("models"), dict):
+            models = spec.get("models", {})
+            for key in ("model_a", "model_b", "model_c", "model_d"):
+                block = models.get(key)
+                if isinstance(block, dict):
+                    model_name = (block.get("model") or "").strip() if isinstance(block.get("model"), str) else ""
+                    if model_name:
+                        spec[key] = model_name
+
+            selected_key = self._model_key if self._model_key in ("model_a", "model_b", "model_c", "model_d") else "model_a"
+            selected_block = models.get(selected_key) if isinstance(models.get(selected_key), dict) else None
+            if isinstance(selected_block, dict):
+                loader_type = (selected_block.get("loader_type") or "").strip() if isinstance(selected_block.get("loader_type"), str) else ""
+                clip_type = (selected_block.get("clip_type") or "").strip() if isinstance(selected_block.get("clip_type"), str) else ""
+                vae_name = (selected_block.get("vae") or "").strip() if isinstance(selected_block.get("vae"), str) else ""
+                clip_names = selected_block.get("clip")
+
+                if loader_type:
+                    spec["loader_type"] = loader_type
+                if clip_type:
+                    spec["clip_type"] = clip_type
+                if vae_name:
+                    spec["vae"] = vae_name
+                if isinstance(clip_names, list):
+                    spec["clip"] = clip_names
+                elif isinstance(clip_names, str) and clip_names.strip():
+                    spec["clip"] = [clip_names.strip()]
 
         # VAE / CLIP: placeholders like '(from checkpoint)' mean "use what
         # the checkpoint already provides" — normalise to empty.
