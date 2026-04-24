@@ -339,7 +339,7 @@ app.registerExtension({
 
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
-                    filterPromptDropdown(node);
+                    filterPromptDropdown(node, { preserveDanglingSelection: true });
 
                     // Ensure height is sufficient after data is loaded
                     setTimeout(() => {
@@ -362,17 +362,24 @@ app.registerExtension({
                 const result = onConfigure?.apply(this, arguments);
 
                 const node = this;
+                // Mark workflow restore so async onNodeCreated load does not coerce selection.
+                node._configuredFromWorkflow = true;
+                node._restoringFromWorkflow = true;
 
                 // Reload prompts from server and reapply filtering
                 setTimeout(() => {
                     loadPrompts(node).then(() => {
-                        filterPromptDropdown(node);
+                        try {
+                            filterPromptDropdown(node, { preserveDanglingSelection: true });
 
-                        // Reattach button bar if needed
-                        if (!node.buttonBarAttached) {
-                            addButtonBar(node);
-                            setupCategoryChangeHandler(node);
-                            setupUseExternalToggleHandler(node);
+                            // Reattach button bar if needed
+                            if (!node.buttonBarAttached) {
+                                addButtonBar(node);
+                                setupCategoryChangeHandler(node);
+                                setupUseExternalToggleHandler(node);
+                            }
+                        } finally {
+                            node._restoringFromWorkflow = false;
                         }
                     });
                 }, 100);
@@ -523,7 +530,8 @@ function hasUnsavedChanges(node) {
     return currentText !== savedText;
 }
 
-function filterPromptDropdown(node) {
+function filterPromptDropdown(node, options = {}) {
+    const preserveDanglingSelection = options?.preserveDanglingSelection === true;
     // Filter name dropdown to only show prompts from current category
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
@@ -532,13 +540,23 @@ function filterPromptDropdown(node) {
         const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
 
         // Filter NSFW categories from the category dropdown
-        if (hideNSFW && node.prompts) {
+        if (node.prompts) {
             let categories = Object.keys(node.prompts).sort((a, b) => a.localeCompare(b));
-            categories = categories.filter(cat => node.prompts[cat]?.["__meta__"]?.nsfw !== true);
-            categoryWidget.options.values = categories.length > 0 ? categories : ["Default"];
+            const currentCategoryValue = String(categoryWidget.value || "");
 
-            // If current category is now hidden, switch to first visible
-            if (!categories.includes(categoryWidget.value) && categories.length > 0) {
+            if (hideNSFW) {
+            categories = categories.filter(cat => node.prompts[cat]?.["__meta__"]?.nsfw !== true);
+            }
+
+            let categoryOptions = categories.length > 0 ? [...categories] : ["Default"];
+            if (preserveDanglingSelection && currentCategoryValue && !categoryOptions.includes(currentCategoryValue)) {
+                categoryOptions = [currentCategoryValue, ...categoryOptions];
+            }
+            categoryWidget.options.values = categoryOptions;
+
+            // If current category is now hidden, switch only when we are not preserving
+            // workflow-restored dangling selections.
+            if (!categoryOptions.includes(categoryWidget.value) && categories.length > 0) {
                 categoryWidget.value = categories[0];
             }
         }
@@ -553,6 +571,10 @@ function filterPromptDropdown(node) {
                 } else {
                     promptNames = promptNames.filter(name => !node.prompts[currentCategory][name]?.nsfw);
                 }
+            }
+            const currentPromptValue = String(promptWidget.value || "");
+            if (preserveDanglingSelection && currentPromptValue && !promptNames.includes(currentPromptValue)) {
+                promptNames = [currentPromptValue, ...promptNames];
             }
             if (promptNames.length === 0) {
                 promptNames.push("");
@@ -766,6 +788,13 @@ function setupCategoryChangeHandler(node) {
 
     // Update prompt dropdown when category changes
     categoryWidget.callback = async function(value) {
+        if (node._restoringFromWorkflow) {
+            if (originalCallback) {
+                originalCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         if (originalCallback) {
             originalCallback.apply(this, arguments);
         }
@@ -806,6 +835,13 @@ function setupCategoryChangeHandler(node) {
 
     // Update text widget when prompt selection changes
     promptWidget.callback = async function(value) {
+        if (node._restoringFromWorkflow) {
+            if (originalPromptCallback) {
+                originalPromptCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         if (originalPromptCallback) {
             originalPromptCallback.apply(this, arguments);
         }
@@ -864,7 +900,7 @@ function setupCategoryChangeHandler(node) {
 
                     if (hasOtherCategoryPrompts) {
                         setTimeout(() => {
-                            filterPromptDropdown(node);
+                            filterPromptDropdown(node, { preserveDanglingSelection: node._restoringFromWorkflow === true });
                         }, 50);
                     }
                 }

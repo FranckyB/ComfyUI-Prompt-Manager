@@ -506,7 +506,9 @@ app.registerExtension({
 
                 // Load prompts asynchronously (data only, not widgets)
                 loadPrompts(node).then(() => {
-                    filterPromptDropdown(node);
+                    // Preserve serialized selection during initial async hydrate so
+                    // archived workflow names are not replaced by filtered library values.
+                    filterPromptDropdown(node, { preserveDanglingSelection: true });
 
                     // Update custom prompt selector display
                     if (node.updatePromptSelectorDisplay) {
@@ -648,48 +650,44 @@ app.registerExtension({
                 }
 
                 // Load prompts data asynchronously (data only, widgets already added)
+                node._restoringFromWorkflow = true;
                 loadPrompts(node).then(async () => {
-                    filterPromptDropdown(node);
+                    try {
+                        filterPromptDropdown(node, { preserveDanglingSelection: true });
 
-                    // Rehydrate selected prompt/workflow data after restore.
-                    // RecipeManager can show the selected name after reload but keep stale/empty
-                    // data unless we explicitly load it here.
-                    const categoryWidget = node.widgets?.find((w) => w.name === "category");
-                    const promptWidget = node.widgets?.find((w) => w.name === "name");
-                    const selectedCategory = String(categoryWidget?.value || "");
-                    const selectedPrompt = String(promptWidget?.value || "");
-                    const hasSelection = !!(selectedCategory && selectedPrompt);
-                    const shouldLoadSelection = hasSelection && !(node._isWorkflowManager && hasConnectedWorkflowInput(node));
-                    if (shouldLoadSelection) {
-                        await loadPromptData(node, selectedCategory, selectedPrompt);
-                    }
+                        // Archival-safe restore: never auto-load prompt-library data during
+                        // onConfigure. The serialized workflow payload is authoritative and
+                        // must not be overwritten even if a same-named prompt exists.
 
-                    // Re-check LoRA availability after restoring from serialized state.
-                    // The 'available' field is not serialized in toggle widgets, so after
-                    // a tab switch all restored loras would show as "not found" without this.
-                    await recheckLoraAvailability(node);
+                        // Re-check LoRA availability after restoring from serialized state.
+                        // The 'available' field is not serialized in toggle widgets, so after
+                        // a tab switch all restored loras would show as "not found" without this.
+                        await recheckLoraAvailability(node);
 
-                    updateLoraDisplays(node);
-                    updateTriggerWordsDisplay(node);
+                        updateLoraDisplays(node);
+                        updateTriggerWordsDisplay(node);
 
-                    // Snapshot restored state so unsaved-changes detection
-                    // doesn't falsely trigger after a reload
-                    updateLastSavedState(node);
+                        // Snapshot restored state so unsaved-changes detection
+                        // doesn't falsely trigger after a reload
+                        updateLastSavedState(node);
 
-                    // Update custom prompt selector display
-                    if (node.updatePromptSelectorDisplay) {
-                        node.updatePromptSelectorDisplay();
-                    }
-
-                    if (node._isWorkflowManager) {
-                        const computedSize = node.computeSize();
-                        const minHeight = Math.max(420, computedSize[1] + 20);
-                        if (node.size[1] > 560 || node.size[1] < minHeight) {
-                            node.setSize([Math.max(440, node.size[0]), minHeight]);
+                        // Update custom prompt selector display
+                        if (node.updatePromptSelectorDisplay) {
+                            node.updatePromptSelectorDisplay();
                         }
-                    }
 
-                    app.graph.setDirtyCanvas(true, true);
+                        if (node._isWorkflowManager) {
+                            const computedSize = node.computeSize();
+                            const minHeight = Math.max(420, computedSize[1] + 20);
+                            if (node.size[1] > 560 || node.size[1] < minHeight) {
+                                node.setSize([Math.max(440, node.size[0]), minHeight]);
+                            }
+                        }
+
+                        app.graph.setDirtyCanvas(true, true);
+                    } finally {
+                        node._restoringFromWorkflow = false;
+                    }
                 });
 
                 return result;
@@ -1067,7 +1065,8 @@ function getVisibleCategories(node, options = {}) {
     return categories;
 }
 
-function filterPromptDropdown(node) {
+function filterPromptDropdown(node, options = {}) {
+    const preserveDanglingSelection = options?.preserveDanglingSelection === true;
     const categoryWidget = node.widgets.find(w => w.name === "category");
     const promptWidget = node.widgets.find(w => w.name === "name");
 
@@ -1076,9 +1075,14 @@ function filterPromptDropdown(node) {
         const workflowOnly = node?._isWorkflowManager === true;
         const visibleCategories = getVisibleCategories(node, { hideNSFW, workflowOnly });
 
-        categoryWidget.options.values = visibleCategories.length > 0 ? visibleCategories : ["Default"];
+        const currentCategoryValue = String(categoryWidget.value || "");
+        let categoryOptions = visibleCategories.length > 0 ? [...visibleCategories] : ["Default"];
+        if (preserveDanglingSelection && currentCategoryValue && !categoryOptions.includes(currentCategoryValue)) {
+            categoryOptions = [currentCategoryValue, ...categoryOptions];
+        }
+        categoryWidget.options.values = categoryOptions;
 
-        if (!visibleCategories.includes(categoryWidget.value)) {
+        if (!categoryOptions.includes(categoryWidget.value)) {
             categoryWidget.value = visibleCategories[0] || "Default";
         }
 
@@ -1086,10 +1090,14 @@ function filterPromptDropdown(node) {
         const promptNames = getPromptNamesForCategory(node, currentCategory, { hideNSFW, workflowOnly });
 
         // Preserve explicit empty selection (New Prompt) across tab-switch restore.
-        const wantsEmptySelection = String(promptWidget.value || "") === "";
+        const currentPromptValue = String(promptWidget.value || "");
+        const wantsEmptySelection = currentPromptValue === "";
         let promptOptions = promptNames.length > 0 ? [...promptNames] : [""];
         if (wantsEmptySelection && !promptOptions.includes("")) {
             promptOptions = ["", ...promptOptions];
+        }
+        if (preserveDanglingSelection && currentPromptValue && !promptOptions.includes(currentPromptValue)) {
+            promptOptions = [currentPromptValue, ...promptOptions];
         }
 
         promptWidget.options.values = promptOptions;
@@ -3563,6 +3571,13 @@ function setupCategoryChangeHandler(node) {
     const originalCallback = categoryWidget.callback;
 
     categoryWidget.callback = async function(value) {
+        if (node._restoringFromWorkflow) {
+            if (originalCallback) {
+                originalCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         // Skip callback reload during save operations
         if (node._skipCallbackReload) {
             if (originalCallback) {
@@ -3671,6 +3686,13 @@ function setupCategoryChangeHandler(node) {
     const originalPromptCallback = promptWidget.callback;
 
     promptWidget.callback = async function(value) {
+        if (node._restoringFromWorkflow) {
+            if (originalPromptCallback) {
+                originalPromptCallback.apply(this, arguments);
+            }
+            return;
+        }
+
         // Skip callback reload during save operations
         if (node._skipCallbackReload) {
             if (originalPromptCallback) {
@@ -3783,7 +3805,7 @@ function setupCategoryChangeHandler(node) {
 
                     if (hasOtherCategoryPrompts) {
                         setTimeout(() => {
-                            filterPromptDropdown(node);
+                            filterPromptDropdown(node, { preserveDanglingSelection: node._restoringFromWorkflow === true });
                         }, 50);
                     }
                 }
