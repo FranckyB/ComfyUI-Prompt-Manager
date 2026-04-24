@@ -985,9 +985,29 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
     const wf = parseJsonObjectSafe(rawWorkflowData, null);
     if (!wf || typeof wf !== "object") return false;
 
+    if ((Number(wf.version || 0) >= 2) && wf.models && typeof wf.models === "object") {
+        for (const slot of ["model_a", "model_b", "model_c", "model_d"]) {
+            const block = wf.models[slot];
+            if (!block || typeof block !== "object") continue;
+            const positivePrompt = String(block.positive_prompt || "").trim();
+            const modelName = String(block.model || "").trim();
+            const hasLoras = Array.isArray(block.loras) && block.loras.some((lora) => String(lora?.name || "").trim().length > 0);
+            const hasRuntimeCarrier = ["MODEL", "CLIP", "VAE", "POSITIVE", "NEGATIVE"]
+                .some((key) => block[key] != null);
+            if (positivePrompt.length > 0 || modelName.length > 0 || hasLoras || hasRuntimeCarrier) {
+                return true;
+            }
+        }
+
+        if (["LATENT", "IMAGE", "MASK"].some((key) => wf[key] != null)) {
+            return true;
+        }
+        return false;
+    }
+
     // Renderer passthrough payloads may carry runtime objects but omit textual
     // fields. Treat these as meaningful for save-time extraction.
-    const hasRuntimeCarrier = ["MODEL_A", "CLIP", "VAE", "POSITIVE", "NEGATIVE", "LATENT", "IMAGE"]
+    const hasRuntimeCarrier = ["MODEL", "MODEL_A", "CLIP", "VAE", "POSITIVE", "NEGATIVE", "LATENT", "IMAGE"]
         .some((key) => wf[key] != null);
 
     const positivePrompt = String(wf.positive_prompt || "").trim();
@@ -4341,7 +4361,7 @@ function resolveWorkflowDataForSave(node) {
     if (wfInput?.link != null) {
         const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
-        if (sourceClass === "RecipeBuilder") {
+        if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
             if (hasMeaningfulWorkflowData(fromBuilder)) return fromBuilder;
         }
@@ -4386,7 +4406,7 @@ async function resolveWorkflowDataForLive(node) {
     const sourceClass = String(upstream?.comfyClass || upstream?.type || "");
     const sourceClassLower = sourceClass.toLowerCase();
 
-    if (sourceClass === "RecipeBuilder") {
+    if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
         return buildWorkflowDataFromBuilderNode(upstream);
     }
 
@@ -4467,7 +4487,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
 
         // Include workflow_data when available.
         // If use_workflow_data is enabled and workflow_data comes from a connected
-        // RecipeBuilder, pull it directly from Builder UI state so saving works
+        // RecipeBuilder / RecipeBuilderWan, pull it directly from Builder UI state so saving works
         // even before executing the graph.
         const hasWorkflowInput = hasConnectedWorkflowInput(node);
         const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;

@@ -65,6 +65,12 @@ _FAMILY_SAMPLER_DEFAULTS = {
 # Runtime caches for non-checkpoint components reused across repeated renders.
 _class_vae_cache = {}
 _class_clip_cache = {}
+_MODEL_KEYS = ("model_a", "model_b", "model_c", "model_d")
+
+
+def _normalize_model_slot(value):
+    key = str(value or "model_a").strip().lower()
+    return key if key in _MODEL_KEYS else "model_a"
 
 class WorkflowRenderer:
     """
@@ -84,6 +90,10 @@ class WorkflowRenderer:
                 "recipe_data": ("RECIPE_DATA", {
                     "forceInput": True,
                     "tooltip": "Connect recipe_data from Recipe Builder or PromptExtractor",
+                }),
+                "model_slot": (_MODEL_KEYS, {
+                    "default": "model_a",
+                    "tooltip": "Select which model slot to render from in v2 recipe_data.",
                 }),
                 "clear_cache_after_render": ("BOOLEAN", {
                     "default": False,
@@ -157,7 +167,7 @@ class WorkflowRenderer:
         except Exception as e:
             print(f"[RecipeRenderer] CUDA cache clear failed: {e}")
 
-    def execute(self, recipe_data, clear_cache_after_render=False, source_image=None, unique_id=None):
+    def execute(self, recipe_data, model_slot="model_a", clear_cache_after_render=False, source_image=None, unique_id=None):
         workflow_data = recipe_data
 
         # ── Parse workflow_data ───────────────────────────────────────────
@@ -175,6 +185,10 @@ class WorkflowRenderer:
 
         wf_sampler = wf.get("sampler", {})
         wf_res = wf.get("resolution", {})
+        if not isinstance(wf_sampler, dict):
+            wf_sampler = {}
+        if not isinstance(wf_res, dict):
+            wf_res = {}
 
         positive_prompt = wf.get("positive_prompt", "")
         negative_prompt = wf.get("negative_prompt", "")
@@ -189,6 +203,56 @@ class WorkflowRenderer:
         loader_type_str = wf.get("loader_type", "")
         loras_a = wf.get("loras_a", [])
         loras_b = wf.get("loras_b", [])
+        primary_key = None
+        secondary_key = None
+        selected_slot = _normalize_model_slot(model_slot)
+
+        if int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict):
+            models = wf.get("models", {})
+            primary_key = selected_slot
+            secondary = None
+            idx = _MODEL_KEYS.index(selected_slot)
+            if idx < len(_MODEL_KEYS) - 1:
+                secondary_key = _MODEL_KEYS[idx + 1]
+
+            primary = models.get(primary_key) if isinstance(models.get(primary_key), dict) else None
+            if secondary_key and isinstance(models.get(secondary_key), dict):
+                secondary = models.get(secondary_key)
+
+            if isinstance(primary, dict):
+                model_name_a = primary.get("model", model_name_a)
+                positive_prompt = primary.get("positive_prompt", positive_prompt)
+                negative_prompt = primary.get("negative_prompt", negative_prompt)
+                family_key = primary.get("family", family_key)
+                vae_name = primary.get("vae", vae_name)
+                clip_names = primary.get("clip", clip_names)
+                clip_type_str = primary.get("clip_type", clip_type_str)
+                loader_type_str = primary.get("loader_type", loader_type_str)
+                if isinstance(primary.get("loras"), list):
+                    loras_a = primary.get("loras", [])
+                if isinstance(primary.get("sampler"), dict):
+                    merged_sampler = dict(wf_sampler) if isinstance(wf_sampler, dict) else {}
+                    merged_sampler.update(primary.get("sampler", {}))
+                    wf_sampler = merged_sampler
+                if isinstance(primary.get("resolution"), dict):
+                    merged_res = dict(wf_res) if isinstance(wf_res, dict) else {}
+                    merged_res.update(primary.get("resolution", {}))
+                    wf_res = merged_res
+
+            if isinstance(secondary, dict):
+                model_name_b = secondary.get("model", model_name_b)
+                if isinstance(secondary.get("loras"), list):
+                    loras_b = secondary.get("loras", [])
+                if isinstance(secondary.get("sampler"), dict):
+                    sec_sampler = secondary.get("sampler", {})
+                    if isinstance(wf_sampler, dict):
+                        if "steps_b" not in wf_sampler and sec_sampler.get("steps") is not None:
+                            wf_sampler["steps_b"] = sec_sampler.get("steps")
+                        if "seed_b" not in wf_sampler and sec_sampler.get("seed") is not None:
+                            wf_sampler["seed_b"] = sec_sampler.get("seed")
+
+        if isinstance(clip_names, str):
+            clip_names = [clip_names] if clip_names else []
 
         # Resolution
         width = int(wf_res.get("width", 768))
@@ -550,16 +614,52 @@ class WorkflowRenderer:
             base = os.path.basename(raw.replace("\\", "/"))
             return os.path.splitext(base)[0]
 
-        wf_out["MODEL_A"] = model_a
-        if model_b_obj is not None:
-            wf_out["MODEL_B"] = model_b_obj
-        else:
-            wf_out.pop("MODEL_B", None)
-        wf_out["CLIP"] = clip
-        wf_out["VAE"] = vae
         cond_pos_out, cond_neg_out = _encode_text_conditioning(clip, positive_prompt, negative_prompt)
-        wf_out["POSITIVE"] = cond_pos_out
-        wf_out["NEGATIVE"] = cond_neg_out
+
+        if int(wf_out.get("version", 0) or 0) >= 2 and isinstance(wf_out.get("models"), dict):
+            models_out = wf_out.get("models", {})
+            if not isinstance(models_out, dict):
+                models_out = {}
+                wf_out["models"] = models_out
+
+            if not primary_key:
+                primary_key = "model_a"
+            if primary_key not in models_out or not isinstance(models_out.get(primary_key), dict):
+                models_out[primary_key] = {}
+
+            primary_out = models_out[primary_key]
+            primary_out["MODEL"] = model_a
+            primary_out["CLIP"] = clip
+            primary_out["VAE"] = vae
+            primary_out["POSITIVE"] = cond_pos_out
+            primary_out["NEGATIVE"] = cond_neg_out
+
+            if secondary_key and model_b_obj is not None:
+                if secondary_key not in models_out or not isinstance(models_out.get(secondary_key), dict):
+                    models_out[secondary_key] = {}
+                secondary_out = models_out[secondary_key]
+                secondary_out["MODEL"] = model_b_obj
+                secondary_out["VAE"] = vae
+                secondary_out["CLIP"] = clip
+
+            wf_out.pop("MODEL", None)
+            wf_out.pop("MODEL_A", None)
+            wf_out.pop("MODEL_B", None)
+            wf_out.pop("CLIP", None)
+            wf_out.pop("VAE", None)
+            wf_out.pop("POSITIVE", None)
+            wf_out.pop("NEGATIVE", None)
+        else:
+            wf_out["MODEL_A"] = model_a
+            if model_b_obj is not None:
+                wf_out["MODEL_B"] = model_b_obj
+            else:
+                wf_out.pop("MODEL_B", None)
+            wf_out["CLIP"] = clip
+            wf_out["VAE"] = vae
+            wf_out["POSITIVE"] = cond_pos_out
+            wf_out["NEGATIVE"] = cond_neg_out
+
         wf_out["LATENT"] = out_latent
         wf_out["IMAGE"] = decoded
         wf_out["model_name"] = _short_display_name(resolved_a or model_name_a)

@@ -11,7 +11,7 @@ from datetime import datetime
 from io import BytesIO
 import folder_paths
 import server
-from ..py.workflow_data_utils import to_json_safe_workflow_data
+from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data
 
 # Import numpy and PIL for image processing (available in ComfyUI environment)
 try:
@@ -76,6 +76,22 @@ def image_to_base64_thumbnail(image_tensor, max_size=200):
 def _has_meaningful_workflow_data(workflow_data):
     """Return True when workflow_data contains authored prompt/model/lora content."""
     if not isinstance(workflow_data, dict):
+        return False
+
+    if int(workflow_data.get("version", 0) or 0) >= 2 and isinstance(workflow_data.get("models"), dict):
+        for mk in ("model_a", "model_b", "model_c", "model_d"):
+            block = workflow_data.get("models", {}).get(mk)
+            if not isinstance(block, dict):
+                continue
+            positive_prompt = str(block.get("positive_prompt", "")).strip()
+            model_name = str(block.get("model", "")).strip()
+            loras = block.get("loras")
+            has_loras = isinstance(loras, list) and any(
+                isinstance(lora_item, dict) and str(lora_item.get("name", "")).strip()
+                for lora_item in loras
+            )
+            if positive_prompt or model_name or has_loras:
+                return True
         return False
 
     positive_prompt = str(workflow_data.get("positive_prompt", "")).strip()
@@ -552,7 +568,7 @@ class PromptManagerAdvanced:
         prompts_data = self.load_prompts()
         prompt_entry = prompts_data.get(category, {}).get(name, {}) if isinstance(prompts_data, dict) else {}
         stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
-        resolved_workflow_data = stored_prompt_wf if isinstance(stored_prompt_wf, dict) else None
+        resolved_workflow_data = ensure_v2_recipe_data(stored_prompt_wf, source="PromptManagerAdvanced") if isinstance(stored_prompt_wf, dict) else None
 
         # Choose which text to use based on the toggles
         # Priority: use_prompt_input > internal text
@@ -710,6 +726,7 @@ class PromptManagerAdvanced:
             if isinstance(lora, dict) and lora.get('name')
         ]
         out_workflow_data['_source'] = 'PromptManagerAdvanced'
+        out_workflow_data = ensure_v2_recipe_data(out_workflow_data, source='PromptManagerAdvanced')
 
         return (final_output, out_stack_a, out_stack_b, out_workflow_data)
 
@@ -1189,12 +1206,12 @@ async def save_prompt_advanced(request):
         workflow_data = data.get("workflow_data")
         wf_to_save = None
         if isinstance(workflow_data, dict):
-            wf_to_save = to_json_safe_workflow_data(workflow_data)
+            wf_to_save = to_json_safe_workflow_data(ensure_v2_recipe_data(workflow_data, source="PromptManagerAdvanced"))
         elif isinstance(workflow_data, str) and workflow_data.strip():
             try:
                 parsed_wf = json.loads(workflow_data)
                 if isinstance(parsed_wf, dict):
-                    wf_to_save = to_json_safe_workflow_data(parsed_wf)
+                    wf_to_save = to_json_safe_workflow_data(ensure_v2_recipe_data(parsed_wf, source="PromptManagerAdvanced"))
             except (json.JSONDecodeError, TypeError):
                 wf_to_save = None
 
@@ -1206,15 +1223,16 @@ async def save_prompt_advanced(request):
 
         # Workflow Saver parity: when meaningful workflow_data is present, treat
         # its LoRA lists as authoritative for persistence.
-        wf_loras_a = normalize_workflow_lora_data((wf_to_save or {}).get("loras_a", []))
-        wf_loras_b = normalize_workflow_lora_data((wf_to_save or {}).get("loras_b", []))
+        wf_models = (wf_to_save or {}).get("models", {}) if isinstance((wf_to_save or {}).get("models"), dict) else {}
+        wf_loras_a = normalize_workflow_lora_data((wf_models.get("model_a") or {}).get("loras", []))
+        wf_loras_b = normalize_workflow_lora_data((wf_models.get("model_b") or {}).get("loras", []))
         if isinstance(wf_to_save, dict) and workflow_has_meaningful_data:
-            if "loras_a" in wf_to_save and wf_loras_a:
+            if isinstance(wf_models.get("model_a"), dict) and wf_loras_a:
                 normalized_loras_a = wf_loras_a
             elif not normalized_loras_a and wf_loras_a:
                 normalized_loras_a = wf_loras_a
 
-            if "loras_b" in wf_to_save and wf_loras_b:
+            if isinstance(wf_models.get("model_b"), dict) and wf_loras_b:
                 normalized_loras_b = wf_loras_b
             elif not normalized_loras_b and wf_loras_b:
                 normalized_loras_b = wf_loras_b
@@ -1236,10 +1254,11 @@ async def save_prompt_advanced(request):
 
         # Persist prompt fields from workflow_data snapshot when available.
         if isinstance(wf_to_save, dict):
-            if isinstance(wf_to_save.get("positive_prompt"), str) and wf_to_save.get("positive_prompt", "").strip():
-                prompt_data["prompt"] = wf_to_save.get("positive_prompt", "")
-            if isinstance(wf_to_save.get("negative_prompt"), str):
-                prompt_data["negative_prompt"] = wf_to_save.get("negative_prompt", "")
+            model_a_block = wf_models.get("model_a") if isinstance(wf_models.get("model_a"), dict) else {}
+            if isinstance(model_a_block.get("positive_prompt"), str) and model_a_block.get("positive_prompt", "").strip():
+                prompt_data["prompt"] = model_a_block.get("positive_prompt", "")
+            if isinstance(model_a_block.get("negative_prompt"), str):
+                prompt_data["negative_prompt"] = model_a_block.get("negative_prompt", "")
             prompt_data["saved_from"] = "RecipeManager"
             prompt_data["saved_at"] = datetime.utcnow().isoformat() + "Z"
 
@@ -1250,7 +1269,7 @@ async def save_prompt_advanced(request):
             # edits without a currently connected workflow_data source.
             existing_wf = existing_prompt.get("workflow_data")
             if isinstance(existing_wf, dict):
-                prompt_data["workflow_data"] = to_json_safe_workflow_data(existing_wf)
+                prompt_data["workflow_data"] = to_json_safe_workflow_data(ensure_v2_recipe_data(existing_wf, source="PromptManagerAdvanced"))
 
         if thumbnail:
             prompt_data["thumbnail"] = thumbnail

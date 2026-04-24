@@ -267,6 +267,25 @@ function _canonicalInputName(name) {
     return n;
 }
 
+function _findInput(node, ...names) {
+    const wanted = new Set(names.map((n) => String(n || "").trim().toLowerCase()));
+    return node?.inputs?.find((i) => wanted.has(String(i?.name || "").trim().toLowerCase())) || null;
+}
+
+const MODEL_SLOT_KEYS = ["model_a", "model_b", "model_c", "model_d"];
+
+function _normalizeModelSlotKey(v) {
+    const key = String(v || "model_a").trim().toLowerCase();
+    return MODEL_SLOT_KEYS.includes(key) ? key : "model_a";
+}
+
+function _nextModelSlotKey(v) {
+    const key = _normalizeModelSlotKey(v);
+    const idx = MODEL_SLOT_KEYS.indexOf(key);
+    if (idx < 0 || idx >= MODEL_SLOT_KEYS.length - 1) return null;
+    return MODEL_SLOT_KEYS[idx + 1];
+}
+
 function _isLoraAvailableForSort(lora, availabilityMap = null) {
     if (!lora) return true;
     if (lora.available === false || lora.found === false) return false;
@@ -929,6 +948,19 @@ async function updateUI(node) {
     const d = node._weExtracted;
     if (!d) return;
 
+    if (node._wePullModelSlotRow?._inp) {
+        const pullSlot = _normalizeModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a");
+        if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(pullSlot);
+        node._wePullModelSlotRow._inp.value = pullSlot;
+        node._wePullModelSlot = pullSlot;
+    }
+    if (node._weSendModelSlotRow?._inp) {
+        const sendSlot = _normalizeModelSlotKey(d.send_model_slot || node._weSendModelSlot || node._wePullModelSlot || "model_a");
+        if (node._weSendModelSlotRow._setOriginal) node._weSendModelSlotRow._setOriginal(sendSlot);
+        node._weSendModelSlotRow._inp.value = sendSlot;
+        node._weSendModelSlot = sendSlot;
+    }
+
     const sectionLocks = node._weSectionLocks || {};
     const modelLocked = !!sectionLocks.model;
     const samplerLocked = !!sectionLocks.sampler;
@@ -1034,7 +1066,7 @@ async function updateUI(node) {
     const s = d.sampler || {};
     if (!samplerLocked && node._weSamplerRows) {
         const rows = node._weSamplerRows;
-        const seedAInputConn = node.inputs?.find(i => i.name === "seed_a");
+        const seedAInputConn = _findInput(node, "seed", "seed_a");
         const seedBInputConn = node.inputs?.find(i => i.name === "seed_b");
         const seedALinked = seedAInputConn?.link != null;
         const seedBLinked = seedBInputConn?.link != null;
@@ -1180,8 +1212,13 @@ async function checkLoraAvailability(node) {
 // --- WAN-specific visibility ---
 function updateWanVisibility(node) {
     const family = node._weFamily;
-    const isWanVideo = (family === "wan_video_i2v" || family === "wan_video_t2v");
-    const isWan      = isWanVideo || (family === "wan_image");
+    const variant = node._weBuilderVariant || "simple";
+    const isWanVideo = variant === "wan"
+        ? true
+        : (family === "wan_video_i2v" || family === "wan_video_t2v");
+    const isWan = variant === "wan"
+        ? true
+        : (isWanVideo || (family === "wan_image"));
 
     // LoRA stack titles
     if (node._weLoraACard?._titleLabel) {
@@ -1707,6 +1744,12 @@ function syncHidden(node) {
         ov.negative_prompt = String(node._weNegBox.value || "");
     }
     if (node._weFamily) ov._family = node._weFamily;
+    if (node._wePullModelSlot) ov._pull_model_slot = _normalizeModelSlotKey(node._wePullModelSlot);
+    else delete ov._pull_model_slot;
+    if (node._weSendModelSlot) ov._send_model_slot = _normalizeModelSlotKey(node._weSendModelSlot);
+    else delete ov._send_model_slot;
+    // Backward compatibility for older saved workflows.
+    delete ov._model_slot;
     if (node._weShowAllModels) ov._show_all_models = true;
     else delete ov._show_all_models;
 
@@ -1834,6 +1877,20 @@ function applyOverrides(node, ovJson, lsJson) {
         }
     }
 
+    if (node._wePullModelSlotRow?._inp) {
+        const slot = _normalizeModelSlotKey(ov._pull_model_slot || ov._model_slot || "model_a");
+        node._wePullModelSlotRow._inp.value = slot;
+        node._wePullModelSlot = slot;
+        if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(slot);
+    }
+
+    if (node._weSendModelSlotRow?._inp) {
+        const slot = _normalizeModelSlotKey(ov._send_model_slot || ov._model_slot || node._wePullModelSlot || "model_a");
+        node._weSendModelSlotRow._inp.value = slot;
+        node._weSendModelSlot = slot;
+        if (node._weSendModelSlotRow._setOriginal) node._weSendModelSlotRow._setOriginal(slot);
+    }
+
     if (ov._section_locks && typeof ov._section_locks === "object") {
         for (const key of ["resolution", "model", "sampler", "positive", "negative", "loras"]) {
             if (Object.prototype.hasOwnProperty.call(ov._section_locks, key) && node._weSetSectionLock) {
@@ -1902,10 +1959,71 @@ function applyOverrides(node, ovJson, lsJson) {
 }
 
 // --- Parse workflow_data string into extracted format ---
-function parseWorkflowData(jsonStr) {
+function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "simple") {
     if (!jsonStr) return null;
     try {
         const d = JSON.parse(jsonStr);
+        const selectedSlot = _normalizeModelSlotKey(modelSlot);
+        const isWanBuilder = String(builderVariant || "simple").toLowerCase() === "wan";
+
+        if (Number(d?.version || 0) >= 2 && d?.models && typeof d.models === "object") {
+            const primary = d.models[selectedSlot] && typeof d.models[selectedSlot] === "object"
+                ? d.models[selectedSlot]
+                : {};
+            const secondaryKey = _nextModelSlotKey(selectedSlot);
+            const secondary = isWanBuilder && secondaryKey && d.models[secondaryKey] && typeof d.models[secondaryKey] === "object"
+                ? d.models[secondaryKey]
+                : null;
+
+            const rootSampler = (d.sampler && typeof d.sampler === "object") ? d.sampler : {};
+            const primarySampler = (primary.sampler && typeof primary.sampler === "object") ? primary.sampler : {};
+            const secondarySampler = (secondary && secondary.sampler && typeof secondary.sampler === "object") ? secondary.sampler : {};
+            const rootRes = (d.resolution && typeof d.resolution === "object") ? d.resolution : {};
+            const primaryRes = (primary.resolution && typeof primary.resolution === "object") ? primary.resolution : {};
+            const mergedSampler = { ...rootSampler, ...primarySampler };
+            const mergedResolution = { ...rootRes, ...primaryRes };
+            const primaryClipNames = Array.isArray(primary.clip)
+                ? primary.clip
+                : (primary.clip ? [primary.clip] : []);
+
+            return {
+                positive_prompt: primary.positive_prompt || "",
+                negative_prompt: primary.negative_prompt || "",
+                loras_a: Array.isArray(primary.loras) ? primary.loras : [],
+                loras_b: (isWanBuilder && secondary && Array.isArray(secondary.loras)) ? secondary.loras : [],
+                model_a: primary.model || "",
+                model_b: (isWanBuilder && secondary) ? (secondary.model || "") : "",
+                model_slot: selectedSlot,
+                vae: { name: primary.vae || "", source: "workflow_data" },
+                clip: {
+                    names: primaryClipNames,
+                    type: primary.clip_type || d.clip_type || "",
+                    source: "workflow_data",
+                },
+                sampler: {
+                    steps_a: mergedSampler.steps ?? mergedSampler.steps_a ?? 20,
+                    steps_b: isWanBuilder
+                        ? (secondarySampler.steps ?? mergedSampler.steps_b ?? mergedSampler.steps_a ?? mergedSampler.steps ?? 3)
+                        : undefined,
+                    cfg: mergedSampler.cfg ?? 5.0,
+                    denoise: mergedSampler.denoise ?? 1.0,
+                    seed_a: mergedSampler.seed ?? mergedSampler.seed_a ?? 0,
+                    seed_b: isWanBuilder
+                        ? (secondarySampler.seed ?? mergedSampler.seed_b ?? mergedSampler.seed_a ?? mergedSampler.seed ?? 0)
+                        : undefined,
+                    sampler_name: mergedSampler.sampler_name ?? "euler",
+                    scheduler: mergedSampler.scheduler ?? "simple",
+                },
+                resolution: {
+                    width: mergedResolution.width ?? 768,
+                    height: mergedResolution.height ?? 1280,
+                    batch_size: mergedResolution.batch_size ?? 1,
+                    length: mergedResolution.length ?? null,
+                },
+                model_family: primary.family || d.family || "",
+            };
+        }
+
         // Map from build_simplified_workflow_data schema to extracted schema
         return {
             positive_prompt: d.positive_prompt || "",
@@ -1914,6 +2032,7 @@ function parseWorkflowData(jsonStr) {
             loras_b: d.loras_b || [],
             model_a: d.model_a || "",
             model_b: d.model_b || "",
+            model_slot: selectedSlot,
             model_a_found: d.model_a_found,
             model_b_found: d.model_b_found,
             vae: { name: d.vae || "", source: "workflow_data" },
@@ -1943,31 +2062,49 @@ app.registerExtension({
     name: "RecipeBuilder",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "RecipeBuilder") return;
+        if (nodeData.name !== "RecipeBuilder" && nodeData.name !== "RecipeBuilderWan") return;
 
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = origCreated?.apply(this, arguments);
             const node = this;
+            const isWanBuilder = nodeData.name === "RecipeBuilderWan";
+            node._weBuilderVariant = isWanBuilder ? "wan" : "simple";
+
+            const _normalizeInputNameForVariant = (name) => {
+                let key = _canonicalInputName(name);
+                if (!isWanBuilder) {
+                    if (key === "seed_a") key = "seed";
+                    if (key === "lora_stack_a") key = "lora_stack";
+                }
+                return key;
+            };
 
             const _normalizeRecipePortsNow = () => {
-                const VALID_INPUTS = new Set([
-                    "recipe_data",
-                    "pos_prompt", "neg_prompt",
-                    "positive_prompt", "negative_prompt",
-                    "seed_a", "seed_b", "denoise",
-                    "lora_stack_a", "lora_stack_b",
-                ]);
+                const VALID_INPUTS = isWanBuilder
+                    ? new Set([
+                        "recipe_data",
+                        "pos_prompt", "neg_prompt",
+                        "positive_prompt", "negative_prompt",
+                        "seed_a", "seed_b", "denoise",
+                        "lora_stack_a", "lora_stack_b",
+                    ])
+                    : new Set([
+                        "recipe_data",
+                        "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
+                        "seed", "seed_a",
+                        "lora_stack", "lora_stack_a",
+                    ]);
                 if (node.inputs) {
                     for (const inp of node.inputs) {
                         if (!inp || !inp.name) continue;
-                        inp.name = _canonicalInputName(inp.name);
+                        inp.name = _normalizeInputNameForVariant(inp.name);
                     }
                     const keepIndexByName = new Map();
                     for (let i = 0; i < node.inputs.length; i++) {
                         const inp = node.inputs[i];
                         if (!inp || !inp.name) continue;
-                        const key = _canonicalInputName(inp.name);
+                        const key = _normalizeInputNameForVariant(inp.name);
                         if (!VALID_INPUTS.has(key)) continue;
                         if (!keepIndexByName.has(key)) {
                             keepIndexByName.set(key, i);
@@ -1982,7 +2119,7 @@ app.registerExtension({
                     for (let i = node.inputs.length - 1; i >= 0; i--) {
                         const inp = node.inputs[i];
                         if (!inp || !inp.name) continue;
-                        const key = _canonicalInputName(inp.name);
+                        const key = _normalizeInputNameForVariant(inp.name);
                         if (!VALID_INPUTS.has(key) || keepIndexByName.get(key) !== i) {
                             node.removeInput(i);
                         }
@@ -2010,7 +2147,7 @@ app.registerExtension({
             node._weExtracted = null;
             node._weLoraState = {};
             node._weOverrides = {};
-            node._weFamily = "sdxl";
+            node._weFamily = isWanBuilder ? "wan_video_t2v" : "sdxl";
             node._weShowAllModels = false;
             node._weSections = {};
             node._weSectionLocks = {
@@ -2141,6 +2278,35 @@ app.registerExtension({
                 fontFamily: "inherit", marginBottom: "2px",
             }, "Update Recipe");
             node._weUpdateBtn = updateBtn;
+
+            const pullModelSlotRow = makeInput("Pull From", "select", "model_a", {
+                options: MODEL_SLOT_KEYS,
+            }, () => {
+                const picked = _normalizeModelSlotKey(pullModelSlotRow._inp?.value || "model_a");
+                pullModelSlotRow._inp.value = picked;
+                node._wePullModelSlot = picked;
+                _syncS();
+            });
+            pullModelSlotRow._inp.title = "Select which model slot to pull from when reading connected v2 recipe_data.";
+            pullModelSlotRow._inp.style.color = C.accent;
+            pullModelSlotRow._inp.style.fontWeight = "bold";
+            pullModelSlotRow.style.marginBottom = "0";
+            node._wePullModelSlotRow = pullModelSlotRow;
+            node._wePullModelSlot = "model_a";
+
+            const sendModelSlotRow = makeInput("Send To", "select", "model_a", {
+                options: MODEL_SLOT_KEYS,
+            }, () => {
+                const picked = _normalizeModelSlotKey(sendModelSlotRow._inp?.value || "model_a");
+                sendModelSlotRow._inp.value = picked;
+                node._weSendModelSlot = picked;
+                _syncS();
+            });
+            sendModelSlotRow._inp.title = "Select which model slot this Builder writes into on output.";
+            sendModelSlotRow.style.marginBottom = "0";
+            node._weSendModelSlotRow = sendModelSlotRow;
+            node._weSendModelSlot = "model_a";
+
             const _findWorkflowDataInput = (targetNode = node) => {
                 const ins = targetNode?.inputs || [];
                 let fallback = null;
@@ -2201,7 +2367,8 @@ app.registerExtension({
                     node._weUpdateBtn.style.display = "";
                     return;
                 }
-                node._weUpdateBtn.style.display = _isUpdateSourceHint(upstream) ? "" : "none";
+                const show = _isUpdateSourceHint(upstream);
+                node._weUpdateBtn.style.display = show ? "" : "none";
             };
             const _deferUpdateWorkflowButtonRefresh = () => {
                 if (!node._weUpdateBtn) return;
@@ -2309,7 +2476,7 @@ app.registerExtension({
                     let extracted = null;
                     const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
                     const sourceClassNorm = _normalizeNodeKind(sourceClass);
-                    const isBuilderSource = sourceClassNorm === "recipebuilder";
+                    const isBuilderSource = sourceClassNorm === "recipebuilder" || sourceClassNorm === "recipebuilderwan";
                     const isContextSource = sourceClassNorm === "reciperelay";
                     const isPmaSource = sourceClassNorm === "promptmanageradvanced" || sourceClassNorm === "recipemanager";
 
@@ -2430,7 +2597,7 @@ app.registerExtension({
                         }
 
                         const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
-                        extracted = parseWorkflowData(wfJson);
+                        extracted = parseWorkflowData(wfJson, node._wePullModelSlot || "model_a", node._weBuilderVariant || "simple");
                         if (!extracted) {
                             _showError(node, "Connected RecipeRelay recipe_data is unavailable or invalid. Execute upstream nodes, then click Update Recipe.");
                             return;
@@ -2449,7 +2616,7 @@ app.registerExtension({
 
                         if (wfData) {
                             const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
-                            extracted = parseWorkflowData(wfJson);
+                            extracted = parseWorkflowData(wfJson, node._wePullModelSlot || "model_a", node._weBuilderVariant || "simple");
                         }
 
                         if (!extracted) {
@@ -2659,7 +2826,7 @@ app.registerExtension({
                             b: [...(processed.loras_b || [])],
                         };
                     }
-                    const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
+                    const loraAConn = _findInput(node, "lora_stack", "lora_stack_a");
                     const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
                     if (!node._weInputLoras) node._weInputLoras = { a: [], b: [] };
                     if (loraAConn?.link == null) node._weInputLoras.a = [];
@@ -2687,6 +2854,25 @@ app.registerExtension({
                     updateBtn.textContent = "Update Recipe";
                 }
             };
+            const modelSlotGroup = makeEl("div", {
+                display: "flex",
+                flexDirection: "column",
+                gap: "2px",
+            });
+            modelSlotGroup.appendChild(pullModelSlotRow);
+            modelSlotGroup.appendChild(sendModelSlotRow);
+
+            const modelSlotBox = makeEl("div", {
+                borderRadius: "6px",
+                overflow: "hidden",
+                marginTop: "2px",
+                marginBottom: "2px",
+                backgroundColor: C.bgCard,
+                flexShrink: "0",
+                padding: "4px 8px",
+            });
+            modelSlotBox.appendChild(modelSlotGroup);
+            root.appendChild(modelSlotBox);
             root.appendChild(updateBtn);
 
             // -- 1. RESOLUTION section (open) --
@@ -2882,8 +3068,22 @@ app.registerExtension({
                     try {
                         const r = await fetch("/workflow-extractor/list-families");
                         const d = await r.json();
-                        const families = d.families || {};
-                        const curVal = familySel.value || node._weFamily || "sdxl";
+                        let families = d.families || {};
+                        const curVal = familySel.value || node._weFamily || (isWanBuilder ? "wan_video_t2v" : "sdxl");
+                        if (isWanBuilder) {
+                            const wanOnly = {};
+                            if (families.wan_video_t2v) wanOnly.wan_video_t2v = families.wan_video_t2v;
+                            if (families.wan_video_i2v) wanOnly.wan_video_i2v = families.wan_video_i2v;
+                            families = wanOnly;
+                        } else {
+                            const noWan = {};
+                            for (const [k, v] of Object.entries(families)) {
+                                const key = String(k || "");
+                                if (key === "wan_video_t2v" || key === "wan_video_i2v") continue;
+                                noWan[key] = v;
+                            }
+                            families = noWan;
+                        }
                         familySel.innerHTML = "";
                         // Sort alphabetically, SDXL first
                         const keys = Object.keys(families).sort((a, b) => {
@@ -2898,8 +3098,8 @@ app.registerExtension({
                         }
                         if (!familySel.options.length) {
                             const o = document.createElement("option");
-                            o.value = "sdxl";
-                            o.textContent = "SDXL";
+                            o.value = isWanBuilder ? "wan_video_t2v" : "sdxl";
+                            o.textContent = isWanBuilder ? "WAN Video (T2V)" : "SDXL";
                             familySel.appendChild(o);
                         }
                         familySel.value = [...familySel.options].some((o) => o.value === curVal)
@@ -2921,20 +3121,30 @@ app.registerExtension({
             // Add SDXL as initial option
             {
                 const o = document.createElement("option");
-                o.value = "sdxl"; o.textContent = "SDXL";
+                o.value = isWanBuilder ? "wan_video_t2v" : "sdxl";
+                o.textContent = isWanBuilder ? "WAN Video (T2V)" : "SDXL";
                 familySel.appendChild(o);
-                familySel.value = "sdxl";
+                familySel.value = isWanBuilder ? "wan_video_t2v" : "sdxl";
             }
             requestAnimationFrame(() => {
                 _ensureFamiliesLoaded().catch(() => { /* ignore */ });
             });
             familySel.onchange = () => {
                 // Persist family immediately so fast tab-switches do not lose it.
-                node._weFamily = familySel.value || "sdxl";
+                let picked = familySel.value || (isWanBuilder ? "wan_video_t2v" : "sdxl");
+                if (isWanBuilder && picked !== "wan_video_t2v" && picked !== "wan_video_i2v") {
+                    picked = "wan_video_t2v";
+                    familySel.value = picked;
+                }
+                if (!isWanBuilder && (picked === "wan_video_t2v" || picked === "wan_video_i2v")) {
+                    picked = "sdxl";
+                    familySel.value = picked;
+                }
+                node._weFamily = picked;
                 node._weOverrides = node._weOverrides || {};
                 node._weOverrides._family = node._weFamily;
                 _syncS();
-                onFamilyChanged(familySel.value);
+                onFamilyChanged(node._weFamily);
             };
             familyRow.appendChild(familySel);
             familyRow.appendChild(modelFilterIcon);
@@ -3151,6 +3361,14 @@ app.registerExtension({
             // fromUpdateUI=true: skip auto-select & _syncS — updateUI will call
             // _setOriginal and _syncS itself right after, with the correct values.
             const onFamilyChanged = async (familyKey, { fromUpdateUI = false } = {}) => {
+                if (isWanBuilder && familyKey !== "wan_video_t2v" && familyKey !== "wan_video_i2v") {
+                    familyKey = "wan_video_t2v";
+                    if (node._weFamilySel) node._weFamilySel.value = familyKey;
+                }
+                if (!isWanBuilder && (familyKey === "wan_video_t2v" || familyKey === "wan_video_i2v")) {
+                    familyKey = "sdxl";
+                    if (node._weFamilySel) node._weFamilySel.value = familyKey;
+                }
                 node._weFamily = familyKey;
                 // Persist early before async reloads complete.
                 node._weOverrides = node._weOverrides || {};
@@ -3307,6 +3525,8 @@ app.registerExtension({
             negSec._body.appendChild(negBox);
             root.appendChild(negSec);
             node._weNegBox = negBox;
+            node._weNegSection = negSec;
+            negSec.style.display = "";
 
             // -- 5. LORAS section --
             const loraSec = makeSection("LORAS");
@@ -3515,7 +3735,7 @@ app.registerExtension({
                     }
                 };
 
-                applySeedState("seed_a", rows.seed_a);
+                applySeedState(node._weBuilderVariant === "wan" ? "seed_a" : "seed", rows.seed_a);
                 applySeedState("seed_b", rows.seed_b);
             }
             node._updateSeedGhosting = _updateSeedGhosting;
@@ -3552,7 +3772,7 @@ app.registerExtension({
                 }
 
                 // Clear input LoRAs for disconnected stacks and re-merge
-                const loraAConn = node.inputs?.find(i => i.name === "lora_stack_a");
+                const loraAConn = _findInput(node, "lora_stack", "lora_stack_a");
                 const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
                 let changed = false;
                 const oldMergedLorasA = node._weExtracted?.loras_a || [];
@@ -3601,7 +3821,7 @@ app.registerExtension({
                 if (negInputConn?.link != null && info.negative_prompt != null && node._weNegBox) {
                     node._weNegBox.value = info.negative_prompt;
                 }
-                const seedAInputConn = node.inputs?.find(i => i.name === "seed_a");
+                const seedAInputConn = _findInput(node, "seed", "seed_a");
                 const seedBInputConn = node.inputs?.find(i => i.name === "seed_b");
                 const samplerInfo = info.sampler || {};
                 if (seedAInputConn?.link != null && samplerInfo.seed_a != null && node._weSamplerRows?.seed_a?._inp) {
@@ -3744,7 +3964,7 @@ app.registerExtension({
                 if (negConn?.link != null && info.negative_prompt != null && this._weNegBox) {
                     this._weNegBox.value = info.negative_prompt;
                 }
-                const seedAConn = this.inputs?.find(i => i.name === "seed_a");
+                const seedAConn = _findInput(this, "seed", "seed_a");
                 const seedBConn = this.inputs?.find(i => i.name === "seed_b");
                 const samplerInfo = info.sampler || {};
                 if (seedAConn?.link != null && samplerInfo.seed_a != null && this._weSamplerRows?.seed_a?._inp) {
@@ -3884,19 +4104,40 @@ app.registerExtension({
             // ── Migration: remove stale inputs/outputs from old workflows ──
             // LiteGraph restores slots from saved JSON; if INPUT_TYPES or
             // RETURN_TYPES changed between versions, phantom slots persist.
+            if (!node._weBuilderVariant) {
+                const cls = String(node.comfyClass || node.type || "");
+                node._weBuilderVariant = cls === "RecipeBuilderWan" ? "wan" : "simple";
+            }
+
             const VALID_INPUTS = new Set([
-                "recipe_data",
-                "pos_prompt", "neg_prompt",
-                // Legacy names: accepted during migration then normalized.
-                "positive_prompt", "negative_prompt",
-                "seed_a", "seed_b", "denoise",
-                "lora_stack_a", "lora_stack_b",
+                ...(node._weBuilderVariant === "wan"
+                    ? [
+                        "recipe_data",
+                        "pos_prompt", "neg_prompt",
+                        "positive_prompt", "negative_prompt",
+                        "seed_a", "seed_b", "denoise",
+                        "lora_stack_a", "lora_stack_b",
+                    ]
+                    : [
+                        "recipe_data",
+                        "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
+                        "seed", "seed_a",
+                        "lora_stack", "lora_stack_a",
+                    ])
             ]);
+            const _normalizeInputNameForVariant = (name) => {
+                let key = _canonicalInputName(name);
+                if (node._weBuilderVariant !== "wan") {
+                    if (key === "seed_a") key = "seed";
+                    if (key === "lora_stack_a") key = "lora_stack";
+                }
+                return key;
+            };
             // Normalize legacy prompt input slot names on load.
             if (node.inputs) {
                 for (const inp of node.inputs) {
                     if (!inp || !inp.name) continue;
-                    inp.name = _canonicalInputName(inp.name);
+                    inp.name = _normalizeInputNameForVariant(inp.name);
                 }
 
                 // Deduplicate legacy duplicate inputs by name. Prefer keeping
@@ -3905,7 +4146,7 @@ app.registerExtension({
                 for (let i = 0; i < node.inputs.length; i++) {
                     const inp = node.inputs[i];
                     if (!inp || !inp.name) continue;
-                    const key = _canonicalInputName(inp.name);
+                    const key = _normalizeInputNameForVariant(inp.name);
                     if (!VALID_INPUTS.has(key)) continue;
                     if (!keepIndexByName.has(key)) {
                         keepIndexByName.set(key, i);
@@ -3922,7 +4163,7 @@ app.registerExtension({
                 for (let i = node.inputs.length - 1; i >= 0; i--) {
                     const inp = node.inputs[i];
                     if (!inp || !inp.name) continue;
-                    const key = _canonicalInputName(inp.name);
+                    const key = _normalizeInputNameForVariant(inp.name);
                     if (VALID_INPUTS.has(key) && keepIndexByName.get(key) !== i) {
                         node.removeInput(i);
                     }
@@ -3930,7 +4171,7 @@ app.registerExtension({
             }
             if (node.inputs) {
                 for (let i = node.inputs.length - 1; i >= 0; i--) {
-                    const key = _canonicalInputName(node.inputs[i].name);
+                    const key = _normalizeInputNameForVariant(node.inputs[i].name);
                     if (!VALID_INPUTS.has(key)) {
                         node.removeInput(i);
                     }

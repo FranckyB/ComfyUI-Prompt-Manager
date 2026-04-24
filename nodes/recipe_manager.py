@@ -13,7 +13,7 @@ from io import BytesIO
 
 import server
 
-from ..py.workflow_data_utils import to_json_safe_workflow_data
+from ..py.workflow_data_utils import ensure_v2_recipe_data, get_v2_model_block, to_json_safe_workflow_data
 from .prompt_manager_adv import PromptManagerAdvanced
 
 try:
@@ -158,15 +158,17 @@ class WorkflowManager(PromptManagerAdvanced):
 
         # WorkflowManager should prefer live connected workflow_data when present,
         # then fall back to local serialized state.
-        resolved_workflow_data = live_workflow_data if isinstance(live_workflow_data, dict) else None
+        resolved_workflow_data = ensure_v2_recipe_data(live_workflow_data, source="WorkflowManager") if isinstance(live_workflow_data, dict) else None
         if resolved_workflow_data is None:
-            resolved_workflow_data = hidden_saved_wf
+            resolved_workflow_data = ensure_v2_recipe_data(hidden_saved_wf, source="WorkflowManager") if isinstance(hidden_saved_wf, dict) else None
         if resolved_workflow_data is None and isinstance(stored_prompt_wf, dict):
-            resolved_workflow_data = stored_prompt_wf
+            resolved_workflow_data = ensure_v2_recipe_data(stored_prompt_wf, source="WorkflowManager")
 
         wf = resolved_workflow_data if isinstance(resolved_workflow_data, dict) else {}
+        wf_model_a = get_v2_model_block(wf, "model_a") or {}
+        wf_model_b = get_v2_model_block(wf, "model_b") or {}
         incoming_wf = live_workflow_data if isinstance(live_workflow_data, dict) else None
-        output_text = (wf.get("positive_prompt", "") or text or "")
+        output_text = (wf_model_a.get("positive_prompt", "") or text or "")
         generated_thumbnail = _image_to_base64_thumbnail(wf.get("IMAGE")) if isinstance(wf, dict) else None
         incoming_thumbnail = _image_to_base64_thumbnail(incoming_wf.get("IMAGE")) if isinstance(incoming_wf, dict) else None
         workflow_thumbnail = incoming_thumbnail if isinstance(incoming_thumbnail, str) and incoming_thumbnail else (
@@ -186,12 +188,12 @@ class WorkflowManager(PromptManagerAdvanced):
 
         wf_loras_a = [
             (lora["name"], lora.get("model_strength", 1.0), lora.get("clip_strength", 1.0))
-            for lora in wf.get("loras_a", [])
+            for lora in wf_model_a.get("loras", [])
             if isinstance(lora, dict) and lora.get("name")
         ]
         wf_loras_b = [
             (lora["name"], lora.get("model_strength", 1.0), lora.get("clip_strength", 1.0))
-            for lora in wf.get("loras_b", [])
+            for lora in wf_model_b.get("loras", [])
             if isinstance(lora, dict) and lora.get("name")
         ]
 
@@ -215,7 +217,7 @@ class WorkflowManager(PromptManagerAdvanced):
                 "use_prompt_input": False,
                 "use_workflow_data": True,
                 "prompt_input": "",
-                "workflow_data": to_json_safe_workflow_data(recipe_data) if isinstance(recipe_data, dict) else (
+                "workflow_data": to_json_safe_workflow_data(ensure_v2_recipe_data(recipe_data, source="WorkflowManager")) if isinstance(recipe_data, dict) else (
                     to_json_safe_workflow_data(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None
                 ),
                 "loras_a": loras_a_display,
@@ -264,6 +266,7 @@ class WorkflowManager(PromptManagerAdvanced):
             if isinstance(lora, dict) and lora.get("name")
         ]
         out_workflow_data["_source"] = "WorkflowManager"
+        out_workflow_data = ensure_v2_recipe_data(out_workflow_data, source="WorkflowManager")
 
         return (out_workflow_data,)
 
