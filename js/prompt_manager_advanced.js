@@ -651,6 +651,19 @@ app.registerExtension({
                 loadPrompts(node).then(async () => {
                     filterPromptDropdown(node);
 
+                    // Rehydrate selected prompt/workflow data after restore.
+                    // RecipeManager can show the selected name after reload but keep stale/empty
+                    // data unless we explicitly load it here.
+                    const categoryWidget = node.widgets?.find((w) => w.name === "category");
+                    const promptWidget = node.widgets?.find((w) => w.name === "name");
+                    const selectedCategory = String(categoryWidget?.value || "");
+                    const selectedPrompt = String(promptWidget?.value || "");
+                    const hasSelection = !!(selectedCategory && selectedPrompt);
+                    const shouldLoadSelection = hasSelection && !(node._isWorkflowManager && hasConnectedWorkflowInput(node));
+                    if (shouldLoadSelection) {
+                        await loadPromptData(node, selectedCategory, selectedPrompt);
+                    }
+
                     // Re-check LoRA availability after restoring from serialized state.
                     // The 'available' field is not serialized in toggle widgets, so after
                     // a tab switch all restored loras would show as "not found" without this.
@@ -1226,6 +1239,386 @@ function addWorkflowManagerPreview(node) {
     node._workflowManagerPreview = { container, image, emptyLabel, widget };
     node.workflowManagerPreviewAttached = true;
     updateWorkflowManagerPreview(node);
+}
+
+function _normalizeModelSlotLabel(slotKey) {
+    const key = String(slotKey || "").toLowerCase();
+    if (key === "model_a") return "A";
+    if (key === "model_b") return "B";
+    if (key === "model_c") return "C";
+    if (key === "model_d") return "D";
+    return String(slotKey || "?");
+}
+
+function _modelNameForSummary(pathLike) {
+    const raw = String(pathLike || "").trim();
+    if (!raw) return "";
+    const parts = raw.replace(/\\/g, "/").split("/");
+    const base = parts[parts.length - 1] || raw;
+    return base.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, "");
+}
+
+function _normalizeSummaryLoras(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const name = String(item.name || "").trim();
+            if (!name) return null;
+            const strengthRaw = Number(item.model_strength ?? item.strength ?? 1.0);
+            const strength = Number.isFinite(strengthRaw) ? strengthRaw : 1.0;
+            const available = item.available !== false && item.found !== false;
+            return {
+                name,
+                strength,
+                active: item.active !== false,
+                available,
+                found: item.found !== false,
+            };
+        })
+        .filter(Boolean)
+        .sort(compareLorasMissingLast);
+}
+
+function _summarizeWorkflowDataDiscovery(rawWorkflowData) {
+    const empty = {
+        modelCount: 0,
+        modelDetails: [],
+        modelSlots: [],
+        loraSlots: [],
+        positivePromptPresent: false,
+        source: "",
+    };
+
+    if (!rawWorkflowData || typeof rawWorkflowData !== "object") return empty;
+
+    const slotOrder = ["model_a", "model_b", "model_c", "model_d"];
+    const modelSlots = [];
+    const loraSlots = [];
+    const modelDetails = [];
+    const source = String(rawWorkflowData._source || "");
+
+    const models = (rawWorkflowData.models && typeof rawWorkflowData.models === "object")
+        ? rawWorkflowData.models
+        : null;
+
+    if (models) {
+        for (const slot of slotOrder) {
+            const block = models[slot];
+            if (!block || typeof block !== "object") continue;
+            const modelName = String(block.model || "").trim();
+            const loras = _normalizeSummaryLoras(block.loras);
+            if (modelName) modelSlots.push(slot);
+            if (loras.length > 0) loraSlots.push(slot);
+            if (modelName || loras.length > 0) {
+                modelDetails.push({
+                    slot,
+                    slotLabel: _normalizeModelSlotLabel(slot),
+                    model: modelName,
+                    modelDisplay: _modelNameForSummary(modelName),
+                    family: String(block.family || ""),
+                    loras,
+                    promptPresent: String(block.positive_prompt || "").trim().length > 0,
+                });
+            }
+        }
+    } else {
+        const modelA = String(rawWorkflowData.model_a || "").trim();
+        const modelB = String(rawWorkflowData.model_b || "").trim();
+        if (modelA) modelSlots.push("model_a");
+        if (modelB) modelSlots.push("model_b");
+        const lorasA = _normalizeSummaryLoras(rawWorkflowData.loras_a);
+        const lorasB = _normalizeSummaryLoras(rawWorkflowData.loras_b);
+        if (lorasA.length > 0) loraSlots.push("model_a");
+        if (lorasB.length > 0) loraSlots.push("model_b");
+
+        if (modelA || lorasA.length > 0) {
+            modelDetails.push({
+                slot: "model_a",
+                slotLabel: "A",
+                model: modelA,
+                modelDisplay: _modelNameForSummary(modelA),
+                family: String(rawWorkflowData.family || ""),
+                loras: lorasA,
+                promptPresent: String(rawWorkflowData.positive_prompt || "").trim().length > 0,
+            });
+        }
+        if (modelB || lorasB.length > 0) {
+            modelDetails.push({
+                slot: "model_b",
+                slotLabel: "B",
+                model: modelB,
+                modelDisplay: _modelNameForSummary(modelB),
+                family: String(rawWorkflowData.family || ""),
+                loras: lorasB,
+                promptPresent: String(rawWorkflowData.negative_prompt || "").trim().length > 0,
+            });
+        }
+    }
+
+    const positivePromptPresent = models
+        ? modelSlots.some((slot) => String((models[slot] || {}).positive_prompt || "").trim().length > 0)
+        : String(rawWorkflowData.positive_prompt || "").trim().length > 0;
+
+    return {
+        modelCount: modelSlots.length,
+        modelDetails,
+        modelSlots,
+        loraSlots,
+        positivePromptPresent,
+        source,
+    };
+}
+
+function _createSummaryLoraTag(lora) {
+    const tag = document.createElement("div");
+    const isActive = lora?.active !== false;
+    const isAvailable = lora?.available !== false && lora?.found !== false;
+    const strength = Number(lora?.strength ?? 1.0);
+
+    let bgColor, textColor, borderColor;
+    if (!isAvailable) {
+        bgColor = isActive ? "rgba(220, 53, 69, 0.9)" : "rgba(220, 53, 69, 0.4)";
+        textColor = isActive ? "white" : "rgba(255, 200, 200, 0.8)";
+        borderColor = "rgba(220, 53, 69, 0.9)";
+    } else if (isActive) {
+        bgColor = "rgba(66, 153, 225, 0.9)";
+        textColor = "white";
+        borderColor = "rgba(122, 188, 243, 0.9)";
+    } else {
+        bgColor = "rgba(45, 55, 72, 0.7)";
+        textColor = "rgba(226, 232, 240, 0.6)";
+        borderColor = "rgba(226, 232, 240, 0.2)";
+    }
+
+    Object.assign(tag.style, {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "4px 10px",
+        borderRadius: "6px",
+        fontSize: "12px",
+        transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease",
+        backgroundColor: bgColor,
+        color: textColor,
+        border: `1px solid ${borderColor}`,
+        width: "200px",
+        height: "24px",
+        boxSizing: "border-box",
+        userSelect: "none",
+        cursor: "default",
+        flexShrink: "0",
+    });
+
+    if (!isAvailable) {
+        const warningIcon = document.createElement("span");
+        warningIcon.textContent = "⚠️";
+        warningIcon.style.fontSize = "11px";
+        warningIcon.style.marginRight = "-2px";
+        tag.appendChild(warningIcon);
+    }
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = String(lora?.name || "");
+    Object.assign(nameSpan.style, {
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        flexGrow: "1",
+        textDecoration: !isAvailable ? "line-through" : "none",
+        opacity: !isAvailable ? "0.8" : "1",
+    });
+    tag.appendChild(nameSpan);
+
+    const strengthBadge = document.createElement("span");
+    strengthBadge.textContent = Number.isFinite(strength) ? strength.toFixed(2) : "1.00";
+    Object.assign(strengthBadge.style, {
+        fontSize: "10px",
+        fontWeight: "600",
+        padding: "1px 6px",
+        borderRadius: "999px",
+        backgroundColor: "rgba(255,255,255,0.15)",
+        color: "rgba(255,255,255,0.9)",
+        border: "1px solid transparent",
+        flexShrink: "0",
+    });
+    tag.appendChild(strengthBadge);
+
+    let hoverTimeout = null;
+    tag.addEventListener("mouseenter", () => {
+        tag.style.transform = "translateY(-1px)";
+        tag.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
+        if (loraManagerAvailable && isAvailable) {
+            const tagRect = tag.getBoundingClientRect();
+            hoverTimeout = setTimeout(async () => {
+                const tooltip = await getLoraManagerPreviewTooltip();
+                if (tooltip) {
+                    tooltip.show(String(lora?.name || ""), tagRect.right, tagRect.top);
+                }
+            }, 250);
+        }
+    });
+    tag.addEventListener("mouseleave", () => {
+        tag.style.transform = "translateY(0)";
+        tag.style.boxShadow = "none";
+        if (hoverTimeout) {
+            clearTimeout(hoverTimeout);
+            hoverTimeout = null;
+        }
+        if (loraManagerPreviewTooltip) {
+            loraManagerPreviewTooltip.hide();
+        }
+    });
+
+    if (!loraManagerAvailable || !isAvailable) {
+        tag.title = !isAvailable
+            ? `${lora?.name || ""}\nNot found`
+            : `${lora?.name || ""}\nStrength: ${Number.isFinite(strength) ? strength.toFixed(2) : "1.00"}`;
+    }
+
+    return tag;
+}
+
+function _showWorkflowSummaryDialog(summary) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(820px, 92vw);
+            max-height: 82vh;
+            overflow: auto;
+            background: #232930;
+            border: 1px solid #3c4b59;
+            border-radius: 10px;
+            padding: 16px;
+            z-index: 10000;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.55);
+        `;
+
+        const title = document.createElement("div");
+        title.textContent = "Summary";
+        title.style.cssText = "margin-bottom: 10px; font-size: 18px; font-weight: 700; color: #e7eef6;";
+        dialog.appendChild(title);
+
+        const meta = document.createElement("div");
+        meta.style.cssText = "margin-bottom: 12px; color: #9eb2c6; font-size: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(115, 144, 170, 0.35);";
+        meta.innerHTML = `<b style=\"color:#c5d8ea;\">Models found:</b> ${summary.modelCount} &nbsp; | &nbsp; <b style=\"color:#c5d8ea;\">Source:</b> ${summary.source || "unknown"}`;
+        dialog.appendChild(meta);
+
+        const modelsSection = document.createElement("div");
+        modelsSection.style.cssText = "margin-bottom: 14px;";
+        modelsSection.innerHTML = `<div style=\"color:#8fb8dc; font-weight:700; margin-bottom:6px;\">Models</div>`;
+        const modelsList = document.createElement("div");
+        modelsList.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+        if (!summary.modelDetails.length) {
+            const none = document.createElement("div");
+            none.textContent = "No models found.";
+            none.style.cssText = "color:#9aa8b7; font-size:12px;";
+            modelsList.appendChild(none);
+        } else {
+            for (const item of summary.modelDetails) {
+                const row = document.createElement("div");
+                const familyText = item.family ? ` (${item.family})` : "";
+                row.textContent = `${item.slotLabel}: ${item.modelDisplay || "(none)"}${familyText}`;
+                row.style.cssText = "color:#d9e6f3; font-size:13px; background: rgba(37, 48, 60, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 6px; padding: 6px 8px;";
+                modelsList.appendChild(row);
+            }
+        }
+        modelsSection.appendChild(modelsList);
+        dialog.appendChild(modelsSection);
+
+        const loraDivider = document.createElement("div");
+        loraDivider.style.cssText = "height: 1px; background: rgba(115, 144, 170, 0.35); margin: 2px 0 12px 0;";
+        dialog.appendChild(loraDivider);
+
+        const loraSection = document.createElement("div");
+        loraSection.innerHTML = `<div style=\"color:#8fb8dc; font-weight:700; margin-bottom:8px;\">LoRAs</div>`;
+        if (!summary.modelDetails.some((m) => Array.isArray(m.loras) && m.loras.length > 0)) {
+            const none = document.createElement("div");
+            none.textContent = "No LoRAs found.";
+            none.style.cssText = "color:#9aa8b7; font-size:12px; margin-bottom:8px;";
+            loraSection.appendChild(none);
+        } else {
+            for (const item of summary.modelDetails) {
+                if (!Array.isArray(item.loras) || item.loras.length === 0) continue;
+                const stackCard = document.createElement("div");
+                stackCard.style.cssText = "background: rgba(30, 40, 52, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 8px; padding: 8px; margin-bottom: 8px;";
+
+                const stackTitle = document.createElement("div");
+                stackTitle.textContent = `Stack ${item.slotLabel}:`;
+                stackTitle.style.cssText = "color:#c5d8ea; font-size:12px; margin:0 0 6px 0;";
+                stackCard.appendChild(stackTitle);
+
+                const stackTags = document.createElement("div");
+                stackTags.style.cssText = "display:flex; flex-wrap:wrap; gap:6px;";
+                for (const lora of item.loras) {
+                    stackTags.appendChild(_createSummaryLoraTag(lora));
+                }
+                stackCard.appendChild(stackTags);
+                loraSection.appendChild(stackCard);
+            }
+        }
+        dialog.appendChild(loraSection);
+
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex; justify-content:flex-end; margin-top:14px;";
+        const okBtn = document.createElement("button");
+        okBtn.textContent = "OK";
+        okBtn.style.cssText = "padding:8px 16px; background:#2f7dbf; color:#fff; border:none; border-radius:6px; cursor:pointer;";
+        actions.appendChild(okBtn);
+        dialog.appendChild(actions);
+
+        const cleanup = () => {
+            if (loraManagerPreviewTooltip) {
+                loraManagerPreviewTooltip.hide();
+            }
+            if (overlay.parentNode) document.body.removeChild(overlay);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        okBtn.onclick = () => {
+            cleanup();
+            resolve(true);
+        };
+        overlay.onclick = () => {
+            cleanup();
+            resolve(true);
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        okBtn.focus();
+    });
+}
+
+async function showWorkflowDiscoverySummary(node) {
+    const hasWorkflowInput = hasConnectedWorkflowInput(node);
+    const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
+    const workflowData = (liveWorkflowData && typeof liveWorkflowData === "object")
+        ? liveWorkflowData
+        : resolveWorkflowDataForSave(node);
+
+    if (!workflowData || typeof workflowData !== "object") {
+        await showInfo("Summary", "No recipe_data available yet. Execute upstream or select a saved workflow prompt.");
+        return;
+    }
+
+    const summary = _summarizeWorkflowDataDiscovery(workflowData);
+    await _showWorkflowSummaryDialog(summary);
 }
 
 // ========================
@@ -2993,14 +3386,19 @@ function addButtonBar(node) {
         }
     ]);
 
+    const infoBtn = createButton("Info", async () => {
+        await showWorkflowDiscoverySummary(node);
+    });
+
     buttonContainer.appendChild(savePromptBtn);
     buttonContainer.appendChild(newPromptBtn);
+    buttonContainer.appendChild(infoBtn);
     buttonContainer.appendChild(moreBtn);
 
     // Add button bar to node
     const htmlWidget = node.addDOMWidget("buttons", "div", buttonContainer);
     htmlWidget.computeSize = function(width) {
-        return [width, 36];
+        return [width, 40];
     };
 
     node.buttonBarAttached = true;
@@ -8378,6 +8776,8 @@ function createPromptSelectorWidget(node) {
         if (existingNsfwLabel) existingNsfwLabel.remove();
         const existingWorkflowLabel = nameDisplay.querySelector('.workflow-selector-label');
         if (existingWorkflowLabel) existingWorkflowLabel.remove();
+        const existingFoundLabel = nameDisplay.querySelector('.workflow-found-label');
+        if (existingFoundLabel) existingFoundLabel.remove();
 
         const createBadge = (className, text, styleBlock) => {
             const label = document.createElement("span");
@@ -8428,6 +8828,23 @@ function createPromptSelectorWidget(node) {
                     justify-content: center;
                     flex-shrink: 0;
                     line-height: 1;
+                `);
+            }
+        }
+
+        if (node._isWorkflowManager) {
+            const summary = _summarizeWorkflowDataDiscovery(node.lastWorkflowData);
+            if (summary.modelCount > 0) {
+                createBadge("workflow-found-label", `M${summary.modelCount}`, `
+                    background: rgba(50, 170, 220, 0.95);
+                    color: #fff;
+                    font-size: 8px;
+                    font-weight: bold;
+                    padding: 0px 4px;
+                    border-radius: 2px;
+                    margin-left: 6px;
+                    flex-shrink: 0;
+                    line-height: 12px;
                 `);
             }
         }

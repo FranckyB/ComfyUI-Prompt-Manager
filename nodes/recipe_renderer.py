@@ -93,7 +93,7 @@ class WorkflowRenderer:
                 }),
                 "model_slot": (_MODEL_KEYS, {
                     "default": "model_a",
-                    "tooltip": "Select which model slot to render from in v2 recipe_data.",
+                    "tooltip": "Select which model slot to render from in recipe_data.",
                 }),
                 "clear_cache_after_render": ("BOOLEAN", {
                     "default": False,

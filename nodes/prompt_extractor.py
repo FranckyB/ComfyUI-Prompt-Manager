@@ -3697,6 +3697,7 @@ class PromptExtractor:
                         extract_vae_info,
                         extract_clip_info,
                         extract_resolution,
+                        extract_recipe_builder_models_from_workflow,
                         build_simplified_workflow_data,
                         get_model_family,
                         get_family_label,
@@ -3801,6 +3802,30 @@ class PromptExtractor:
                         'model_family':       _family,
                         'model_family_label': get_family_label(_family),
                     }
+
+                    # For RecipeBuilder-authored workflows, map each builder by
+                    # its send slot (model_a..model_d). If multiple builders target
+                    # the same slot, the last builder wins.
+                    _builder_models = extract_recipe_builder_models_from_workflow(_raw_wf)
+                    if _builder_models:
+                        _extracted_for_wf['models'] = _builder_models
+                        for _slot in ('model_a', 'model_b', 'model_c', 'model_d'):
+                            _block = _builder_models.get(_slot)
+                            if isinstance(_block, dict):
+                                _extracted_for_wf[_slot] = str(_block.get('model', '') or '')
+                        _model_a_block = _builder_models.get('model_a') if isinstance(_builder_models.get('model_a'), dict) else None
+                        if _model_a_block:
+                            _extracted_for_wf['positive_prompt'] = str(_model_a_block.get('positive_prompt', positive_prompt) or '')
+                            _extracted_for_wf['negative_prompt'] = str(_model_a_block.get('negative_prompt', negative_prompt) or '')
+                            _extracted_for_wf['loras_a'] = _model_a_block.get('loras', loras_a) if isinstance(_model_a_block.get('loras'), list) else loras_a
+                            if isinstance(_model_a_block.get('sampler'), dict):
+                                _extracted_for_wf['sampler'] = _model_a_block['sampler']
+                            if isinstance(_model_a_block.get('resolution'), dict):
+                                _extracted_for_wf['resolution'] = _model_a_block['resolution']
+                        _model_b_block = _builder_models.get('model_b') if isinstance(_builder_models.get('model_b'), dict) else None
+                        if _model_b_block and isinstance(_model_b_block.get('loras'), list):
+                            _extracted_for_wf['loras_b'] = _model_b_block.get('loras', loras_b)
+
                     _simplified = build_simplified_workflow_data(
                         _extracted_for_wf,
                         overrides={'_source': 'PromptExtractor'},

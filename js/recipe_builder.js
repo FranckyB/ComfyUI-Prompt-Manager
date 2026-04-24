@@ -2394,7 +2394,7 @@ app.registerExtension({
                 node._wePullModelSlot = picked;
                 _syncS();
             });
-            pullModelSlotRow._inp.title = "Select which model slot to pull from when reading connected v2 recipe_data. Use none to ignore connected recipe_data during execute.";
+            pullModelSlotRow._inp.title = "Select which model slot to pull from when reading connected recipe_data. Use none to ignore connected recipe_data during execute.";
             pullModelSlotRow._inp.style.color = C.accent;
             pullModelSlotRow._inp.style.fontWeight = "bold";
             pullModelSlotRow.style.marginBottom = "0";
