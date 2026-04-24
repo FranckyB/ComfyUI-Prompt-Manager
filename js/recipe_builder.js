@@ -273,6 +273,7 @@ function _findInput(node, ...names) {
 }
 
 const MODEL_SLOT_KEYS = ["model_a", "model_b", "model_c", "model_d"];
+const NO_PULL_SLOT = "none";
 const MODEL_SLOT_PAIR_OPTIONS = [
     { value: "model_a", label: "model_a | model_b" },
     { value: "model_c", label: "model_c | model_d" },
@@ -293,6 +294,18 @@ function _nextModelSlotKey(v) {
 function _normalizeModelPairStartKey(v) {
     const key = _normalizeModelSlotKey(v);
     return (key === "model_c" || key === "model_d") ? "model_c" : "model_a";
+}
+
+function _normalizePullModelSlotKey(v) {
+    const key = String(v ?? NO_PULL_SLOT).trim().toLowerCase();
+    if (key === NO_PULL_SLOT) return NO_PULL_SLOT;
+    return _normalizeModelSlotKey(key);
+}
+
+function _normalizePullModelPairStartKey(v) {
+    const key = _normalizePullModelSlotKey(v);
+    if (key === NO_PULL_SLOT) return NO_PULL_SLOT;
+    return _normalizeModelPairStartKey(key);
 }
 
 function _isLoraAvailableForSort(lora, availabilityMap = null) {
@@ -942,6 +955,34 @@ const FAMILY_DEFAULTS = {
     qwen_image:    { steps_a: 10, cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
 };
 
+function _isFiniteScalarNumber(value) {
+    if (typeof value === "number") return Number.isFinite(value);
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) return false;
+        const n = Number(trimmed);
+        return Number.isFinite(n);
+    }
+    return false;
+}
+
+function _coerceNumericField(value, fallback, { integer = false, min = null } = {}) {
+    let out = _isFiniteScalarNumber(value) ? Number(value) : Number(fallback);
+    if (!Number.isFinite(out)) out = Number(fallback);
+    if (integer) out = Math.trunc(out);
+    if (min != null && out < min) out = min;
+    return out;
+}
+
+function _coerceChoiceField(value, fallback, allowed = null) {
+    const raw = (typeof value === "string") ? value.trim() : "";
+    let out = raw || String(fallback || "");
+    if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(out)) {
+        out = String(fallback || allowed[0] || "");
+    }
+    return out;
+}
+
 function normalizeSelectableFamily(family, fallback = "sdxl") {
     const f = String(family || "").trim();
     if (!f) return fallback;
@@ -967,8 +1008,8 @@ async function updateUI(node) {
 
     if (node._wePullModelSlotRow?._inp) {
         const pullSlot = node._weBuilderVariant === "wan"
-            ? _normalizeModelPairStartKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a")
-            : _normalizeModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a");
+            ? _normalizePullModelPairStartKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || NO_PULL_SLOT)
+            : _normalizePullModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || NO_PULL_SLOT);
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(pullSlot);
         node._wePullModelSlotRow._inp.value = pullSlot;
         node._wePullModelSlot = pullSlot;
@@ -1091,15 +1132,35 @@ async function updateUI(node) {
         const seedBInputConn = node.inputs?.find(i => i.name === "seed_b");
         const seedALinked = seedAInputConn?.link != null;
         const seedBLinked = seedBInputConn?.link != null;
-        if (rows.steps_a?._setOriginal) rows.steps_a._setOriginal(s.steps_a ?? s.steps ?? 20);
-        if (rows.cfg?._setOriginal) rows.cfg._setOriginal(s.cfg ?? 5.0);
-        if (rows.sampler?._setOriginal) rows.sampler._setOriginal(s.sampler_name ?? "euler");
-        if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(s.scheduler ?? "simple");
-        if (rows.denoise?._setOriginal) rows.denoise._setOriginal(s.denoise ?? 1.0);
-        if (!seedALinked && rows.seed_a?._setOriginal) rows.seed_a._setOriginal(s.seed_a ?? s.seed ?? 0);
-        if (!seedBLinked && rows.seed_b?._setOriginal) rows.seed_b._setOriginal(s.seed_b ?? s.seed_a ?? s.seed ?? 0);
+        const familyDefaults = FAMILY_DEFAULTS[newFamily] || FAMILY_DEFAULTS.sdxl || {};
+        const defaultStepsA = _coerceNumericField(familyDefaults.steps_a, 20, { integer: true, min: 1 });
+        const defaultCfg = _coerceNumericField(familyDefaults.cfg, 5.0, { min: 0 });
+        const defaultSampler = _coerceChoiceField(familyDefaults.sampler, "euler", SAMPLERS);
+        const defaultScheduler = _coerceChoiceField(familyDefaults.scheduler, "simple", SCHEDULERS);
+        const defaultStepsB = _coerceNumericField(
+            familyDefaults.steps_b,
+            (newFamily === "wan_video_i2v" || newFamily === "wan_video_t2v") ? 3 : defaultStepsA,
+            { integer: true, min: 1 }
+        );
+
+        const stepsA = _coerceNumericField(s.steps_a ?? s.steps, defaultStepsA, { integer: true, min: 1 });
+        const cfg = _coerceNumericField(s.cfg, defaultCfg, { min: 0 });
+        const samplerName = _coerceChoiceField(s.sampler_name, defaultSampler, SAMPLERS);
+        const schedulerName = _coerceChoiceField(s.scheduler, defaultScheduler, SCHEDULERS);
+        const denoise = _coerceNumericField(s.denoise, 1.0, { min: 0 });
+        const seedA = _coerceNumericField(s.seed_a ?? s.seed, 0, { integer: true, min: 0 });
+        const seedB = _coerceNumericField(s.seed_b ?? s.seed_a ?? s.seed, seedA, { integer: true, min: 0 });
+        const stepsB = _coerceNumericField(s.steps_b ?? s.steps_a ?? s.steps, defaultStepsB, { integer: true, min: 1 });
+
+        if (rows.steps_a?._setOriginal) rows.steps_a._setOriginal(stepsA);
+        if (rows.cfg?._setOriginal) rows.cfg._setOriginal(cfg);
+        if (rows.sampler?._setOriginal) rows.sampler._setOriginal(samplerName);
+        if (rows.scheduler?._setOriginal) rows.scheduler._setOriginal(schedulerName);
+        if (rows.denoise?._setOriginal) rows.denoise._setOriginal(denoise);
+        if (!seedALinked && rows.seed_a?._setOriginal) rows.seed_a._setOriginal(seedA);
+        if (!seedBLinked && rows.seed_b?._setOriginal) rows.seed_b._setOriginal(seedB);
         // WAN Video dual steps
-        if (rows.steps_b?._setOriginal) rows.steps_b._setOriginal(s.steps_b ?? s.steps_a ?? s.steps ?? 3);
+        if (rows.steps_b?._setOriginal) rows.steps_b._setOriginal(stepsB);
     }
 
     // Resolution — skip width/height/batch if locked
@@ -1107,8 +1168,9 @@ async function updateUI(node) {
     if (node._weResRows) {
         const rr = node._weResRows;
         if (!resolutionLocked) {
-            const inW = parseInt(r.width ?? 768) || 768;
-            const inH = parseInt(r.height ?? 1280) || 1280;
+            const inW = _coerceNumericField(r.width, 768, { integer: true, min: 1 });
+            const inH = _coerceNumericField(r.height, 1280, { integer: true, min: 1 });
+            const inBatch = _coerceNumericField(r.batch_size, 1, { integer: true, min: 1 });
 
             console.log("[WB UpdateTrace] updateUI applying resolution", {
                 inW,
@@ -1124,7 +1186,7 @@ async function updateUI(node) {
 
             if (rr.width?._setOriginal) rr.width._setOriginal(inW);
             if (rr.height?._setOriginal) rr.height._setOriginal(inH);
-            if (rr.batch?._setOriginal) rr.batch._setOriginal(r.batch_size ?? 1);
+            if (rr.batch?._setOriginal) rr.batch._setOriginal(inBatch);
 
             // If incoming resolution exactly matches a known ratio preset,
             // select that ratio; otherwise keep None.
@@ -1171,8 +1233,9 @@ async function updateUI(node) {
         }
         if (rr.frames) {
             if (r.length != null) {
+                const frames = _coerceNumericField(r.length, 81, { integer: true, min: 1 });
                 rr.frames.style.display = "flex";
-                if (rr.frames._setOriginal) rr.frames._setOriginal(r.length);
+                if (rr.frames._setOriginal) rr.frames._setOriginal(frames);
             }
         }
 
@@ -1766,8 +1829,8 @@ function syncHidden(node) {
     }
     if (node._weFamily) ov._family = node._weFamily;
     if (node._wePullModelSlot) ov._pull_model_slot = node._weBuilderVariant === "wan"
-        ? _normalizeModelPairStartKey(node._wePullModelSlot)
-        : _normalizeModelSlotKey(node._wePullModelSlot);
+        ? _normalizePullModelPairStartKey(node._wePullModelSlot)
+        : _normalizePullModelSlotKey(node._wePullModelSlot);
     else delete ov._pull_model_slot;
     if (node._weSendModelSlot) ov._send_model_slot = node._weBuilderVariant === "wan"
         ? _normalizeModelPairStartKey(node._weSendModelSlot)
@@ -1904,8 +1967,8 @@ function applyOverrides(node, ovJson, lsJson) {
 
     if (node._wePullModelSlotRow?._inp) {
         const slot = node._weBuilderVariant === "wan"
-            ? _normalizeModelPairStartKey(ov._pull_model_slot || ov._model_slot || "model_a")
-            : _normalizeModelSlotKey(ov._pull_model_slot || ov._model_slot || "model_a");
+            ? _normalizePullModelPairStartKey(ov._pull_model_slot || ov._model_slot || NO_PULL_SLOT)
+            : _normalizePullModelSlotKey(ov._pull_model_slot || ov._model_slot || NO_PULL_SLOT);
         node._wePullModelSlotRow._inp.value = slot;
         node._wePullModelSlot = slot;
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(slot);
@@ -2157,7 +2220,13 @@ app.registerExtension({
                     }
                 }
 
-                const VALID_OUTPUTS = [{ name: "recipe_data", type: "RECIPE_DATA" }];
+                const VALID_OUTPUTS = [
+                    { name: "recipe_data", type: "RECIPE_DATA" },
+                    { name: "pos_prompt", type: "STRING" },
+                    { name: "neg_prompt", type: "STRING" },
+                    { name: "seed", type: "INT" },
+                    { name: "lora_stack", type: "LORA_STACK" },
+                ];
                 if (node.outputs) {
                     const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
                         VALID_OUTPUTS.every((v, i) => node.outputs[i]?.name === v.name && node.outputs[i]?.type === v.type);
@@ -2310,27 +2379,30 @@ app.registerExtension({
             }, "Update Recipe");
             node._weUpdateBtn = updateBtn;
 
-            const slotOptions = isWanBuilder ? MODEL_SLOT_PAIR_OPTIONS : MODEL_SLOT_KEYS;
+            const pullSlotOptions = isWanBuilder
+                ? [{ value: NO_PULL_SLOT, label: "none" }, ...MODEL_SLOT_PAIR_OPTIONS]
+                : [{ value: NO_PULL_SLOT, label: "none" }, ...MODEL_SLOT_KEYS];
+            const sendSlotOptions = isWanBuilder ? MODEL_SLOT_PAIR_OPTIONS : MODEL_SLOT_KEYS;
 
-            const pullModelSlotRow = makeInput("Pull From", "select", "model_a", {
-                options: slotOptions,
+            const pullModelSlotRow = makeInput("Pull From", "select", NO_PULL_SLOT, {
+                options: pullSlotOptions,
             }, () => {
                 const picked = isWanBuilder
-                    ? _normalizeModelPairStartKey(pullModelSlotRow._inp?.value || "model_a")
-                    : _normalizeModelSlotKey(pullModelSlotRow._inp?.value || "model_a");
+                    ? _normalizePullModelPairStartKey(pullModelSlotRow._inp?.value)
+                    : _normalizePullModelSlotKey(pullModelSlotRow._inp?.value);
                 pullModelSlotRow._inp.value = picked;
                 node._wePullModelSlot = picked;
                 _syncS();
             });
-            pullModelSlotRow._inp.title = "Select which model slot to pull from when reading connected v2 recipe_data.";
+            pullModelSlotRow._inp.title = "Select which model slot to pull from when reading connected v2 recipe_data. Use none to ignore connected recipe_data during execute.";
             pullModelSlotRow._inp.style.color = C.accent;
             pullModelSlotRow._inp.style.fontWeight = "bold";
             pullModelSlotRow.style.marginBottom = "0";
             node._wePullModelSlotRow = pullModelSlotRow;
-            node._wePullModelSlot = "model_a";
+            node._wePullModelSlot = NO_PULL_SLOT;
 
             const sendModelSlotRow = makeInput("Send To", "select", "model_a", {
-                options: slotOptions,
+                options: sendSlotOptions,
             }, () => {
                 const picked = isWanBuilder
                     ? _normalizeModelPairStartKey(sendModelSlotRow._inp?.value || "model_a")
@@ -4214,7 +4286,13 @@ app.registerExtension({
                     }
                 }
             }
-            const VALID_OUTPUTS = [{ name: "recipe_data", type: "RECIPE_DATA" }];
+            const VALID_OUTPUTS = [
+                { name: "recipe_data", type: "RECIPE_DATA" },
+                { name: "pos_prompt", type: "STRING" },
+                { name: "neg_prompt", type: "STRING" },
+                { name: "seed", type: "INT" },
+                { name: "lora_stack", type: "LORA_STACK" },
+            ];
             if (node.outputs) {
                 const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
                     VALID_OUTPUTS.every((v, i) => node.outputs[i]?.name === v.name && node.outputs[i]?.type === v.type);

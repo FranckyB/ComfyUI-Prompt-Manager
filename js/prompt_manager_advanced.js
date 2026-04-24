@@ -4362,6 +4362,17 @@ function resolveWorkflowDataForSave(node) {
         const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
         if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
+            const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+            if (wfOutIdx >= 0) {
+                const out = upstream.outputs[wfOutIdx];
+                const data = out?._data ?? out?.value ?? null;
+                if (hasMeaningfulWorkflowData(data)) return data;
+                if (typeof data === "string") {
+                    const parsed = parseJsonObjectSafe(data, null);
+                    if (hasMeaningfulWorkflowData(parsed)) return parsed;
+                }
+            }
+
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
             if (hasMeaningfulWorkflowData(fromBuilder)) return fromBuilder;
         }
@@ -4407,6 +4418,17 @@ async function resolveWorkflowDataForLive(node) {
     const sourceClassLower = sourceClass.toLowerCase();
 
     if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
+        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+        if (wfOutIdx >= 0) {
+            const out = upstream.outputs[wfOutIdx];
+            const data = out?._data ?? out?.value ?? null;
+            if (hasMeaningfulWorkflowData(data)) return data;
+            if (typeof data === "string") {
+                const parsed = parseJsonObjectSafe(data, null);
+                if (hasMeaningfulWorkflowData(parsed)) return parsed;
+            }
+        }
+
         return buildWorkflowDataFromBuilderNode(upstream);
     }
 

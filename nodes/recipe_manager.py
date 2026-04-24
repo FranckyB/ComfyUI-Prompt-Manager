@@ -158,11 +158,11 @@ class WorkflowManager(PromptManagerAdvanced):
 
         # WorkflowManager should prefer live connected workflow_data when present,
         # then fall back to local serialized state.
-        resolved_workflow_data = ensure_v2_recipe_data(live_workflow_data, source="WorkflowManager") if isinstance(live_workflow_data, dict) else None
+        resolved_workflow_data = ensure_v2_recipe_data(live_workflow_data, source="RecipeManager") if isinstance(live_workflow_data, dict) else None
         if resolved_workflow_data is None:
-            resolved_workflow_data = ensure_v2_recipe_data(hidden_saved_wf, source="WorkflowManager") if isinstance(hidden_saved_wf, dict) else None
+            resolved_workflow_data = ensure_v2_recipe_data(hidden_saved_wf, source="RecipeManager") if isinstance(hidden_saved_wf, dict) else None
         if resolved_workflow_data is None and isinstance(stored_prompt_wf, dict):
-            resolved_workflow_data = ensure_v2_recipe_data(stored_prompt_wf, source="WorkflowManager")
+            resolved_workflow_data = ensure_v2_recipe_data(stored_prompt_wf, source="RecipeManager")
 
         wf = resolved_workflow_data if isinstance(resolved_workflow_data, dict) else {}
         wf_model_a = get_v2_model_block(wf, "model_a") or {}
@@ -217,7 +217,7 @@ class WorkflowManager(PromptManagerAdvanced):
                 "use_prompt_input": False,
                 "use_workflow_data": True,
                 "prompt_input": "",
-                "workflow_data": to_json_safe_workflow_data(ensure_v2_recipe_data(recipe_data, source="WorkflowManager")) if isinstance(recipe_data, dict) else (
+                "workflow_data": to_json_safe_workflow_data(ensure_v2_recipe_data(recipe_data, source="RecipeManager")) if isinstance(recipe_data, dict) else (
                     to_json_safe_workflow_data(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else None
                 ),
                 "loras_a": loras_a_display,
@@ -265,8 +265,8 @@ class WorkflowManager(PromptManagerAdvanced):
             for lora in loras_b_display
             if isinstance(lora, dict) and lora.get("name")
         ]
-        out_workflow_data["_source"] = "WorkflowManager"
-        out_workflow_data = ensure_v2_recipe_data(out_workflow_data, source="WorkflowManager")
+        out_workflow_data["_source"] = "RecipeManager"
+        out_workflow_data = ensure_v2_recipe_data(out_workflow_data, source="RecipeManager")
 
         return (out_workflow_data,)
 

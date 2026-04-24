@@ -69,11 +69,14 @@ SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS
 # Used by another RecipeBuilder's "Update Workflow" button for live pull.
 _last_workflow_builder_info = {}
 _MODEL_KEYS = ("model_a", "model_b", "model_c", "model_d")
+_NO_PULL_SLOT = "none"
 
 
-def _normalize_model_slot(slot):
-    key = str(slot or "model_a").strip().lower()
-    return key if key in _MODEL_KEYS else "model_a"
+def _normalize_model_slot(slot, default="model_a", allow_none=False):
+    key = str(slot or default).strip().lower()
+    if allow_none and key == _NO_PULL_SLOT:
+        return _NO_PULL_SLOT
+    return key if key in _MODEL_KEYS else default
 
 
 def _normalize_model_pair_start(slot):
@@ -742,8 +745,8 @@ class WorkflowBuilder:
             },
         }
 
-    RETURN_TYPES  = ("RECIPE_DATA",)
-    RETURN_NAMES  = ("recipe_data",)
+    RETURN_TYPES  = ("RECIPE_DATA", "STRING", "STRING", "INT", "LORA_STACK")
+    RETURN_NAMES  = ("recipe_data", "pos_prompt", "neg_prompt", "seed", "lora_stack")
     FUNCTION      = "execute"
     CATEGORY      = "Prompt Manager"
     OUTPUT_NODE   = True
@@ -788,12 +791,18 @@ class WorkflowBuilder:
             overrides = {}
         if not isinstance(overrides, dict):
             overrides = {}
-        pull_model_slot = _normalize_model_slot(overrides.get("_pull_model_slot", overrides.get("_model_slot", "model_a")))
+        pull_model_slot = _normalize_model_slot(
+            overrides.get("_pull_model_slot", overrides.get("_model_slot", _NO_PULL_SLOT)),
+            default=_NO_PULL_SLOT,
+            allow_none=True,
+        )
         send_model_slot = _normalize_model_slot(overrides.get("_send_model_slot", overrides.get("_model_slot", pull_model_slot)))
         if is_wan_mode:
-            pull_model_slot = _normalize_model_pair_start(pull_model_slot)
+            if pull_model_slot != _NO_PULL_SLOT:
+                pull_model_slot = _normalize_model_pair_start(pull_model_slot)
             send_model_slot = _normalize_model_pair_start(send_model_slot)
-        secondary_pull_slot = _next_model_slot(pull_model_slot)
+        pull_enabled = pull_model_slot != _NO_PULL_SLOT
+        secondary_pull_slot = _next_model_slot(pull_model_slot) if pull_enabled else None
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
@@ -822,7 +831,7 @@ class WorkflowBuilder:
                 wf_data = None
 
         # ── Build extracted dict from recipe_data or defaults ───────────
-        if wf_data:
+        if wf_data and pull_enabled:
             v2_a = _v2_get_model_block(wf_data, pull_model_slot)
             v2_b = _v2_get_model_block(wf_data, secondary_pull_slot) if secondary_pull_slot else None
 
@@ -1030,7 +1039,10 @@ class WorkflowBuilder:
                     lora_overrides = dict(cached_overrides)
 
         section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
-        has_workflow_input = wf_data is not None
+        # Pull From none means connected recipe_data should not drive section
+        # values during execute; keep current UI state unless explicit inputs
+        # (prompt/seed/lora stacks) are connected.
+        has_workflow_input = (wf_data is not None) and pull_enabled
         upstream_source = str((wf_data or {}).get('_source', '')).strip().lower() if isinstance(wf_data, dict) else ""
         # Sources that should keep RecipeBuilder in manual-edit mode while connected.
         # This includes extractors and manager nodes that users actively edit.
@@ -1164,15 +1176,15 @@ class WorkflowBuilder:
         #           4. extracted['model_family'] (fallback)
         # The JS dropdown is the user's deliberate choice and must win.
         js_family = (overrides.get('_family') or None) if _allow_override('model') else None
-        selected_v2_block = _v2_get_model_block(wf_data, pull_model_slot) if isinstance(wf_data, dict) else None
-        wf_family = selected_v2_block.get('family', '') if isinstance(selected_v2_block, dict) else (wf_data.get('family', '') if wf_data else '')
+        selected_v2_block = _v2_get_model_block(wf_data, pull_model_slot) if (pull_enabled and isinstance(wf_data, dict)) else None
+        wf_family = selected_v2_block.get('family', '') if isinstance(selected_v2_block, dict) else ((wf_data.get('family', '') if wf_data else '') if pull_enabled else '')
         incoming_family = extracted.get('model_family') or wf_family or ''
         model_detected_family = None
         if model_name_a:
             resolved_ref, _ = resolve_model_name(model_name_a)
             model_detected_family = get_model_family(resolved_ref or model_name_a)
         family_key = js_family or model_detected_family or wf_family or extracted.get('model_family') or None
-        if not family_key and wf_data:
+        if not family_key and wf_data and pull_enabled:
             clip_type = str((selected_v2_block or {}).get('clip_type', wf_data.get('clip_type', ''))).lower()
             loader_type = (selected_v2_block or {}).get('loader_type', wf_data.get('loader_type', ''))
             if loader_type == 'checkpoint':
@@ -1212,6 +1224,35 @@ class WorkflowBuilder:
         family_switched_in_ui = bool(
             _allow_override('model') and js_family and incoming_family and js_family != incoming_family
         )
+
+        def _families_compatible(source_family, target_family):
+            src = str(source_family or "").strip()
+            dst = str(target_family or "").strip()
+            if not src or not dst:
+                return True
+            if src == dst:
+                return True
+            try:
+                src_compat = set(get_compatible_families(src) or [])
+            except Exception:
+                src_compat = set()
+            try:
+                dst_compat = set(get_compatible_families(dst) or [])
+            except Exception:
+                dst_compat = set()
+            return (dst in src_compat) or (src in dst_compat)
+
+        # Builder-to-Builder chaining guard:
+        # if upstream workflow family and selected execution family are
+        # incompatible, drop carried workflow LoRAs. Keep explicitly connected
+        # input stacks only, so user-intent inputs still work.
+        if not _families_compatible(incoming_family, family_key):
+            extracted['loras_a'] = list(input_loras_a)
+            extracted['loras_b'] = list(input_loras_b)
+            print(
+                f"[RecipeBuilder] Dropped incompatible upstream LoRAs "
+                f"(incoming_family={incoming_family}, selected_family={family_key})"
+            )
 
         # ── Build workflow JSON + UI info BEFORE model loading ────────────
         # This ensures the JS UI is always populated, even if generation
@@ -1449,7 +1490,7 @@ class WorkflowBuilder:
         # only when the effective selection remains unchanged. If the user
         # changed model/clip/vae in this Builder, drop stale runtime objects
         # so downstream Renderer reloads the new assets.
-        if isinstance(wf_data, dict):
+        if pull_enabled and isinstance(wf_data, dict):
             def _norm_name(v):
                 return str(v or "").strip()
 
@@ -1651,9 +1692,34 @@ class WorkflowBuilder:
         if unique_id is not None:
             _last_workflow_builder_info[str(unique_id)] = ui_info.get('extracted', {})
 
+        output_seed = 0
+        try:
+            output_seed = int(sampler_params.get('seed_a', 0))
+        except Exception:
+            output_seed = 0
+
+        output_lora_stack = []
+        for lora in extracted.get('loras_a', []):
+            if not isinstance(lora, dict):
+                continue
+            if lora.get('active', True) is False:
+                continue
+            name_or_path = str(lora.get('path') or lora.get('name') or '').strip()
+            if not name_or_path:
+                continue
+            try:
+                model_strength = float(lora.get('model_strength', lora.get('strength', 1.0)))
+            except Exception:
+                model_strength = 1.0
+            try:
+                clip_strength = float(lora.get('clip_strength', model_strength))
+            except Exception:
+                clip_strength = model_strength
+            output_lora_stack.append((name_or_path, model_strength, clip_strength))
+
         return {
             "ui":     {"workflow_info": [ui_info]},
-            "result": (output_wf,),
+            "result": (output_wf, pos_text, neg_text, output_seed, output_lora_stack),
         }
 
 
