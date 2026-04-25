@@ -702,7 +702,9 @@ class WorkflowRelay:
         if clip_name_in:
             selected_clip_name = clip_name_in
 
-        if int(wf.get('version', 0) or 0) >= 2:
+        is_v2_recipe = int(wf.get('version', 0) or 0) >= 2
+
+        if is_v2_recipe:
             target_block = _selected_v2_block(wf, selected_slot, create=True)
             if selected_model_name:
                 target_block['model'] = selected_model_name
@@ -716,29 +718,31 @@ class WorkflowRelay:
                 target_block['vae'] = selected_vae_name
             if selected_clip_name:
                 target_block['clip'] = [selected_clip_name]
-
-        if selected_model_name:
-            wf['model_a'] = selected_model_name
-        if selected_loader_type:
-            wf['loader_type'] = selected_loader_type
-        if family_from_data:
-            wf['family'] = family_from_data
-        if clip_type_from_data:
-            wf['clip_type'] = clip_type_from_data
-        if selected_vae_name:
-            wf['vae'] = selected_vae_name
-        if selected_clip_name:
-            wf['clip'] = [selected_clip_name]
+        else:
+            # Legacy payload fallback: keep top-level writes for non-v2 dicts.
+            if selected_model_name:
+                wf['model_a'] = selected_model_name
+            if selected_loader_type:
+                wf['loader_type'] = selected_loader_type
+            if family_from_data:
+                wf['family'] = family_from_data
+            if clip_type_from_data:
+                wf['clip_type'] = clip_type_from_data
+            if selected_vae_name:
+                wf['vae'] = selected_vae_name
+            if selected_clip_name:
+                wf['clip'] = [selected_clip_name]
 
         if selected_model_name:
             detected_family = get_model_family(selected_model_name)
             if detected_family:
-                wf['family'] = detected_family
-                if int(wf.get('version', 0) or 0) >= 2:
+                if is_v2_recipe:
                     _selected_v2_block(wf, selected_slot, create=True)['family'] = detected_family
+                else:
+                    wf['family'] = detected_family
 
         # -- Extract all output values -------------------------------
-        model_name = final_model_name
+        model_name = _short_display_name(selected_model_name) or final_model_name
 
         # Always emit string outputs for combo-name sockets to avoid None flowing
         # into downstream standard loader nodes.
