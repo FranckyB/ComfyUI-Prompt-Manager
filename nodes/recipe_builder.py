@@ -741,7 +741,6 @@ class WorkflowBuilder:
             "hidden": {
                 "unique_id":     "UNIQUE_ID",
                 "extra_pnginfo": "EXTRA_PNGINFO",
-                "prompt":        "PROMPT",
             },
         }
 
@@ -1102,15 +1101,71 @@ class WorkflowBuilder:
 
             return out
 
+        def _apply_preferred_lora_order(current_list, preferred_list):
+            current = list(current_list) if isinstance(current_list, list) else []
+            preferred = preferred_list if isinstance(preferred_list, list) else []
+            if not current or not preferred:
+                return current
+
+            current_by_name = {}
+            for row in current:
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get('name', '')).strip()
+                if not name or name in current_by_name:
+                    continue
+                current_by_name[name] = row
+
+            ordered = []
+            used_names = set()
+            for row in preferred:
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get('name', '')).strip()
+                if not name or name in used_names:
+                    continue
+                match = current_by_name.get(name)
+                if match is not None:
+                    ordered.append(match)
+                    used_names.add(name)
+
+            for row in current:
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get('name', '')).strip()
+                if not name or name in used_names:
+                    continue
+                ordered.append(row)
+                used_names.add(name)
+
+            return ordered
+
         # If JS persisted full LoRA stacks in override_data, treat those as
         # authoritative UI state for this run only when no connected LoRA
         # inputs are present. Connected stacks must be authoritative on the
         # current execute so add/remove changes apply immediately.
-        if _allow_override('loras') and not has_connected_lora_input:
+        override_loras_a = None
+        override_loras_b = None
+        if _allow_override('loras'):
             if 'loras_a' in overrides:
-                extracted['loras_a'] = _normalize_override_lora_list(overrides.get('loras_a'))
+                override_loras_a = _normalize_override_lora_list(overrides.get('loras_a'))
             if 'loras_b' in overrides:
-                extracted['loras_b'] = _normalize_override_lora_list(overrides.get('loras_b'))
+                override_loras_b = _normalize_override_lora_list(overrides.get('loras_b'))
+
+            if not has_connected_lora_input:
+                if override_loras_a is not None:
+                    extracted['loras_a'] = override_loras_a
+                if override_loras_b is not None:
+                    extracted['loras_b'] = override_loras_b
+            else:
+                if override_loras_a is not None:
+                    # Keep all UI-authored rows even when a lora_stack input is
+                    # connected. Connected rows still win on duplicate names.
+                    merged_a = _merge_lora_lists(override_loras_a, extracted.get('loras_a', []))
+                    extracted['loras_a'] = _apply_preferred_lora_order(merged_a, override_loras_a)
+                if override_loras_b is not None:
+                    merged_b = _merge_lora_lists(override_loras_b, extracted.get('loras_b', []))
+                    extracted['loras_b'] = _apply_preferred_lora_order(merged_b, override_loras_b)
 
         # ── Apply overrides ──────────────────────────────────────────────
         pos_text = extracted['positive_prompt']
@@ -1126,7 +1181,7 @@ class WorkflowBuilder:
         if neg_prompt is not None:
             neg_text = neg_prompt
         model_name_a = extracted['model_a']
-        model_name_b = extracted['model_b']
+        model_name_b = extracted.get('model_b', '')
         vae_name = extracted['vae']['name']
         if _allow_override('model'):
             model_name_a = overrides.get('model_a', model_name_a)
@@ -1252,6 +1307,10 @@ class WorkflowBuilder:
         if not _families_compatible(incoming_family, family_key):
             extracted['loras_a'] = list(input_loras_a)
             extracted['loras_b'] = list(input_loras_b)
+            if override_loras_a is not None:
+                extracted['loras_a'] = _apply_preferred_lora_order(extracted['loras_a'], override_loras_a)
+            if override_loras_b is not None:
+                extracted['loras_b'] = _apply_preferred_lora_order(extracted['loras_b'], override_loras_b)
             print(
                 f"[RecipeBuilder] Dropped incompatible upstream LoRAs "
                 f"(incoming_family={incoming_family}, selected_family={family_key})"
@@ -1345,7 +1404,7 @@ class WorkflowBuilder:
         )
 
         if is_simple_mode:
-            simplified_wf['model_b'] = ''
+            simplified_wf.pop('model_b', None)
             simplified_wf['loras_b'] = []
             if isinstance(simplified_wf.get('sampler'), dict):
                 simplified_wf['sampler'].pop('seed_b', None)
@@ -1608,8 +1667,10 @@ class WorkflowBuilder:
                 'model_b_found':      model_b_found,
                 'loras_a':            extracted['loras_a'],
                 'loras_b':            extracted['loras_b'],
-                'workflow_loras_a':   workflow_loras_a,
-                'workflow_loras_b':   workflow_loras_b,
+                # Report effective workflow-side stack order so downstream
+                # Builder pre-update can track order-only changes.
+                'workflow_loras_a':   list(extracted['loras_a']),
+                'workflow_loras_b':   list(extracted['loras_b']),
                 'input_loras_a':      input_loras_a,
                 'input_loras_b':      input_loras_b,
                 'vae':                effective_vae,
@@ -1763,7 +1824,6 @@ class WorkflowBuilderWan(WorkflowBuilder):
             "hidden": {
                 "unique_id":     "UNIQUE_ID",
                 "extra_pnginfo": "EXTRA_PNGINFO",
-                "prompt":        "PROMPT",
             },
         }
 

@@ -127,6 +127,21 @@ _LIVE_CKPTS, _LIVE_UNETS, _LIVE_VAES, _LIVE_CLIPS = _get_live_loader_combo_types
 
 
 _MODEL_KEYS = ("model_a", "model_b", "model_c", "model_d")
+_LEGACY_TOP_LEVEL_RECIPE_KEYS = (
+    "family",
+    "model_a",
+    "model_b",
+    "positive_prompt",
+    "negative_prompt",
+    "loras_a",
+    "loras_b",
+    "vae",
+    "clip",
+    "clip_type",
+    "loader_type",
+    "sampler",
+    "resolution",
+)
 
 
 def _normalize_model_slot(value):
@@ -366,9 +381,19 @@ class WorkflowRelay:
         else:
             incoming_wf = {}
 
+        has_incoming_data = isinstance(incoming_wf, dict) and bool(incoming_wf)
+        has_slot_write_request = any([
+            kwargs.get('lora_stack') is not None,
+            any(kwargs.get(k) is not None for k in ('steps', 'seed', 'cfg', 'denoise', 'sampler_name', 'scheduler')),
+            any(kwargs.get(k) is not None for k in ('width', 'height', 'batch_size', 'length')),
+            isinstance(kwargs.get('model_name'), str) and kwargs.get('model_name').strip() != '',
+            kwargs.get('model_data') is not None,
+        ])
+        create_v2_block_on_write = (not has_incoming_data) or has_slot_write_request
+
         # Preserve incoming recipe_data exactly when present.
         # Only fall back to the empty template when no input payload exists.
-        if isinstance(incoming_wf, dict) and incoming_wf:
+        if has_incoming_data:
             wf = dict(incoming_wf)
             if isinstance(incoming_wf.get('sampler'), dict):
                 wf['sampler'] = dict(incoming_wf['sampler'])
@@ -384,7 +409,7 @@ class WorkflowRelay:
             wf['models'] = {}
 
         selected_slot = _normalize_model_slot(model_slot)
-        selected_block = _selected_v2_block(wf, selected_slot, create=False)
+        selected_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
 
         v2_family = selected_block.get('family', '') if isinstance(selected_block, dict) else ''
         v2_model_name = selected_block.get('model', '') if isinstance(selected_block, dict) else ''
@@ -447,8 +472,9 @@ class WorkflowRelay:
                 wf['loras_b'] = normalized_stack
 
             if int(wf.get('version', 0) or 0) >= 2:
-                target_block = _selected_v2_block(wf, selected_slot, create=True)
-                target_block['loras'] = normalized_stack
+                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+                if isinstance(target_block, dict):
+                    target_block['loras'] = normalized_stack
 
         # -- Resolution overrides ------------------------------------
         for key in ('width', 'height', 'batch_size', 'length'):
@@ -470,23 +496,24 @@ class WorkflowRelay:
         wf['sampler'] = sampler
 
         if int(wf.get('version', 0) or 0) >= 2:
-            target_block = _selected_v2_block(wf, selected_slot, create=True)
-            bs = target_block.get('sampler', {}) if isinstance(target_block.get('sampler'), dict) else {}
-            if kwargs.get('steps') is not None:
-                bs['steps'] = kwargs['steps']
-            if kwargs.get('seed') is not None:
-                bs['seed'] = kwargs['seed']
-            for key in ('cfg', 'denoise', 'sampler_name', 'scheduler'):
-                if kwargs.get(key) is not None:
-                    bs[key] = kwargs[key]
-            target_block['sampler'] = bs
+            target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+            if isinstance(target_block, dict):
+                bs = target_block.get('sampler', {}) if isinstance(target_block.get('sampler'), dict) else {}
+                if kwargs.get('steps') is not None:
+                    bs['steps'] = kwargs['steps']
+                if kwargs.get('seed') is not None:
+                    bs['seed'] = kwargs['seed']
+                for key in ('cfg', 'denoise', 'sampler_name', 'scheduler'):
+                    if kwargs.get(key) is not None:
+                        bs[key] = kwargs[key]
+                target_block['sampler'] = bs
 
-            br = target_block.get('resolution', {}) if isinstance(target_block.get('resolution'), dict) else {}
-            for key in ('width', 'height', 'batch_size', 'length'):
-                if kwargs.get(key) is not None:
-                    br[key] = kwargs[key]
-            if br:
-                target_block['resolution'] = br
+                br = target_block.get('resolution', {}) if isinstance(target_block.get('resolution'), dict) else {}
+                for key in ('width', 'height', 'batch_size', 'length'):
+                    if kwargs.get(key) is not None:
+                        br[key] = kwargs[key]
+                if br:
+                    target_block['resolution'] = br
 
         # -- Model/CLIP/VAE name overrides ---------------------------
         model_name_in = kwargs.get('model_name')
@@ -496,8 +523,9 @@ class WorkflowRelay:
             wf['model_a'] = chosen_name
 
             if int(wf.get('version', 0) or 0) >= 2:
-                target_block = _selected_v2_block(wf, selected_slot, create=True)
-                target_block['model'] = chosen_name
+                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+                if isinstance(target_block, dict):
+                    target_block['model'] = chosen_name
 
             family = get_model_family(chosen_name)
             if family:
@@ -562,27 +590,6 @@ class WorkflowRelay:
         if extra is None:
             extra = wf.get('EXTRA')
 
-        if model is not None:
-            wf['MODEL'] = model
-            wf['MODEL_A'] = model
-            if int(wf.get('version', 0) or 0) >= 2:
-                _selected_v2_block(wf, selected_slot, create=True)['MODEL'] = model
-        if clip is not None:
-            wf['CLIP'] = clip
-            if int(wf.get('version', 0) or 0) >= 2:
-                _selected_v2_block(wf, selected_slot, create=True)['CLIP'] = clip
-        if vae is not None:
-            wf['VAE'] = vae
-            if int(wf.get('version', 0) or 0) >= 2:
-                _selected_v2_block(wf, selected_slot, create=True)['VAE'] = vae
-        if positive is not None:
-            wf['POSITIVE'] = positive
-            if int(wf.get('version', 0) or 0) >= 2:
-                _selected_v2_block(wf, selected_slot, create=True)['POSITIVE'] = positive
-        if negative is not None:
-            wf['NEGATIVE'] = negative
-            if int(wf.get('version', 0) or 0) >= 2:
-                _selected_v2_block(wf, selected_slot, create=True)['NEGATIVE'] = negative
         if latent is not None:
             wf['LATENT'] = latent
         if image is not None:
@@ -614,7 +621,7 @@ class WorkflowRelay:
             for item in (wf.get('loras_a', []) if isinstance(wf.get('loras_a', []), list) else [])
             if _is_active_available(item)
         ]
-        final_selected = _selected_v2_block(wf, selected_slot, create=False)
+        final_selected = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
         selected_loras = final_selected.get('loras', []) if isinstance(final_selected, dict) and isinstance(final_selected.get('loras'), list) else []
         if selected_loras:
             lora_stack = [
@@ -705,19 +712,20 @@ class WorkflowRelay:
         is_v2_recipe = int(wf.get('version', 0) or 0) >= 2
 
         if is_v2_recipe:
-            target_block = _selected_v2_block(wf, selected_slot, create=True)
-            if selected_model_name:
-                target_block['model'] = selected_model_name
-            if selected_loader_type:
-                target_block['loader_type'] = selected_loader_type
-            if family_from_data:
-                target_block['family'] = family_from_data
-            if clip_type_from_data:
-                target_block['clip_type'] = clip_type_from_data
-            if selected_vae_name:
-                target_block['vae'] = selected_vae_name
-            if selected_clip_name:
-                target_block['clip'] = [selected_clip_name]
+            target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+            if isinstance(target_block, dict):
+                if selected_model_name:
+                    target_block['model'] = selected_model_name
+                if selected_loader_type:
+                    target_block['loader_type'] = selected_loader_type
+                if family_from_data:
+                    target_block['family'] = family_from_data
+                if clip_type_from_data:
+                    target_block['clip_type'] = clip_type_from_data
+                if selected_vae_name:
+                    target_block['vae'] = selected_vae_name
+                if selected_clip_name:
+                    target_block['clip'] = [selected_clip_name]
         else:
             # Legacy payload fallback: keep top-level writes for non-v2 dicts.
             if selected_model_name:
@@ -737,7 +745,9 @@ class WorkflowRelay:
             detected_family = get_model_family(selected_model_name)
             if detected_family:
                 if is_v2_recipe:
-                    _selected_v2_block(wf, selected_slot, create=True)['family'] = detected_family
+                    detected_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+                    if isinstance(detected_block, dict):
+                        detected_block['family'] = detected_family
                 else:
                     wf['family'] = detected_family
 
@@ -750,6 +760,10 @@ class WorkflowRelay:
         unet_out = unet_name_in or (selected_model_name if selected_loader_type in ('unet', 'diffusion') else "")
         vae_name_out = selected_vae_name or ""
         clip_name_out = selected_clip_name or ""
+
+        if is_v2_recipe:
+            for legacy_key in _LEGACY_TOP_LEVEL_RECIPE_KEYS:
+                wf.pop(legacy_key, None)
 
         return (
             wf,

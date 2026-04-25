@@ -636,62 +636,26 @@ class WorkflowRenderer:
                 )
                 decoded = decoded_nchw.permute(0, 2, 3, 1).contiguous()
 
-        def _short_display_name(name):
-            raw = str(name or "").strip()
-            if not raw:
-                return ""
-            base = os.path.basename(raw.replace("\\", "/"))
-            return os.path.splitext(base)[0]
-
         cond_pos_out, cond_neg_out = _encode_text_conditioning(clip, positive_prompt, negative_prompt)
 
         if int(wf_out.get("version", 0) or 0) >= 2 and isinstance(wf_out.get("models"), dict):
             models_out = wf_out.get("models", {})
-            if not isinstance(models_out, dict):
-                models_out = {}
-                wf_out["models"] = models_out
+            if primary_key and isinstance(models_out.get(primary_key), dict):
+                primary_out = models_out[primary_key]
+                primary_out["MODEL"] = model_a
+                primary_out["CLIP"] = clip
+                primary_out["VAE"] = vae
+                primary_out["POSITIVE"] = cond_pos_out
+                primary_out["NEGATIVE"] = cond_neg_out
 
-            if not primary_key:
-                primary_key = "model_a"
-            if primary_key not in models_out or not isinstance(models_out.get(primary_key), dict):
-                models_out[primary_key] = {}
-
-            primary_out = models_out[primary_key]
-            primary_out["MODEL"] = model_a
-            primary_out["CLIP"] = clip
-            primary_out["VAE"] = vae
-            primary_out["POSITIVE"] = cond_pos_out
-            primary_out["NEGATIVE"] = cond_neg_out
-
-            if secondary_key and model_b_obj is not None:
-                if secondary_key not in models_out or not isinstance(models_out.get(secondary_key), dict):
-                    models_out[secondary_key] = {}
+            if secondary_key and model_b_obj is not None and isinstance(models_out.get(secondary_key), dict):
                 secondary_out = models_out[secondary_key]
                 secondary_out["MODEL"] = model_b_obj
                 secondary_out["VAE"] = vae
                 secondary_out["CLIP"] = clip
 
-            wf_out.pop("MODEL", None)
-            wf_out.pop("MODEL_A", None)
-            wf_out.pop("MODEL_B", None)
-            wf_out.pop("CLIP", None)
-            wf_out.pop("VAE", None)
-            wf_out.pop("POSITIVE", None)
-            wf_out.pop("NEGATIVE", None)
-        else:
-            wf_out["MODEL_A"] = model_a
-            if model_b_obj is not None:
-                wf_out["MODEL_B"] = model_b_obj
-            else:
-                wf_out.pop("MODEL_B", None)
-            wf_out["CLIP"] = clip
-            wf_out["VAE"] = vae
-            wf_out["POSITIVE"] = cond_pos_out
-            wf_out["NEGATIVE"] = cond_neg_out
-
         wf_out["LATENT"] = out_latent
         wf_out["IMAGE"] = decoded
-        wf_out["model_name"] = _short_display_name(resolved_a or model_name_a)
 
         if clear_cache_after_render:
             self._clear_cached_models()

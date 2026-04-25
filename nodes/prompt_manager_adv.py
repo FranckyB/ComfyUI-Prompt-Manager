@@ -128,6 +128,7 @@ def _normalize_workflow_loras_for_prompt(loras):
         clip_strength = lora.get("clip_strength", strength)
         normalized.append({
             "name": name,
+            "path": str(lora.get("path", name) or name),
             "strength": strength,
             "clip_strength": clip_strength,
             "active": lora.get("active", True),
@@ -783,6 +784,7 @@ class PromptManagerAdvanced:
         out_workflow_data['loras_a'] = [
             {
                 'name': lora.get('name', ''),
+                'path': lora.get('path', lora.get('name', '')),
                 'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
                 'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
                 'active': lora.get('active', True),
@@ -794,6 +796,7 @@ class PromptManagerAdvanced:
         out_workflow_data['loras_b'] = [
             {
                 'name': lora.get('name', ''),
+                'path': lora.get('path', lora.get('name', '')),
                 'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
                 'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
                 'active': lora.get('active', True),
@@ -1213,8 +1216,7 @@ async def save_prompt_advanced(request):
                 print(f"[PromptManagerAdvanced] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        # Normalize lora data - save name, strengths, and active state
-        # Paths are resolved at runtime for portability
+        # Normalize lora data - keep path when present for lossless save/restore.
         def normalize_lora_data(loras):
             normalized = []
             for lora in loras:
@@ -1222,6 +1224,7 @@ async def save_prompt_advanced(request):
                     available = lora.get('available', lora.get('available', True))
                     normalized.append({
                         "name": lora.get('name'),
+                        "path": lora.get('path', lora.get('name')),
                         "strength": lora.get('strength', lora.get('model_strength', 1.0)),
                         "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0)),
                         "active": lora.get('active', True),
@@ -1245,6 +1248,7 @@ async def save_prompt_advanced(request):
                 available = lora.get('available', lora.get('available', True))
                 normalized.append({
                     "name": name,
+                    "path": lora.get('path', name),
                     "strength": strength,
                     "clip_strength": clip_strength,
                     "active": lora.get('active', True),

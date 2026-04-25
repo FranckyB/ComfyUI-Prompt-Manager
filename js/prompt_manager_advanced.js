@@ -202,7 +202,6 @@ app.registerExtension({
                         const normalizedLoraListSig = (list) => JSON.stringify(
                             (Array.isArray(list) ? list : [])
                                 .map(normalizeLoraForSig)
-                                .sort((a, b) => a.name.localeCompare(b.name))
                         );
 
                         let newLorasA = event.detail.loras_a || [];
@@ -228,15 +227,15 @@ app.registerExtension({
                             use_workflow_data: shouldIngestWorkflowExecution,
                             use_lora_input: (this.widgets?.find(w => w.name === "use_lora_input")?.value !== false),
                             prompt_input: String(event.detail.prompt_input || ""),
-                            workflow_prompt: String(wfDataEvent?.positive_prompt || ""),
+                            workflow_prompt: getWorkflowPromptText(wfDataEvent || null),
                             connected_thumbnail_sig: (() => {
                                 const t = String(event.detail.connected_thumbnail || "");
                                 return t ? `${t.length}:${t.slice(0, 64)}` : "";
                             })(),
                             workflow_data_sig: wfDataEvent ? JSON.stringify({
-                                positive_prompt: String(wfDataEvent.positive_prompt || ""),
-                                loras_a: (Array.isArray(wfDataEvent.loras_a) ? wfDataEvent.loras_a : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
-                                loras_b: (Array.isArray(wfDataEvent.loras_b) ? wfDataEvent.loras_b : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
+                                positive_prompt: getWorkflowPromptText(wfDataEvent),
+                                loras_a: getWorkflowLorasBySlot(wfDataEvent, "model_a").map(normalizeLoraForSig),
+                                loras_b: getWorkflowLorasBySlot(wfDataEvent, "model_b").map(normalizeLoraForSig),
                             }) : null,
                             loras_a_sig: normalizedLoraListSig(newLorasA),
                             loras_b_sig: normalizedLoraListSig(newLorasB),
@@ -462,9 +461,9 @@ app.registerExtension({
                                     promptTextWidget.inputEl.style.pointerEvents = "auto";
                                     promptTextWidget.inputEl.readOnly = true;
                                 }
-                            } else if (useWorkflow && wfData && wfData.positive_prompt) {
+                            } else if (useWorkflow && wfData && getWorkflowPromptText(wfData)) {
                                 // Using workflow_data prompt — display it (grayed out)
-                                promptTextWidget.value = wfData.positive_prompt;
+                                promptTextWidget.value = getWorkflowPromptText(wfData);
                                 promptTextWidget.disabled = true;
                                 if (promptTextWidget.inputEl) {
                                     promptTextWidget.inputEl.style.pointerEvents = "auto";
@@ -1343,8 +1342,7 @@ function _normalizeSummaryLoras(list) {
                 found: item.found !== false,
             };
         })
-        .filter(Boolean)
-        .sort(compareLorasMissingLast);
+            .filter(Boolean);
 }
 
 function _summarizeWorkflowDataDiscovery(rawWorkflowData) {
@@ -1995,8 +1993,14 @@ function updateLoraDisplays(node) {
         lorasB = (node.savedLorasB || []).map(l => ({ ...l, source: 'saved' }));
     } else {
         // Override OFF: Merge current (from input) and saved (from prompt) loras
-        lorasA = mergeLoraLists(node.currentLorasA, node.savedLorasA);
-        lorasB = mergeLoraLists(node.currentLorasB, node.savedLorasB);
+        lorasA = applyPreferredOrder(
+            mergeLoraLists(node.currentLorasA, node.savedLorasA),
+            node.properties?.preferredLoraOrderA
+        );
+        lorasB = applyPreferredOrder(
+            mergeLoraLists(node.currentLorasB, node.savedLorasB),
+            node.properties?.preferredLoraOrderB
+        );
     }
 
     // Update display A
@@ -2017,6 +2021,26 @@ function updateLoraDisplays(node) {
     // Just redraw canvas - the computeSize functions already handle correct sizing
     // using node.size[0] for accurate width calculation
     app.graph.setDirtyCanvas(true, true);
+}
+
+/**
+ * Reorder a lora list to match a preferred order (array of names).
+ * Items not in preferredOrder are appended at the end in their original relative order.
+ */
+function applyPreferredOrder(list, preferredOrder) {
+    if (!Array.isArray(preferredOrder) || preferredOrder.length === 0) return list;
+    const orderMap = new Map(preferredOrder.map((name, i) => [name.toLowerCase(), i]));
+    const ordered = Array(preferredOrder.length).fill(null);
+    const rest = [];
+    list.forEach(lora => {
+        const idx = orderMap.get(lora.name.toLowerCase());
+        if (idx !== undefined) {
+            ordered[idx] = lora;
+        } else {
+            rest.push(lora);
+        }
+    });
+    return [...ordered.filter(x => x !== null), ...rest];
 }
 
 function mergeLoraLists(currentLoras, savedLoras) {
@@ -2059,9 +2083,6 @@ function mergeLoraLists(currentLoras, savedLoras) {
         }
     });
 
-    // Keep available LoRAs first, then missing ones, each group alphabetical.
-    merged.sort(compareLorasMissingLast);
-
     return merged;
 }
 
@@ -2102,7 +2123,7 @@ function renderLoraTags(container, loras, stackId, node) {
         return;
     }
 
-    const orderedLoras = (Array.isArray(loras) ? [...loras] : []).sort(compareLorasMissingLast);
+    const orderedLoras = Array.isArray(loras) ? loras : [];
     orderedLoras.forEach((lora, index) => {
         const tag = createLoraTag(lora, index, stackId, node);
         container.appendChild(tag);
@@ -2405,54 +2426,42 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
     `;
     menu.appendChild(titleItem);
 
-    // Search on CivitAI option (only for missing LoRAs)
-    if (!isAvailable) {
-        const searchItem = document.createElement("div");
-        searchItem.textContent = "🔍 Search on CivitAI";
-        searchItem.style.cssText = `
+    const addMenuItem = (label, color, onClick) => {
+        const item = document.createElement("div");
+        item.textContent = label;
+        item.style.cssText = `
             padding: 8px 12px;
             cursor: pointer;
             font-size: 12px;
-            color: #4da6ff;
+            color: ${color};
             white-space: nowrap;
         `;
-        searchItem.addEventListener("mouseenter", () => {
-            searchItem.style.backgroundColor = "#3a3a3a";
+        item.addEventListener("mouseenter", () => {
+            item.style.backgroundColor = "#3a3a3a";
         });
-        searchItem.addEventListener("mouseleave", () => {
-            searchItem.style.backgroundColor = "transparent";
+        item.addEventListener("mouseleave", () => {
+            item.style.backgroundColor = "transparent";
         });
-        searchItem.addEventListener("click", (evt) => {
+        item.addEventListener("click", (evt) => {
             evt.stopPropagation();
             menu.remove();
-            // Open CivitAI search in new tab
+            onClick();
+        });
+        menu.appendChild(item);
+    };
+
+    addMenuItem("Move Up", "#ddd", () => moveLora(node, stackId, index, -1));
+    addMenuItem("Move Down", "#ddd", () => moveLora(node, stackId, index, 1));
+
+    // Search on CivitAI option (only for missing LoRAs)
+    if (!isAvailable) {
+        addMenuItem("🔍 Search on CivitAI", "#4da6ff", () => {
             const searchQuery = encodeURIComponent(loraName);
             window.open(`https://civitai.red/search/models?sortBy=models_v9&query=${searchQuery}&modelType=LORA`, "_blank");
         });
-        menu.appendChild(searchItem);
     }
 
-    const deleteItem = document.createElement("div");
-    deleteItem.textContent = "Delete";
-    deleteItem.style.cssText = `
-        padding: 8px 12px;
-        cursor: pointer;
-        font-size: 12px;
-        color: #ff6b6b;
-        white-space: nowrap;
-    `;
-    deleteItem.addEventListener("mouseenter", () => {
-        deleteItem.style.backgroundColor = "#3a3a3a";
-    });
-    deleteItem.addEventListener("mouseleave", () => {
-        deleteItem.style.backgroundColor = "transparent";
-    });
-    deleteItem.addEventListener("click", (evt) => {
-        evt.stopPropagation();
-        menu.remove();
-        removeLora(node, stackId, index);
-    });
-    menu.appendChild(deleteItem);
+    addMenuItem("Delete", "#ff6b6b", () => removeLora(node, stackId, index));
 
     document.body.appendChild(menu);
 
@@ -2516,6 +2525,56 @@ function removeLora(node, stackId, index) {
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
     }
+}
+
+function moveLora(node, stackId, index, delta) {
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
+
+    let loraList;
+    if (!useLoraInput) {
+        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
+    } else {
+        loraList = applyPreferredOrder(
+            stackId === "a"
+                ? mergeLoraLists(node.currentLorasA, node.savedLorasA)
+                : mergeLoraLists(node.currentLorasB, node.savedLorasB),
+            stackId === "a" ? node.properties?.preferredLoraOrderA : node.properties?.preferredLoraOrderB
+        );
+    }
+
+    if (!Array.isArray(loraList) || loraList.length === 0) {
+        return;
+    }
+
+    const from = Number(index);
+    const to = from + Number(delta || 0);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= loraList.length || to >= loraList.length) {
+        return;
+    }
+
+    loraList.splice(to, 0, loraList.splice(from, 1)[0]);
+
+    if (!useLoraInput) {
+        // When lora input is disabled, directly update savedLoras order
+        if (stackId === "a") {
+            node.savedLorasA = loraList;
+        } else {
+            node.savedLorasB = loraList;
+        }
+    } else {
+        // Store preferred order as names — does NOT change source/color
+        if (!node.properties) node.properties = {};
+        const orderNames = loraList.map(l => l.name);
+        if (stackId === "a") {
+            node.properties.preferredLoraOrderA = orderNames;
+        } else {
+            node.properties.preferredLoraOrderB = orderNames;
+        }
+    }
+
+    updateLoraDisplays(node);
+    app.graph.setDirtyCanvas(true, true);
 }
 
 /**
@@ -3864,10 +3923,38 @@ function mapWorkflowLorasToUi(list) {
         .filter(Boolean);
 }
 
+function getWorkflowModelBlock(workflowData, slot = "model_a") {
+    if (!workflowData || typeof workflowData !== "object") return null;
+    if (Number(workflowData.version || 0) < 2) return null;
+    const models = workflowData.models;
+    if (!models || typeof models !== "object") return null;
+    const block = models[slot];
+    return block && typeof block === "object" ? block : null;
+}
+
+function getWorkflowPromptText(workflowData) {
+    const modelA = getWorkflowModelBlock(workflowData, "model_a");
+    if (modelA && typeof modelA.positive_prompt === "string") {
+        return String(modelA.positive_prompt || "");
+    }
+    return String(workflowData?.positive_prompt || "");
+}
+
+function getWorkflowLorasBySlot(workflowData, slot = "model_a") {
+    const block = getWorkflowModelBlock(workflowData, slot);
+    if (block && Array.isArray(block.loras)) {
+        return block.loras;
+    }
+    if (slot === "model_b") {
+        return Array.isArray(workflowData?.loras_b) ? workflowData.loras_b : [];
+    }
+    return Array.isArray(workflowData?.loras_a) ? workflowData.loras_a : [];
+}
+
 function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, fallbackLorasB = null, options = null) {
     const preserveLocal = options?.preserveUserState !== false;
-    const mappedPrimaryA = Array.isArray(workflowData?.loras_a) ? mapWorkflowLorasToUi(workflowData.loras_a) : [];
-    const mappedPrimaryB = Array.isArray(workflowData?.loras_b) ? mapWorkflowLorasToUi(workflowData.loras_b) : [];
+    const mappedPrimaryA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_a"));
+    const mappedPrimaryB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_b"));
     const mappedFallbackA = mapWorkflowLorasToUi(fallbackLorasA || []);
     const mappedFallbackB = mapWorkflowLorasToUi(fallbackLorasB || []);
 
@@ -3940,23 +4027,57 @@ function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
         ? JSON.parse(JSON.stringify(baseWorkflowData))
         : {};
 
-    base.positive_prompt = String(promptText || "");
-    base.loras_a = (lorasA || []).map((l) => ({
+    const normalizedPrompt = String(promptText || "");
+    const normalizedA = (lorasA || []).map((l) => ({
         name: l.name,
+        path: String(l.path || l.name || ""),
         model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
         clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
         active: l.active !== false,
         available: l.available !== false,
         found: l.found !== false,
     }));
-    base.loras_b = (lorasB || []).map((l) => ({
+    const normalizedB = (lorasB || []).map((l) => ({
         name: l.name,
+        path: String(l.path || l.name || ""),
         model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
         clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
         active: l.active !== false,
         available: l.available !== false,
         found: l.found !== false,
     }));
+
+    if (Number(base.version || 0) >= 2 && base.models && typeof base.models === "object") {
+        const modelA = (base.models.model_a && typeof base.models.model_a === "object")
+            ? base.models.model_a
+            : (base.models.model_a = {});
+        const hasExistingModelB = !!(base.models.model_b && typeof base.models.model_b === "object");
+        const existingModelB = hasExistingModelB ? base.models.model_b : null;
+        const modelAName = String(modelA?.model || "").trim();
+        const modelBName = String(existingModelB?.model || "").trim();
+        const modelBPos = String(existingModelB?.positive_prompt || "").trim();
+        const modelBNeg = String(existingModelB?.negative_prompt || "").trim();
+        const modelBHasLoras = Array.isArray(existingModelB?.loras) && existingModelB.loras.length > 0;
+        const modelBHasRuntime = ["MODEL", "CLIP", "VAE", "POSITIVE", "NEGATIVE"].some((k) => existingModelB?.[k] != null);
+        const isGhostModelB = hasExistingModelB && !modelBHasLoras && !modelBPos && !modelBNeg && !modelBHasRuntime && (!modelBName || modelBName === modelAName);
+
+        if (isGhostModelB) {
+            delete base.models.model_b;
+        }
+
+        modelA.positive_prompt = normalizedPrompt;
+        modelA.loras = normalizedA;
+        if ((hasExistingModelB && !isGhostModelB) || normalizedB.length > 0) {
+            const modelB = (hasExistingModelB && !isGhostModelB)
+                ? base.models.model_b
+                : (base.models.model_b = {});
+            modelB.loras = normalizedB;
+        }
+    } else {
+        base.positive_prompt = normalizedPrompt;
+        base.loras_a = normalizedA;
+        base.loras_b = normalizedB;
+    }
     base._source = "PromptManagerAdvanced";
     return base;
 }
@@ -4017,8 +4138,9 @@ async function pullWorkflowIntoNode(node) {
     const textWidget = node.widgets?.find((w) => w.name === "text");
     const usePromptInputWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
     const usePromptInput = usePromptInputWidget?.value === true;
-    if (!usePromptInput && textWidget && wfData.positive_prompt) {
-        textWidget.value = String(wfData.positive_prompt);
+    const wfPrompt = getWorkflowPromptText(wfData);
+    if (!usePromptInput && textWidget && wfPrompt) {
+        textWidget.value = wfPrompt;
     }
 
     node.lastWorkflowData = wfData;
@@ -4030,8 +4152,8 @@ async function pullWorkflowIntoNode(node) {
     // Pull Workflow should only replace fields that are NOT controlled by live inputs.
     // If use_lora_input is ON, connected stacks control LoRAs at execution; keep PMA stacks unchanged.
     if (!useLoraInput) {
-        let pulledA = mapWorkflowLorasToUi(wfData.loras_a || []).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
-        let pulledB = mapWorkflowLorasToUi(wfData.loras_b || []).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
+        let pulledA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_a")).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
+        let pulledB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_b")).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
         pulledA = await applyLoraFoundState(pulledA);
         pulledB = await applyLoraFoundState(pulledB);
 
@@ -4117,13 +4239,11 @@ function getWorkflowDataLiveSig(workflowData) {
         found: lora?.found !== false,
     });
     return JSON.stringify({
-        positive_prompt: String(workflowData.positive_prompt || ""),
-        loras_a: (Array.isArray(workflowData.loras_a) ? workflowData.loras_a : [])
-            .map(normalize)
-            .sort((a, b) => a.name.localeCompare(b.name)),
-        loras_b: (Array.isArray(workflowData.loras_b) ? workflowData.loras_b : [])
-            .map(normalize)
-            .sort((a, b) => a.name.localeCompare(b.name)),
+        positive_prompt: getWorkflowPromptText(workflowData),
+        loras_a: getWorkflowLorasBySlot(workflowData, "model_a")
+            .map(normalize),
+        loras_b: getWorkflowLorasBySlot(workflowData, "model_b")
+            .map(normalize),
     });
 }
 
@@ -4140,8 +4260,8 @@ async function tryLiveWorkflowPickup(node, { force = false } = {}) {
         return false;
     }
 
-    let liveA = mapWorkflowLorasToUi(wfData.loras_a || []);
-    let liveB = mapWorkflowLorasToUi(wfData.loras_b || []);
+    let liveA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_a"));
+    let liveB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_b"));
     liveA = await applyLoraFoundState(liveA);
     liveB = await applyLoraFoundState(liveB);
 
@@ -4151,8 +4271,9 @@ async function tryLiveWorkflowPickup(node, { force = false } = {}) {
 
     const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
     const textWidget = node.widgets?.find((w) => w.name === "text");
-    if (textWidget && !(useExternalWidget?.value === true) && wfData.positive_prompt != null) {
-        textWidget.value = String(wfData.positive_prompt);
+    const wfPrompt = getWorkflowPromptText(wfData);
+    if (textWidget && !(useExternalWidget?.value === true) && wfPrompt.length > 0) {
+        textWidget.value = wfPrompt;
     }
 
     node.currentTriggerWords = [];
@@ -4615,12 +4736,10 @@ function getCurrentStateSnapshot(node) {
 
     // Get all loras with their states
     const lorasA = (node.savedLorasA || [])
-        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }));
 
     const lorasB = (node.savedLorasB || [])
-        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }));
 
     // Get all trigger words with their states
     const triggerWords = (node.savedTriggerWords || [])
@@ -5087,13 +5206,13 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             return;
         }
         if (workflowDataForSave) {
+            const wfPrompt = getWorkflowPromptText(workflowDataForSave);
             const effectivePromptText = (
                 node?._isWorkflowManager &&
                 hasWorkflowInput &&
-                typeof workflowDataForSave?.positive_prompt === "string" &&
-                workflowDataForSave.positive_prompt.trim().length > 0
+                wfPrompt.trim().length > 0
             )
-                ? workflowDataForSave.positive_prompt
+                ? wfPrompt
                 : text;
 
             const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasA, lorasB);

@@ -3933,21 +3933,34 @@ class PromptExtractor:
                     except Exception:
                         pass
 
-                    workflow_data = ensure_v2_recipe_data({
-                        "_source": "PromptExtractor",
+                    model_a_block = {
                         "family": family_fallback,
-                        "model_a": model_a,
-                        "model_b": model_b,
+                        "model": model_a,
                         "positive_prompt": positive_prompt,
                         "negative_prompt": negative_prompt,
-                        "loras_a": loras_a if isinstance(loras_a, list) else [],
-                        "loras_b": loras_b if isinstance(loras_b, list) else [],
+                        "loras": loras_a if isinstance(loras_a, list) else [],
                         "vae": vae_name,
                         "clip": clip_names,
                         "clip_type": clip_type,
-                        "sampler": sampler_fallback,
-                        "resolution": resolution_fallback,
-                    }, source="PromptExtractor")
+                        "sampler": sampler_fallback if isinstance(sampler_fallback, dict) else {},
+                        "resolution": resolution_fallback if isinstance(resolution_fallback, dict) else {},
+                    }
+                    workflow_data = {
+                        "_source": "PromptExtractor",
+                        "version": 2,
+                        "models": {
+                            "model_a": model_a_block,
+                        },
+                    }
+                    if model_b or (isinstance(loras_b, list) and loras_b):
+                        workflow_data["models"]["model_b"] = {
+                            "family": family_fallback,
+                            "model": model_b,
+                            "loras": loras_b if isinstance(loras_b, list) else [],
+                            "sampler": sampler_fallback if isinstance(sampler_fallback, dict) else {},
+                            "resolution": resolution_fallback if isinstance(resolution_fallback, dict) else {},
+                        }
+                    workflow_data = ensure_v2_recipe_data(workflow_data, source="PromptExtractor")
             else:
                 workflow_data = ensure_v2_recipe_data({}, source="PromptExtractor")
 
@@ -4058,8 +4071,17 @@ class PromptExtractor:
 
             merged_a = _tuples_to_lora_dicts(final_lora_stack_a)
             merged_b = _tuples_to_lora_dicts(final_lora_stack_b)
-            workflow_data['loras_a'] = merged_a
-            workflow_data['loras_b'] = merged_b
+            models = workflow_data.get('models', {}) if isinstance(workflow_data.get('models'), dict) else {}
+            model_a_block = models.get('model_a') if isinstance(models.get('model_a'), dict) else {}
+            model_a_block['loras'] = merged_a
+            models['model_a'] = model_a_block
+
+            if merged_b or isinstance(models.get('model_b'), dict):
+                model_b_block = models.get('model_b') if isinstance(models.get('model_b'), dict) else {}
+                model_b_block['loras'] = merged_b
+                models['model_b'] = model_b_block
+
+            workflow_data['models'] = models
 
             # Update the _last_extracted_info cache too
             uid_str = str(unique_id) if unique_id is not None else None
@@ -4139,7 +4161,8 @@ class PromptExtractor:
             extracted_data.setdefault('positive_prompt', positive_prompt.strip())
             extracted_data.setdefault('negative_prompt', negative_prompt.strip())
             extracted_data.setdefault('model_a', model_a.strip())
-            extracted_data.setdefault('model_b', model_b.strip())
+            if model_b and model_b.strip():
+                extracted_data.setdefault('model_b', model_b.strip())
 
             wf_nodes = workflow.get('nodes', []) if isinstance(workflow, dict) else []
             for wf_node in wf_nodes:

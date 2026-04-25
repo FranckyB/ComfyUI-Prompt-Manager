@@ -84,7 +84,7 @@ class WorkflowManager(PromptManagerAdvanced):
                     "default": first_prompt_text,
                     "placeholder": "Enter prompt text",
                     "dynamicPrompts": False,
-                    "tooltip": "Edit recipe_data prompt text directly",
+                    "tooltip": "Edit prompt text directly",
                 }),
             },
             "optional": {
@@ -167,7 +167,13 @@ class WorkflowManager(PromptManagerAdvanced):
         wf = resolved_workflow_data if isinstance(resolved_workflow_data, dict) else {}
         wf_model_a = get_v2_model_block(wf, "model_a") or {}
         wf_model_b = get_v2_model_block(wf, "model_b") or {}
+        wf_has_model_b = isinstance(get_v2_model_block(wf, "model_b"), dict)
         incoming_wf = live_workflow_data if isinstance(live_workflow_data, dict) else None
+        incoming_has_model_b = None
+        if isinstance(incoming_wf, dict):
+            incoming_v2 = ensure_v2_recipe_data(incoming_wf, source="RecipeManager")
+            incoming_models = incoming_v2.get("models", {}) if isinstance(incoming_v2.get("models"), dict) else {}
+            incoming_has_model_b = isinstance(incoming_models.get("model_b"), dict)
         output_text = (wf_model_a.get("positive_prompt", "") or text or "")
         generated_thumbnail = _image_to_base64_thumbnail(wf.get("IMAGE")) if isinstance(wf, dict) else None
         incoming_thumbnail = _image_to_base64_thumbnail(incoming_wf.get("IMAGE")) if isinstance(incoming_wf, dict) else None
@@ -181,25 +187,39 @@ class WorkflowManager(PromptManagerAdvanced):
 
         # Build preset stacks from saved toggle state.
         preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
-        preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if loras_b_toggle else []
+        preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if (wf_has_model_b and loras_b_toggle) else []
 
         all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
-        all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if loras_b_toggle else []
+        all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if (wf_has_model_b and loras_b_toggle) else []
 
         wf_loras_a = [
             (lora["name"], lora.get("model_strength", 1.0), lora.get("clip_strength", 1.0))
             for lora in wf_model_a.get("loras", [])
             if isinstance(lora, dict) and lora.get("name")
         ]
-        wf_loras_b = [
-            (lora["name"], lora.get("model_strength", 1.0), lora.get("clip_strength", 1.0))
-            for lora in wf_model_b.get("loras", [])
-            if isinstance(lora, dict) and lora.get("name")
-        ]
+        wf_loras_b = []
+        if wf_has_model_b:
+            wf_loras_b = [
+                (lora["name"], lora.get("model_strength", 1.0), lora.get("clip_strength", 1.0))
+                for lora in wf_model_b.get("loras", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
 
-        # WorkflowManager is workflow-data centric: workflow LoRAs are base, preset toggles merge in.
-        merged_stack_a = self._merge_lora_stacks(wf_loras_a, preset_stack_a) if (wf_loras_a or preset_stack_a) else []
-        merged_stack_b = self._merge_lora_stacks(wf_loras_b, preset_stack_b) if (wf_loras_b or preset_stack_b) else []
+        # WorkflowManager is workflow-data centric: preserve connected workflow order
+        # and use toggles only to modify active/strength state for those entries.
+        # Fallback to preset stack only when no workflow LoRAs are present.
+        if wf_loras_a:
+            merged_stack_a = list(wf_loras_a)
+        else:
+            merged_stack_a = list(preset_stack_a) if preset_stack_a else []
+
+        if wf_has_model_b:
+            if wf_loras_b:
+                merged_stack_b = list(wf_loras_b)
+            else:
+                merged_stack_b = list(preset_stack_b) if preset_stack_b else []
+        else:
+            merged_stack_b = []
 
         processed_stack_a = self._process_lora_toggle(merged_stack_a, loras_a_toggle)
         processed_stack_b = self._process_lora_toggle(merged_stack_b, loras_b_toggle)
@@ -241,11 +261,25 @@ class WorkflowManager(PromptManagerAdvanced):
                 },
             })
 
-        out_workflow_data = dict(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else {}
-        out_workflow_data["positive_prompt"] = output_text
-        out_workflow_data["loras_a"] = [
+        out_workflow_data = ensure_v2_recipe_data(
+            dict(resolved_workflow_data) if isinstance(resolved_workflow_data, dict) else {},
+            source="RecipeManager",
+        )
+
+        models_out = out_workflow_data.get("models", {})
+        if not isinstance(models_out, dict):
+            models_out = {}
+            out_workflow_data["models"] = models_out
+
+        has_existing_model_b = isinstance(models_out.get("model_b"), dict)
+        model_a_out = models_out.get("model_a") if isinstance(models_out.get("model_a"), dict) else {}
+        model_b_out = models_out.get("model_b") if isinstance(models_out.get("model_b"), dict) else {}
+
+        model_a_out["positive_prompt"] = output_text
+        model_a_out["loras"] = [
             {
                 "name": lora.get("name", ""),
+                "path": lora.get("path", lora.get("name", "")),
                 "model_strength": lora.get("model_strength", lora.get("strength", 1.0)),
                 "clip_strength": lora.get("clip_strength", lora.get("strength", 1.0)),
                 "active": lora.get("active", True),
@@ -254,9 +288,10 @@ class WorkflowManager(PromptManagerAdvanced):
             for lora in loras_a_display
             if isinstance(lora, dict) and lora.get("name")
         ]
-        out_workflow_data["loras_b"] = [
+        model_b_loras = [
             {
                 "name": lora.get("name", ""),
+                "path": lora.get("path", lora.get("name", "")),
                 "model_strength": lora.get("model_strength", lora.get("strength", 1.0)),
                 "clip_strength": lora.get("clip_strength", lora.get("strength", 1.0)),
                 "active": lora.get("active", True),
@@ -265,8 +300,36 @@ class WorkflowManager(PromptManagerAdvanced):
             for lora in loras_b_display
             if isinstance(lora, dict) and lora.get("name")
         ]
+
+        models_out["model_a"] = model_a_out
+        model_a_name = str(model_a_out.get("model", "") or "").strip()
+        model_b_name = str(model_b_out.get("model", "") or "").strip()
+        model_b_pos = str(model_b_out.get("positive_prompt", "") or "").strip()
+        model_b_neg = str(model_b_out.get("negative_prompt", "") or "").strip()
+        model_b_has_runtime = any(
+            model_b_out.get(k) is not None
+            for k in ("MODEL", "CLIP", "VAE", "POSITIVE", "NEGATIVE")
+        )
+        # model_b is considered meaningful when it has authored content
+        # that is not just a mirrored default of model_a.
+        keep_model_b = bool(model_b_loras) or bool(model_b_pos) or bool(model_b_neg) or model_b_has_runtime
+        if model_b_name and model_b_name != model_a_name:
+            keep_model_b = True
+
+        if (has_existing_model_b and model_b_name and model_b_name == model_a_name and
+                not model_b_loras and not model_b_pos and not model_b_neg and not model_b_has_runtime):
+            keep_model_b = False
+
+        # Canonical rule: if incoming recipe_data had no model_b, scrub model_b from output.
+        if incoming_has_model_b is False:
+            keep_model_b = False
+
+        if keep_model_b:
+            model_b_out["loras"] = model_b_loras
+            models_out["model_b"] = model_b_out
+        else:
+            models_out.pop("model_b", None)
         out_workflow_data["_source"] = "RecipeManager"
-        out_workflow_data = ensure_v2_recipe_data(out_workflow_data, source="RecipeManager")
 
         return (out_workflow_data,)
 

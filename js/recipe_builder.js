@@ -264,6 +264,7 @@ function _canonicalInputName(name) {
     const n = String(name || "").trim().toLowerCase();
     if (n === "positive_prompt") return "pos_prompt";
     if (n === "negative_prompt") return "neg_prompt";
+    if (n === "workflow_data") return "recipe_data";
     return n;
 }
 
@@ -700,7 +701,7 @@ function makeInput(label, type, value, attrs, onChange) {
 }
 
 // --- LoRA tag builder ---
-function makeLoraTag(lora, avail, onToggle, onStrength) {
+function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown) {
     const name = lora.name || "?";
     const str = lora.model_strength ?? 1.0;
     const active = lora._active !== false;
@@ -818,18 +819,29 @@ function makeLoraTag(lora, avail, onToggle, onStrength) {
             borderBottom: "1px solid #444", marginBottom: "4px", whiteSpace: "nowrap",
         }, name);
         menu.appendChild(title);
-        if (!avail) {
-            const searchItem = makeEl("div", {
+
+        const addMenuItem = (label, color, onClick) => {
+            const item = makeEl("div", {
                 padding: "8px 12px", cursor: "pointer", fontSize: "12px",
-                color: "#4da6ff", whiteSpace: "nowrap",
-            }, "\uD83D\uDD0D Search on CivitAI");
-            searchItem.addEventListener("mouseenter", () => { searchItem.style.backgroundColor = "#3a3a3a"; });
-            searchItem.addEventListener("mouseleave", () => { searchItem.style.backgroundColor = "transparent"; });
-            searchItem.addEventListener("click", (ev) => {
-                ev.stopPropagation(); menu.remove();
+                color, whiteSpace: "nowrap",
+            }, label);
+            item.addEventListener("mouseenter", () => { item.style.backgroundColor = "#3a3a3a"; });
+            item.addEventListener("mouseleave", () => { item.style.backgroundColor = "transparent"; });
+            item.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                menu.remove();
+                if (onClick) onClick();
+            });
+            menu.appendChild(item);
+        };
+
+        addMenuItem("Move Up", "#ddd", onMoveUp);
+        addMenuItem("Move Down", "#ddd", onMoveDown);
+
+        if (!avail) {
+            addMenuItem("\uD83D\uDD0D Search on CivitAI", "#4da6ff", () => {
                 window.open(`https://civitai.red/search/models?sortBy=models_v9&query=${encodeURIComponent(name)}&modelType=LORA`, "_blank");
             });
-            menu.appendChild(searchItem);
         }
         document.body.appendChild(menu);
         const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener("mousedown", close); } };
@@ -1376,12 +1388,53 @@ function _sortLorasMissingLast(loras, availabilityMap = null) {
     });
 }
 
-/** Merge two LoRA lists, dedup by name (second list wins on conflict), then sort by name. */
-function _mergeLoraLists(listA, listB) {
+function _applyPreferredLoraOrder(loras, preferredOrder) {
+    const src = Array.isArray(loras) ? loras : [];
+    const pref = Array.isArray(preferredOrder) ? preferredOrder : [];
+    if (!pref.length || !src.length) return src;
+
+    const preferredNames = pref
+        .map((item) => String(item?.name || item || "").trim())
+        .filter(Boolean);
+    if (!preferredNames.length) return src;
+
+    const out = [];
+    const used = new Set();
+
+    for (const pname of preferredNames) {
+        const idx = src.findIndex((item, i) => {
+            if (used.has(i)) return false;
+            return String(item?.name || "").trim() === pname;
+        });
+        if (idx >= 0) {
+            out.push(src[idx]);
+            used.add(idx);
+        }
+    }
+
+    for (let i = 0; i < src.length; i++) {
+        if (!used.has(i)) out.push(src[i]);
+    }
+
+    return out;
+}
+
+/** Merge two LoRA lists, dedup by name (second list wins on conflict), preserving preferred UI order when provided. */
+function _mergeLoraLists(listA, listB, preferredOrder = null) {
     const byName = new Map();
-    for (const l of listA) byName.set(l.name || "", l);
-    for (const l of listB) byName.set(l.name || "", l);
-    return _sortLorasByName([...byName.values()]);
+    const orderedNames = [];
+    const apply = (list) => {
+        for (const l of (Array.isArray(list) ? list : [])) {
+            const name = String(l?.name || "").trim();
+            if (!name) continue;
+            if (!byName.has(name)) orderedNames.push(name);
+            byName.set(name, l);
+        }
+    };
+    apply(listA);
+    apply(listB);
+    const merged = orderedNames.map((name) => byName.get(name)).filter(Boolean);
+    return _applyPreferredLoraOrder(merged, preferredOrder);
 }
 
 function _loraListSignature(list) {
@@ -1396,7 +1449,6 @@ function _loraListSignature(list) {
             const active = (l.active !== false) ? "1" : "0";
             return `${name}|${path}|${ms}|${cs}|${active}`;
         })
-        .sort()
         .join(",");
 }
 
@@ -1551,9 +1603,26 @@ function updateLoras(node) {
     const d = node._weExtracted;
     if (!d) return;
 
-    const lorasA = _sortLorasMissingLast(d.loras_a || [], d.lora_availability || null);
-    const lorasB = _sortLorasMissingLast(d.loras_b || [], d.lora_availability || null);
+    const lorasA = Array.isArray(d.loras_a) ? d.loras_a : [];
+    const lorasB = Array.isArray(d.loras_b) ? d.loras_b : [];
     const hasBoth = lorasA.length > 0 && lorasB.length > 0;
+
+    const moveInStack = (stackKey, index, delta) => {
+        const effectiveStack = stackKey === "b" ? "b" : "a";
+        const src = effectiveStack === "b"
+            ? (Array.isArray(d.loras_b) ? d.loras_b : [])
+            : (Array.isArray(d.loras_a) ? d.loras_a : []);
+        const from = Number(index);
+        const to = from + Number(delta || 0);
+        if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= src.length || to >= src.length) {
+            return;
+        }
+        const moved = src[from];
+        src.splice(from, 1);
+        src.splice(to, 0, moved);
+        updateLoras(node);
+        syncHidden(node);
+    };
 
     const noLorasMsg = () => makeEl("div", {
         color: "rgba(200, 200, 200, 0.5)", fontStyle: "italic",
@@ -1565,7 +1634,8 @@ function updateLoras(node) {
     if (!lorasA.length && !lorasB.length) return;
 
     const populateStack = (container, loras, stackKey) => {
-        for (const lora of loras) {
+        for (let index = 0; index < loras.length; index++) {
+            const lora = loras[index];
             const name = lora.name || "";
             const stateKey = stackKey ? `${stackKey}:${name}` : name;
             const avail = d.lora_availability?.[name] !== false;
@@ -1579,9 +1649,12 @@ function updateLoras(node) {
             const st = node._weLoraState[stateKey];
             lora._active = st.active;
             lora.model_strength = st.model_strength;
+            const stackForMove = stackKey || "a";
             const tag = makeLoraTag(lora, avail,
                 () => { st.active = !st.active; updateLoras(node); syncHidden(node); },
                 (v) => { st.model_strength = v; st.clip_strength = v; syncHidden(node); },
+                () => moveInStack(stackForMove, index, -1),
+                () => moveInStack(stackForMove, index, 1),
             );
             container.appendChild(tag);
         }
@@ -1744,7 +1817,7 @@ function syncHidden(node) {
         return normalized;
     };
     const serializeLoraList = (list, stackKey = "", stateMap = null) => {
-        const src = _sortLorasByName(Array.isArray(list) ? list : []);
+        const src = Array.isArray(list) ? list : [];
         const state = stateMap || node._weLoraState || {};
         return src
             .map((lora) => {
@@ -2497,44 +2570,37 @@ app.registerExtension({
                 }
                 return null;
             };
-            const _syncPullFromOptionMode = (updateVisible) => {
+            const _syncPullFromOptionMode = (recipeDataConnected) => {
                 const row = node._wePullModelSlotRow;
                 const sel = row?._inp;
                 if (!sel) return;
 
-                const wasVisible = node._weUpdateBtnVisibleState;
-                const hasPrevState = typeof wasVisible === "boolean";
-                const visibilityChanged = !hasPrevState || wasVisible !== updateVisible;
-                node._weUpdateBtnVisibleState = updateVisible;
+                const wasConnected = node._weRecipeDataConnectedState;
+                const hasPrevState = typeof wasConnected === "boolean";
+                const connectionChanged = !hasPrevState || wasConnected !== recipeDataConnected;
+                node._weRecipeDataConnectedState = recipeDataConnected;
 
                 const current = String(sel.value || node._wePullModelSlot || "");
                 const preferredConnected = node._weBuilderVariant === "wan"
                     ? _normalizePullModelPairStartKey(current && current !== NO_PULL_SLOT ? current : "model_a")
                     : _normalizePullModelSlotKey(current && current !== NO_PULL_SLOT ? current : "model_a");
 
-                const hasNone = [...sel.options].some((o) => o.value === NO_PULL_SLOT);
-                if (!updateVisible && !hasNone) {
-                    const noneOpt = document.createElement("option");
-                    noneOpt.value = NO_PULL_SLOT;
-                    noneOpt.textContent = "none";
-                    sel.insertBefore(noneOpt, sel.firstChild || null);
-                } else if (updateVisible && hasNone) {
-                    for (const opt of [...sel.options]) {
-                        if (opt.value === NO_PULL_SLOT) opt.remove();
-                    }
+                // Remove any stale "none" option that may exist from a previous version.
+                for (const opt of [...sel.options]) {
+                    if (opt.value === NO_PULL_SLOT) opt.remove();
                 }
 
-                // Auto-select defaults only when visibility actually changes and
+                // Auto-select defaults only when connection mode actually changes and
                 // never during workflow hydration (restore should win).
                 let nextVal = sel.value || current;
-                if (!node._weHydrating && visibilityChanged) {
-                    nextVal = updateVisible ? preferredConnected : NO_PULL_SLOT;
-                }
-                if (!node._weHydrating && updateVisible && nextVal === NO_PULL_SLOT) {
+                if (!node._weHydrating && connectionChanged) {
                     nextVal = preferredConnected;
                 }
-                if (!updateVisible && ![...sel.options].some((o) => o.value === nextVal)) {
-                    nextVal = NO_PULL_SLOT;
+                if (!node._weHydrating && nextVal === NO_PULL_SLOT) {
+                    nextVal = preferredConnected;
+                }
+                if (![...sel.options].some((o) => o.value === nextVal)) {
+                    nextVal = preferredConnected;
                 }
 
                 const prevVal = node._wePullModelSlot;
@@ -2562,7 +2628,9 @@ app.registerExtension({
                 }
                 const show = _isUpdateSourceHint(upstream);
                 node._weUpdateBtn.style.display = show ? "" : "none";
-                _syncPullFromOptionMode(show);
+                // Any connected recipe_data source (including Builder->Builder)
+                // must keep Pull From active so execute-time updates can flow.
+                _syncPullFromOptionMode(true);
             };
             const _deferUpdateWorkflowButtonRefresh = () => {
                 if (!node._weUpdateBtn) return;
@@ -4120,15 +4188,16 @@ app.registerExtension({
                 const oldIl = node._weInputLoras || { a: [], b: [] };
                 const isExtractorConnected = node._weIsConnectedWorkflowDataExtractor?.() === true;
                 const oldSig = isExtractorConnected
-                    ? `${_loraListSignature(oldIl.a)}||${_loraListSignature(oldIl.b)}`
+                    ? `${_loraListSignature(node._weExtracted?.loras_a || [])}||${_loraListSignature(node._weExtracted?.loras_b || [])}`
                     : _loraStacksSignature(oldWl, oldIl);
 
                 node._weWorkflowLoras = isExtractorConnected
                     ? {
-                        // Extractor-connected mode is manual-refresh only.
-                        // Keep workflow baseline stable across executions.
-                        a: [...(oldWl.a || [])],
-                        b: [...(oldWl.b || [])],
+                        // Keep extractor-connected baseline aligned with the
+                        // effective stack Python executed (UI truth), so queue
+                        // runs never reintroduce stale order/state.
+                        a: [...(info.workflow_loras_a || info.loras_a || node._weExtracted?.loras_a || oldWl.a || [])],
+                        b: [...(info.workflow_loras_b || info.loras_b || node._weExtracted?.loras_b || oldWl.b || [])],
                     }
                     : {
                         a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
@@ -4143,7 +4212,7 @@ app.registerExtension({
                 const mergedLorasB = _mergeLoraLists(node._weWorkflowLoras.b, node._weInputLoras.b);
 
                 const newSig = isExtractorConnected
-                    ? `${_loraListSignature(node._weInputLoras.a)}||${_loraListSignature(node._weInputLoras.b)}`
+                    ? `${_loraListSignature(info.loras_a || mergedLorasA)}||${_loraListSignature(info.loras_b || mergedLorasB)}`
                     : _loraStacksSignature(node._weWorkflowLoras, node._weInputLoras);
                 const lorasLocked = !!(node._weSectionLocks?.loras);
                 if (!lorasLocked && oldSig !== newSig) {
@@ -4161,8 +4230,8 @@ app.registerExtension({
                     // but always reflect latest merged LoRA stacks from execution.
                     node._weExtracted = {
                         ...(node._weExtracted || {}),
-                        loras_a: mergedLorasA,
-                        loras_b: mergedLorasB,
+                        loras_a: [...(info.loras_a || mergedLorasA)],
+                        loras_b: [...(info.loras_b || mergedLorasB)],
                         lora_availability: info.lora_availability || node._weExtracted?.lora_availability || {},
                     };
                     node._wePopulated = true;
@@ -4267,13 +4336,13 @@ app.registerExtension({
                 const oldWl = this._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = this._weInputLoras || { a: [], b: [] };
                 const oldSig = isExtractorConnected
-                    ? `${_loraListSignature(oldIl.a)}||${_loraListSignature(oldIl.b)}`
+                    ? `${_loraListSignature(this._weExtracted?.loras_a || [])}||${_loraListSignature(this._weExtracted?.loras_b || [])}`
                     : _loraStacksSignature(oldWl, oldIl);
 
                 this._weWorkflowLoras = isExtractorConnected
                     ? {
-                        a: [...(oldWl.a || [])],
-                        b: [...(oldWl.b || [])],
+                        a: [...(info.workflow_loras_a || info.loras_a || this._weExtracted?.loras_a || oldWl.a || [])],
+                        b: [...(info.workflow_loras_b || info.loras_b || this._weExtracted?.loras_b || oldWl.b || [])],
                     }
                     : {
                         a: [...(info.workflow_loras_a || info.loras_a || oldWl.a || [])],
@@ -4288,7 +4357,7 @@ app.registerExtension({
                 const mergedLorasB = _mergeLoraLists(this._weWorkflowLoras.b, this._weInputLoras.b);
 
                 const newSig = isExtractorConnected
-                    ? `${_loraListSignature(this._weInputLoras.a)}||${_loraListSignature(this._weInputLoras.b)}`
+                    ? `${_loraListSignature(info.loras_a || mergedLorasA)}||${_loraListSignature(info.loras_b || mergedLorasB)}`
                     : _loraStacksSignature(this._weWorkflowLoras, this._weInputLoras);
                 const lorasLocked = !!(this._weSectionLocks?.loras);
                 if (!lorasLocked && oldSig !== newSig) {
@@ -4305,8 +4374,8 @@ app.registerExtension({
                 if (isExtractorConnected) {
                     this._weExtracted = {
                         ...(this._weExtracted || {}),
-                        loras_a: mergedLorasA,
-                        loras_b: mergedLorasB,
+                        loras_a: [...(info.loras_a || mergedLorasA)],
+                        loras_b: [...(info.loras_b || mergedLorasB)],
                         lora_availability: info.lora_availability || this._weExtracted?.lora_availability || {},
                     };
                     this._wePopulated = true;
@@ -4597,8 +4666,8 @@ app.registerExtension({
             if (hasAuthoritativeOverrides || hasSavedLoraContext) {
                 // UI state is the sole source of truth on restore.
                 // Intentionally ignore we_extracted_cache because it may be stale.
-                const mergedLorasA = _mergeLoraLists(savedWorkflowLoras?.a || [], savedInputLoras?.a || []);
-                const mergedLorasB = _mergeLoraLists(savedWorkflowLoras?.b || [], savedInputLoras?.b || []);
+                const mergedLorasA = _mergeLoraLists(savedWorkflowLoras?.a || [], savedInputLoras?.a || [], ovObj?.loras_a || []);
+                const mergedLorasB = _mergeLoraLists(savedWorkflowLoras?.b || [], savedInputLoras?.b || [], ovObj?.loras_b || []);
                 node._weExtracted = buildExtractedFromOverrides(ovObj, {
                     loras_a: mergedLorasA,
                     loras_b: mergedLorasB,
