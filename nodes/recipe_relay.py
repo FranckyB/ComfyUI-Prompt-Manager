@@ -258,10 +258,7 @@ class WorkflowRelay:
                 "batch_size":      ("INT",          {"forceInput": True, "tooltip": "Override batch size"}),
                 "length":          ("INT",          {"forceInput": True, "tooltip": "Override video length"}),
                 "model_name":      ("STRING",       {"forceInput": True, "tooltip": "Optional model name/path. Resolves and writes recipe model field(s)."}),
-                "ckpt":            (cls._CKPT_ENUM, {"forceInput": True, "tooltip": "Optional checkpoint model name override."}),
-                "unet":            (cls._UNET_ENUM, {"forceInput": True, "tooltip": "Optional UNET/diffusion model name override."}),
-                "load_vae":        (cls._VAE_ENUM,  {"forceInput": True, "tooltip": "Optional VAE name override for Load VAE."}),
-                "load_clip":       (cls._CLIP_ENUM, {"forceInput": True, "tooltip": "Optional CLIP name override for Load CLIP."}),
+                "model_data":      (ANY_TYPE,       {"forceInput": True, "tooltip": "Optional structured model payload from Recipe Model Picker."}),
             },
         }
 
@@ -285,7 +282,7 @@ class WorkflowRelay:
         "lora_stack",
         "width", "height", "batch_size", "length",
         "model_name",
-        "ckpt", "unet", "vae", "clip",
+        "ckpt_name", "unet_name", "vae_name", "clip_name",
     )
     FUNCTION = "unpack"
     CATEGORY = "Prompt Manager"
@@ -649,10 +646,27 @@ class WorkflowRelay:
         final_pos = (final_selected.get('positive_prompt', '') if isinstance(final_selected, dict) else '') or wf.get('positive_prompt', '') or v2_positive
         final_neg = (final_selected.get('negative_prompt', '') if isinstance(final_selected, dict) else '') or wf.get('negative_prompt', '') or v2_negative
 
-        ckpt_name_in = kwargs.get('ckpt')
-        unet_name_in = kwargs.get('unet')
-        vae_name_in = kwargs.get('load_vae')
-        clip_name_in = kwargs.get('load_clip')
+        raw_model_data = kwargs.get('model_data')
+        if isinstance(raw_model_data, str):
+            try:
+                model_data_in = json.loads(raw_model_data)
+            except Exception:
+                model_data_in = {}
+        elif isinstance(raw_model_data, dict):
+            model_data_in = dict(raw_model_data)
+        else:
+            model_data_in = {}
+
+        ckpt_name_in = str(model_data_in.get('ckpt_name', '') or '').strip()
+        unet_name_in = str(model_data_in.get('unet_name', '') or '').strip()
+        vae_name_in = str(model_data_in.get('vae_name', model_data_in.get('vae', '')) or '').strip()
+        clip_name_in = str(model_data_in.get('clip_name', '') or '').strip()
+        if not clip_name_in and isinstance(model_data_in.get('clip'), list) and model_data_in.get('clip'):
+            clip_name_in = str(model_data_in.get('clip')[0] or '').strip()
+        model_name_from_data = str(model_data_in.get('model', '') or '').strip()
+        loader_type_from_data = str(model_data_in.get('loader_type', '') or '').strip().lower()
+        family_from_data = str(model_data_in.get('family', '') or '').strip()
+        clip_type_from_data = str(model_data_in.get('clip_type', '') or '').strip()
 
         selected_model_raw = (final_selected.get('model', '') if isinstance(final_selected, dict) else '') or wf.get('model_a', '') or v2_model_name or ''
         selected_vae_raw = (final_selected.get('vae', '') if isinstance(final_selected, dict) else '') or wf.get('vae', '') or v2_vae or ''
@@ -668,19 +682,36 @@ class WorkflowRelay:
         selected_vae_name = str(selected_vae_raw or '').strip()
         selected_clip_name = str(selected_clip_raw or '').strip()
 
-        if isinstance(unet_name_in, str) and unet_name_in.strip() and selected_loader_type in ('unet', 'diffusion'):
-            selected_model_name = unet_name_in.strip()
-        if isinstance(ckpt_name_in, str) and ckpt_name_in.strip() and selected_loader_type == 'checkpoint':
-            selected_model_name = ckpt_name_in.strip()
-        if isinstance(vae_name_in, str) and vae_name_in.strip():
-            selected_vae_name = vae_name_in.strip()
-        if isinstance(clip_name_in, str) and clip_name_in.strip():
-            selected_clip_name = clip_name_in.strip()
+        # Structured model_data / combo-name overrides are authoritative.
+        if model_name_from_data:
+            selected_model_name = model_name_from_data
+        if loader_type_from_data in ('checkpoint', 'unet', 'diffusion'):
+            selected_loader_type = 'unet' if loader_type_from_data == 'diffusion' else loader_type_from_data
+
+        # If checkpoint/unet names are provided, update model name and loader type
+        # even when recipe_data did not previously declare a loader type.
+        if ckpt_name_in:
+            selected_model_name = ckpt_name_in
+            selected_loader_type = 'checkpoint'
+        elif unet_name_in:
+            selected_model_name = unet_name_in
+            selected_loader_type = 'unet'
+
+        if vae_name_in:
+            selected_vae_name = vae_name_in
+        if clip_name_in:
+            selected_clip_name = clip_name_in
 
         if int(wf.get('version', 0) or 0) >= 2:
             target_block = _selected_v2_block(wf, selected_slot, create=True)
             if selected_model_name:
                 target_block['model'] = selected_model_name
+            if selected_loader_type:
+                target_block['loader_type'] = selected_loader_type
+            if family_from_data:
+                target_block['family'] = family_from_data
+            if clip_type_from_data:
+                target_block['clip_type'] = clip_type_from_data
             if selected_vae_name:
                 target_block['vae'] = selected_vae_name
             if selected_clip_name:
@@ -688,18 +719,33 @@ class WorkflowRelay:
 
         if selected_model_name:
             wf['model_a'] = selected_model_name
+        if selected_loader_type:
+            wf['loader_type'] = selected_loader_type
+        if family_from_data:
+            wf['family'] = family_from_data
+        if clip_type_from_data:
+            wf['clip_type'] = clip_type_from_data
         if selected_vae_name:
             wf['vae'] = selected_vae_name
         if selected_clip_name:
             wf['clip'] = [selected_clip_name]
 
+        if selected_model_name:
+            detected_family = get_model_family(selected_model_name)
+            if detected_family:
+                wf['family'] = detected_family
+                if int(wf.get('version', 0) or 0) >= 2:
+                    _selected_v2_block(wf, selected_slot, create=True)['family'] = detected_family
+
         # -- Extract all output values -------------------------------
         model_name = final_model_name
 
-        unet_out = selected_model_name if selected_loader_type in ('unet', 'diffusion') else None
-        ckpt_out = selected_model_name if selected_loader_type == 'checkpoint' else None
-        vae_name_out = selected_vae_name or None
-        clip_name_out = selected_clip_name or None
+        # Always emit string outputs for combo-name sockets to avoid None flowing
+        # into downstream standard loader nodes.
+        ckpt_out = ckpt_name_in or (selected_model_name if selected_loader_type == 'checkpoint' else "")
+        unet_out = unet_name_in or (selected_model_name if selected_loader_type in ('unet', 'diffusion') else "")
+        vae_name_out = selected_vae_name or ""
+        clip_name_out = selected_clip_name or ""
 
         return (
             wf,
