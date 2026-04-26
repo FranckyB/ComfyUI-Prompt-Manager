@@ -2728,14 +2728,14 @@ app.registerExtension({
     name: "RecipeBuilder",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "RecipeBuilder" && nodeData.name !== "RecipeBuilderWan" && nodeData.name !== "RecipeBuilderMulti") return;
+        if (nodeData.name !== "RecipeBuilder") return;
 
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = origCreated?.apply(this, arguments);
             const node = this;
-            const isWanBuilder = nodeData.name === "RecipeBuilderWan";
-            const isMultiBuilder = nodeData.name === "RecipeBuilderMulti";
+            const isWanBuilder = false;
+            const isMultiBuilder = nodeData.name === "RecipeBuilder";
             node._weBuilderVariant = isWanBuilder ? "wan" : "simple";
             node._weUseSlotProfiles = isMultiBuilder === true;
 
@@ -2953,15 +2953,8 @@ app.registerExtension({
                 return false;
             };
 
-            // -- "Update Recipe" button — pull data from source node --
-            const updateBtn = makeEl("button", {
-                width: "100%", padding: "6px 0",
-                background: C.accent, color: "#fff", border: "none",
-                borderRadius: "4px", cursor: "pointer",
-                fontWeight: "bold", fontSize: "13px",
-                fontFamily: "inherit", marginBottom: "2px",
-            }, "Update Recipe");
-            node._weUpdateBtn = updateBtn;
+            // Execute-only flow: no manual Update Recipe button.
+            node._weUpdateBtn = null;
 
             const pullSlotOptions = isWanBuilder
                 ? [...MODEL_SLOT_PAIR_OPTIONS]
@@ -3204,645 +3197,17 @@ app.registerExtension({
                 if (row._setOriginal) row._setOriginal(nextVal);
                 if (!node._weHydrating && prevVal !== nextVal) syncHidden(node);
             };
-            const _refreshUpdateWorkflowButtonVisibility = () => {
-                if (!node._weUpdateBtn) return;
-                const wfInput = _findWorkflowDataInput(node);
-                if (wfInput?.link == null) {
-                    node._weUpdateBtn.style.display = "none";
-                    _syncPullFromOptionMode(false);
-                    return;
-                }
-                const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
-                // During initial graph load, links can exist before upstream node
-                // resolution is fully settled. Keep the button visible for linked
-                // recipe_data in that transient state and refine on the next pass.
-                if (!upstream) {
-                    node._weUpdateBtn.style.display = "";
-                    _syncPullFromOptionMode(true);
-                    return;
-                }
-                const show = _isUpdateSourceHint(upstream);
-                node._weUpdateBtn.style.display = show ? "" : "none";
-                // Any connected recipe_data source (including Builder->Builder)
-                // must keep Pull From active so execute-time updates can flow.
-                _syncPullFromOptionMode(true);
-            };
-            const _deferUpdateWorkflowButtonRefresh = () => {
-                if (!node._weUpdateBtn) return;
-                requestAnimationFrame(() => {
-                    if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
-                    if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
-                });
-            };
-            const _refreshUpdateWorkflowTooltip = () => {
-                if (!node._weUpdateBtn) return;
-                if (node._weUpdateBtn.style.display === "none") {
-                    node._weUpdateBtn.title = "";
-                    return;
-                }
-                const wfInput = _findWorkflowDataInput(node);
-                if (wfInput?.link == null) {
-                    node._weUpdateBtn.title = "Connect recipe_data, execute upstream nodes, then click Update Recipe.";
-                    return;
-                }
-
-                const sourceNode = _resolveUpstreamNodeHint(node.graph, wfInput.link);
-                if (!sourceNode) {
-                    node._weUpdateBtn.title = "Execute upstream nodes, then click Update Recipe.";
-                    return;
-                }
-
-                node._weUpdateBtn.title = "Pull and refresh from connected workflow source.";
-            };
             const _isConnectedWorkflowDataExtractor = () => {
                 const wfInput = _findWorkflowDataInput(node);
                 if (wfInput?.link == null) return false;
                 const upstream = _resolveUpstreamNodeHint(node.graph, wfInput.link);
                 return _isUpdateSourceHint(upstream);
             };
-            node._weRefreshUpdateWorkflowTooltip = _refreshUpdateWorkflowTooltip;
-            node._weRefreshUpdateWorkflowButtonVisibility = _refreshUpdateWorkflowButtonVisibility;
-            node._weDeferUpdateWorkflowButtonRefresh = _deferUpdateWorkflowButtonRefresh;
+            node._weRefreshUpdateWorkflowTooltip = null;
+            node._weRefreshUpdateWorkflowButtonVisibility = null;
+            node._weDeferUpdateWorkflowButtonRefresh = null;
             node._weIsConnectedWorkflowDataExtractor = _isConnectedWorkflowDataExtractor;
-            _refreshUpdateWorkflowButtonVisibility();
-            _refreshUpdateWorkflowTooltip();
-            _deferUpdateWorkflowButtonRefresh();
-
-            updateBtn.onmouseenter = () => { updateBtn.style.background = C.accentDim; };
-            updateBtn.onmouseleave = () => { updateBtn.style.background = C.accent; };
-            updateBtn.onclick = async () => {
-                const isWanBuilder = node._weBuilderVariant === "wan";
-                const selectedPullSlot = node._weUseSlotProfiles
-                    ? _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a")
-                    : node._weBuilderVariant === "wan"
-                        ? _normalizePullModelPairStartKey(node._wePullModelSlotRow?._inp?.value ?? node._wePullModelSlot ?? NO_PULL_SLOT)
-                        : _normalizePullModelSlotKey(node._wePullModelSlotRow?._inp?.value ?? node._wePullModelSlot ?? NO_PULL_SLOT);
-                node._wePullModelSlot = selectedPullSlot;
-                if (node._wePullModelSlotRow?._inp) {
-                    node._wePullModelSlotRow._inp.value = selectedPullSlot;
-                }
-
-                // Explicit clear mode: Pull From = none should clear Builder UI
-                // and must not fetch or infer data from any connected source.
-                if (!node._weUseSlotProfiles && selectedPullSlot === NO_PULL_SLOT) {
-                    try {
-                        updateBtn.disabled = true;
-                        updateBtn.textContent = "Clearing...";
-
-                        _showError(node, null);
-                        const cleared = {
-                            positive_prompt: "",
-                            negative_prompt: "",
-                            loras_a: [],
-                            loras_b: [],
-                            model_a: "",
-                            model_b: "",
-                            model_slot: NO_PULL_SLOT,
-                            pull_model_slot: NO_PULL_SLOT,
-                            vae: { name: "", source: "workflow_data" },
-                            clip: { names: [], type: "", source: "workflow_data" },
-                            sampler: {
-                                steps_a: 20,
-                                steps_b: isWanBuilder ? 3 : undefined,
-                                cfg: 5.0,
-                                denoise: 1.0,
-                                seed_a: 0,
-                                seed_b: isWanBuilder ? 0 : undefined,
-                                sampler_name: "euler",
-                                scheduler: "simple",
-                            },
-                            resolution: {
-                                width: 768,
-                                height: 1280,
-                                batch_size: 1,
-                                length: isWanBuilder ? 81 : null,
-                            },
-                            model_family: node._weFamily || "sdxl",
-                        };
-
-                        node._weWorkflowPrompts = { positive: "", negative: "" };
-                        node._weExtracted = cleared;
-                        node._wePopulated = true;
-                        node._weWorkflowLoras = { a: [], b: [] };
-                        node._weInputLoras = node._weInputLoras || { a: [], b: [] };
-                        node._weExtracted.loras_a = [];
-                        node._weExtracted.loras_b = [];
-                        node._weLoraState = {};
-                        node._weOverrides = {};
-                        node.properties = node.properties || {};
-                        node.properties.we_extracted_cache = JSON.stringify(cleared);
-                        delete node.properties.we_override_data;
-                        delete node.properties.we_lora_state;
-                        await updateUI(node);
-                        syncHidden(node);
-                        node.setDirtyCanvas(true, true);
-                        app.graph.setDirtyCanvas(true, true);
-                    } catch (e) {
-                        console.error("[RecipeBuilder] Update Recipe clear error:", e);
-                        _showError(node, "Failed to clear builder data for Pull From = none.");
-                    } finally {
-                        updateBtn.disabled = false;
-                        updateBtn.textContent = "Update Recipe";
-                    }
-                    return;
-                }
-
-                // 1. Find a source node — prefer one connected via recipe_data input
-                // Supported: PromptExtractor, RecipeExtractor, RecipeBuilder, RecipeRelay.
-                const _isSupportedSource = (n) => {
-                    if (!n) return false;
-                    const ccNorm = _normalizeNodeKind(n.comfyClass);
-                    const tyNorm = _normalizeNodeKind(n.type);
-                    return ccNorm === "promptextractor" || ccNorm === "recipeextractor" ||
-                        tyNorm === "promptextractor" || tyNorm === "recipeextractor" ||
-                        ccNorm === "promptmanageradvanced" || tyNorm === "promptmanageradvanced" ||
-                        ccNorm === "recipemanager" || tyNorm === "recipemanager" ||
-                        ccNorm === "recipebuilder" || tyNorm === "recipebuilder" ||
-                        ccNorm === "recipebuilderwan" || tyNorm === "recipebuilderwan" ||
-                        ccNorm === "recipebuildermulti" || tyNorm === "recipebuildermulti" ||
-                        ccNorm === "reciperelay" || tyNorm === "reciperelay";
-                };
-                const _isRerouteNode = (n) => {
-                    if (!n) return false;
-                    const cc = (n.comfyClass || "").toLowerCase();
-                    const ty = (n.type || "").toLowerCase();
-                    return cc.includes("reroute") || ty.includes("reroute");
-                };
-                const _resolveUpstreamSource = (graph, startLinkId) => {
-                    if (!graph || startLinkId == null) return null;
-                    let linkId = startLinkId;
-                    const seen = new Set();
-                    for (let hop = 0; hop < 24; hop++) {
-                        if (linkId == null || seen.has(linkId)) break;
-                        seen.add(linkId);
-                        const linkInfo = graph.links?.[linkId];
-                        if (!linkInfo) break;
-                        const srcNode = graph.getNodeById?.(linkInfo.origin_id);
-                        if (!srcNode) break;
-                        if (_isSupportedSource(srcNode)) return srcNode;
-                        if (!_isRerouteNode(srcNode)) return null;
-
-                        // Follow reroute input upstream.
-                        const in0 = srcNode.inputs?.[0];
-                        linkId = in0?.link ?? null;
-                    }
-                    return null;
-                };
-                let sourceNode = null;
-                const wfInput = _findWorkflowDataInput(node);
-                if (wfInput?.link != null) {
-                    sourceNode = _resolveUpstreamSource(node.graph, wfInput.link);
-                }
-                // Fallback only when recipe_data isn't connected.
-                if (wfInput?.link == null && !sourceNode && app.graph?._nodes) {
-                    for (const n of app.graph._nodes) {
-                        if (_isSupportedSource(n)) {
-                            sourceNode = n;
-                            break;
-                        }
-                    }
-                }
-                if (!sourceNode) {
-                    _showError(node, "No supported source connected to recipe_data (PromptExtractor, RecipeExtractor, PromptManagerAdvanced, RecipeManager, RecipeBuilder, or RecipeRelay).");
-                    return;
-                }
-
-                updateBtn.disabled = true;
-                updateBtn.textContent = "Fetching...";
-                try {
-                    let extracted = null;
-                    let pulledSlotProfiles = null;
-                    const sourceClass = sourceNode?.comfyClass || sourceNode?.type || "";
-                    const sourceClassNorm = _normalizeNodeKind(sourceClass);
-                    const isBuilderSource = sourceClassNorm === "recipebuilder" || sourceClassNorm === "recipebuilderwan" || sourceClassNorm === "recipebuildermulti";
-                    const isContextSource = sourceClassNorm === "reciperelay";
-                    const isPmaSource = sourceClassNorm === "promptmanageradvanced" || sourceClassNorm === "recipemanager";
-
-                    console.log("[WB UpdateTrace] Update Recipe start", {
-                        nodeId: node.id,
-                        sourceNodeId: sourceNode?.id,
-                        sourceClass,
-                    });
-
-                    if (isBuilderSource) {
-                        // Prefer server-side WB cache from last execution.
-                        try {
-                            const cacheResp = await fetch(
-                                `/workflow-builder/get-extracted-data?node_id=${encodeURIComponent(sourceNode.id)}`
-                            );
-                            const cacheData = await cacheResp.json();
-                            if (cacheData.extracted) extracted = cacheData.extracted;
-                        } catch { /* fall through */ }
-
-                        // Fallback to in-memory node state when available.
-                        if (!extracted && sourceNode._weExtracted) {
-                            extracted = sourceNode._weExtracted;
-                        }
-
-                        // Fallback to persisted property cache.
-                        if (!extracted) {
-                            const cachedStr = sourceNode.properties?.we_extracted_cache;
-                            if (cachedStr) {
-                                try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
-                            }
-                        }
-
-                        if (!extracted) {
-                            _showError(node, "Connected RecipeBuilder has no cached extracted data yet. Execute it once, then click Update Recipe.");
-                            return;
-                        }
-
-                        // Merge source Builder's live UI overrides so chaining
-                        // Builder -> Builder reflects current tweaks even before
-                        // the source Builder is executed again.
-                        const ovWidget = sourceNode.widgets?.find(w => w.name === "override_data");
-                        const ovJson = (ovWidget?.value || sourceNode.properties?.we_override_data || "{}");
-                        try {
-                            const ov = JSON.parse(ovJson || "{}");
-                            if (ov && typeof ov === "object") {
-                                if (Object.prototype.hasOwnProperty.call(ov, "positive_prompt")) {
-                                    extracted.positive_prompt = ov.positive_prompt || "";
-                                }
-                                if (Object.prototype.hasOwnProperty.call(ov, "negative_prompt")) {
-                                    extracted.negative_prompt = ov.negative_prompt || "";
-                                }
-                                if (Object.prototype.hasOwnProperty.call(ov, "model_a")) {
-                                    extracted.model_a = ov.model_a || "";
-                                }
-                                if (Object.prototype.hasOwnProperty.call(ov, "model_b")) {
-                                    extracted.model_b = ov.model_b || "";
-                                }
-
-                                if (Object.prototype.hasOwnProperty.call(ov, "vae")) {
-                                    const curVae = (extracted.vae && typeof extracted.vae === "object")
-                                        ? extracted.vae
-                                        : { name: "", source: "recipe_data" };
-                                    extracted.vae = {
-                                        ...curVae,
-                                        name: ov.vae || "",
-                                        source: ov.vae ? "override" : curVae.source || "recipe_data",
-                                    };
-                                }
-
-                                if (Object.prototype.hasOwnProperty.call(ov, "clip_names")) {
-                                    const curClip = (extracted.clip && typeof extracted.clip === "object")
-                                        ? extracted.clip
-                                        : { names: [], type: "", source: "recipe_data" };
-                                    const clipNames = Array.isArray(ov.clip_names)
-                                        ? ov.clip_names
-                                        : (ov.clip_names ? [ov.clip_names] : []);
-                                    extracted.clip = {
-                                        ...curClip,
-                                        names: clipNames,
-                                        source: clipNames.length ? "override" : (curClip.source || "recipe_data"),
-                                    };
-                                }
-
-                                const s = { ...(extracted.sampler || {}) };
-                                for (const k of ["steps_a", "steps_b", "cfg", "denoise", "seed_a", "seed_b", "sampler_name", "scheduler"]) {
-                                    if (Object.prototype.hasOwnProperty.call(ov, k)) s[k] = ov[k];
-                                }
-                                extracted.sampler = s;
-
-                                const r = { ...(extracted.resolution || {}) };
-                                if (Object.prototype.hasOwnProperty.call(ov, "width")) r.width = ov.width;
-                                if (Object.prototype.hasOwnProperty.call(ov, "height")) r.height = ov.height;
-                                if (Object.prototype.hasOwnProperty.call(ov, "batch_size")) r.batch_size = ov.batch_size;
-                                if (Object.prototype.hasOwnProperty.call(ov, "length")) r.length = ov.length;
-                                extracted.resolution = r;
-
-                                if (ov._family) {
-                                    extracted.model_family = ov._family;
-                                    extracted.model_family_label = ov._family;
-                                }
-                            }
-                        } catch (e) {
-                            console.warn("[RecipeBuilder] Failed to merge source builder override_data:", e);
-                        }
-                    } else if (isContextSource) {
-                        // Pull recipe_data from RecipeRelay output cache.
-                        // This supports Builder -> Context -> Builder update flows.
-                        let wfData = null;
-                        const wfOutIdx = sourceNode.outputs?.findIndex(o => o.name === "recipe_data");
-                        if (wfOutIdx >= 0) {
-                            const out = sourceNode.outputs[wfOutIdx];
-                            wfData = out?._data ?? out?.value ?? null;
-                        }
-
-                        if (!wfData) {
-                            _showError(node, "Connected RecipeRelay has no cached recipe_data yet. Execute upstream nodes, then click Update Recipe.");
-                            return;
-                        }
-
-                        if (node._weUseSlotProfiles) {
-                            pulledSlotProfiles = buildSlotProfilesFromWorkflowData(wfData);
-                        }
-
-                        const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
-                        extracted = parseWorkflowData(wfJson, selectedPullSlot || "model_a", node._weBuilderVariant || "simple");
-                        if (!extracted) {
-                            _showError(node, "Connected RecipeRelay recipe_data is unavailable or invalid. Execute upstream nodes, then click Update Recipe.");
-                            return;
-                        }
-                    } else if (isPmaSource) {
-                        let wfData = null;
-                        const wfOutIdx = sourceNode.outputs?.findIndex(o => o.name === "recipe_data");
-                        if (wfOutIdx >= 0) {
-                            const out = sourceNode.outputs[wfOutIdx];
-                            wfData = out?._data ?? out?.value ?? null;
-                        }
-
-                        if (!wfData && sourceNode.lastWorkflowData) {
-                            wfData = sourceNode.lastWorkflowData;
-                        }
-
-                        if (wfData) {
-                            if (node._weUseSlotProfiles) {
-                                pulledSlotProfiles = buildSlotProfilesFromWorkflowData(wfData);
-                            }
-                            const wfJson = (typeof wfData === "string") ? wfData : JSON.stringify(wfData);
-                            extracted = parseWorkflowData(wfJson, selectedPullSlot || "model_a", node._weBuilderVariant || "simple");
-                        }
-
-                        if (!extracted) {
-                            const textWidget = sourceNode.widgets?.find(w => w.name === "text");
-                            const promptText = String(textWidget?.value || "");
-
-                            const toLora = (l) => {
-                                const name = String(l?.name || "").trim();
-                                if (!name) return null;
-                                const modelStrength = Number(l?.model_strength ?? l?.strength ?? 1.0);
-                                const clipStrength = Number(l?.clip_strength ?? l?.strength ?? modelStrength);
-                                return {
-                                    name,
-                                    model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
-                                    clip_strength: Number.isFinite(clipStrength) ? clipStrength : 1.0,
-                                    active: l?.active !== false,
-                                };
-                            };
-                            const normalizeList = (arr) => (Array.isArray(arr) ? arr.map(toLora).filter(Boolean) : []);
-                            const mergeByName = (a, b) => {
-                                const out = [];
-                                const seen = new Set();
-                                for (const item of [...a, ...b]) {
-                                    const key = String(item?.name || "").toLowerCase();
-                                    if (!key || seen.has(key)) continue;
-                                    seen.add(key);
-                                    out.push(item);
-                                }
-                                return out;
-                            };
-
-                            const savedA = normalizeList(sourceNode.savedLorasA || []);
-                            const savedB = normalizeList(sourceNode.savedLorasB || []);
-                            const currentA = normalizeList(sourceNode.currentLorasA || []);
-                            const currentB = normalizeList(sourceNode.currentLorasB || []);
-
-                            extracted = {
-                                positive_prompt: promptText,
-                                negative_prompt: "",
-                                loras_a: mergeByName(savedA, currentA),
-                                loras_b: mergeByName(savedB, currentB),
-                                model_a: "",
-                                model_b: "",
-                                vae: { name: "", source: "recipe_data" },
-                                clip: { names: [], type: "", source: "recipe_data" },
-                                sampler: {
-                                    steps_a: 20,
-                                    cfg: 5.0,
-                                    seed_a: 0,
-                                    sampler_name: "euler",
-                                    scheduler: "simple",
-                                },
-                                resolution: { width: 768, height: 1280, batch_size: 1, length: null },
-                                model_family: "sdxl",
-                            };
-                        }
-
-                        if (extracted) {
-                            extracted._source = (sourceClassNorm === "recipemanager") ? "RecipeManager" : "PromptManagerAdvanced";
-                        }
-                    } else {
-
-                        // Determine extractor's current file for staleness check
-                        const peImageW = sourceNode.widgets?.find(w => w.name === "image");
-                        const peSourceW = sourceNode.widgets?.find(w => w.name === "source_folder");
-                        const peFilename = peImageW?.value || "";
-                        const peSource = peSourceW?.value || "input";
-
-                        // 2a. Try execution cache (includes merged LoRA inputs)
-                        //     Only use if the cached file matches the current selection.
-                        try {
-                            const cacheResp = await fetch(
-                                `/prompt-extractor/get-extracted-data?node_id=${encodeURIComponent(sourceNode.id)}`
-                            );
-                            const cacheData = await cacheResp.json();
-                            if (cacheData.extracted) {
-                                console.log("[WB UpdateTrace] extractor cache payload", {
-                                    sourceNodeId: sourceNode.id,
-                                    sourceFile: cacheData.extracted._source_file,
-                                    sourceFolder: cacheData.extracted._source_folder,
-                                    resolution: cacheData.extracted.resolution || null,
-                                });
-                                const cachedFile = cacheData.extracted._source_file || "";
-                                const cachedFolder = cacheData.extracted._source_folder || "input";
-                                if (cachedFile === peFilename && cachedFolder === peSource) {
-                                    extracted = cacheData.extracted;
-                                } else {
-                                    console.log("[RecipeBuilder] Execution cache stale — file changed");
-                                }
-                            }
-                        } catch { /* fall through */ }
-
-                        // 2b. Try client-side cache (set by PE JS on file selection)
-                        if (!extracted) {
-                            const cachedStr = sourceNode.properties?.pe_extracted_data;
-                            if (cachedStr) {
-                                try { extracted = JSON.parse(cachedStr); } catch { extracted = null; }
-                            }
-                        }
-
-                        // Always refresh resolution from live preview extraction.
-                        // This keeps Update Recipe aligned with current media size
-                        // even when using stale cached extractor payloads.
-                        let previewExtracted = null;
-                        if (peFilename && peFilename !== "(none)") {
-                            try {
-                                const resp = await fetch(
-                                    `/prompt-extractor/extract-preview?filename=${encodeURIComponent(peFilename)}&source=${encodeURIComponent(peSource)}`
-                                );
-                                const data = await resp.json();
-                                previewExtracted = data.extracted || null;
-                                console.log("[WB UpdateTrace] extractor preview payload", {
-                                    filename: peFilename,
-                                    source: peSource,
-                                    resolution: previewExtracted?.resolution || null,
-                                    isVideo: previewExtracted?.is_video,
-                                    error: data.error || null,
-                                });
-                                if (!previewExtracted && !extracted) {
-                                    _showError(node, data.error || "No metadata found in selected file.");
-                                    return;
-                                }
-                            } catch (e) {
-                                console.warn("[RecipeBuilder] Preview refresh failed:", e);
-                            }
-                        }
-
-                        if (previewExtracted) {
-                            if (!extracted) {
-                                extracted = previewExtracted;
-                            } else {
-                                extracted.resolution = {
-                                    ...(extracted.resolution || {}),
-                                    ...(previewExtracted.resolution || {}),
-                                };
-                            }
-                        }
-
-                        console.log("[WB UpdateTrace] merged extracted for process", {
-                            resolution: extracted?.resolution || null,
-                            model_family: extracted?.model_family || extracted?.family || null,
-                            sourceFile: extracted?._source_file || null,
-                        });
-
-                        if (!extracted) {
-                            if (!peFilename || peFilename === "(none)") {
-                                _showError(node, "PromptExtractor has no file selected.");
-                            } else {
-                                _showError(node, "No extracted data available from PromptExtractor.");
-                            }
-                            return;
-                        }
-                    }
-
-                    // 3. Process through WB Python (matches execute() behavior)
-                    const processResp = await fetch("/workflow-builder/process-extracted", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ extracted }),
-                    });
-                    const processData = await processResp.json();
-                    console.log("[WB UpdateTrace] process-extracted response", {
-                        error: processData.error || null,
-                        resolution: processData.extracted?.resolution || extracted?.resolution || null,
-                    });
-                    if (processData.error) {
-                        _showError(node, processData.error);
-                        return;
-                    }
-                    const processed = processData.extracted || extracted;
-                    if (processed && typeof processed === "object") {
-                        processed.pull_model_slot = selectedPullSlot;
-                        processed.model_slot = selectedPullSlot;
-                    }
-                    const sectionLocks = node._weSectionLocks || {};
-                    const lorasLocked = !!sectionLocks.loras;
-                    const positiveLocked = !!sectionLocks.positive;
-                    const negativeLocked = !!sectionLocks.negative;
-
-                    if (node._weUseSlotProfiles && pulledSlotProfiles) {
-                        const currentProfiles = _normalizeSlotProfiles(node._weSlotProfiles);
-                        const incomingProfiles = _normalizeSlotProfiles(pulledSlotProfiles);
-
-                        // Merge per-slot incoming data while honoring lock state.
-                        const mergedProfiles = _emptySlotProfiles();
-                        for (const slot of MODEL_SLOT_KEYS) {
-                            const cur = currentProfiles[slot] || _makeEmptySlotProfile();
-                            const inc = incomingProfiles[slot] || _makeEmptySlotProfile();
-                            mergedProfiles[slot] = mergeSlotProfileWithLocks(cur, inc);
-                        }
-
-                        const activeSlot = _normalizeModelSlotKey(selectedPullSlot || node._weActiveModelSlot || "model_a");
-                        const activeProfile = mergedProfiles[activeSlot] || _makeEmptySlotProfile();
-                        const activeOv = {
-                            ...(activeProfile.ov || {}),
-                            _slot_profiles: mergedProfiles,
-                            _active_model_slot: activeSlot,
-                            _send_model_slot: activeSlot,
-                            _pull_model_slot: activeSlot,
-                        };
-
-                        node._weSlotProfiles = mergedProfiles;
-                        node._weActiveModelSlot = activeSlot;
-                        node._weSendModelSlot = activeSlot;
-                        node._wePullModelSlot = activeSlot;
-
-                        if (processed && typeof processed === "object") {
-                            node._weExtracted = processed;
-                            node._wePopulated = true;
-                        }
-
-                        await updateUI(node);
-                        applyOverrides(node, JSON.stringify(activeOv), JSON.stringify(activeProfile.ls || {}));
-                        syncHidden(node);
-                        node.setDirtyCanvas(true, true);
-                        app.graph.setDirtyCanvas(true, true);
-                        return;
-                    }
-
-                    // 4. Populate the UI
-                    _showError(node, null);
-
-                    // If prompts are connected, preserve current prompt values
-                    const posConn = node.inputs?.find(i => i.name === "pos_prompt");
-                    const negConn = node.inputs?.find(i => i.name === "neg_prompt");
-                    // Save workflow prompts before overwriting
-                    const prevWorkflowPrompts = node._weWorkflowPrompts || { positive: "", negative: "" };
-                    node._weWorkflowPrompts = {
-                        positive: positiveLocked ? (prevWorkflowPrompts.positive || node._wePosBox?.value || "") : (processed.positive_prompt || ""),
-                        negative: negativeLocked ? (prevWorkflowPrompts.negative || node._weNegBox?.value || "") : (processed.negative_prompt || ""),
-                    };
-                    if (posConn?.link != null) {
-                        processed.positive_prompt = node._wePosBox?.value || "";
-                    }
-                    if (negConn?.link != null) {
-                        processed.negative_prompt = node._weNegBox?.value || "";
-                    }
-
-                    if (lorasLocked && node._weExtracted) {
-                        processed.loras_a = [...(node._weExtracted.loras_a || [])];
-                        processed.loras_b = [...(node._weExtracted.loras_b || [])];
-                    }
-
-                    node._weExtracted = processed;
-                    node._wePopulated = true;
-                    // Track workflow LoRAs separately; merge with existing input LoRAs
-                    // (only if those inputs are still connected)
-                    if (!lorasLocked) {
-                        node._weWorkflowLoras = {
-                            a: [...(processed.loras_a || [])],
-                            b: [...(processed.loras_b || [])],
-                        };
-                    }
-                    const loraAConn = _findInput(node, "lora_stack", "lora_stack_a");
-                    const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
-                    if (!node._weInputLoras) node._weInputLoras = { a: [], b: [] };
-                    if (loraAConn?.link == null) node._weInputLoras.a = [];
-                    if (loraBConn?.link == null) node._weInputLoras.b = [];
-                    if (!lorasLocked) {
-                        node._weExtracted.loras_a = _mergeLoraLists(processed.loras_a || [], node._weInputLoras.a);
-                        node._weExtracted.loras_b = _mergeLoraLists(processed.loras_b || [], node._weInputLoras.b);
-                        _captureLoraOriginalStrengths(node, node._weExtracted.loras_a, node._weExtracted.loras_b);
-                        node._weLoraState = {};
-                    }
-                    node._weOverrides = {};
-                    node.properties = node.properties || {};
-                    node.properties.we_extracted_cache = JSON.stringify(processed);
-                    delete node.properties.we_override_data;
-                    delete node.properties.we_lora_state;
-                    await updateUI(node);
-                    syncHidden(node);
-                    node.setDirtyCanvas(true, true);
-                    app.graph.setDirtyCanvas(true, true);
-                } catch (e) {
-                    console.error("[RecipeBuilder] Update Recipe error:", e);
-                    _showError(node, "Failed to refresh workflow data from the connected source.");
-                } finally {
-                    updateBtn.disabled = false;
-                    updateBtn.textContent = "Update Recipe";
-                }
-            };
+            // Legacy update-button interactions removed.
             const modelSlotGroup = makeEl("div", {
                 display: "flex",
                 flexDirection: "column",
@@ -4765,23 +4130,11 @@ app.registerExtension({
                 if (node._weHydrating) {
                     _updatePromptGhosting();
                     _updateSeedGhosting();
-                    if (node._weUpdateBtn) {
-                        if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
-                        if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
-                        if (node._weDeferUpdateWorkflowButtonRefresh) node._weDeferUpdateWorkflowButtonRefresh();
-                    }
                     return;
                 }
 
                 _updatePromptGhosting();
                 _updateSeedGhosting();
-
-                // Show/hide Update Recipe button based on recipe_data connection
-                if (node._weUpdateBtn) {
-                    if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
-                    if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
-                    if (node._weDeferUpdateWorkflowButtonRefresh) node._weDeferUpdateWorkflowButtonRefresh();
-                }
 
                 // Clear input LoRAs for disconnected stacks and re-merge
                 const loraAConn = _findInput(node, "lora_stack", "lora_stack_a");
@@ -4893,7 +4246,7 @@ app.registerExtension({
 
                 const oldWl = node._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = node._weInputLoras || { a: [], b: [] };
-                const isExtractorConnected = node._weIsConnectedWorkflowDataExtractor?.() === true;
+                const isExtractorConnected = (!node._weUseSlotProfiles) && (node._weIsConnectedWorkflowDataExtractor?.() === true);
                 const oldSig = isExtractorConnected
                     ? `${_loraListSignature(node._weExtracted?.loras_a || [])}||${_loraListSignature(node._weExtracted?.loras_b || [])}`
                     : _loraStacksSignature(oldWl, oldIl);
@@ -5072,7 +4425,7 @@ app.registerExtension({
 
             // UI population is handled by pre-update listener (fires before
             // generation).  Only run here as a fallback if send_sync failed.
-            const isExtractorConnected = this._weIsConnectedWorkflowDataExtractor?.() === true;
+            const isExtractorConnected = (!this._weUseSlotProfiles) && (this._weIsConnectedWorkflowDataExtractor?.() === true);
             if (info && !this._preUpdateApplied) {
                 const oldWl = this._weWorkflowLoras || { a: [], b: [] };
                 const oldIl = this._weInputLoras || { a: [], b: [] };
@@ -5193,11 +4546,11 @@ app.registerExtension({
             // RETURN_TYPES changed between versions, phantom slots persist.
             if (!node._weBuilderVariant) {
                 const cls = String(node.comfyClass || node.type || "");
-                node._weBuilderVariant = cls === "RecipeBuilderWan" ? "wan" : "simple";
+                node._weBuilderVariant = "simple";
             }
             if (node._weUseSlotProfiles == null) {
                 const cls = String(node.comfyClass || node.type || "");
-                node._weUseSlotProfiles = cls === "RecipeBuilderMulti";
+                node._weUseSlotProfiles = cls === "RecipeBuilder";
             }
 
             const VALID_INPUTS = new Set([
@@ -5461,13 +4814,7 @@ app.registerExtension({
                 _finishHydration();
             }
 
-            // Show/hide Update Recipe button based on recipe_data connection
-            const wfSlot = node.inputs?.find(i => _canonicalInputName(i.name) === "recipe_data");
-            if (node._weUpdateBtn) {
-                if (node._weRefreshUpdateWorkflowButtonVisibility) node._weRefreshUpdateWorkflowButtonVisibility();
-                if (node._weRefreshUpdateWorkflowTooltip) node._weRefreshUpdateWorkflowTooltip();
-                if (node._weDeferUpdateWorkflowButtonRefresh) node._weDeferUpdateWorkflowButtonRefresh();
-            }
+            // Execute-only flow: no manual Update Recipe button refresh.
         };
     },
 });
