@@ -105,7 +105,7 @@ const LOCK_ICON_STROKE = 2.7;
 const UI_ICON_COLOR = "rgba(255,255,255,0.85)";
 const UI_ICON_COLOR_DIM = "rgba(255,255,255,0.72)";
 const SECTION_LOCK_SVG_OPEN = `<svg width="14" height="16" viewBox="0 0 20 24" fill="none" stroke="${UI_ICON_COLOR}" stroke-width="${LOCK_ICON_STROKE}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`;
-const SECTION_LOCK_SVG_CLOSED = `<svg width="14" height="16" viewBox="0 0 20 24" fill="none" stroke="${UI_ICON_COLOR}" stroke-width="${LOCK_ICON_STROKE}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="10" rx="2"/><path d="M6 11V7a4 4 0 0 1 8 0v4"/></svg>`;
+const SECTION_LOCK_SVG_CLOSED = `<svg width="14" height="16" viewBox="0 0 20 24" fill="none" stroke="${UI_ICON_COLOR}" stroke-width="${LOCK_ICON_STROKE}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="14" height="10" rx="2" fill="${UI_ICON_COLOR}" stroke="${UI_ICON_COLOR}"/><path d="M6 11V7a4 4 0 0 1 8 0v4"/></svg>`;
 
 // --- Tiny helpers ---
 function makeEl(tag, style, text) {
@@ -130,9 +130,9 @@ function makeBtn(label, onclick, extraStyle) {
 }
 
 // --- Snap node height to fit content after section toggle ---
-const _NATIVE_H = 90;   // title bar + toggle widgets above the DOM widget
+const _NATIVE_H = 60;   // title bar + toggle widgets above the DOM widget
 const _MIN_W = 478;
-const _MIN_H = 300;
+const _MIN_H = 200;
 
 function reflowNode(node) {
     if (!node?._weRoot) return;
@@ -1449,7 +1449,8 @@ function updateWanVisibility(node) {
     }
     // LoRA Stack A container: taller when alone, normal when both visible
     if (node._weLoraAContainer) {
-        node._weLoraAContainer.style.height = isWanVideo ? "100px" : "160px";
+        node._weLoraAContainer.style.height = "";
+        node._weLoraAContainer.style.minHeight = "";
     }
 
     // Model A label: "Model A" for WAN Video, "Model" otherwise
@@ -3987,9 +3988,9 @@ app.registerExtension({
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
                 border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "vertical",
+                fontSize: "12px", padding: "6px", resize: "none",
                 fontFamily: "inherit", lineHeight: "1.4",
-                minHeight: "144px", height: "144px", maxHeight: "none", overflow: "auto",
+                minHeight: "128px", height: "128px", maxHeight: "none", overflow: "auto",
             });
             posBox.onchange = _syncS;
             posBox.oninput = () => { _syncS(); requestAnimationFrame(() => reflowNode(node)); };
@@ -4012,9 +4013,9 @@ app.registerExtension({
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
                 border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "vertical",
+                fontSize: "12px", padding: "6px", resize: "none",
                 fontFamily: "inherit", lineHeight: "1.4",
-                minHeight: "144px", height: "144px", maxHeight: "none", overflow: "auto",
+                minHeight: "128px", height: "128px", maxHeight: "none", overflow: "auto",
             });
             negBox.onchange = _syncS;
             negBox.oninput = () => { _syncS(); requestAnimationFrame(() => reflowNode(node)); };
@@ -4135,9 +4136,9 @@ app.registerExtension({
             domW.computeSize = function (width) {
                 const calcLoraHeight = (card) => {
                     const tags = card?._tagsContainer;
-                    if (!tags) return 0;
+                    if (!tags) return;
                     const children = Array.from(tags.children || []).filter(el => el.style?.display !== "none");
-                    const actualWidth = Math.max(220, Number(node.size?.[0] || width || 0) - 32);
+                    const actualWidth = Math.max(220, Number(width || node.size?.[0] || 0) - 32);
                     const tagWidth = 204;
                     const tagsPerRow = Math.max(1, Math.floor(actualWidth / tagWidth));
                     const rows = Math.max(1, Math.ceil(Math.max(1, children.length) / tagsPerRow));
@@ -4146,14 +4147,11 @@ app.registerExtension({
                     const target = topChrome + rows * rowHeight;
                     tags.style.minHeight = `${target}px`;
                     tags.style.height = `${target}px`;
-                    return card.getBoundingClientRect().height || target;
                 };
 
                 calcLoraHeight(node._weLoraACard);
                 calcLoraHeight(node._weLoraB);
-                const rectH = Math.ceil(root.getBoundingClientRect().height || 0);
-                const scrollH = Math.ceil(root.scrollHeight || 0);
-                const h = Math.max(rectH, scrollH, _MIN_H);
+                const h = Math.max(Math.ceil(root.scrollHeight || 0), _MIN_H);
                 return [width, h];
             };
 
