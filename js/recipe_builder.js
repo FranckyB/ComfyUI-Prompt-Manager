@@ -130,15 +130,74 @@ function makeBtn(label, onclick, extraStyle) {
 }
 
 // --- Snap node height to fit content after section toggle ---
-// Walks up from a section element to find the root (which stores _weNode),
-// then forces the node to exactly fit its DOM content.
 const _NATIVE_H = 90;   // title bar + toggle widgets above the DOM widget
 const _MIN_W = 478;
 const _MIN_H = 300;
 
+function reflowNode(node) {
+    if (!node?._weRoot) return;
+    const root = node._weRoot;
+    let visibleBottom = 0;
+    for (const child of Array.from(root.children)) {
+        if (!child || child.style?.display === "none") continue;
+        visibleBottom = Math.max(visibleBottom, child.offsetTop + child.offsetHeight);
+    }
+    const contentH = Math.ceil(Math.max(root.scrollHeight, visibleBottom) + _NATIVE_H);
+    const width = Math.max(_MIN_W, node.size?.[0] || _MIN_W);
+    const height = Math.max(contentH, _MIN_H);
+    node.setSize([width, height]);
+    node.setDirtyCanvas(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+    requestAnimationFrame(() => {
+        let visibleBottom2 = 0;
+        for (const child of Array.from(root.children)) {
+            if (!child || child.style?.display === "none") continue;
+            visibleBottom2 = Math.max(visibleBottom2, child.offsetTop + child.offsetHeight);
+        }
+        const contentH2 = Math.ceil(Math.max(root.scrollHeight, visibleBottom2) + _NATIVE_H);
+        const height2 = Math.max(contentH2, _MIN_H);
+        if (Math.abs(height2 - (node.size?.[1] || 0)) > 1) {
+            node.setSize([width, height2]);
+            node.setDirtyCanvas(true, true);
+            app.graph?.setDirtyCanvas(true, true);
+        }
+    });
+}
 
-// --- Section builder (always expanded, not collapsible) ---
-function makeSection(title) {
+async function normalizeSectionLayout(node, closingKey = null) {
+    if (!node?._weSections) return;
+    const root = node._weRoot;
+    const sections = node._weSections;
+    const reopenKeys = Object.entries(sections)
+        .filter(([key, sec]) => key !== closingKey && sec && !sec._collapsed)
+        .map(([key]) => key);
+
+    if (root) root.style.visibility = "hidden";
+
+    for (const sec of Object.values(sections)) {
+        if (!sec?.setCollapsed || sec._collapsed) continue;
+        sec.setCollapsed(true, { sync: false });
+        await new Promise(requestAnimationFrame);
+        reflowNode(node);
+    }
+    await new Promise(requestAnimationFrame);
+    reflowNode(node);
+
+    for (const key of reopenKeys) {
+        const sec = sections[key];
+        if (sec?.setCollapsed) sec.setCollapsed(false, { sync: false });
+        await new Promise(requestAnimationFrame);
+        reflowNode(node);
+    }
+
+    if (root) root.style.visibility = "";
+    syncHidden(node);
+    requestAnimationFrame(() => reflowNode(node));
+}
+
+// --- Section builder (collapsible + lockable) ---
+function makeSection(title, node = null, key = null, opts = {}) {
+    const collapsed = !!opts.collapsed;
     const wrap = makeEl("div", {
         borderRadius: "6px", overflow: "hidden", marginTop: "2px",
         backgroundColor: C.bgCard, flexShrink: "0",
@@ -149,17 +208,29 @@ function makeSection(title) {
         fontSize: "11px", fontWeight: "600", color: "#aaa",
         userSelect: "none",
         borderBottom: "1px solid rgba(255,255,255,0.1)",
+        cursor: "pointer",
     });
-    const label = makeEl("span", {}, title);
+    const left = makeEl("div", {
+        display: "flex", alignItems: "center", gap: "6px", minWidth: "0", flex: "1",
+    });
+    const chevron = makeEl("span", {
+        width: "12px", display: "inline-flex", alignItems: "center", justifyContent: "center",
+        flexShrink: "0", color: C.textMuted,
+    });
+    const label = makeEl("span", {
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    }, title);
     const lockBtn = makeEl("span", {
         width: "20px", flexShrink: "0", display: "inline-flex",
         alignItems: "center", justifyContent: "center", cursor: "pointer",
     });
-    header.append(label, lockBtn);
+    left.append(chevron, label);
+    header.append(left, lockBtn);
     const body = makeEl("div", {
         padding: "4px 8px",
     });
     wrap._locked = false;
+    wrap._collapsed = collapsed;
     wrap._setLocked = (locked) => {
         wrap._locked = !!locked;
         lockBtn.innerHTML = wrap._locked ? SECTION_LOCK_SVG_CLOSED : SECTION_LOCK_SVG_OPEN;
@@ -167,7 +238,31 @@ function makeSection(title) {
         body.style.opacity = wrap._locked ? "0.45" : "1";
         body.style.pointerEvents = wrap._locked ? "none" : "auto";
     };
+    wrap._setCollapsed = (next, { sync = true } = {}) => {
+        const target = !!next;
+        const wasCollapsed = !!wrap._collapsed;
+        wrap._collapsed = target;
+        chevron.textContent = wrap._collapsed ? "▶" : "▼";
+        body.style.display = wrap._collapsed ? "none" : "";
+        header.style.borderBottom = wrap._collapsed ? "none" : "1px solid rgba(255,255,255,0.1)";
+        if (node?._weCollapsedSections && key) node._weCollapsedSections[key] = wrap._collapsed;
+        if (sync && node) {
+            if (!target && wasCollapsed) {
+                syncHidden(node);
+                requestAnimationFrame(() => reflowNode(node));
+            } else if (target && !wasCollapsed && node._weSections && key) {
+                normalizeSectionLayout(node, key);
+            } else {
+                syncHidden(node);
+                requestAnimationFrame(() => reflowNode(node));
+            }
+        }
+    };
     wrap._setLocked(false);
+    wrap._setCollapsed(collapsed, { sync: false });
+    header.onclick = () => {
+        wrap._setCollapsed(!wrap._collapsed);
+    };
     lockBtn.onclick = (e) => {
         e.stopPropagation();
         const next = !wrap._locked;
@@ -176,8 +271,11 @@ function makeSection(title) {
     };
     wrap._lockBtn = lockBtn;
     wrap._titleLabel = label;
-    wrap.append(header, body);
+    wrap._chevron = chevron;
     wrap._body = body;
+    wrap.setLocked = wrap._setLocked;
+    wrap.setCollapsed = wrap._setCollapsed;
+    wrap.append(header, body);
     return wrap;
 }
 
@@ -853,6 +951,24 @@ function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown, on
 }
 
 // --- LoRA stack card ---
+function updateLoraContainerHeight(container, node = null) {
+    const tagsContainer = container?._tagsContainer || container?.tagsContainer;
+    if (!tagsContainer || !node) return;
+
+    const children = Array.from(tagsContainer.children || []).filter(el => el.style?.display !== "none");
+    const actualWidth = Math.max(220, Number(node.size?.[0] || 0) - 32);
+    const tagWidth = 204;
+    const tagsPerRow = Math.max(1, Math.floor(actualWidth / tagWidth));
+    const tagCount = Math.max(1, children.length);
+    const rows = Math.max(1, Math.ceil(tagCount / tagsPerRow));
+    const rowHeight = 28;
+    const topChrome = 8;
+    const target = topChrome + rows * rowHeight;
+
+    tagsContainer.style.minHeight = `${target}px`;
+    tagsContainer.style.height = `${target}px`;
+}
+
 function createLoraStackContainer(title, onResetStrength, onToggleAll) {
     const container = document.createElement("div");
     Object.assign(container.style, {
@@ -894,7 +1010,7 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
     Object.assign(tagsContainer.style, {
         display: "flex", flexWrap: "wrap", gap: "4px",
         alignContent: "flex-start",
-        height: "100px", overflowY: "auto", scrollbarWidth: "none",
+        minHeight: "30px", overflowY: "auto", scrollbarWidth: "none",
         border: "1px solid rgba(255,255,255,0.1)", borderRadius: "4px",
         padding: "4px",
     });
@@ -903,6 +1019,7 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
     container.appendChild(tagsContainer);
     container._tagsContainer = tagsContainer;
     container._titleLabel = titleLabel;
+    container.updateHeight = (node = null) => updateLoraContainerHeight(container, node);
     return container;
 }
 
@@ -1594,6 +1711,8 @@ function _getLoraOriginalStrength(node, stateKey, lora) {
 }
 
 // --- LoRA display ---
+    requestAnimationFrame(() => reflowNode(node));
+
 function updateLoras(node) {
     const containerA = node._weLoraAContainer;
     const containerB = node._weLoraBContainer;
@@ -1779,6 +1898,7 @@ function _showInfo(node, infoMsg) {
     banner.append(text);
     root.insertBefore(banner, root.firstChild);
 }
+    requestAnimationFrame(() => reflowNode(node));
 
 // --- Sync hidden widgets ---
 function syncHidden(node) {
@@ -1907,11 +2027,19 @@ function syncHidden(node) {
     }
     const sectionLocks = node._weSectionLocks || {};
     const persistedLocks = {};
+    const sectionCollapsed = node._weCollapsedSections || {};
     for (const [key, locked] of Object.entries(sectionLocks)) {
         if (locked) persistedLocks[key] = true;
     }
     if (Object.keys(persistedLocks).length > 0) ov._section_locks = persistedLocks;
     else delete ov._section_locks;
+
+    const persistedCollapsed = {};
+    for (const [key, collapsed] of Object.entries(sectionCollapsed)) {
+        if (collapsed) persistedCollapsed[key] = true;
+    }
+    if (Object.keys(persistedCollapsed).length > 0) ov._section_collapsed = persistedCollapsed;
+    else delete ov._section_collapsed;
 
     // Persist resolution UI state
     if (node._weRatio) ov._ratio = node._weRatio;
@@ -2383,6 +2511,7 @@ app.registerExtension({
             node._weFamily = isWanBuilder ? "wan_video_t2v" : "sdxl";
             node._weShowAllModels = false;
             node._weSections = {};
+            node._weCollapsedSections = { resolution: true, model: true, sampler: true, positive: false, negative: false, loras: false };
             node._weSectionLocks = {
                 resolution: false,
                 model: false,
@@ -3244,7 +3373,7 @@ app.registerExtension({
             root.appendChild(updateBtn);
 
             // -- 1. RESOLUTION section (open) --
-            const resSec = makeSection("RESOLUTION");
+            const resSec = makeSection("RESOLUTION", node, "resolution", { collapsed: !!node._weCollapsedSections?.resolution });
             node._weSections.resolution = resSec;
 
             // Aspect ratio definitions — stored as portrait (w < h)
@@ -3404,7 +3533,7 @@ app.registerExtension({
             if (resSec._setLocked) resSec._setLocked(false);
 
             // -- 2. MODEL section (open, with VAE/CLIP) --
-            const modelSec = makeSection("MODEL");
+            const modelSec = makeSection("MODEL", node, "model", { collapsed: !!node._weCollapsedSections?.model });
             node._weSections.model = modelSec;
             modelSec._onLockChanged = (locked) => {
                 node._weSectionLocks.model = !!locked;
@@ -3795,7 +3924,7 @@ app.registerExtension({
             node._onFamilyChanged = onFamilyChanged;
 
             // -- 3. SAMPLER section --
-            const sampSec = makeSection("SAMPLER");
+            const sampSec = makeSection("SAMPLER", node, "sampler", { collapsed: !!node._weCollapsedSections?.sampler });
             node._weSections.sampler = sampSec;
             sampSec._onLockChanged = (locked) => {
                 node._weSectionLocks.sampler = !!locked;
@@ -3844,7 +3973,7 @@ app.registerExtension({
             });
 
             // -- 4. PROMPTS (positive open, negative closed) --
-            const posSec = makeSection("POSITIVE PROMPT");
+            const posSec = makeSection("POSITIVE PROMPT", node, "positive", { collapsed: !!node._weCollapsedSections?.positive });
             node._weSections.positive = posSec;
             posSec._onLockChanged = (locked) => {
                 node._weSectionLocks.positive = !!locked;
@@ -3853,23 +3982,23 @@ app.registerExtension({
             if (posSec._setLocked) posSec._setLocked(false);
             const posBox = document.createElement("textarea");
             posBox.placeholder = "Positive prompt";
-            posBox.rows = 5;
+            posBox.rows = 8;
             Object.assign(posBox.style, {
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
                 border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "none",
+                fontSize: "12px", padding: "6px", resize: "vertical",
                 fontFamily: "inherit", lineHeight: "1.4",
-                maxHeight: "90px", overflow: "auto",
+                minHeight: "144px", height: "144px", maxHeight: "none", overflow: "auto",
             });
             posBox.onchange = _syncS;
-            posBox.oninput = _syncS;
+            posBox.oninput = () => { _syncS(); requestAnimationFrame(() => reflowNode(node)); };
             posBox.addEventListener("wheel", (e) => { e.stopPropagation(); });
             posSec._body.appendChild(posBox);
             root.appendChild(posSec);
             node._wePosBox = posBox;
 
-            const negSec = makeSection("NEGATIVE PROMPT");
+            const negSec = makeSection("NEGATIVE PROMPT", node, "negative", { collapsed: !!node._weCollapsedSections?.negative });
             node._weSections.negative = negSec;
             negSec._onLockChanged = (locked) => {
                 node._weSectionLocks.negative = !!locked;
@@ -3878,17 +4007,17 @@ app.registerExtension({
             if (negSec._setLocked) negSec._setLocked(false);
             const negBox = document.createElement("textarea");
             negBox.placeholder = "Negative prompt";
-            negBox.rows = 5;
+            negBox.rows = 8;
             Object.assign(negBox.style, {
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
                 border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "none",
+                fontSize: "12px", padding: "6px", resize: "vertical",
                 fontFamily: "inherit", lineHeight: "1.4",
-                maxHeight: "90px", overflow: "auto",
+                minHeight: "144px", height: "144px", maxHeight: "none", overflow: "auto",
             });
             negBox.onchange = _syncS;
-            negBox.oninput = _syncS;
+            negBox.oninput = () => { _syncS(); requestAnimationFrame(() => reflowNode(node)); };
             negBox.addEventListener("wheel", (e) => { e.stopPropagation(); });
             negSec._body.appendChild(negBox);
             root.appendChild(negSec);
@@ -3897,7 +4026,7 @@ app.registerExtension({
             negSec.style.display = "";
 
             // -- 5. LORAS section --
-            const loraSec = makeSection("LORAS");
+            const loraSec = makeSection("LORAS", node, "loras", { collapsed: !!node._weCollapsedSections?.loras });
             node._weSections.loras = loraSec;
             loraSec._onLockChanged = (locked) => {
                 node._weSectionLocks.loras = !!locked;
@@ -3955,6 +4084,7 @@ app.registerExtension({
             loraSec._body.appendChild(loraACard);
             node._weLoraAContainer = loraACard._tagsContainer;
             node._weLoraACard = loraACard;
+            loraACard.updateHeight?.(node);
 
             // Stack B card
             const loraBCard = createLoraStackContainer("LoRA Stack B",
@@ -3987,6 +4117,7 @@ app.registerExtension({
             loraSec._body.appendChild(loraBCard);
             node._weLoraBContainer = loraBCard._tagsContainer;
             node._weLoraB = loraBCard;
+            loraBCard.updateHeight?.(node);
 
             root.appendChild(loraSec);
 
@@ -4002,7 +4133,27 @@ app.registerExtension({
                 serialize: false,
             });
             domW.computeSize = function (width) {
-                const h = root.scrollHeight || _MIN_H;
+                const calcLoraHeight = (card) => {
+                    const tags = card?._tagsContainer;
+                    if (!tags) return 0;
+                    const children = Array.from(tags.children || []).filter(el => el.style?.display !== "none");
+                    const actualWidth = Math.max(220, Number(node.size?.[0] || width || 0) - 32);
+                    const tagWidth = 204;
+                    const tagsPerRow = Math.max(1, Math.floor(actualWidth / tagWidth));
+                    const rows = Math.max(1, Math.ceil(Math.max(1, children.length) / tagsPerRow));
+                    const rowHeight = 28;
+                    const topChrome = 8;
+                    const target = topChrome + rows * rowHeight;
+                    tags.style.minHeight = `${target}px`;
+                    tags.style.height = `${target}px`;
+                    return card.getBoundingClientRect().height || target;
+                };
+
+                calcLoraHeight(node._weLoraACard);
+                calcLoraHeight(node._weLoraB);
+                const rectH = Math.ceil(root.getBoundingClientRect().height || 0);
+                const scrollH = Math.ceil(root.scrollHeight || 0);
+                const h = Math.max(rectH, scrollH, _MIN_H);
                 return [width, h];
             };
 
