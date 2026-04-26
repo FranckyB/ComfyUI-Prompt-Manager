@@ -372,15 +372,15 @@ function _findInput(node, ...names) {
 }
 
 const MODEL_SLOT_KEYS = ["model_a", "model_b", "model_c", "model_d"];
-const NO_PULL_SLOT = "none";
-const MODEL_SLOT_PAIR_OPTIONS = [
-    { value: "model_a", label: "model_a | model_b" },
-    { value: "model_c", label: "model_c | model_d" },
-];
 
 function _normalizeModelSlotKey(v) {
     const key = String(v || "model_a").trim().toLowerCase();
     return MODEL_SLOT_KEYS.includes(key) ? key : "model_a";
+}
+
+function _normalizeModelSlotKeyStrict(v) {
+    const key = String(v || "").trim().toLowerCase();
+    return MODEL_SLOT_KEYS.includes(key) ? key : null;
 }
 
 function _nextModelSlotKey(v) {
@@ -390,21 +390,53 @@ function _nextModelSlotKey(v) {
     return MODEL_SLOT_KEYS[idx + 1];
 }
 
-function _normalizeModelPairStartKey(v) {
-    const key = _normalizeModelSlotKey(v);
-    return (key === "model_c" || key === "model_d") ? "model_c" : "model_a";
+function _getCurrentlySelectedModelSlot(node) {
+    const uiSlot = node?._weSendModelSlotRow?._inp?.value;
+    if (uiSlot) return _normalizeModelSlotKeyStrict(uiSlot);
+    return _normalizeModelSlotKeyStrict(node?._weActiveModelSlot || node?._weSendModelSlot || "");
 }
 
-function _normalizePullModelSlotKey(v) {
-    const key = String(v ?? NO_PULL_SLOT).trim().toLowerCase();
-    if (key === NO_PULL_SLOT) return NO_PULL_SLOT;
-    return _normalizeModelSlotKey(key);
-}
+function _hydrateExtractedFromSelectedSlotProfile(node) {
+    if (!node?._weUseSlotProfiles) return;
+    const activeSlot = _getCurrentlySelectedModelSlot(node);
+    if (!activeSlot) return;
+    node._weActiveModelSlot = activeSlot;
+    const activeProfile = node?._weSlotProfiles?.[activeSlot];
+    if (!activeProfile?.ov || typeof activeProfile.ov !== "object") return;
 
-function _normalizePullModelPairStartKey(v) {
-    const key = _normalizePullModelSlotKey(v);
-    if (key === NO_PULL_SLOT) return NO_PULL_SLOT;
-    return _normalizeModelPairStartKey(key);
+    const ov = activeProfile.ov;
+    const sampler = {
+        steps_a: ov.steps_a ?? 20,
+        cfg: ov.cfg ?? 5.0,
+        denoise: ov.denoise ?? 1.0,
+        seed_a: ov.seed_a ?? 0,
+        sampler_name: ov.sampler_name || "euler",
+        scheduler: ov.scheduler || "simple",
+    };
+
+    node._weExtracted = {
+        ...(node._weExtracted || {}),
+        positive_prompt: ov.positive_prompt ?? "",
+        negative_prompt: ov.negative_prompt ?? "",
+        model_a: ov.model_a ?? "",
+        model_family: ov._family || "",
+        vae: { name: ov.vae ?? "", source: "manual" },
+        clip: {
+            names: Array.isArray(ov.clip_names) ? ov.clip_names : [],
+            type: "",
+            source: "manual",
+        },
+        loras_a: Array.isArray(ov.loras_a) ? ov.loras_a : (node._weExtracted?.loras_a || []),
+        sampler,
+    };
+
+    if (ov._section_locks && typeof ov._section_locks === "object") {
+        const sl = ov._section_locks;
+        const _g = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
+        _g(node._wePosBox, !!sl.positive);
+        _g(node._weNegBox, !!sl.negative);
+        _g(node._weSamplerRows?.seed_a?._inp, !!sl.sampler);
+    }
 }
 
 function _makeEmptySlotProfile() {
@@ -416,7 +448,7 @@ function _makeEmptySlotProfile() {
             model_b: "",
             vae: "",
             clip_names: [],
-            _family: "sdxl",
+            _family: "",
             steps_a: 20,
             cfg: 5.0,
             denoise: 1.0,
@@ -459,6 +491,28 @@ function _normalizeSlotProfiles(raw) {
         out[slot] = { ov, ls };
     }
     return out;
+}
+
+function _mergeSlotProfiles(existingRaw, incomingRaw) {
+    const merged = _normalizeSlotProfiles(existingRaw);
+    if (!incomingRaw || typeof incomingRaw !== "object") return merged;
+
+    for (const slot of MODEL_SLOT_KEYS) {
+        const incomingRow = incomingRaw[slot];
+        if (!incomingRow || typeof incomingRow !== "object") continue;
+
+        const current = merged[slot] || _makeEmptySlotProfile();
+        const nextOv = (incomingRow.ov && typeof incomingRow.ov === "object")
+            ? { ...current.ov, ...incomingRow.ov }
+            : { ...current.ov };
+        const nextLs = (incomingRow.ls && typeof incomingRow.ls === "object")
+            ? { ...incomingRow.ls }
+            : { ...current.ls };
+
+        merged[slot] = { ov: nextOv, ls: nextLs };
+    }
+
+    return merged;
 }
 
 function _isLoraAvailableForSort(lora, availabilityMap = null) {
@@ -1191,24 +1245,15 @@ async function updateUI(node) {
     if (!d) return;
 
     if (node._wePullModelSlotRow?._inp) {
-        let pullSlot = node._weUseSlotProfiles
-            ? _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a")
-            : node._weBuilderVariant === "wan"
-            ? _normalizePullModelPairStartKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a")
-            : _normalizePullModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a");
-        if (pullSlot === NO_PULL_SLOT) {
-            pullSlot = node._weBuilderVariant === "wan" ? "model_a" : "model_a";
-        }
+        const modelSlotRaw = d.model_slot || node._weActiveModelSlot || node._wePullModelSlot || "model_a";
+        let pullSlot = _normalizeModelSlotKey(modelSlotRaw);
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(pullSlot);
         node._wePullModelSlotRow._inp.value = pullSlot;
         node._wePullModelSlot = pullSlot;
     }
     if (node._weSendModelSlotRow?._inp) {
-        const sendSlot = node._weUseSlotProfiles
-            ? _normalizeModelSlotKey(node._weActiveModelSlot || d.send_model_slot || "model_a")
-            : node._weBuilderVariant === "wan"
-            ? _normalizeModelPairStartKey(d.send_model_slot || node._weSendModelSlot || node._wePullModelSlot || "model_a")
-            : _normalizeModelSlotKey(d.send_model_slot || node._weSendModelSlot || node._wePullModelSlot || "model_a");
+        const modelSlotRaw = d.model_slot || node._weActiveModelSlot || node._weSendModelSlot || node._wePullModelSlot || "model_a";
+        const sendSlot = _normalizeModelSlotKey(modelSlotRaw);
         if (node._weSendModelSlotRow._setOriginal) node._weSendModelSlotRow._setOriginal(sendSlot);
         node._weSendModelSlotRow._inp.value = sendSlot;
         node._weSendModelSlot = sendSlot;
@@ -1490,13 +1535,8 @@ async function checkLoraAvailability(node) {
 // --- WAN-specific visibility ---
 function updateWanVisibility(node) {
     const family = node._weFamily;
-    const variant = node._weBuilderVariant || "simple";
-    const isWanVideo = variant === "wan"
-        ? true
-        : (family === "wan_video_i2v" || family === "wan_video_t2v");
-    const isWan = variant === "wan"
-        ? true
-        : (isWanVideo || (family === "wan_image"));
+    const isWanVideo = (family === "wan_video_i2v" || family === "wan_video_t2v");
+    const isWan = (isWanVideo || (family === "wan_image"));
 
     // LoRA stack titles
     if (node._weLoraACard?._titleLabel) {
@@ -2125,30 +2165,22 @@ function syncHidden(node) {
         ov.negative_prompt = String(node._weNegBox.value || "");
     }
     if (node._weFamily) ov._family = node._weFamily;
-    if (node._wePullModelSlot) {
-        let normalizedPullSlot = node._weBuilderVariant === "wan"
-            ? _normalizePullModelPairStartKey(node._wePullModelSlot)
-            : _normalizePullModelSlotKey(node._wePullModelSlot);
-        if (normalizedPullSlot === NO_PULL_SLOT) normalizedPullSlot = "model_a";
-        ov._pull_model_slot = normalizedPullSlot;
-    }
-    else delete ov._pull_model_slot;
-    if (node._weSendModelSlot) ov._send_model_slot = node._weBuilderVariant === "wan"
-        ? _normalizeModelPairStartKey(node._weSendModelSlot)
-        : _normalizeModelSlotKey(node._weSendModelSlot);
-    else delete ov._send_model_slot;
-
     if (node._weUseSlotProfiles) {
         const activeSlot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
         node._weActiveModelSlot = activeSlot;
         ov._active_model_slot = activeSlot;
-        ov._send_model_slot = activeSlot;
-        ov._pull_model_slot = activeSlot;
+        ov._model_slot = activeSlot;
     } else {
         delete ov._active_model_slot;
+        if (node._weSendModelSlot) {
+            ov._model_slot = _normalizeModelSlotKey(node._weSendModelSlot);
+        } else {
+            delete ov._model_slot;
+        }
     }
-    // Backward compatibility for older saved workflows.
-    delete ov._model_slot;
+    // Remove legacy selector fields.
+    delete ov._send_model_slot;
+    delete ov._pull_model_slot;
     if (node._weShowAllModels) ov._show_all_models = true;
     else delete ov._show_all_models;
 
@@ -2202,6 +2234,7 @@ function syncHidden(node) {
         node._weSlotProfiles = slotProfiles;
         ov._slot_profiles = slotProfiles;
         ov._active_model_slot = activeSlot;
+        ov._model_slot = activeSlot;
     } else {
         delete ov._slot_profiles;
     }
@@ -2263,7 +2296,7 @@ function applyOverrides(node, ovJson, lsJson) {
         const slotProfiles = _normalizeSlotProfiles(ov?._slot_profiles);
         node._weSlotProfiles = slotProfiles;
 
-        const activeSlot = _normalizeModelSlotKey(ov?._active_model_slot || ov?._send_model_slot || "model_a");
+        const activeSlot = _normalizeModelSlotKey(ov?._active_model_slot || ov?._model_slot || "model_a");
         node._weActiveModelSlot = activeSlot;
 
         const activeProfile = slotProfiles?.[activeSlot];
@@ -2276,8 +2309,7 @@ function applyOverrides(node, ovJson, lsJson) {
             }
         }
 
-        ov._send_model_slot = activeSlot;
-        ov._pull_model_slot = activeSlot;
+        ov._model_slot = activeSlot;
     }
 
     const d = node._weExtracted;
@@ -2344,19 +2376,14 @@ function applyOverrides(node, ovJson, lsJson) {
     }
 
     if (node._wePullModelSlotRow?._inp) {
-        let slot = node._weBuilderVariant === "wan"
-            ? _normalizePullModelPairStartKey(ov._pull_model_slot || ov._model_slot || "model_a")
-            : _normalizePullModelSlotKey(ov._pull_model_slot || ov._model_slot || "model_a");
-        if (slot === NO_PULL_SLOT) slot = "model_a";
+        const slot = _normalizeModelSlotKey(ov._model_slot || "model_a");
         node._wePullModelSlotRow._inp.value = slot;
         node._wePullModelSlot = slot;
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(slot);
     }
 
     if (node._weSendModelSlotRow?._inp) {
-        const slot = node._weBuilderVariant === "wan"
-            ? _normalizeModelPairStartKey(ov._send_model_slot || ov._model_slot || node._wePullModelSlot || "model_a")
-            : _normalizeModelSlotKey(ov._send_model_slot || ov._model_slot || node._wePullModelSlot || "model_a");
+        const slot = _normalizeModelSlotKey(ov._model_slot || node._wePullModelSlot || "model_a");
         node._weSendModelSlotRow._inp.value = slot;
         node._weSendModelSlot = slot;
         if (node._weSendModelSlotRow._setOriginal) node._weSendModelSlotRow._setOriginal(slot);
@@ -2458,27 +2485,43 @@ function applyOverrides(node, ovJson, lsJson) {
 }
 
 // --- Parse workflow_data string into extracted format ---
-function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "simple") {
+function parseWorkflowData(jsonStr, modelSlot = "model_a") {
     if (!jsonStr) return null;
     try {
         const d = JSON.parse(jsonStr);
-        const isWanBuilder = String(builderVariant || "simple").toLowerCase() === "wan";
-        const selectedSlot = isWanBuilder
-            ? _normalizeModelPairStartKey(modelSlot)
-            : _normalizeModelSlotKey(modelSlot);
+        const strictSlot = _normalizeModelSlotKeyStrict(modelSlot);
+        if (!strictSlot) {
+            return {
+                positive_prompt: "",
+                negative_prompt: "",
+                loras_a: [],
+                loras_b: [],
+                model_a: "",
+                model_b: "",
+                model_slot: "",
+                vae: { name: "", source: "workflow_data" },
+                clip: { names: [], type: "", source: "workflow_data" },
+                sampler: {
+                    steps_a: 20,
+                    cfg: 5.0,
+                    denoise: 1.0,
+                    seed_a: 0,
+                    sampler_name: "euler",
+                    scheduler: "simple",
+                },
+                resolution: { width: 768, height: 1280, batch_size: 1, length: null },
+                model_family: "",
+            };
+        }
+        const selectedSlot = strictSlot;
 
         if (d?.models && typeof d.models === "object") {
             const primary = d.models[selectedSlot] && typeof d.models[selectedSlot] === "object"
                 ? d.models[selectedSlot]
                 : {};
-            const secondaryKey = _nextModelSlotKey(selectedSlot);
-            const secondary = isWanBuilder && secondaryKey && d.models[secondaryKey] && typeof d.models[secondaryKey] === "object"
-                ? d.models[secondaryKey]
-                : null;
 
             const rootSampler = (d.sampler && typeof d.sampler === "object") ? d.sampler : {};
             const primarySampler = (primary.sampler && typeof primary.sampler === "object") ? primary.sampler : {};
-            const secondarySampler = (secondary && secondary.sampler && typeof secondary.sampler === "object") ? secondary.sampler : {};
             const rootRes = (d.resolution && typeof d.resolution === "object") ? d.resolution : {};
             const primaryRes = (primary.resolution && typeof primary.resolution === "object") ? primary.resolution : {};
             const mergedSampler = { ...rootSampler, ...primarySampler };
@@ -2491,9 +2534,9 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
                 positive_prompt: primary.positive_prompt || "",
                 negative_prompt: primary.negative_prompt || "",
                 loras_a: Array.isArray(primary.loras) ? primary.loras : [],
-                loras_b: (isWanBuilder && secondary && Array.isArray(secondary.loras)) ? secondary.loras : [],
+                loras_b: [],
                 model_a: primary.model || "",
-                model_b: (isWanBuilder && secondary) ? (secondary.model || "") : "",
+                model_b: "",
                 model_slot: selectedSlot,
                 vae: { name: primary.vae || "", source: "workflow_data" },
                 clip: {
@@ -2503,15 +2546,11 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
                 },
                 sampler: {
                     steps_a: mergedSampler.steps ?? mergedSampler.steps_a ?? 20,
-                    steps_b: isWanBuilder
-                        ? (secondarySampler.steps ?? mergedSampler.steps_b ?? mergedSampler.steps_a ?? mergedSampler.steps ?? 3)
-                        : undefined,
+                    steps_b: undefined,
                     cfg: mergedSampler.cfg ?? 5.0,
                     denoise: mergedSampler.denoise ?? 1.0,
                     seed_a: mergedSampler.seed ?? mergedSampler.seed_a ?? 0,
-                    seed_b: isWanBuilder
-                        ? (secondarySampler.seed ?? mergedSampler.seed_b ?? mergedSampler.seed_a ?? mergedSampler.seed ?? 0)
-                        : undefined,
+                    seed_b: undefined,
                     sampler_name: mergedSampler.sampler_name ?? "euler",
                     scheduler: mergedSampler.scheduler ?? "simple",
                 },
@@ -2527,8 +2566,6 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
 
         // Legacy flat schema fallback.
         const selectedModel = String(d?.[selectedSlot] ?? "").trim();
-        const secondaryLegacySlot = isWanBuilder ? _nextModelSlotKey(selectedSlot) : null;
-        const secondaryModel = secondaryLegacySlot ? String(d?.[secondaryLegacySlot] ?? "").trim() : "";
         const isExtendedSlot = selectedSlot === "model_c" || selectedSlot === "model_d";
 
         const slotPrompt = (slot, kind) => {
@@ -2546,9 +2583,6 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
             selectedSlot === "model_a" ? String(d.model_a || "") :
                 selectedSlot === "model_b" ? String(d.model_b || "") : ""
         );
-        const legacySecondaryModel = secondaryModel || (
-            isWanBuilder && selectedSlot === "model_a" ? String(d.model_b || "") : ""
-        );
 
         const lorasBySlot = (slot) => {
             if (slot === "model_a") return Array.isArray(d.loras_a) ? d.loras_a : [];
@@ -2563,9 +2597,9 @@ function parseWorkflowData(jsonStr, modelSlot = "model_a", builderVariant = "sim
             positive_prompt: legacyPositive,
             negative_prompt: legacyNegative,
             loras_a: lorasBySlot(selectedSlot),
-            loras_b: isWanBuilder && secondaryLegacySlot ? lorasBySlot(secondaryLegacySlot) : [],
+            loras_b: [],
             model_a: legacyPrimaryModel,
-            model_b: isWanBuilder ? legacySecondaryModel : "",
+            model_b: "",
             model_slot: selectedSlot,
             model_a_found: d.model_a_found,
             model_b_found: d.model_b_found,
@@ -2734,17 +2768,13 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = origCreated?.apply(this, arguments);
             const node = this;
-            const isWanBuilder = false;
             const isMultiBuilder = nodeData.name === "RecipeBuilder";
-            node._weBuilderVariant = isWanBuilder ? "wan" : "simple";
             node._weUseSlotProfiles = isMultiBuilder === true;
 
             const _normalizeInputNameForVariant = (name) => {
                 let key = _canonicalInputName(name);
-                if (!isWanBuilder) {
-                    if (key === "seed_a") key = "seed";
-                    if (key === "lora_stack_a") key = "lora_stack";
-                }
+                if (key === "seed_a") key = "seed";
+                if (key === "lora_stack_a") key = "lora_stack";
                 return key;
             };
 
@@ -2811,7 +2841,7 @@ app.registerExtension({
             node._weExtracted = null;
             node._weLoraState = {};
             node._weOverrides = {};
-            node._weFamily = isWanBuilder ? "wan_video_t2v" : "sdxl";
+            node._weFamily = "sdxl";
             node._weShowAllModels = false;
             node._weSections = {};
             node._weCollapsedSections = { resolution: true, model: true, sampler: true, positive: false, negative: false, loras: false };
@@ -2936,17 +2966,13 @@ app.registerExtension({
             // Execute-only flow: no manual Update Recipe button.
             node._weUpdateBtn = null;
 
-            const pullSlotOptions = isWanBuilder
-                ? [...MODEL_SLOT_PAIR_OPTIONS]
-                : [...MODEL_SLOT_KEYS];
-            const sendSlotOptions = isWanBuilder ? MODEL_SLOT_PAIR_OPTIONS : MODEL_SLOT_KEYS;
+            const pullSlotOptions = [...MODEL_SLOT_KEYS];
+            const sendSlotOptions = [...MODEL_SLOT_KEYS];
 
             const pullModelSlotRow = makeInput("Pull From", "select", "model_a", {
                 options: pullSlotOptions,
             }, () => {
-                const picked = isWanBuilder
-                    ? _normalizePullModelPairStartKey(pullModelSlotRow._inp?.value)
-                    : _normalizePullModelSlotKey(pullModelSlotRow._inp?.value);
+                const picked = _normalizeModelSlotKey(pullModelSlotRow._inp?.value);
                 pullModelSlotRow._inp.value = picked;
                 node._wePullModelSlot = picked;
                 _syncS();
@@ -2961,9 +2987,7 @@ app.registerExtension({
             const sendModelSlotRow = makeInput("Send To", "select", "model_a", {
                 options: sendSlotOptions,
             }, () => {
-                const picked = isWanBuilder
-                    ? _normalizeModelPairStartKey(sendModelSlotRow._inp?.value || "model_a")
-                    : _normalizeModelSlotKey(sendModelSlotRow._inp?.value || "model_a");
+                const picked = _normalizeModelSlotKey(sendModelSlotRow._inp?.value || "model_a");
                 sendModelSlotRow._inp.value = picked;
                 node._weSendModelSlot = picked;
                 _syncS();
@@ -3009,8 +3033,7 @@ app.registerExtension({
                         delete nextCollapsed.resolution;
                         ovObj._section_collapsed = nextCollapsed;
                     }
-                    ovObj._send_model_slot = slot;
-                    ovObj._pull_model_slot = slot;
+                    ovObj._model_slot = slot;
                     slotProfiles[slot] = { ov: ovObj, ls: lsObj };
                     node._weSlotProfiles = slotProfiles;
                 };
@@ -3028,7 +3051,7 @@ app.registerExtension({
                                 model_b: "",
                                 vae: "",
                                 clip_names: [],
-                                _family: "sdxl",
+                                _family: "",
                                 steps_a: 20,
                                 cfg: 5.0,
                                 denoise: 1.0,
@@ -3050,8 +3073,7 @@ app.registerExtension({
                         slotProfiles[targetSlot] = profile;
                     }
                     const profileOv = (profile.ov && typeof profile.ov === "object") ? { ...profile.ov } : {};
-                    profileOv._send_model_slot = targetSlot;
-                    profileOv._pull_model_slot = targetSlot;
+                    profileOv._model_slot = targetSlot;
                     profileOv._active_model_slot = targetSlot;
                     profileOv._slot_profiles = slotProfiles;
 
@@ -3149,22 +3171,12 @@ app.registerExtension({
                 node._weRecipeDataConnectedState = recipeDataConnected;
 
                 const current = String(sel.value || node._wePullModelSlot || "");
-                const preferredConnected = node._weBuilderVariant === "wan"
-                    ? _normalizePullModelPairStartKey(current && current !== NO_PULL_SLOT ? current : "model_a")
-                    : _normalizePullModelSlotKey(current && current !== NO_PULL_SLOT ? current : "model_a");
-
-                // Remove any stale "none" option that may exist from a previous version.
-                for (const opt of [...sel.options]) {
-                    if (opt.value === NO_PULL_SLOT) opt.remove();
-                }
+                const preferredConnected = _normalizeModelSlotKey(current || "model_a");
 
                 // Auto-select defaults only when connection mode actually changes and
                 // never during workflow hydration (restore should win).
                 let nextVal = sel.value || current;
                 if (!node._weHydrating && connectionChanged) {
-                    nextVal = preferredConnected;
-                }
-                if (!node._weHydrating && nextVal === NO_PULL_SLOT) {
                     nextVal = preferredConnected;
                 }
                 if (![...sel.options].some((o) => o.value === nextVal)) {
@@ -3408,21 +3420,7 @@ app.registerExtension({
                         const r = await fetch("/workflow-extractor/list-families");
                         const d = await r.json();
                         let families = d.families || {};
-                        const curVal = familySel.value || node._weFamily || (isWanBuilder ? "wan_video_t2v" : "sdxl");
-                        if (isWanBuilder) {
-                            const wanOnly = {};
-                            if (families.wan_video_t2v) wanOnly.wan_video_t2v = families.wan_video_t2v;
-                            if (families.wan_video_i2v) wanOnly.wan_video_i2v = families.wan_video_i2v;
-                            families = wanOnly;
-                        } else {
-                            const noWan = {};
-                            for (const [k, v] of Object.entries(families)) {
-                                const key = String(k || "");
-                                if (key === "wan_video_t2v" || key === "wan_video_i2v") continue;
-                                noWan[key] = v;
-                            }
-                            families = noWan;
-                        }
+                        const curVal = familySel.value || node._weFamily || "sdxl";
                         familySel.innerHTML = "";
                         // Sort alphabetically, SDXL first
                         const keys = Object.keys(families).sort((a, b) => {
@@ -3437,8 +3435,8 @@ app.registerExtension({
                         }
                         if (!familySel.options.length) {
                             const o = document.createElement("option");
-                            o.value = isWanBuilder ? "wan_video_t2v" : "sdxl";
-                            o.textContent = isWanBuilder ? "WAN Video (T2V)" : "SDXL";
+                            o.value = "sdxl";
+                            o.textContent = "SDXL";
                             familySel.appendChild(o);
                         }
                         familySel.value = [...familySel.options].some((o) => o.value === curVal)
@@ -3460,25 +3458,17 @@ app.registerExtension({
             // Add SDXL as initial option
             {
                 const o = document.createElement("option");
-                o.value = isWanBuilder ? "wan_video_t2v" : "sdxl";
-                o.textContent = isWanBuilder ? "WAN Video (T2V)" : "SDXL";
+                o.value = "sdxl";
+                o.textContent = "SDXL";
                 familySel.appendChild(o);
-                familySel.value = isWanBuilder ? "wan_video_t2v" : "sdxl";
+                familySel.value = "sdxl";
             }
             requestAnimationFrame(() => {
                 _ensureFamiliesLoaded().catch(() => { /* ignore */ });
             });
             familySel.onchange = () => {
                 // Persist family immediately so fast tab-switches do not lose it.
-                let picked = familySel.value || (isWanBuilder ? "wan_video_t2v" : "sdxl");
-                if (isWanBuilder && picked !== "wan_video_t2v" && picked !== "wan_video_i2v") {
-                    picked = "wan_video_t2v";
-                    familySel.value = picked;
-                }
-                if (!isWanBuilder && (picked === "wan_video_t2v" || picked === "wan_video_i2v")) {
-                    picked = "sdxl";
-                    familySel.value = picked;
-                }
+                const picked = familySel.value || "sdxl";
                 node._weFamily = picked;
                 node._weOverrides = node._weOverrides || {};
                 node._weOverrides._family = node._weFamily;
@@ -3700,14 +3690,6 @@ app.registerExtension({
             // fromUpdateUI=true: skip auto-select & _syncS — updateUI will call
             // _setOriginal and _syncS itself right after, with the correct values.
             const onFamilyChanged = async (familyKey, { fromUpdateUI = false } = {}) => {
-                if (isWanBuilder && familyKey !== "wan_video_t2v" && familyKey !== "wan_video_i2v") {
-                    familyKey = "wan_video_t2v";
-                    if (node._weFamilySel) node._weFamilySel.value = familyKey;
-                }
-                if (!isWanBuilder && (familyKey === "wan_video_t2v" || familyKey === "wan_video_i2v")) {
-                    familyKey = "sdxl";
-                    if (node._weFamilySel) node._weFamilySel.value = familyKey;
-                }
                 node._weFamily = familyKey;
                 // Persist early before async reloads complete.
                 node._weOverrides = node._weOverrides || {};
@@ -4093,7 +4075,7 @@ app.registerExtension({
                     }
                 };
 
-                applySeedState(node._weBuilderVariant === "wan" ? "seed_a" : "seed", rows.seed_a);
+                applySeedState("seed", rows.seed_a);
                 applySeedState("seed_b", rows.seed_b);
             }
             node._updateSeedGhosting = _updateSeedGhosting;
@@ -4160,40 +4142,8 @@ app.registerExtension({
                 if (!info) return;
 
                 if (node._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
-                    node._weSlotProfiles = _normalizeSlotProfiles(info._slot_profiles);
-                    // Immediately apply active slot's fresh data into _weExtracted so
-                    // the updateUI() call below paints the currently-visible slot.
-                    const activeSlot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
-                    const activeProfile = node._weSlotProfiles?.[activeSlot];
-                    if (activeProfile?.ov && typeof activeProfile.ov === "object") {
-                        const ov = activeProfile.ov;
-                        const sampler = {
-                            steps_a: ov.steps_a ?? 20, cfg: ov.cfg ?? 5.0,
-                            denoise: ov.denoise ?? 1.0, seed_a: ov.seed_a ?? 0,
-                            sampler_name: ov.sampler_name || "euler", scheduler: ov.scheduler || "simple",
-                        };
-                        node._weExtracted = {
-                            ...(node._weExtracted || {}),
-                            positive_prompt: ov.positive_prompt ?? "",
-                            negative_prompt: ov.negative_prompt ?? "",
-                            model_a: ov.model_a ?? "",
-                            model_family: ov._family || node._weExtracted?.model_family || "sdxl",
-                            vae: { name: ov.vae ?? "", source: "manual" },
-                            clip: { names: Array.isArray(ov.clip_names) ? ov.clip_names : [], type: "", source: "manual" },
-                            sampler,
-                            loras_a: (ov._section_locks?.loras && Array.isArray(node._weExtracted?.loras_a))
-                                ? node._weExtracted.loras_a
-                                : (Array.isArray(ov.loras_a) ? ov.loras_a : (node._weExtracted?.loras_a || [])),
-                        };
-                        // Ghost individual inputs to show MM multi-input locked state
-                        if (ov._section_locks && typeof ov._section_locks === "object") {
-                            const sl = ov._section_locks;
-                            const _g = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
-                            _g(node._wePosBox, !!sl.positive);
-                            _g(node._weNegBox, !!sl.negative);
-                            _g(node._weSamplerRows?.seed_a?._inp, !!sl.sampler);
-                        }
-                    }
+                    node._weSlotProfiles = _mergeSlotProfiles(node._weSlotProfiles, info._slot_profiles);
+                    _hydrateExtractedFromSelectedSlotProfile(node);
                 }
 
                 // Always mirror connected prompt inputs into textareas,
@@ -4294,6 +4244,7 @@ app.registerExtension({
                     loras_a: mergedLorasA,
                     loras_b: mergedLorasB,
                 };
+                _hydrateExtractedFromSelectedSlotProfile(node);
                 node._wePopulated = true;
 
                 if (info.model_family && node._weFamilySel) {
@@ -4345,38 +4296,8 @@ app.registerExtension({
             const negConn = this.inputs?.find(i => i.name === "neg_prompt");
             if (info) {
                 if (this._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
-                    this._weSlotProfiles = _normalizeSlotProfiles(info._slot_profiles);
-                    const activeSlot = _normalizeModelSlotKey(this._weActiveModelSlot || this._weSendModelSlot || "model_a");
-                    const activeProfile = this._weSlotProfiles?.[activeSlot];
-                    if (activeProfile?.ov && typeof activeProfile.ov === "object") {
-                        const ov = activeProfile.ov;
-                        const sampler = {
-                            steps_a: ov.steps_a ?? 20, cfg: ov.cfg ?? 5.0,
-                            denoise: ov.denoise ?? 1.0, seed_a: ov.seed_a ?? 0,
-                            sampler_name: ov.sampler_name || "euler", scheduler: ov.scheduler || "simple",
-                        };
-                        this._weExtracted = {
-                            ...(this._weExtracted || {}),
-                            positive_prompt: ov.positive_prompt ?? "",
-                            negative_prompt: ov.negative_prompt ?? "",
-                            model_a: ov.model_a ?? "",
-                            model_family: ov._family || this._weExtracted?.model_family || "sdxl",
-                            vae: { name: ov.vae ?? "", source: "manual" },
-                            clip: { names: Array.isArray(ov.clip_names) ? ov.clip_names : [], type: "", source: "manual" },
-                            sampler,
-                            loras_a: (ov._section_locks?.loras && Array.isArray(this._weExtracted?.loras_a))
-                                ? this._weExtracted.loras_a
-                                : (Array.isArray(ov.loras_a) ? ov.loras_a : (this._weExtracted?.loras_a || [])),
-                        };
-                        // Ghost individual inputs to show MM multi-input locked state
-                        if (ov._section_locks && typeof ov._section_locks === "object") {
-                            const sl = ov._section_locks;
-                            const _g = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
-                            _g(this._wePosBox, !!sl.positive);
-                            _g(this._weNegBox, !!sl.negative);
-                            _g(this._weSamplerRows?.seed_a?._inp, !!sl.sampler);
-                        }
-                    }
+                    this._weSlotProfiles = _mergeSlotProfiles(this._weSlotProfiles, info._slot_profiles);
+                    _hydrateExtractedFromSelectedSlotProfile(this);
                 }
                 if (posConn?.link != null && info.positive_prompt != null && this._wePosBox) {
                     this._wePosBox.value = info.positive_prompt;
@@ -4467,6 +4388,7 @@ app.registerExtension({
                     loras_a: mergedLorasA,
                     loras_b: mergedLorasB,
                 };
+                _hydrateExtractedFromSelectedSlotProfile(this);
                 this._wePopulated = true;
 
                 if (info.model_family && this._weFamilySel) {
@@ -4524,10 +4446,6 @@ app.registerExtension({
             // ── Migration: remove stale inputs/outputs from old workflows ──
             // LiteGraph restores slots from saved JSON; if INPUT_TYPES or
             // RETURN_TYPES changed between versions, phantom slots persist.
-            if (!node._weBuilderVariant) {
-                const cls = String(node.comfyClass || node.type || "");
-                node._weBuilderVariant = "simple";
-            }
             if (node._weUseSlotProfiles == null) {
                 const cls = String(node.comfyClass || node.type || "");
                 node._weUseSlotProfiles = (cls === "RecipeBuilder") || (cls === "WorkflowBuilderMulti");
@@ -4539,10 +4457,8 @@ app.registerExtension({
             ]);
             const _normalizeInputNameForVariant = (name) => {
                 let key = _canonicalInputName(name);
-                if (node._weBuilderVariant !== "wan") {
-                    if (key === "seed_a") key = "seed";
-                    if (key === "lora_stack_a") key = "lora_stack";
-                }
+                if (key === "seed_a") key = "seed";
+                if (key === "lora_stack_a") key = "lora_stack";
                 return key;
             };
             // Normalize legacy prompt input slot names on load.

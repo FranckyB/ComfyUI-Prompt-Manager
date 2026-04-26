@@ -394,7 +394,7 @@ def extract_vae_info(prompt_data, workflow_data):
 
             if ct in CHECKPOINT_TYPES and inp.get('ckpt_name'):
                 if not vae_info['name']:
-                    vae_info['name']   = '(from checkpoint)'
+                    vae_info['name']   = '(Default)'
                     vae_info['source'] = 'checkpoint'
                 # Don't return — a separate VAE loader later overrides this
 
@@ -411,7 +411,7 @@ def extract_vae_info(prompt_data, workflow_data):
                 return vae_info
 
             if ntype in CHECKPOINT_TYPES and widgets and not vae_info['name']:
-                vae_info['name']   = '(from checkpoint)'
+                vae_info['name']   = '(Default)'
                 vae_info['source'] = 'checkpoint'
 
     # ── Fallback: embedded extracted_data from WG / PE nodes ──────────────
@@ -461,7 +461,7 @@ def extract_clip_info(prompt_data, workflow_data):
                 return clip_info
 
             if ct in CHECKPOINT_TYPES and inp.get('ckpt_name') and not clip_info['names']:
-                clip_info['names']  = ['(from checkpoint)']
+                clip_info['names']  = ['(Default)']
                 clip_info['source'] = 'checkpoint'
 
     if not clip_info['names'] and workflow_data and isinstance(workflow_data, dict):
@@ -487,7 +487,7 @@ def extract_clip_info(prompt_data, workflow_data):
                 return clip_info
 
             if ntype in CHECKPOINT_TYPES and widgets and not clip_info['names']:
-                clip_info['names']  = ['(from checkpoint)']
+                clip_info['names']  = ['(Default)']
                 clip_info['source'] = 'checkpoint'
 
     # ── Fallback: embedded extracted_data from WG / PE nodes ──────────────
@@ -1134,10 +1134,10 @@ def build_simplified_workflow_data(extracted, overrides=None, sampler_params=Non
     # original graph — they shouldn't override the checkpoint's built-in ones.
     if loader_type == 'checkpoint':
         if not vae_override_explicit or not vae_val or vae_val.startswith('('):
-            vae_val = '(from checkpoint)'
+            vae_val = '(Default)'
         if not clip_override_explicit or not clip_val or clip_val == [] or \
                 (len(clip_val) == 1 and (not clip_val[0] or clip_val[0].startswith('('))):
-            clip_val = ['(from checkpoint)']
+            clip_val = ['(Default)']
 
     output = {
         "_source":         overrides.get('_source', 'PromptExtractor'),

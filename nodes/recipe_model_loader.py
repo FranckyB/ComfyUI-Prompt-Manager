@@ -417,7 +417,7 @@ class WorkflowModelLoader:
 
     @staticmethod
     def _is_placeholder(value):
-        """True for display-only strings like '(from checkpoint)', '(none)', etc."""
+        """True for display-only strings like '(Default)', '(none)', etc."""
         return isinstance(value, str) and value.startswith("(")
 
     def _normalize_spec(self, spec):
@@ -460,7 +460,7 @@ class WorkflowModelLoader:
                 elif isinstance(clip_names, str) and clip_names.strip():
                     spec["clip"] = [clip_names.strip()]
 
-        # VAE / CLIP: placeholders like '(from checkpoint)' mean "use what
+        # VAE / CLIP: placeholders like '(Default)' mean "use what
         # the checkpoint already provides" — normalise to empty.
         vae = (spec.get("vae") or "").strip()
         spec["vae"] = "" if self._is_placeholder(vae) else vae

@@ -296,9 +296,9 @@ class WorkflowRenderer:
         if _family_is_ckpt:
             # Checkpoint families can use embedded VAE/CLIP.
             if not vae_name or str(vae_name).startswith('('):
-                vae_name = "(from checkpoint)"
+                vae_name = "(Default)"
             if not clip_names or clip_is_placeholder:
-                clip_names = ["(from checkpoint)"]
+                clip_names = ["(Default)"]
             if not clip_type_str:
                 clip_type_str = str(_family_spec.get("clip_type", ""))
         else:

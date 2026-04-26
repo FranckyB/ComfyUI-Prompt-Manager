@@ -69,30 +69,11 @@ SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS
 # Used by another RecipeBuilder's "Update Workflow" button for live pull.
 _last_workflow_builder_info = {}
 _MODEL_KEYS = ("model_a", "model_b", "model_c", "model_d")
-_NO_PULL_SLOT = "none"
 
 
-def _normalize_model_slot(slot, default="model_a", allow_none=False):
+def _normalize_model_slot(slot, default="model_a"):
     key = str(slot or default).strip().lower()
-    if allow_none and key == _NO_PULL_SLOT:
-        return _NO_PULL_SLOT
     return key if key in _MODEL_KEYS else default
-
-
-def _normalize_model_pair_start(slot):
-    key = _normalize_model_slot(slot)
-    return "model_c" if key in ("model_c", "model_d") else "model_a"
-
-
-def _next_model_slot(slot):
-    key = _normalize_model_slot(slot)
-    try:
-        idx = _MODEL_KEYS.index(key)
-    except ValueError:
-        return None
-    if idx >= len(_MODEL_KEYS) - 1:
-        return None
-    return _MODEL_KEYS[idx + 1]
 
 
 def _v2_get_model_block(recipe_data, model_key):
@@ -105,7 +86,7 @@ def _v2_get_model_block(recipe_data, model_key):
     return block if isinstance(block, dict) else None
 
 
-def _builder_output_to_v2(legacy_wf, mode="simple", send_as_slot="model_a", base_recipe_data=None):
+def _builder_output_to_v2(legacy_wf, base_recipe_data=None, overwrite_existing_slots=True):
     """Convert Builder legacy workflow_data shape to v2 models shape."""
     wf = legacy_wf if isinstance(legacy_wf, dict) else {}
     sampler = wf.get("sampler", {}) if isinstance(wf.get("sampler"), dict) else {}
@@ -168,33 +149,19 @@ def _builder_output_to_v2(legacy_wf, mode="simple", send_as_slot="model_a", base
                 # (e.g. ModelPatcher), which can raise during deepcopy.
                 out["models"][key] = dict(block)
 
-    is_wan_mode = str(mode or "simple").strip().lower() == "wan"
-    primary_slot = _normalize_model_pair_start(send_as_slot) if is_wan_mode else _normalize_model_slot(send_as_slot)
-    secondary_slot = _next_model_slot(primary_slot) if is_wan_mode else None
+    primary_slot = "model_a"
+    has_secondary_block = any([
+        str(wf.get("model_b", "")).strip() != "",
+        isinstance(wf.get("loras_b"), list) and len(wf.get("loras_b") or []) > 0,
+        isinstance(sampler.get("steps_b"), (int, float)),
+        isinstance(sampler.get("seed_b"), (int, float)),
+    ])
+    secondary_slot = "model_b" if has_secondary_block else None
 
-    out["models"][primary_slot] = _make_model_block("model_a")
-    if secondary_slot:
+    if overwrite_existing_slots or primary_slot not in out["models"]:
+        out["models"][primary_slot] = _make_model_block("model_a")
+    if secondary_slot and (overwrite_existing_slots or secondary_slot not in out["models"]):
         out["models"][secondary_slot] = _make_model_block("model_b")
-
-    # Attach runtime objects: model-scoped assets go in model blocks, while
-    # latent/image/mask remain root-level for merge-friendly chaining.
-    if "MODEL_A" in wf:
-        out["models"][primary_slot]["MODEL"] = wf.get("MODEL_A")
-    if "CLIP" in wf:
-        out["models"][primary_slot]["CLIP"] = wf.get("CLIP")
-    if "VAE" in wf:
-        out["models"][primary_slot]["VAE"] = wf.get("VAE")
-    if "POSITIVE" in wf:
-        out["models"][primary_slot]["POSITIVE"] = wf.get("POSITIVE")
-    if "NEGATIVE" in wf:
-        out["models"][primary_slot]["NEGATIVE"] = wf.get("NEGATIVE")
-
-    if secondary_slot and "MODEL_B" in wf:
-        out["models"][secondary_slot]["MODEL"] = wf.get("MODEL_B")
-        if "CLIP" in wf:
-            out["models"][secondary_slot]["CLIP"] = wf.get("CLIP")
-        if "VAE" in wf:
-            out["models"][secondary_slot]["VAE"] = wf.get("VAE")
 
     for key in ("LATENT", "IMAGE", "MASK", "EXTRA"):
         if key in wf:
@@ -559,7 +526,7 @@ async def api_process_extracted(request):
             # Checkpoint models default to built-in VAE, but respect an
             # explicit separate VAE selection from the incoming data.
             if not vae_name or str(vae_name).startswith('('):
-                vae = {'name': '(from checkpoint)', 'source': 'checkpoint'}
+                vae = {'name': '(Default)', 'source': 'checkpoint'}
                 extracted['vae'] = vae
             else:
                 vae = {'name': vae_name, 'source': vae.get('source', 'separate')}
@@ -580,7 +547,7 @@ async def api_process_extracted(request):
             # Checkpoint models default to built-in CLIP, but respect an
             # explicit separate CLIP selection from the incoming data.
             if not clip_names or clip_is_placeholder:
-                clip = {'names': ['(from checkpoint)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
+                clip = {'names': ['(Default)'], 'type': clip.get('type', ''), 'source': 'checkpoint'}
             else:
                 clip = {
                     'names': clip_names,
@@ -753,8 +720,7 @@ class WorkflowBuilder:
                 multi_pos_prompts=None, multi_neg_prompts=None,
                 multi_seeds=None, multi_loras=None,
                 override_data="{}", lora_state="{}",
-                unique_id=None, extra_pnginfo=None, prompt=None,
-                builder_mode="simple"):
+                unique_id=None, extra_pnginfo=None, prompt=None):
         """
         Main execution:
           1. Parse recipe_data (if connected)
@@ -763,19 +729,11 @@ class WorkflowBuilder:
           4. Build recipe_data JSON
           5. Return RECIPE_DATA
         """
-        mode = str(builder_mode or "simple").strip().lower()
-        is_wan_mode = mode == "wan"
-        is_simple_mode = not is_wan_mode
-
-        # Simple builder is intentionally single prompt/seed/lora.
-        if is_simple_mode:
-            if seed is not None:
-                seed_a = seed
-            if lora_stack is not None:
-                lora_stack_a = lora_stack
-            seed_b = None
-            denoise = None
-            lora_stack_b = None
+        # Backward-compat input mapping: route legacy scalar inputs to slot A.
+        if seed is not None and seed_a is None:
+            seed_a = seed
+        if lora_stack is not None and lora_stack_a is None:
+            lora_stack_a = lora_stack
 
         try:
             overrides = json.loads(override_data) if override_data else {}
@@ -783,22 +741,12 @@ class WorkflowBuilder:
             overrides = {}
         if not isinstance(overrides, dict):
             overrides = {}
-        pull_model_slot = _normalize_model_slot(
-            overrides.get("_pull_model_slot", overrides.get("_model_slot", "model_a")),
-            default="model_a",
-            allow_none=True,
-        )
-        send_model_slot = _normalize_model_slot(overrides.get("_send_model_slot", overrides.get("_model_slot", pull_model_slot)))
-        if is_wan_mode:
-            if pull_model_slot != _NO_PULL_SLOT:
-                pull_model_slot = _normalize_model_pair_start(pull_model_slot)
-            send_model_slot = _normalize_model_pair_start(send_model_slot)
-        # Execute-only pull flow: treat legacy "none" as current send slot.
-        if pull_model_slot == _NO_PULL_SLOT:
-            pull_model_slot = send_model_slot
-        pull_enabled = pull_model_slot != _NO_PULL_SLOT
-        secondary_pull_slot = _next_model_slot(pull_model_slot) if pull_enabled else None
-        active_model_slot = send_model_slot
+        raw_active_model_slot = str(overrides.get("_model_slot", "") or "").strip().lower()
+        active_model_slot = raw_active_model_slot if raw_active_model_slot in _MODEL_KEYS else None
+
+        # Multi-slot builder semantics: selected slot drives read/display only.
+        load_model_slot = active_model_slot
+        load_secondary_pull_slot = None
 
         def _extract_multi_prompt_value(payload, slot_key, prompt_key=None):
             if not isinstance(payload, dict):
@@ -879,10 +827,23 @@ class WorkflowBuilder:
                 except (json.JSONDecodeError, TypeError):
                     print("[RecipeBuilder] Warning: could not parse recipe_data")
 
+        # RecipeBuilder consumes v2 recipe_data only.
+        if isinstance(wf_data, dict):
+            is_v2_recipe = int(wf_data.get("version", 0) or 0) >= 2 and isinstance(wf_data.get("models"), dict)
+            if not is_v2_recipe:
+                print("[RecipeBuilder] Warning: non-v2 recipe_data received; ignoring input payload")
+                wf_data = None
+
         # ── Build extracted dict from recipe_data or defaults ───────────
-        if wf_data and pull_enabled:
-            v2_a = _v2_get_model_block(wf_data, pull_model_slot)
-            v2_b = _v2_get_model_block(wf_data, secondary_pull_slot) if secondary_pull_slot else None
+        if wf_data:
+            v2_a = _v2_get_model_block(wf_data, load_model_slot) if load_model_slot else None
+            v2_b = _v2_get_model_block(wf_data, load_secondary_pull_slot) if load_secondary_pull_slot else None
+
+            # Strict multi behavior: if selected slot has no model, treat as
+            # empty selection and clear extracted UI state.
+            if isinstance(v2_a, dict) and str(v2_a.get('model', '') or '').strip() == '':
+                v2_a = None
+                v2_b = None
 
             if isinstance(v2_a, dict):
                 sa = v2_a.get('sampler', {}) if isinstance(v2_a.get('sampler'), dict) else {}
@@ -919,43 +880,41 @@ class WorkflowBuilder:
                     'is_video': ra.get('length') is not None,
                     'model_family': v2_a.get('family', ''),
                     'model_family_label': get_family_label(v2_a.get('family', '')),
-                    'model_slot': pull_model_slot,
+                    'model_slot': load_model_slot or '',
                 }
             else:
-                wf_sampler = wf_data.get('sampler', {})
-                wf_res = wf_data.get('resolution', {})
                 extracted = {
-                    'positive_prompt': wf_data.get('positive_prompt', ''),
-                    'negative_prompt': wf_data.get('negative_prompt', ''),
-                    'loras_a': wf_data.get('loras_a', []),
-                    'loras_b': wf_data.get('loras_b', []),
-                    'model_a': wf_data.get('model_a', ''),
-                    'model_b': wf_data.get('model_b', ''),
-                    'vae':     {'name': wf_data.get('vae', ''), 'source': 'workflow_data'},
+                    'positive_prompt': '',
+                    'negative_prompt': '',
+                    'loras_a': [],
+                    'loras_b': [],
+                    'model_a': '',
+                    'model_b': '',
+                    'vae':     {'name': '', 'source': 'workflow_data'},
                     'clip':    {
-                        'names': wf_data.get('clip', []) if isinstance(wf_data.get('clip'), list) else ([wf_data['clip']] if wf_data.get('clip') else []),
-                        'type': wf_data.get('clip_type', ''), 'source': 'workflow_data',
+                        'names': [],
+                        'type': '', 'source': 'workflow_data',
                     },
                     'sampler': {
-                        'steps_a': wf_sampler.get('steps_a', wf_sampler.get('steps', 20)),
-                        'steps_b': wf_sampler.get('steps_b'),
-                        'cfg': wf_sampler.get('cfg', 5.0),
-                        'denoise': wf_sampler.get('denoise', 1.0),
-                        'seed_a': wf_sampler.get('seed_a', wf_sampler.get('seed', 0)),
-                        'seed_b': wf_sampler.get('seed_b'),
-                        'sampler_name': wf_sampler.get('sampler_name', 'euler'),
-                        'scheduler': wf_sampler.get('scheduler', 'simple'),
+                        'steps_a': 20,
+                        'steps_b': None,
+                        'cfg': 5.0,
+                        'denoise': 1.0,
+                        'seed_a': 0,
+                        'seed_b': None,
+                        'sampler_name': 'euler',
+                        'scheduler': 'simple',
                     },
                     'resolution': {
-                        'width': wf_res.get('width', 768),
-                        'height': wf_res.get('height', 1280),
-                        'batch_size': wf_res.get('batch_size', 1),
-                        'length': wf_res.get('length'),
+                        'width': 768,
+                        'height': 1280,
+                        'batch_size': 1,
+                        'length': None,
                     },
-                    'is_video': wf_res.get('length') is not None,
-                    'model_family': wf_data.get('family', ''),
-                    'model_family_label': get_family_label(wf_data.get('family', '')),
-                    'model_slot': pull_model_slot,
+                    'is_video': False,
+                    'model_family': '',
+                    'model_family_label': get_family_label(''),
+                    'model_slot': load_model_slot or '',
                 }
         else:
             extracted = {
@@ -975,7 +934,7 @@ class WorkflowBuilder:
                     'width': 768, 'height': 1280, 'batch_size': 1, 'length': None,
                 },
                 'is_video': False,
-                'model_slot': pull_model_slot,
+                'model_slot': load_model_slot or '',
             }
 
         # ── Merge connected LoRA stacks with workflow LoRAs ──────────────
@@ -1053,10 +1012,6 @@ class WorkflowBuilder:
         extracted['loras_a'] = _merge_lora_lists(workflow_loras_a, input_loras_a)
         extracted['loras_b'] = _merge_lora_lists(workflow_loras_b, input_loras_b)
 
-        if is_simple_mode:
-            extracted['loras_b'] = []
-            extracted['model_b'] = ''
-
         def _lora_input_signature(lora_list):
             rows = []
             for lora_item in (lora_list or []):
@@ -1093,7 +1048,7 @@ class WorkflowBuilder:
         # Pull From none means connected recipe_data should not drive section
         # values during execute; keep current UI state unless explicit inputs
         # (prompt/seed/lora stacks) are connected.
-        has_workflow_input = (wf_data is not None) and pull_enabled
+        has_workflow_input = (wf_data is not None)
         upstream_source = str((wf_data or {}).get('_source', '')).strip().lower() if isinstance(wf_data, dict) else ""
         # Sources that should keep RecipeBuilder in manual-edit mode while connected.
         # This includes extractors and manager nodes that users actively edit.
@@ -1285,9 +1240,6 @@ class WorkflowBuilder:
             model_name_a = overrides.get('model_a', model_name_a)
             model_name_b = overrides.get('model_b', model_name_b)
             vae_name = overrides.get('vae', vae_name)
-        if is_simple_mode:
-            model_name_b = ""
-
         sampler_params = extracted['sampler'].copy()
         if _allow_override('sampler'):
             for key in ['steps_a', 'steps_b', 'cfg', 'denoise', 'seed_a', 'seed_b', 'sampler_name', 'scheduler']:
@@ -1336,17 +1288,17 @@ class WorkflowBuilder:
         #           4. extracted['model_family'] (fallback)
         # The JS dropdown is the user's deliberate choice and must win.
         js_family = (overrides.get('_family') or None) if _allow_override('model') else None
-        selected_v2_block = _v2_get_model_block(wf_data, pull_model_slot) if (pull_enabled and isinstance(wf_data, dict)) else None
-        wf_family = selected_v2_block.get('family', '') if isinstance(selected_v2_block, dict) else ((wf_data.get('family', '') if wf_data else '') if pull_enabled else '')
+        selected_v2_block = _v2_get_model_block(wf_data, load_model_slot) if isinstance(wf_data, dict) else None
+        wf_family = selected_v2_block.get('family', '') if isinstance(selected_v2_block, dict) else ''
         incoming_family = extracted.get('model_family') or wf_family or ''
         model_detected_family = None
         if model_name_a:
             resolved_ref, _ = resolve_model_name(model_name_a)
             model_detected_family = get_model_family(resolved_ref or model_name_a)
         family_key = js_family or model_detected_family or wf_family or extracted.get('model_family') or None
-        if not family_key and wf_data and pull_enabled:
-            clip_type = str((selected_v2_block or {}).get('clip_type', wf_data.get('clip_type', ''))).lower()
-            loader_type = (selected_v2_block or {}).get('loader_type', wf_data.get('loader_type', ''))
+        if not family_key and isinstance(selected_v2_block, dict):
+            clip_type = str(selected_v2_block.get('clip_type', '')).lower()
+            loader_type = selected_v2_block.get('loader_type', '')
             if loader_type == 'checkpoint':
                 family_key = 'sdxl'
             elif 'flux2' in clip_type:
@@ -1363,15 +1315,7 @@ class WorkflowBuilder:
                 family_key = 'zimage'
             # other: fall through to sdxl default — better than wrong family
         if not family_key:
-            family_key = "sdxl"
-
-        if is_wan_mode:
-            if family_key not in ("wan_video_t2v", "wan_video_i2v"):
-                family_key = "wan_video_t2v"
-            extracted['is_video'] = True
-            if isinstance(extracted.get('resolution'), dict):
-                if extracted['resolution'].get('length') is None:
-                    extracted['resolution']['length'] = 81
+            family_key = "" if not str(model_name_a or "").strip() else "sdxl"
 
         strategy = get_family_sampler_strategy(family_key)
 
@@ -1505,18 +1449,6 @@ class WorkflowBuilder:
             extracted, wf_overrides, sampler_params
         )
 
-        if is_simple_mode:
-            simplified_wf.pop('model_b', None)
-            simplified_wf['loras_b'] = []
-            if isinstance(simplified_wf.get('sampler'), dict):
-                simplified_wf['sampler'].pop('seed_b', None)
-                simplified_wf['sampler'].pop('steps_b', None)
-
-        if is_wan_mode:
-            simplified_wf['family'] = family_key
-            if isinstance(simplified_wf.get('resolution'), dict) and simplified_wf['resolution'].get('length') is None:
-                simplified_wf['resolution']['length'] = 81
-
         # ── Ensure clip_type and loader_type are always set from family ───
         # build_simplified_workflow_data derives these from extracted['clip'],
         # which may have empty type/source when the user is in manual mode
@@ -1541,16 +1473,16 @@ class WorkflowBuilder:
         # For non-checkpoint (unet) models, resolve to a compatible file.
         is_checkpoint = simplified_wf.get('loader_type') == 'checkpoint'
 
-        # Checkpoint models: use (from checkpoint) when user selected "(Default)"
+        # Checkpoint models: use (Default) when user selected "(Default)"
         # (i.e. override value is empty/missing). If user explicitly picked a
         # file in the dropdown, respect that choice.
         if is_checkpoint:
             vae_ov = overrides.get('vae', '')
             if not vae_ov or vae_ov.startswith('('):
-                simplified_wf['vae'] = '(from checkpoint)'
+                simplified_wf['vae'] = '(Default)'
             clip_ov = overrides.get('clip_names', [])
             if not clip_ov or all(not c or c.startswith('(') for c in clip_ov):
-                simplified_wf['clip'] = ['(from checkpoint)']
+                simplified_wf['clip'] = ['(Default)']
         else:
             # Non-checkpoint: resolve empty VAE/CLIP to compatible files
             vae_val = simplified_wf.get('vae')
@@ -1634,7 +1566,7 @@ class WorkflowBuilder:
                 simplified_wf['vae'] = fallback_vae
 
         # CLIP fallback: check each clip name, replace not-found ones
-        # Skip for "(from checkpoint)" — those aren't real files on disk.
+        # Skip for "(Default)" — those aren't real files on disk.
         clip_names_out = simplified_wf.get('clip', [])
         if clip_names_out and not all(n.startswith('(') for n in clip_names_out):
             clip_paths = resolve_clip_names(clip_names_out, simplified_wf.get('clip_type', ''))
@@ -1654,7 +1586,7 @@ class WorkflowBuilder:
         # only when the effective selection remains unchanged. If the user
         # changed model/clip/vae in this Builder, drop stale runtime objects
         # so downstream Renderer reloads the new assets.
-        if pull_enabled and isinstance(wf_data, dict):
+        if isinstance(wf_data, dict):
             def _norm_name(v):
                 return str(v or "").strip()
 
@@ -1666,22 +1598,22 @@ class WorkflowBuilder:
                     return [s] if s else []
                 return []
 
-            in_v2_a = _v2_get_model_block(wf_data, pull_model_slot)
-            in_v2_b = _v2_get_model_block(wf_data, secondary_pull_slot) if secondary_pull_slot else None
+            in_v2_a = _v2_get_model_block(wf_data, load_model_slot)
+            in_v2_b = _v2_get_model_block(wf_data, load_secondary_pull_slot) if load_secondary_pull_slot else None
 
-            in_model_a = _norm_name((in_v2_a or {}).get("model", "") if isinstance(in_v2_a, dict) else wf_data.get("model_a", ""))
+            in_model_a = _norm_name((in_v2_a or {}).get("model", ""))
             out_model_a = _norm_name(simplified_wf.get("model_a", ""))
-            in_model_b = _norm_name((in_v2_b or {}).get("model", "") if isinstance(in_v2_b, dict) else wf_data.get("model_b", ""))
+            in_model_b = _norm_name((in_v2_b or {}).get("model", ""))
             out_model_b = _norm_name(simplified_wf.get("model_b", ""))
-            in_vae = _norm_name((in_v2_a or {}).get("vae", "") if isinstance(in_v2_a, dict) else wf_data.get("vae", ""))
+            in_vae = _norm_name((in_v2_a or {}).get("vae", ""))
             out_vae = _norm_name(simplified_wf.get("vae", ""))
-            in_clip = _norm_clip_list((in_v2_a or {}).get("clip", []) if isinstance(in_v2_a, dict) else wf_data.get("clip", []))
+            in_clip = _norm_clip_list((in_v2_a or {}).get("clip", []))
             out_clip = _norm_clip_list(simplified_wf.get("clip", []))
 
-            in_model_obj_a = (in_v2_a or {}).get("MODEL") if isinstance(in_v2_a, dict) else wf_data.get("MODEL_A")
-            in_model_obj_b = (in_v2_b or {}).get("MODEL") if isinstance(in_v2_b, dict) else wf_data.get("MODEL_B")
-            in_clip_obj = (in_v2_a or {}).get("CLIP") if isinstance(in_v2_a, dict) else wf_data.get("CLIP")
-            in_vae_obj = (in_v2_a or {}).get("VAE") if isinstance(in_v2_a, dict) else wf_data.get("VAE")
+            in_model_obj_a = (in_v2_a or {}).get("MODEL") if isinstance(in_v2_a, dict) else None
+            in_model_obj_b = (in_v2_b or {}).get("MODEL") if isinstance(in_v2_b, dict) else None
+            in_clip_obj = (in_v2_a or {}).get("CLIP") if isinstance(in_v2_a, dict) else None
+            in_vae_obj = (in_v2_a or {}).get("VAE") if isinstance(in_v2_a, dict) else None
 
             if out_model_a and in_model_a == out_model_a and in_model_obj_a is not None:
                 simplified_wf["MODEL_A"] = in_model_obj_a
@@ -1941,9 +1873,8 @@ class WorkflowBuilder:
 
         output_wf = _builder_output_to_v2(
             simplified_wf,
-            mode=builder_mode,
-            send_as_slot=send_model_slot,
             base_recipe_data=base_recipe_for_output,
+            overwrite_existing_slots=False,
         )
 
         # ── Build UI info for JS (always, even if generation fails) ───────
@@ -2102,9 +2033,7 @@ class WorkflowBuilder:
                 'is_video':           extracted.get('is_video', False),
                 'model_family':       family_key,
                 'model_family_label': get_family_label(family_key),
-                'model_slot':         pull_model_slot,
-                'pull_model_slot':    pull_model_slot,
-                'send_model_slot':    send_model_slot,
+                'model_slot':         active_model_slot or '',
                 'lora_availability':  lora_availability,
                 '_slot_profiles':     ui_slot_profiles,
             }
@@ -2184,76 +2113,6 @@ class WorkflowBuilder:
         }
 
 
-class WorkflowBuilderWan(WorkflowBuilder):
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {},
-            "optional": {
-                "recipe_data": ("RECIPE_DATA", {
-                    "tooltip": "Optional recipe_data input for prefill/update.",
-                }),
-                "pos_prompt": ("STRING", {
-                    "forceInput": True,
-                    "tooltip": "Positive prompt text override.",
-                }),
-                "neg_prompt": ("STRING", {
-                    "forceInput": True,
-                    "tooltip": "Negative prompt text override.",
-                }),
-                "seed_a": ("INT", {
-                    "forceInput": True,
-                    "tooltip": "Seed A input override.",
-                }),
-                "seed_b": ("INT", {
-                    "forceInput": True,
-                    "tooltip": "Seed B input override.",
-                }),
-                "denoise": ("FLOAT", {
-                    "forceInput": True,
-                    "tooltip": "Denoise input override.",
-                }),
-                "lora_stack_a": ("LORA_STACK",),
-                "lora_stack_b": ("LORA_STACK",),
-                "override_data":   ("STRING", {"default": "{}", "multiline": True}),
-                "lora_state":      ("STRING", {"default": "{}", "multiline": True}),
-            },
-            "hidden": {
-                "unique_id":     "UNIQUE_ID",
-                "extra_pnginfo": "EXTRA_PNGINFO",
-            },
-        }
-
-    DESCRIPTION = (
-        "WAN Recipe Builder. Forces WAN video family mode and dual model workflow "
-        "(i2v/t2v only)."
-    )
-
-    def execute(self,
-                recipe_data=None,
-                pos_prompt=None, neg_prompt=None,
-                seed_a=None, seed_b=None, denoise=None,
-                lora_stack_a=None, lora_stack_b=None,
-                override_data="{}", lora_state="{}",
-                unique_id=None, extra_pnginfo=None, prompt=None):
-        return super().execute(
-            recipe_data=recipe_data,
-            pos_prompt=pos_prompt,
-            neg_prompt=neg_prompt,
-            seed_a=seed_a,
-            seed_b=seed_b,
-            denoise=denoise,
-            lora_stack_a=lora_stack_a,
-            lora_stack_b=lora_stack_b,
-            override_data=override_data,
-            lora_state=lora_state,
-            unique_id=unique_id,
-            extra_pnginfo=extra_pnginfo,
-            prompt=prompt,
-            builder_mode="wan",
-        )
-
-
 class WorkflowBuilderMulti(WorkflowBuilder):
     RETURN_TYPES = ("RECIPE_DATA",)
     RETURN_NAMES = ("recipe_data",)
@@ -2296,7 +2155,6 @@ class WorkflowBuilderMulti(WorkflowBuilder):
             unique_id=unique_id,
             extra_pnginfo=extra_pnginfo,
             prompt=prompt,
-            builder_mode="simple",
         )
         if isinstance(result, dict):
             raw = result.get("result", ())
