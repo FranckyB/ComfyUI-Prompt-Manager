@@ -759,6 +759,8 @@ class WorkflowBuilder:
                 pos_prompt=None, neg_prompt=None,
                 seed=None, seed_a=None, seed_b=None, denoise=None,
                 lora_stack=None, lora_stack_a=None, lora_stack_b=None,
+                multi_pos_prompts=None, multi_neg_prompts=None,
+                multi_seeds=None, multi_loras=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None,
                 builder_mode="simple"):
@@ -802,6 +804,38 @@ class WorkflowBuilder:
             send_model_slot = _normalize_model_pair_start(send_model_slot)
         pull_enabled = pull_model_slot != _NO_PULL_SLOT
         secondary_pull_slot = _next_model_slot(pull_model_slot) if pull_enabled else None
+        active_model_slot = send_model_slot
+
+        def _extract_multi_prompt_value(payload, slot_key, prompt_key=None):
+            if not isinstance(payload, dict):
+                return None
+            slot_val = payload.get(slot_key)
+            if isinstance(slot_val, str):
+                return slot_val if slot_val.strip() else None
+            if isinstance(slot_val, dict):
+                val = slot_val.get(prompt_key) if prompt_key is not None else None
+                if val is None:
+                    return None
+                val_str = str(val)
+                return val_str if val_str.strip() else None
+            return None
+
+        def _extract_multi_seed_value(payload, slot_key):
+            if not isinstance(payload, dict):
+                return None
+            if slot_key not in payload:
+                return None
+            try:
+                val = int(payload.get(slot_key))
+                return val if val != 0 else None
+            except Exception:
+                return None
+
+        def _extract_multi_lora_stack(payload, slot_key):
+            if not isinstance(payload, dict):
+                return None
+            stack = payload.get(slot_key)
+            return stack if isinstance(stack, list) else None
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
@@ -1221,6 +1255,13 @@ class WorkflowBuilder:
             pos_text = pos_prompt
         if neg_prompt is not None:
             neg_text = neg_prompt
+
+        multi_pos_text = _extract_multi_prompt_value(multi_pos_prompts, active_model_slot, 'positive')
+        if multi_pos_text is not None:
+            pos_text = multi_pos_text
+        multi_neg_text = _extract_multi_prompt_value(multi_neg_prompts, active_model_slot, 'negative')
+        if multi_neg_text is not None:
+            neg_text = multi_neg_text
         model_name_a = extracted['model_a']
         model_name_b = extracted.get('model_b', '')
         vae_name = extracted['vae']['name']
@@ -1267,6 +1308,10 @@ class WorkflowBuilder:
                 sampler_params['denoise'] = float(denoise)
             except (TypeError, ValueError):
                 pass
+
+        multi_seed_val = _extract_multi_seed_value(multi_seeds, active_model_slot)
+        if multi_seed_val is not None:
+            sampler_params['seed_a'] = multi_seed_val
 
         # Family + strategy
         # Priority: 1. JS override '_family' (user's explicit dropdown selection)
@@ -1752,12 +1797,39 @@ class WorkflowBuilder:
 
                     clip_raw = clip_src if isinstance(clip_src, list) else ([clip_src] if clip_src else [])
 
+                    multi_pos_slot = _extract_multi_prompt_value(multi_pos_prompts, slot_key, 'positive')
+                    multi_neg_slot = _extract_multi_prompt_value(multi_neg_prompts, slot_key, 'negative')
+                    multi_seed_slot = _extract_multi_seed_value(multi_seeds, slot_key)
+                    multi_lora_slot = _extract_multi_lora_stack(multi_loras, slot_key)
+                    merged_profile_loras = _norm_loras(loras_src)
+                    if multi_lora_slot is not None:
+                        merged_profile_loras = _merge_lora_lists(
+                            merged_profile_loras,
+                            _normalize_input_lora_stack(multi_lora_slot),
+                        )
+
+                    existing_slot_block = None
+                    if isinstance(base_recipe_for_output, dict):
+                        existing_models = base_recipe_for_output.get('models')
+                        if isinstance(existing_models, dict):
+                            candidate_slot = existing_models.get(slot_key)
+                            if isinstance(candidate_slot, dict):
+                                existing_slot_block = candidate_slot
+
+                    profile_pos = profile.get('positive_prompt', '')
+                    if (profile_pos is None or str(profile_pos) == '') and isinstance(existing_slot_block, dict):
+                        profile_pos = existing_slot_block.get('positive_prompt', '')
+
+                    profile_neg = profile.get('negative_prompt', '')
+                    if (profile_neg is None or str(profile_neg) == '') and isinstance(existing_slot_block, dict):
+                        profile_neg = existing_slot_block.get('negative_prompt', '')
+
                     slot_block = {
-                        'positive_prompt': str(profile.get('positive_prompt', '') or ''),
-                        'negative_prompt': str(profile.get('negative_prompt', '') or ''),
+                        'positive_prompt': str(multi_pos_slot if multi_pos_slot is not None else (profile_pos or '')),
+                        'negative_prompt': str(multi_neg_slot if multi_neg_slot is not None else (profile_neg or '')),
                         'family': str(profile_family or ''),
                         'model': str(profile_model or ''),
-                        'loras': _norm_loras(loras_src),
+                        'loras': merged_profile_loras,
                         'clip_type': str(profile_clip_type or ''),
                         'loader_type': str(profile_loader_type or ''),
                         'vae': str(profile.get('vae', '') or ''),
@@ -1766,7 +1838,7 @@ class WorkflowBuilder:
                             'steps': _norm_int(sampler_in.get('steps', 20), 20),
                             'cfg': _norm_num(sampler_in.get('cfg', 5.0), 5.0),
                             'denoise': _norm_num(sampler_in.get('denoise', 1.0), 1.0),
-                            'seed': _norm_int(sampler_in.get('seed', 0), 0),
+                            'seed': _norm_int(multi_seed_slot if multi_seed_slot is not None else sampler_in.get('seed', 0), 0),
                             'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
                             'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
                         },
@@ -1829,6 +1901,45 @@ class WorkflowBuilder:
         if _allow_override('model') and overrides.get('clip_names'):
             effective_clip = {'names': overrides['clip_names'], 'type': '', 'source': 'override'}
 
+        ui_slot_profiles = {}
+        slot_profiles_src = slot_profiles if isinstance(slot_profiles, dict) else {}
+        output_models = output_wf.get('models', {}) if isinstance(output_wf, dict) else {}
+        for slot_key in _MODEL_KEYS:
+            row = slot_profiles_src.get(slot_key) if isinstance(slot_profiles_src.get(slot_key), dict) else {}
+            row_ov = dict(row.get('ov')) if isinstance(row.get('ov'), dict) else {}
+            row_ls = dict(row.get('ls')) if isinstance(row.get('ls'), dict) else {}
+
+            block = output_models.get(slot_key) if isinstance(output_models, dict) else None
+            if isinstance(block, dict):
+                sampler_block = block.get('sampler') if isinstance(block.get('sampler'), dict) else {}
+                resolution_block = block.get('resolution') if isinstance(block.get('resolution'), dict) else {}
+                row_ov.update({
+                    'positive_prompt': str(block.get('positive_prompt', '') or ''),
+                    'negative_prompt': str(block.get('negative_prompt', '') or ''),
+                    'model_a': str(block.get('model', '') or ''),
+                    '_family': str(block.get('family', '') or ''),
+                    'clip_type': str(block.get('clip_type', '') or ''),
+                    'loader_type': str(block.get('loader_type', '') or ''),
+                    'vae': str(block.get('vae', '') or ''),
+                    'clip_names': list(block.get('clip', [])) if isinstance(block.get('clip'), list) else [],
+                    'loras_a': list(block.get('loras', [])) if isinstance(block.get('loras'), list) else [],
+                    'steps_a': int(sampler_block.get('steps', 20) or 20),
+                    'cfg': float(sampler_block.get('cfg', 5.0) or 5.0),
+                    'denoise': float(sampler_block.get('denoise', 1.0) or 1.0),
+                    'seed_a': int(sampler_block.get('seed', 0) or 0),
+                    'sampler_name': str(sampler_block.get('sampler_name', 'euler') or 'euler'),
+                    'scheduler': str(sampler_block.get('scheduler', 'simple') or 'simple'),
+                    'width': int(resolution_block.get('width', 768) or 768),
+                    'height': int(resolution_block.get('height', 1280) or 1280),
+                    'batch_size': int(resolution_block.get('batch_size', 1) or 1),
+                    'length': resolution_block.get('length'),
+                })
+
+            ui_slot_profiles[slot_key] = {
+                'ov': row_ov,
+                'ls': row_ls,
+            }
+
         ui_info = {
             'extracted': {
                 'positive_prompt':    pos_text,
@@ -1863,6 +1974,7 @@ class WorkflowBuilder:
                 'pull_model_slot':    pull_model_slot,
                 'send_model_slot':    send_model_slot,
                 'lora_availability':  lora_availability,
+                '_slot_profiles':     ui_slot_profiles,
             }
         }
 
@@ -2036,7 +2148,103 @@ class WorkflowBuilderWan(WorkflowBuilder):
 
 
 class WorkflowBuilderMulti(WorkflowBuilder):
+    RETURN_TYPES = ("RECIPE_DATA",)
+    RETURN_NAMES = ("recipe_data",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": {
+                "recipe_data": ("RECIPE_DATA", {
+                    "tooltip": "Optional recipe_data input for prefill/update.",
+                }),
+                "multi_pos_prompts": ("MULTI_PROMPTS", {
+                    "tooltip": "Optional multi-slot positive prompt bundle.",
+                }),
+                "multi_neg_prompts": ("MULTI_PROMPTS", {
+                    "tooltip": "Optional multi-slot negative prompt bundle.",
+                }),
+                "multi_seeds": ("MULTI_SEEDS", {
+                    "tooltip": "Optional multi-slot seed bundle.",
+                }),
+                "multi_loras": ("MULTI_LORAS", {
+                    "tooltip": "Optional multi-slot LoRA bundle.",
+                }),
+                "override_data": ("STRING", {"default": "{}", "multiline": True}),
+                "lora_state": ("STRING", {"default": "{}", "multiline": True}),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
     DESCRIPTION = (
         "Recipe Builder (Multi Model). Single builder UI with 4 model slots "
         "(A/B/C/D) and per-slot settings."
     )
+
+    def execute(self,
+                recipe_data=None,
+                pos_prompt=None, neg_prompt=None,
+                seed=None, seed_a=None, seed_b=None, denoise=None,
+                lora_stack=None, lora_stack_a=None, lora_stack_b=None,
+                multi_pos_prompts=None, multi_neg_prompts=None,
+                multi_seeds=None, multi_loras=None,
+                override_data="{}", lora_state="{}",
+                unique_id=None, extra_pnginfo=None, prompt=None):
+        # Map active slot's multi bundle inputs to standard single-input vars so
+        # they travel the same proven path as lora_stack_a / seed_a in Builder.
+        try:
+            ovs = json.loads(override_data) if override_data else {}
+        except Exception:
+            ovs = {}
+        active_slot = str(ovs.get("_send_model_slot", ovs.get("_model_slot", "model_a"))).strip()
+        if active_slot not in ("model_a", "model_b", "model_c", "model_d"):
+            active_slot = "model_a"
+
+        if isinstance(multi_loras, dict):
+            slot_stack = multi_loras.get(active_slot)
+            if isinstance(slot_stack, list) and slot_stack:
+                lora_stack_a = slot_stack
+
+        if isinstance(multi_seeds, dict):
+            slot_seed = multi_seeds.get(active_slot)
+            if isinstance(slot_seed, int) and slot_seed != 0:
+                seed_a = slot_seed
+
+        result = super().execute(
+            recipe_data=recipe_data,
+            pos_prompt=pos_prompt,
+            neg_prompt=neg_prompt,
+            seed=seed,
+            seed_a=seed_a,
+            seed_b=seed_b,
+            denoise=denoise,
+            lora_stack=lora_stack,
+            lora_stack_a=lora_stack_a,
+            lora_stack_b=lora_stack_b,
+            multi_pos_prompts=multi_pos_prompts,
+            multi_neg_prompts=multi_neg_prompts,
+            multi_seeds=multi_seeds,
+            multi_loras=multi_loras,
+            override_data=override_data,
+            lora_state=lora_state,
+            unique_id=unique_id,
+            extra_pnginfo=extra_pnginfo,
+            prompt=prompt,
+            builder_mode="simple",
+        )
+        if isinstance(result, dict):
+            raw = result.get("result", ())
+            recipe_only = raw[:1] if isinstance(raw, tuple) else tuple(raw[:1]) if isinstance(raw, list) else ()
+            return {
+                "ui": result.get("ui", {}),
+                "result": recipe_only,
+            }
+        if isinstance(result, tuple):
+            return result[:1]
+        if isinstance(result, list):
+            return tuple(result[:1])
+        return result

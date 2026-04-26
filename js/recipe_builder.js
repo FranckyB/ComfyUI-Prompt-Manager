@@ -2371,10 +2371,19 @@ function applyOverrides(node, ovJson, lsJson) {
         else if (node._weSetResDisabled) node._weSetResDisabled(true);
     }
 
-    if (ov.model_a) applySelect(node._weModelRow, ov.model_a, true);
-    if (ov.model_b) applySelect(node._weModelBRow, ov.model_b, true);
-    if (ov.vae) applySelect(node._weVaeRow, ov.vae, true);
-    if (ov.clip_names?.length) applySelect(node._weClipRow, ov.clip_names[0], true);
+    if (Object.prototype.hasOwnProperty.call(ov, "model_a")) {
+        applySelect(node._weModelRow, ov.model_a ?? "", true);
+    }
+    if (Object.prototype.hasOwnProperty.call(ov, "model_b")) {
+        applySelect(node._weModelBRow, ov.model_b ?? "", true);
+    }
+    if (Object.prototype.hasOwnProperty.call(ov, "vae")) {
+        applySelect(node._weVaeRow, ov.vae ?? "", true);
+    }
+    if (Object.prototype.hasOwnProperty.call(ov, "clip_names")) {
+        const clipName = Array.isArray(ov.clip_names) && ov.clip_names.length ? ov.clip_names[0] : "";
+        applySelect(node._weClipRow, clipName, true);
+    }
 
     if (node._weSamplerRows) {
         const rows = node._weSamplerRows;
@@ -2733,12 +2742,18 @@ app.registerExtension({
                         "seed_a", "seed_b", "denoise",
                         "lora_stack_a", "lora_stack_b",
                     ])
-                    : new Set([
-                        "recipe_data",
-                        "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
-                        "seed", "seed_a",
-                        "lora_stack", "lora_stack_a",
-                    ]);
+                    : (isMultiBuilder
+                        ? new Set([
+                            "recipe_data",
+                            "multi_pos_prompts", "multi_neg_prompts",
+                            "multi_seeds", "multi_loras",
+                        ])
+                        : new Set([
+                            "recipe_data",
+                            "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
+                            "seed", "seed_a",
+                            "lora_stack", "lora_stack_a",
+                        ]));
                 if (node.inputs) {
                     for (const inp of node.inputs) {
                         if (!inp || !inp.name) continue;
@@ -2770,13 +2785,17 @@ app.registerExtension({
                     }
                 }
 
-                const VALID_OUTPUTS = [
-                    { name: "recipe_data", type: "RECIPE_DATA" },
-                    { name: "pos_prompt", type: "STRING" },
-                    { name: "neg_prompt", type: "STRING" },
-                    { name: "seed", type: "INT" },
-                    { name: "lora_stack", type: "LORA_STACK" },
-                ];
+                const VALID_OUTPUTS = isMultiBuilder
+                    ? [
+                        { name: "recipe_data", type: "RECIPE_DATA" },
+                    ]
+                    : [
+                        { name: "recipe_data", type: "RECIPE_DATA" },
+                        { name: "pos_prompt", type: "STRING" },
+                        { name: "neg_prompt", type: "STRING" },
+                        { name: "seed", type: "INT" },
+                        { name: "lora_stack", type: "LORA_STACK" },
+                    ];
                 if (node.outputs) {
                     const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
                         VALID_OUTPUTS.every((v, i) => node.outputs[i]?.name === v.name && node.outputs[i]?.type === v.type);
@@ -4793,6 +4812,10 @@ app.registerExtension({
                 const info = event.detail?.info?.extracted;
                 if (!info) return;
 
+                if (node._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
+                    node._weSlotProfiles = _normalizeSlotProfiles(info._slot_profiles);
+                }
+
                 // Always mirror connected prompt inputs into textareas,
                 // even when extractor-connected mode skips full UI refresh.
                 const posInputConn = node.inputs?.find(i => i.name === "pos_prompt");
@@ -4941,6 +4964,9 @@ app.registerExtension({
             const posConn = this.inputs?.find(i => i.name === "pos_prompt");
             const negConn = this.inputs?.find(i => i.name === "neg_prompt");
             if (info) {
+                if (this._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
+                    this._weSlotProfiles = _normalizeSlotProfiles(info._slot_profiles);
+                }
                 if (posConn?.link != null && info.positive_prompt != null && this._wePosBox) {
                     this._wePosBox.value = info.positive_prompt;
                 }
@@ -5097,7 +5123,7 @@ app.registerExtension({
             }
 
             const VALID_INPUTS = new Set([
-                ...(node._weBuilderVariant === "wan"
+                ...((node._weBuilderVariant === "wan")
                     ? [
                         "recipe_data",
                         "pos_prompt", "neg_prompt",
@@ -5105,12 +5131,20 @@ app.registerExtension({
                         "seed_a", "seed_b", "denoise",
                         "lora_stack_a", "lora_stack_b",
                     ]
-                    : [
-                        "recipe_data",
-                        "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
-                        "seed", "seed_a",
-                        "lora_stack", "lora_stack_a",
-                    ])
+                    : (node._weUseSlotProfiles
+                        ? [
+                            "recipe_data",
+                            "multi_pos_prompts", "multi_neg_prompts",
+                            "multi_seeds", "multi_loras",
+                        ]
+                        : [
+                            "recipe_data",
+                            "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
+                            "seed", "seed_a",
+                            "lora_stack", "lora_stack_a",
+                            "multi_pos_prompts", "multi_neg_prompts",
+                            "multi_seeds", "multi_loras",
+                        ]))
             ]);
             const _normalizeInputNameForVariant = (name) => {
                 let key = _canonicalInputName(name);
@@ -5164,13 +5198,17 @@ app.registerExtension({
                     }
                 }
             }
-            const VALID_OUTPUTS = [
-                { name: "recipe_data", type: "RECIPE_DATA" },
-                { name: "pos_prompt", type: "STRING" },
-                { name: "neg_prompt", type: "STRING" },
-                { name: "seed", type: "INT" },
-                { name: "lora_stack", type: "LORA_STACK" },
-            ];
+            const VALID_OUTPUTS = node._weUseSlotProfiles
+                ? [
+                    { name: "recipe_data", type: "RECIPE_DATA" },
+                ]
+                : [
+                    { name: "recipe_data", type: "RECIPE_DATA" },
+                    { name: "pos_prompt", type: "STRING" },
+                    { name: "neg_prompt", type: "STRING" },
+                    { name: "seed", type: "INT" },
+                    { name: "lora_stack", type: "LORA_STACK" },
+                ];
             if (node.outputs) {
                 const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
                     VALID_OUTPUTS.every((v, i) => node.outputs[i]?.name === v.name && node.outputs[i]?.type === v.type);
