@@ -1653,11 +1653,139 @@ class WorkflowBuilder:
 
             simplified_wf[lora_key] = annotated
 
+        # Optional multi-slot profile payload from JS. When present, this node
+        # can author model_a..model_d blocks in one builder instance.
+        base_recipe_for_output = wf_data if isinstance(wf_data, dict) else None
+        slot_profiles = overrides.get('_slot_profiles') if isinstance(overrides, dict) else None
+        if isinstance(slot_profiles, dict):
+            try:
+                if isinstance(base_recipe_for_output, dict) and \
+                        int(base_recipe_for_output.get('version', 0) or 0) >= 2 and \
+                        isinstance(base_recipe_for_output.get('models'), dict):
+                    base_recipe_for_output = dict(base_recipe_for_output)
+                    base_recipe_for_output['models'] = {
+                        k: dict(v) for k, v in (base_recipe_for_output.get('models') or {}).items()
+                        if isinstance(v, dict)
+                    }
+                else:
+                    base_recipe_for_output = {
+                        '_source': 'RecipeBuilder',
+                        'version': 2,
+                        'models': {},
+                    }
+
+                def _norm_num(v, default):
+                    try:
+                        return float(v)
+                    except Exception:
+                        return float(default)
+
+                def _norm_int(v, default):
+                    try:
+                        return int(v)
+                    except Exception:
+                        return int(default)
+
+                def _norm_loras(raw_list):
+                    out = []
+                    if not isinstance(raw_list, list):
+                        return out
+                    for item in raw_list:
+                        if not isinstance(item, dict):
+                            continue
+                        name = str(item.get('name', '')).strip()
+                        if not name:
+                            continue
+                        path = str(item.get('path', name)).strip() or name
+                        model_strength = _norm_num(item.get('model_strength', item.get('strength', 1.0)), 1.0)
+                        clip_strength = _norm_num(item.get('clip_strength', model_strength), model_strength)
+                        out.append({
+                            'name': name,
+                            'path': path,
+                            'model_strength': model_strength,
+                            'clip_strength': clip_strength,
+                            'active': item.get('active', True) is not False,
+                            'available': item.get('available', True) is not False,
+                        })
+                    return out
+
+                for slot_key in _MODEL_KEYS:
+                    raw_profile = slot_profiles.get(slot_key)
+                    if not isinstance(raw_profile, dict):
+                        continue
+
+                    # Current JS shape stores per-slot profile as {ov, ls}; keep
+                    # backward compatibility with legacy raw slot payload.
+                    ov_profile = raw_profile.get('ov') if isinstance(raw_profile.get('ov'), dict) else None
+                    profile = ov_profile if isinstance(ov_profile, dict) else raw_profile
+
+                    if isinstance(ov_profile, dict):
+                        loras_src = profile.get('loras_a', [])
+                        clip_src = profile.get('clip_names', [])
+                        sampler_in = {
+                            'steps': profile.get('steps_a', 20),
+                            'cfg': profile.get('cfg', 5.0),
+                            'denoise': profile.get('denoise', 1.0),
+                            'seed': profile.get('seed_a', 0),
+                            'sampler_name': profile.get('sampler_name', 'euler'),
+                            'scheduler': profile.get('scheduler', 'simple'),
+                        }
+                        resolution_in = {
+                            'width': profile.get('width', 768),
+                            'height': profile.get('height', 1280),
+                            'batch_size': profile.get('batch_size', 1),
+                            'length': profile.get('length'),
+                        }
+                        profile_model = profile.get('model_a', profile.get('model', ''))
+                        profile_family = profile.get('_family', profile.get('family', ''))
+                        profile_clip_type = profile.get('clip_type', '')
+                        profile_loader_type = profile.get('loader_type', '')
+                    else:
+                        loras_src = profile.get('loras', [])
+                        clip_src = profile.get('clip', [])
+                        sampler_in = profile.get('sampler', {}) if isinstance(profile.get('sampler'), dict) else {}
+                        resolution_in = profile.get('resolution', {}) if isinstance(profile.get('resolution'), dict) else {}
+                        profile_model = profile.get('model', '')
+                        profile_family = profile.get('family', '')
+                        profile_clip_type = profile.get('clip_type', '')
+                        profile_loader_type = profile.get('loader_type', '')
+
+                    clip_raw = clip_src if isinstance(clip_src, list) else ([clip_src] if clip_src else [])
+
+                    slot_block = {
+                        'positive_prompt': str(profile.get('positive_prompt', '') or ''),
+                        'negative_prompt': str(profile.get('negative_prompt', '') or ''),
+                        'family': str(profile_family or ''),
+                        'model': str(profile_model or ''),
+                        'loras': _norm_loras(loras_src),
+                        'clip_type': str(profile_clip_type or ''),
+                        'loader_type': str(profile_loader_type or ''),
+                        'vae': str(profile.get('vae', '') or ''),
+                        'clip': [str(x or '') for x in clip_raw if str(x or '').strip()],
+                        'sampler': {
+                            'steps': _norm_int(sampler_in.get('steps', 20), 20),
+                            'cfg': _norm_num(sampler_in.get('cfg', 5.0), 5.0),
+                            'denoise': _norm_num(sampler_in.get('denoise', 1.0), 1.0),
+                            'seed': _norm_int(sampler_in.get('seed', 0), 0),
+                            'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
+                            'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
+                        },
+                        'resolution': {
+                            'width': _norm_int(resolution_in.get('width', 768), 768),
+                            'height': _norm_int(resolution_in.get('height', 1280), 1280),
+                            'batch_size': _norm_int(resolution_in.get('batch_size', 1), 1),
+                            'length': resolution_in.get('length'),
+                        },
+                    }
+                    base_recipe_for_output['models'][slot_key] = slot_block
+            except Exception as e:
+                print(f"[RecipeBuilder] Warning: failed to apply _slot_profiles: {e}")
+
         output_wf = _builder_output_to_v2(
             simplified_wf,
             mode=builder_mode,
             send_as_slot=send_model_slot,
-            base_recipe_data=wf_data if isinstance(wf_data, dict) else None,
+            base_recipe_data=base_recipe_for_output,
         )
 
         # ── Build UI info for JS (always, even if generation fails) ───────
@@ -1905,3 +2033,10 @@ class WorkflowBuilderWan(WorkflowBuilder):
             prompt=prompt,
             builder_mode="wan",
         )
+
+
+class WorkflowBuilderMulti(WorkflowBuilder):
+    DESCRIPTION = (
+        "Recipe Builder (Multi Model). Single builder UI with 4 model slots "
+        "(A/B/C/D) and per-slot settings."
+    )
