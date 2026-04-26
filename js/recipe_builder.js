@@ -2749,26 +2749,10 @@ app.registerExtension({
             };
 
             const _normalizeRecipePortsNow = () => {
-                const VALID_INPUTS = isWanBuilder
-                    ? new Set([
-                        "recipe_data",
-                        "pos_prompt", "neg_prompt",
-                        "positive_prompt", "negative_prompt",
-                        "seed_a", "seed_b", "denoise",
-                        "lora_stack_a", "lora_stack_b",
-                    ])
-                    : (isMultiBuilder
-                        ? new Set([
-                            "recipe_data",
-                            "multi_pos_prompts", "multi_neg_prompts",
-                            "multi_seeds", "multi_loras",
-                        ])
-                        : new Set([
-                            "recipe_data",
-                            "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
-                            "seed", "seed_a",
-                            "lora_stack", "lora_stack_a",
-                        ]));
+                const VALID_INPUTS = new Set([
+                    "recipe_data",
+                    "builder_data",
+                ]);
                 if (node.inputs) {
                     for (const inp of node.inputs) {
                         if (!inp || !inp.name) continue;
@@ -2798,19 +2782,15 @@ app.registerExtension({
                             node.removeInput(i);
                         }
                     }
+
+                    const hasInput = (name) => node.inputs.some((inp) => _normalizeInputNameForVariant(inp?.name || "") === name);
+                    if (!hasInput("recipe_data")) node.addInput("recipe_data", "RECIPE_DATA");
+                    if (!hasInput("builder_data")) node.addInput("builder_data", "BUILDER_DATA");
                 }
 
-                const VALID_OUTPUTS = isMultiBuilder
-                    ? [
-                        { name: "recipe_data", type: "RECIPE_DATA" },
-                    ]
-                    : [
-                        { name: "recipe_data", type: "RECIPE_DATA" },
-                        { name: "pos_prompt", type: "STRING" },
-                        { name: "neg_prompt", type: "STRING" },
-                        { name: "seed", type: "INT" },
-                        { name: "lora_stack", type: "LORA_STACK" },
-                    ];
+                const VALID_OUTPUTS = [
+                    { name: "recipe_data", type: "RECIPE_DATA" },
+                ];
                 if (node.outputs) {
                     const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
                         VALID_OUTPUTS.every((v, i) => node.outputs[i]?.name === v.name && node.outputs[i]?.type === v.type);
@@ -4550,32 +4530,12 @@ app.registerExtension({
             }
             if (node._weUseSlotProfiles == null) {
                 const cls = String(node.comfyClass || node.type || "");
-                node._weUseSlotProfiles = cls === "RecipeBuilder";
+                node._weUseSlotProfiles = (cls === "RecipeBuilder") || (cls === "WorkflowBuilderMulti");
             }
 
             const VALID_INPUTS = new Set([
-                ...((node._weBuilderVariant === "wan")
-                    ? [
-                        "recipe_data",
-                        "pos_prompt", "neg_prompt",
-                        "positive_prompt", "negative_prompt",
-                        "seed_a", "seed_b", "denoise",
-                        "lora_stack_a", "lora_stack_b",
-                    ]
-                    : (node._weUseSlotProfiles
-                        ? [
-                            "recipe_data",
-                            "multi_pos_prompts", "multi_neg_prompts",
-                            "multi_seeds", "multi_loras",
-                        ]
-                        : [
-                            "recipe_data",
-                            "pos_prompt", "neg_prompt", "positive_prompt", "negative_prompt",
-                            "seed", "seed_a",
-                            "lora_stack", "lora_stack_a",
-                            "multi_pos_prompts", "multi_neg_prompts",
-                            "multi_seeds", "multi_loras",
-                        ]))
+                "recipe_data",
+                "builder_data",
             ]);
             const _normalizeInputNameForVariant = (name) => {
                 let key = _canonicalInputName(name);
@@ -4628,18 +4588,20 @@ app.registerExtension({
                         node.removeInput(i);
                     }
                 }
+
+                // Ensure newly introduced inputs exist on restored nodes.
+                // Older saved workflows can miss optional inputs added later.
+                const hasInput = (name) => node.inputs.some((inp) => _normalizeInputNameForVariant(inp?.name || "") === name);
+                if (!hasInput("recipe_data")) {
+                    node.addInput("recipe_data", "RECIPE_DATA");
+                }
+                if (node._weUseSlotProfiles && !hasInput("builder_data")) {
+                    node.addInput("builder_data", "BUILDER_DATA");
+                }
             }
-            const VALID_OUTPUTS = node._weUseSlotProfiles
-                ? [
-                    { name: "recipe_data", type: "RECIPE_DATA" },
-                ]
-                : [
-                    { name: "recipe_data", type: "RECIPE_DATA" },
-                    { name: "pos_prompt", type: "STRING" },
-                    { name: "neg_prompt", type: "STRING" },
-                    { name: "seed", type: "INT" },
-                    { name: "lora_stack", type: "LORA_STACK" },
-                ];
+            const VALID_OUTPUTS = [
+                { name: "recipe_data", type: "RECIPE_DATA" },
+            ];
             if (node.outputs) {
                 const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
                     VALID_OUTPUTS.every((v, i) => node.outputs[i]?.name === v.name && node.outputs[i]?.type === v.type);

@@ -1,88 +1,58 @@
-"""Bundled multi-slot helper nodes for Recipe Builder (Multi Model)."""
+"""Bundled multi-slot helper node for Recipe Builder (Multi Model)."""
 
 
-class MultiPromptBundle:
+class RecipeBuilderDataBundle:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {},
             "optional": {
-                "model_a": ("STRING", {"forceInput": True}),
-                "model_b": ("STRING", {"forceInput": True}),
-                "model_c": ("STRING", {"forceInput": True}),
-                "model_d": ("STRING", {"forceInput": True}),
+                "pos_a": ("STRING", {"forceInput": True}),
+                "pos_b": ("STRING", {"forceInput": True}),
+                "pos_c": ("STRING", {"forceInput": True}),
+                "pos_d": ("STRING", {"forceInput": True}),
+                "neg_a": ("STRING", {"forceInput": True}),
+                "neg_b": ("STRING", {"forceInput": True}),
+                "neg_c": ("STRING", {"forceInput": True}),
+                "neg_d": ("STRING", {"forceInput": True}),
+                "seed_a": ("INT", {"forceInput": True}),
+                "seed_b": ("INT", {"forceInput": True}),
+                "seed_c": ("INT", {"forceInput": True}),
+                "seed_d": ("INT", {"forceInput": True}),
+                "loras_a": ("LORA_STACK",),
+                "loras_b": ("LORA_STACK",),
+                "loras_c": ("LORA_STACK",),
+                "loras_d": ("LORA_STACK",),
             },
         }
 
-    RETURN_TYPES = ("MULTI_PROMPTS",)
-    RETURN_NAMES = ("multi_prompts",)
+    RETURN_TYPES = ("BUILDER_DATA",)
+    RETURN_NAMES = ("builder_data",)
     FUNCTION = "bundle"
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Bundle 4 prompt inputs into one multi-slot prompt payload. Use one node for positive and another for negative prompts."
+    DESCRIPTION = "Bundle A/B/C/D prompts, seeds, and LoRA stacks into one builder_data payload for Recipe Builder."
 
-    def bundle(self, model_a="", model_b="", model_c="", model_d=""):
+    def bundle(self,
+               pos_a="", pos_b="", pos_c="", pos_d="",
+               neg_a="", neg_b="", neg_c="", neg_d="",
+               seed_a=0, seed_b=0, seed_c=0, seed_d=0,
+               loras_a=None, loras_b=None, loras_c=None, loras_d=None):
         payload = {
-            "model_a": str(model_a or ""),
-            "model_b": str(model_b or ""),
-            "model_c": str(model_c or ""),
-            "model_d": str(model_d or ""),
-        }
-        return (payload,)
-
-
-class MultiSeedBundle:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {},
-            "optional": {
-                "model_a": ("INT", {"forceInput": True}),
-                "model_b": ("INT", {"forceInput": True}),
-                "model_c": ("INT", {"forceInput": True}),
-                "model_d": ("INT", {"forceInput": True}),
-            },
-        }
-
-    RETURN_TYPES = ("MULTI_SEEDS",)
-    RETURN_NAMES = ("multi_seeds",)
-    FUNCTION = "bundle"
-    CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Bundle A/B/C/D seeds into one multi-slot seed payload."
-
-    def bundle(self, model_a=0, model_b=0, model_c=0, model_d=0):
-        payload = {
-            "model_a": int(model_a or 0),
-            "model_b": int(model_b or 0),
-            "model_c": int(model_c or 0),
-            "model_d": int(model_d or 0),
-        }
-        return (payload,)
-
-
-class MultiLoraStacker:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {},
-            "optional": {
-                "model_a": ("LORA_STACK",),
-                "model_b": ("LORA_STACK",),
-                "model_c": ("LORA_STACK",),
-                "model_d": ("LORA_STACK",),
-            },
-        }
-
-    RETURN_TYPES = ("MULTI_LORAS",)
-    RETURN_NAMES = ("multi_loras",)
-    FUNCTION = "bundle"
-    CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Bundle 4 LoRA stack inputs into one multi-slot LoRA payload."
-
-    def bundle(self, model_a=None, model_b=None, model_c=None, model_d=None):
-        payload = {
-            "model_a": list(model_a) if model_a else [],
-            "model_b": list(model_b) if model_b else [],
-            "model_c": list(model_c) if model_c else [],
-            "model_d": list(model_d) if model_d else [],
+            "pos_a": str(pos_a or ""),
+            "pos_b": str(pos_b or ""),
+            "pos_c": str(pos_c or ""),
+            "pos_d": str(pos_d or ""),
+            "neg_a": str(neg_a or ""),
+            "neg_b": str(neg_b or ""),
+            "neg_c": str(neg_c or ""),
+            "neg_d": str(neg_d or ""),
+            "seed_a": int(seed_a or 0),
+            "seed_b": int(seed_b or 0),
+            "seed_c": int(seed_c or 0),
+            "seed_d": int(seed_d or 0),
+            "loras_a": list(loras_a) if loras_a else [],
+            "loras_b": list(loras_b) if loras_b else [],
+            "loras_c": list(loras_c) if loras_c else [],
+            "loras_d": list(loras_d) if loras_d else [],
         }
         return (payload,)

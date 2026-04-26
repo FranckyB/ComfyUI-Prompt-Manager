@@ -1,4 +1,4 @@
-"""
+﻿"""
 ComfyUI Prompt Manager - A comprehensive prompt and workflow management system for ComfyUI.
 Features: prompt & workflow management, LoRA stacks, workflow extraction, workflow generation.
 """
@@ -19,47 +19,42 @@ from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
-from .nodes.multi_inputs import MultiPromptBundle, MultiSeedBundle, MultiLoraStacker
+from .nodes.multi_inputs import RecipeBuilderDataBundle
 
 NODE_CLASS_MAPPINGS = {
-    "PromptApplyLora":       ApplyLoraPlusPlus,
-    "PromptManagerAdvanced": PromptManagerAdvanced,
-    "PromptManager":         PromptManager,
-    "PromptGenerator":       PromptGenerator,
-    "PromptGenOptions":      PromptGenOptions,
-    "PromptExtractor":       PromptExtractor,
-    "RecipeExtractor":       RecipeExtractor,
-    "RecipeBuilder":         RecipeBuilder,
-    "RecipeRenderer":        RecipeRenderer,
-    "RecipeRelay":           RecipeRelay,
-    "RecipeModelLoader":     RecipeModelLoader,
-    "RecipeModelPicker":     RecipeModelPicker,
-    "RecipeManager":         RecipeManager,
-    "MultiPromptBundle":     MultiPromptBundle,
-    "MultiSeedBundle":       MultiSeedBundle,
-    "MultiLoraStacker":      MultiLoraStacker,
+    "PromptApplyLora":         ApplyLoraPlusPlus,
+    "PromptManagerAdvanced":   PromptManagerAdvanced,
+    "PromptManager":           PromptManager,
+    "PromptGenerator":         PromptGenerator,
+    "PromptGenOptions":        PromptGenOptions,
+    "PromptExtractor":         PromptExtractor,
+    "RecipeExtractor":         RecipeExtractor,
+    "RecipeBuilder":           RecipeBuilder,
+    "RecipeRenderer":          RecipeRenderer,
+    "RecipeRelay":             RecipeRelay,
+    "RecipeModelLoader":       RecipeModelLoader,
+    "RecipeModelPicker":       RecipeModelPicker,
+    "RecipeManager":           RecipeManager,
+    "RecipeBuilderDataBundle": RecipeBuilderDataBundle,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptApplyLora":       "Apply LoRA++",
-    "PromptManagerAdvanced": "Prompt Manager",
-    "PromptManager":         "Prompt Manager (Basic)",
-    "PromptGenerator":       "Prompt Generator",
-    "PromptGenOptions":      "Prompt Generator Options",
-    "PromptExtractor":       "Prompt Extractor",
-    "RecipeExtractor":       "Recipe Extractor",
-    "RecipeBuilder":         "Recipe Builder",
-    "RecipeRenderer":        "Recipe Renderer",
-    "RecipeRelay":           "Recipe Relay",
-    "RecipeModelLoader":     "Recipe Model Loader",
-    "RecipeModelPicker":     "Recipe Model Picker",
-    "RecipeManager":         "Recipe Manager",
-    "MultiPromptBundle":     "Multi Prompt Bundle",
-    "MultiSeedBundle":       "Multi Seed Bundle",
-    "MultiLoraStacker":      "Multi LoRA Stacker",
+    "PromptApplyLora":          "Apply LoRA++",
+    "PromptManagerAdvanced":    "Prompt Manager",
+    "PromptManager":            "Prompt Manager (Basic)",
+    "PromptGenerator":          "Prompt Generator",
+    "PromptGenOptions":         "Prompt Generator Options",
+    "PromptExtractor":          "Prompt Extractor",
+    "RecipeExtractor":          "Recipe Extractor",
+    "RecipeBuilder":            "Recipe Builder",
+    "RecipeRenderer":           "Recipe Renderer",
+    "RecipeRelay":              "Recipe Relay",
+    "RecipeModelLoader":        "Recipe Model Loader",
+    "RecipeModelPicker":        "Recipe Model Picker",
+    "RecipeManager":            "Recipe Manager",
+    "RecipeBuilderDataBundle":  "Recipe Builder Data",
 }
 
 WEB_DIRECTORY = "./js"
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 print("[PromptManager] Nodes registered: Apply LoRA++, Prompt Manager (Basic), Prompt Manager, Prompt Generator, Prompt Generator Options, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Merge, Recipe Renderer, Recipe Relay, Recipe Model Loader, Recipe Model Picker, Recipe Manager")
-

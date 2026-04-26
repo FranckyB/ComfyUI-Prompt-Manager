@@ -721,19 +721,9 @@ class WorkflowBuilder:
                 "recipe_data": ("RECIPE_DATA", {
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
-                "pos_prompt": ("STRING", {
-                    "forceInput": True,
-                    "tooltip": "Positive prompt text. When connected, overrides and ghosts the prompt textarea.",
+                "builder_data": ("BUILDER_DATA", {
+                    "tooltip": "Optional A/B/C/D bundle of prompts, seeds, and LoRA stacks.",
                 }),
-                "neg_prompt": ("STRING", {
-                    "forceInput": True,
-                    "tooltip": "Negative prompt text. When connected, overrides and ghosts the prompt textarea.",
-                }),
-                "seed": ("INT", {
-                    "forceInput": True,
-                    "tooltip": "Seed input. When connected, overrides sampler seed.",
-                }),
-                "lora_stack": ("LORA_STACK",),
                 # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
                 "lora_state":      ("STRING", {"default": "{}", "multiline": True}),
@@ -744,8 +734,8 @@ class WorkflowBuilder:
             },
         }
 
-    RETURN_TYPES  = ("RECIPE_DATA", "STRING", "STRING", "INT", "LORA_STACK")
-    RETURN_NAMES  = ("recipe_data", "pos_prompt", "neg_prompt", "seed", "lora_stack")
+    RETURN_TYPES  = ("RECIPE_DATA",)
+    RETURN_NAMES  = ("recipe_data",)
     FUNCTION      = "execute"
     CATEGORY      = "Prompt Manager"
     OUTPUT_NODE   = True
@@ -759,6 +749,7 @@ class WorkflowBuilder:
                 pos_prompt=None, neg_prompt=None,
                 seed=None, seed_a=None, seed_b=None, denoise=None,
                 lora_stack=None, lora_stack_a=None, lora_stack_b=None,
+                builder_data=None,
                 multi_pos_prompts=None, multi_neg_prompts=None,
                 multi_seeds=None, multi_loras=None,
                 override_data="{}", lora_state="{}",
@@ -839,6 +830,43 @@ class WorkflowBuilder:
                 return None
             stack = payload.get(slot_key)
             return stack if isinstance(stack, list) else None
+
+        # Unified builder_data payload (from RecipeBuilderDataBundle) maps to
+        # the existing multi_* structures used by slot merge/lock logic.
+        if isinstance(builder_data, dict):
+            slot_map = {
+                "model_a": "a",
+                "model_b": "b",
+                "model_c": "c",
+                "model_d": "d",
+            }
+            if not isinstance(multi_pos_prompts, dict):
+                multi_pos_prompts = {}
+            if not isinstance(multi_neg_prompts, dict):
+                multi_neg_prompts = {}
+            if not isinstance(multi_seeds, dict):
+                multi_seeds = {}
+            if not isinstance(multi_loras, dict):
+                multi_loras = {}
+
+            for slot_key, suffix in slot_map.items():
+                pos_val = builder_data.get(f"pos_{suffix}")
+                if pos_val is not None:
+                    multi_pos_prompts[slot_key] = str(pos_val or "")
+
+                neg_val = builder_data.get(f"neg_{suffix}")
+                if neg_val is not None:
+                    multi_neg_prompts[slot_key] = str(neg_val or "")
+
+                if f"seed_{suffix}" in builder_data:
+                    try:
+                        multi_seeds[slot_key] = int(builder_data.get(f"seed_{suffix}") or 0)
+                    except Exception:
+                        pass
+
+                lora_val = builder_data.get(f"loras_{suffix}")
+                if isinstance(lora_val, list):
+                    multi_loras[slot_key] = lora_val
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
@@ -2150,34 +2178,9 @@ class WorkflowBuilder:
         if unique_id is not None:
             _last_workflow_builder_info[str(unique_id)] = ui_info.get('extracted', {})
 
-        output_seed = 0
-        try:
-            output_seed = int(sampler_params.get('seed_a', 0))
-        except Exception:
-            output_seed = 0
-
-        output_lora_stack = []
-        for lora in extracted.get('loras_a', []):
-            if not isinstance(lora, dict):
-                continue
-            if lora.get('active', True) is False:
-                continue
-            name_or_path = str(lora.get('path') or lora.get('name') or '').strip()
-            if not name_or_path:
-                continue
-            try:
-                model_strength = float(lora.get('model_strength', lora.get('strength', 1.0)))
-            except Exception:
-                model_strength = 1.0
-            try:
-                clip_strength = float(lora.get('clip_strength', model_strength))
-            except Exception:
-                clip_strength = model_strength
-            output_lora_stack.append((name_or_path, model_strength, clip_strength))
-
         return {
             "ui":     {"workflow_info": [ui_info]},
-            "result": (output_wf, pos_text, neg_text, output_seed, output_lora_stack),
+            "result": (output_wf,),
         }
 
 
@@ -2263,17 +2266,8 @@ class WorkflowBuilderMulti(WorkflowBuilder):
                 "recipe_data": ("RECIPE_DATA", {
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
-                "multi_pos_prompts": ("MULTI_PROMPTS", {
-                    "tooltip": "Optional multi-slot positive prompt bundle.",
-                }),
-                "multi_neg_prompts": ("MULTI_PROMPTS", {
-                    "tooltip": "Optional multi-slot negative prompt bundle.",
-                }),
-                "multi_seeds": ("MULTI_SEEDS", {
-                    "tooltip": "Optional multi-slot seed bundle.",
-                }),
-                "multi_loras": ("MULTI_LORAS", {
-                    "tooltip": "Optional multi-slot LoRA bundle.",
+                "builder_data": ("BUILDER_DATA", {
+                    "tooltip": "Optional A/B/C/D bundle of prompts, seeds, and LoRA stacks.",
                 }),
                 "override_data": ("STRING", {"default": "{}", "multiline": True}),
                 "lora_state": ("STRING", {"default": "{}", "multiline": True}),
@@ -2291,48 +2285,12 @@ class WorkflowBuilderMulti(WorkflowBuilder):
 
     def execute(self,
                 recipe_data=None,
-                pos_prompt=None, neg_prompt=None,
-                seed=None, seed_a=None, seed_b=None, denoise=None,
-                lora_stack=None, lora_stack_a=None, lora_stack_b=None,
-                multi_pos_prompts=None, multi_neg_prompts=None,
-                multi_seeds=None, multi_loras=None,
+                builder_data=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
-        # Map active slot's multi bundle inputs to standard single-input vars so
-        # they travel the same proven path as lora_stack_a / seed_a in Builder.
-        try:
-            ovs = json.loads(override_data) if override_data else {}
-        except Exception:
-            ovs = {}
-        active_slot = str(ovs.get("_send_model_slot", ovs.get("_model_slot", "model_a"))).strip()
-        if active_slot not in ("model_a", "model_b", "model_c", "model_d"):
-            active_slot = "model_a"
-
-        if isinstance(multi_loras, dict):
-            slot_stack = multi_loras.get(active_slot)
-            if isinstance(slot_stack, list) and slot_stack:
-                lora_stack_a = slot_stack
-
-        if isinstance(multi_seeds, dict):
-            slot_seed = multi_seeds.get(active_slot)
-            if isinstance(slot_seed, int) and slot_seed != 0:
-                seed_a = slot_seed
-
         result = super().execute(
             recipe_data=recipe_data,
-            pos_prompt=pos_prompt,
-            neg_prompt=neg_prompt,
-            seed=seed,
-            seed_a=seed_a,
-            seed_b=seed_b,
-            denoise=denoise,
-            lora_stack=lora_stack,
-            lora_stack_a=lora_stack_a,
-            lora_stack_b=lora_stack_b,
-            multi_pos_prompts=multi_pos_prompts,
-            multi_neg_prompts=multi_neg_prompts,
-            multi_seeds=multi_seeds,
-            multi_loras=multi_loras,
+            builder_data=builder_data,
             override_data=override_data,
             lora_state=lora_state,
             unique_id=unique_id,
