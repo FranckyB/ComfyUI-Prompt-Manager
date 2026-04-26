@@ -67,13 +67,9 @@ class WorkflowManager(PromptManagerAdvanced):
 
         first_category = categories[0] if categories else "Default"
 
+        # Keep new node instances empty until the user explicitly selects a prompt.
         first_prompt = ""
         first_prompt_text = ""
-        if prompts_data and first_category in prompts_data and prompts_data[first_category]:
-            first_category_prompts = [k for k in prompts_data[first_category].keys() if k != "__meta__"]
-            first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
-            if first_prompt:
-                first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
 
         return {
             "required": {
@@ -133,28 +129,33 @@ class WorkflowManager(PromptManagerAdvanced):
         saved_workflow_data=None,
     ):
         prompts_data = self.load_prompts()
+
+        def _as_workflow_dict(raw):
+            if isinstance(raw, dict):
+                return raw
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    parsed = json.loads(raw)
+                    return parsed if isinstance(parsed, dict) else None
+                except (json.JSONDecodeError, TypeError):
+                    return None
+            return None
+
         prompt_entry = prompts_data.get(category, {}).get(name, {}) if isinstance(prompts_data, dict) else {}
-        stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
+        # On reload, category/name can be temporarily out of sync in the UI.
+        # If direct lookup misses, find the selected name in any category.
+        if not isinstance(prompt_entry, dict) or not prompt_entry:
+            if isinstance(prompts_data, dict) and isinstance(name, str) and name:
+                for cat_prompts in prompts_data.values():
+                    if isinstance(cat_prompts, dict) and isinstance(cat_prompts.get(name), dict):
+                        prompt_entry = cat_prompts.get(name)
+                        break
 
-        live_workflow_data = None
-        if isinstance(recipe_data, dict):
-            live_workflow_data = recipe_data
-        elif isinstance(recipe_data, str) and recipe_data.strip():
-            try:
-                parsed = json.loads(recipe_data)
-                if isinstance(parsed, dict):
-                    live_workflow_data = parsed
-            except (json.JSONDecodeError, TypeError):
-                live_workflow_data = None
+        stored_prompt_wf = _as_workflow_dict(prompt_entry.get("workflow_data")) if isinstance(prompt_entry, dict) else None
 
-        hidden_saved_wf = None
-        if isinstance(saved_workflow_data, str) and saved_workflow_data.strip():
-            try:
-                parsed_saved = json.loads(saved_workflow_data)
-                if isinstance(parsed_saved, dict):
-                    hidden_saved_wf = parsed_saved
-            except (json.JSONDecodeError, TypeError):
-                hidden_saved_wf = None
+        live_workflow_data = _as_workflow_dict(recipe_data)
+
+        hidden_saved_wf = _as_workflow_dict(saved_workflow_data)
 
         # WorkflowManager should prefer live connected workflow_data when present,
         # then fall back to local serialized state.

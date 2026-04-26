@@ -218,13 +218,9 @@ class PromptManagerAdvanced:
         first_category = categories[0] if categories else "Default"
 
         # Get first prompt from first category
+        # Keep new node instances empty until the user explicitly selects a prompt.
         first_prompt = ""
         first_prompt_text = ""
-        if prompts_data and first_category in prompts_data and prompts_data[first_category]:
-            first_category_prompts = [k for k in prompts_data[first_category].keys() if k != "__meta__"]
-            first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
-            if first_prompt:
-                first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
 
         return {
             "required": {

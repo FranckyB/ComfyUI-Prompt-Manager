@@ -3,7 +3,7 @@
  *
  * Layout order: Resolution -> Model/VAE/CLIP -> Prompts -> Sampler -> LoRAs
  * Accepts recipe_data input (from PromptExtractor) + optional lora_stack / prompt / image inputs.
- * "Update Recipe" button pulls data from connected PromptExtractor.
+ * recipe_data is applied during normal workflow execution.
  * Connected prompt inputs automatically ghost textareas and override prompts.
  * Connected LoRA stacks are always merged on execution.
  * Non-WAN families show "Model A" / "Model B" / "LoRA Stack A" / "LoRA Stack B" labels.
@@ -1191,11 +1191,14 @@ async function updateUI(node) {
     if (!d) return;
 
     if (node._wePullModelSlotRow?._inp) {
-        const pullSlot = node._weUseSlotProfiles
+        let pullSlot = node._weUseSlotProfiles
             ? _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a")
             : node._weBuilderVariant === "wan"
-            ? _normalizePullModelPairStartKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || NO_PULL_SLOT)
-            : _normalizePullModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || NO_PULL_SLOT);
+            ? _normalizePullModelPairStartKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a")
+            : _normalizePullModelSlotKey(d.pull_model_slot || d.model_slot || node._wePullModelSlot || "model_a");
+        if (pullSlot === NO_PULL_SLOT) {
+            pullSlot = node._weBuilderVariant === "wan" ? "model_a" : "model_a";
+        }
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(pullSlot);
         node._wePullModelSlotRow._inp.value = pullSlot;
         node._wePullModelSlot = pullSlot;
@@ -2122,9 +2125,13 @@ function syncHidden(node) {
         ov.negative_prompt = String(node._weNegBox.value || "");
     }
     if (node._weFamily) ov._family = node._weFamily;
-    if (node._wePullModelSlot) ov._pull_model_slot = node._weBuilderVariant === "wan"
-        ? _normalizePullModelPairStartKey(node._wePullModelSlot)
-        : _normalizePullModelSlotKey(node._wePullModelSlot);
+    if (node._wePullModelSlot) {
+        let normalizedPullSlot = node._weBuilderVariant === "wan"
+            ? _normalizePullModelPairStartKey(node._wePullModelSlot)
+            : _normalizePullModelSlotKey(node._wePullModelSlot);
+        if (normalizedPullSlot === NO_PULL_SLOT) normalizedPullSlot = "model_a";
+        ov._pull_model_slot = normalizedPullSlot;
+    }
     else delete ov._pull_model_slot;
     if (node._weSendModelSlot) ov._send_model_slot = node._weBuilderVariant === "wan"
         ? _normalizeModelPairStartKey(node._weSendModelSlot)
@@ -2337,9 +2344,10 @@ function applyOverrides(node, ovJson, lsJson) {
     }
 
     if (node._wePullModelSlotRow?._inp) {
-        const slot = node._weBuilderVariant === "wan"
-            ? _normalizePullModelPairStartKey(ov._pull_model_slot || ov._model_slot || NO_PULL_SLOT)
-            : _normalizePullModelSlotKey(ov._pull_model_slot || ov._model_slot || NO_PULL_SLOT);
+        let slot = node._weBuilderVariant === "wan"
+            ? _normalizePullModelPairStartKey(ov._pull_model_slot || ov._model_slot || "model_a")
+            : _normalizePullModelSlotKey(ov._pull_model_slot || ov._model_slot || "model_a");
+        if (slot === NO_PULL_SLOT) slot = "model_a";
         node._wePullModelSlotRow._inp.value = slot;
         node._wePullModelSlot = slot;
         if (node._wePullModelSlotRow._setOriginal) node._wePullModelSlotRow._setOriginal(slot);
@@ -2356,9 +2364,16 @@ function applyOverrides(node, ovJson, lsJson) {
 
     if (node._weUseSlotProfiles) {
         const lockSrc = (ov._section_locks && typeof ov._section_locks === "object") ? ov._section_locks : {};
+        // Multi-slot mode: restore per-slot lock state for all per-model
+        // sections so lock toggles do not bleed between slots.
         for (const key of ["model", "sampler", "positive", "negative", "loras"]) {
             if (node._weSetSectionLock) node._weSetSectionLock(key, !!lockSrc[key], { sync: false });
         }
+        // For connected input override UX, keep prompt/seed ghost visuals.
+        const _ghostInput = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
+        _ghostInput(node._wePosBox, !!lockSrc.positive);
+        _ghostInput(node._weNegBox, !!lockSrc.negative);
+        _ghostInput(node._weSamplerRows?.seed_a?._inp, !!lockSrc.sampler);
     } else if (ov._section_locks && typeof ov._section_locks === "object") {
         for (const key of ["resolution", "model", "sampler", "positive", "negative", "loras"]) {
             if (Object.prototype.hasOwnProperty.call(ov._section_locks, key) && node._weSetSectionLock) {
@@ -2884,8 +2899,7 @@ app.registerExtension({
 
             // -- Top-right help icon on node frame (canvas-drawn) --
             node._weHelpText = [
-                "Use with an extractor node to get an 'Update Recipe' button.",
-                "- In this mode, data is only pulled at the press of that button.",
+                "Connect recipe_data and execute the workflow to refresh Builder data.",
                 "Builder can also be used standalone or chained in a workflow.",
                 "- If chaining, first Builder drives downstream Builders.",
                 "- Chained Builders update their UI at execution.",
@@ -2950,11 +2964,11 @@ app.registerExtension({
             node._weUpdateBtn = updateBtn;
 
             const pullSlotOptions = isWanBuilder
-                ? [{ value: NO_PULL_SLOT, label: "none" }, ...MODEL_SLOT_PAIR_OPTIONS]
-                : [{ value: NO_PULL_SLOT, label: "none" }, ...MODEL_SLOT_KEYS];
+                ? [...MODEL_SLOT_PAIR_OPTIONS]
+                : [...MODEL_SLOT_KEYS];
             const sendSlotOptions = isWanBuilder ? MODEL_SLOT_PAIR_OPTIONS : MODEL_SLOT_KEYS;
 
-            const pullModelSlotRow = makeInput("Pull From", "select", NO_PULL_SLOT, {
+            const pullModelSlotRow = makeInput("Pull From", "select", "model_a", {
                 options: pullSlotOptions,
             }, () => {
                 const picked = isWanBuilder
@@ -2964,12 +2978,12 @@ app.registerExtension({
                 node._wePullModelSlot = picked;
                 _syncS();
             });
-            pullModelSlotRow._inp.title = "Select which model slot to pull from when reading connected recipe_data. Use none to ignore connected recipe_data during execute.";
+            pullModelSlotRow._inp.title = "Select which model slot to pull from when reading connected recipe_data during execute.";
             pullModelSlotRow._inp.style.color = C.accent;
             pullModelSlotRow._inp.style.fontWeight = "bold";
             pullModelSlotRow.style.marginBottom = "0";
             node._wePullModelSlotRow = pullModelSlotRow;
-            node._wePullModelSlot = NO_PULL_SLOT;
+            node._wePullModelSlot = "model_a";
 
             const sendModelSlotRow = makeInput("Send To", "select", "model_a", {
                 options: sendSlotOptions,
@@ -3086,7 +3100,6 @@ app.registerExtension({
                     }
 
                     syncHidden(node);
-                    _captureCurrentSlotProfile();
 
                     const picked = _normalizeModelSlotKey(sendModelSlotRow._inp?.value || "model_a");
                     _loadSlotProfile(picked);
@@ -3848,7 +3861,8 @@ app.registerExtension({
                 padding: "4px 8px",
             });
             modelSlotBox.appendChild(modelSlotGroup);
-            root.appendChild(updateBtn);
+            // Intentionally do not render manual "Update Recipe" button.
+            // Builder refreshes from recipe_data during normal execute flow.
 
             // -- 1. RESOLUTION section (open) --
             const resSec = makeSection("RESOLUTION", node, "resolution", { collapsed: !!node._weCollapsedSections?.resolution });
@@ -3998,7 +4012,7 @@ app.registerExtension({
             if (node._weUseSlotProfiles) {
                 root.appendChild(modelSlotBox);
             } else {
-                root.insertBefore(modelSlotBox, updateBtn);
+                root.appendChild(modelSlotBox);
             }
 
             node._weResRows = resRows;
@@ -4814,6 +4828,39 @@ app.registerExtension({
 
                 if (node._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
                     node._weSlotProfiles = _normalizeSlotProfiles(info._slot_profiles);
+                    // Immediately apply active slot's fresh data into _weExtracted so
+                    // the updateUI() call below paints the currently-visible slot.
+                    const activeSlot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
+                    const activeProfile = node._weSlotProfiles?.[activeSlot];
+                    if (activeProfile?.ov && typeof activeProfile.ov === "object") {
+                        const ov = activeProfile.ov;
+                        const sampler = {
+                            steps_a: ov.steps_a ?? 20, cfg: ov.cfg ?? 5.0,
+                            denoise: ov.denoise ?? 1.0, seed_a: ov.seed_a ?? 0,
+                            sampler_name: ov.sampler_name || "euler", scheduler: ov.scheduler || "simple",
+                        };
+                        node._weExtracted = {
+                            ...(node._weExtracted || {}),
+                            positive_prompt: ov.positive_prompt ?? "",
+                            negative_prompt: ov.negative_prompt ?? "",
+                            model_a: ov.model_a ?? "",
+                            model_family: ov._family || node._weExtracted?.model_family || "sdxl",
+                            vae: { name: ov.vae ?? "", source: "manual" },
+                            clip: { names: Array.isArray(ov.clip_names) ? ov.clip_names : [], type: "", source: "manual" },
+                            sampler,
+                            loras_a: (ov._section_locks?.loras && Array.isArray(node._weExtracted?.loras_a))
+                                ? node._weExtracted.loras_a
+                                : (Array.isArray(ov.loras_a) ? ov.loras_a : (node._weExtracted?.loras_a || [])),
+                        };
+                        // Ghost individual inputs to show MM multi-input locked state
+                        if (ov._section_locks && typeof ov._section_locks === "object") {
+                            const sl = ov._section_locks;
+                            const _g = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
+                            _g(node._wePosBox, !!sl.positive);
+                            _g(node._weNegBox, !!sl.negative);
+                            _g(node._weSamplerRows?.seed_a?._inp, !!sl.sampler);
+                        }
+                    }
                 }
 
                 // Always mirror connected prompt inputs into textareas,
@@ -4966,6 +5013,37 @@ app.registerExtension({
             if (info) {
                 if (this._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
                     this._weSlotProfiles = _normalizeSlotProfiles(info._slot_profiles);
+                    const activeSlot = _normalizeModelSlotKey(this._weActiveModelSlot || this._weSendModelSlot || "model_a");
+                    const activeProfile = this._weSlotProfiles?.[activeSlot];
+                    if (activeProfile?.ov && typeof activeProfile.ov === "object") {
+                        const ov = activeProfile.ov;
+                        const sampler = {
+                            steps_a: ov.steps_a ?? 20, cfg: ov.cfg ?? 5.0,
+                            denoise: ov.denoise ?? 1.0, seed_a: ov.seed_a ?? 0,
+                            sampler_name: ov.sampler_name || "euler", scheduler: ov.scheduler || "simple",
+                        };
+                        this._weExtracted = {
+                            ...(this._weExtracted || {}),
+                            positive_prompt: ov.positive_prompt ?? "",
+                            negative_prompt: ov.negative_prompt ?? "",
+                            model_a: ov.model_a ?? "",
+                            model_family: ov._family || this._weExtracted?.model_family || "sdxl",
+                            vae: { name: ov.vae ?? "", source: "manual" },
+                            clip: { names: Array.isArray(ov.clip_names) ? ov.clip_names : [], type: "", source: "manual" },
+                            sampler,
+                            loras_a: (ov._section_locks?.loras && Array.isArray(this._weExtracted?.loras_a))
+                                ? this._weExtracted.loras_a
+                                : (Array.isArray(ov.loras_a) ? ov.loras_a : (this._weExtracted?.loras_a || [])),
+                        };
+                        // Ghost individual inputs to show MM multi-input locked state
+                        if (ov._section_locks && typeof ov._section_locks === "object") {
+                            const sl = ov._section_locks;
+                            const _g = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
+                            _g(this._wePosBox, !!sl.positive);
+                            _g(this._weNegBox, !!sl.negative);
+                            _g(this._weSamplerRows?.seed_a?._inp, !!sl.sampler);
+                        }
+                    }
                 }
                 if (posConn?.link != null && info.positive_prompt != null && this._wePosBox) {
                     this._wePosBox.value = info.positive_prompt;

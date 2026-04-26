@@ -793,8 +793,8 @@ class WorkflowBuilder:
         if not isinstance(overrides, dict):
             overrides = {}
         pull_model_slot = _normalize_model_slot(
-            overrides.get("_pull_model_slot", overrides.get("_model_slot", _NO_PULL_SLOT)),
-            default=_NO_PULL_SLOT,
+            overrides.get("_pull_model_slot", overrides.get("_model_slot", "model_a")),
+            default="model_a",
             allow_none=True,
         )
         send_model_slot = _normalize_model_slot(overrides.get("_send_model_slot", overrides.get("_model_slot", pull_model_slot)))
@@ -802,6 +802,9 @@ class WorkflowBuilder:
             if pull_model_slot != _NO_PULL_SLOT:
                 pull_model_slot = _normalize_model_pair_start(pull_model_slot)
             send_model_slot = _normalize_model_pair_start(send_model_slot)
+        # Execute-only pull flow: treat legacy "none" as current send slot.
+        if pull_model_slot == _NO_PULL_SLOT:
+            pull_model_slot = send_model_slot
         pull_enabled = pull_model_slot != _NO_PULL_SLOT
         secondary_pull_slot = _next_model_slot(pull_model_slot) if pull_enabled else None
         active_model_slot = send_model_slot
@@ -847,21 +850,6 @@ class WorkflowBuilder:
                     wf_data = json.loads(recipe_data)
                 except (json.JSONDecodeError, TypeError):
                     print("[RecipeBuilder] Warning: could not parse recipe_data")
-
-        # Extractor/Manager sources should be pull-on-demand only via the
-        # Update Workflow button, not auto-applied on every execution.
-        if isinstance(wf_data, dict):
-            upstream_source = str(wf_data.get('_source', '')).strip().lower()
-            manual_pull_sources = {
-                "promptextractor",
-                "recipeextractor",
-                "workflowextractor",
-                "promptmanageradvanced",
-                "recipemanager",
-                "workflowmanager",
-            }
-            if upstream_source in manual_pull_sources:
-                wf_data = None
 
         # ── Build extracted dict from recipe_data or defaults ───────────
         if wf_data and pull_enabled:
@@ -1702,7 +1690,72 @@ class WorkflowBuilder:
         # can author model_a..model_d blocks in one builder instance.
         base_recipe_for_output = wf_data if isinstance(wf_data, dict) else None
         slot_profiles = overrides.get('_slot_profiles') if isinstance(overrides, dict) else None
-        if isinstance(slot_profiles, dict):
+
+        def _slot_profile_is_meaningful(raw_profile):
+            if not isinstance(raw_profile, dict):
+                return False
+
+            ov_profile = raw_profile.get('ov') if isinstance(raw_profile.get('ov'), dict) else None
+            profile = ov_profile if isinstance(ov_profile, dict) else raw_profile
+
+            # Any explicitly provided prompt/model/asset value makes profile meaningful.
+            for k in ('positive_prompt', 'negative_prompt', 'model_a', 'model', 'vae', 'family', '_family', 'clip_type', 'loader_type'):
+                val = profile.get(k)
+                if val is not None and str(val).strip() != '':
+                    return True
+
+            clip_names = profile.get('clip_names', profile.get('clip'))
+            if isinstance(clip_names, list) and any(str(x or '').strip() for x in clip_names):
+                return True
+
+            loras = profile.get('loras_a', profile.get('loras'))
+            if isinstance(loras, list) and len(loras) > 0:
+                return True
+
+            # Non-default sampler/resolution values indicate authored state.
+            try:
+                if int(profile.get('steps_a', profile.get('steps', 20)) or 20) != 20:
+                    return True
+                if float(profile.get('cfg', 5.0) or 5.0) != 5.0:
+                    return True
+                if float(profile.get('denoise', 1.0) or 1.0) != 1.0:
+                    return True
+                if int(profile.get('seed_a', profile.get('seed', 0)) or 0) != 0:
+                    return True
+                if int(profile.get('width', 768) or 768) != 768:
+                    return True
+                if int(profile.get('height', 1280) or 1280) != 1280:
+                    return True
+                if int(profile.get('batch_size', 1) or 1) != 1:
+                    return True
+                if profile.get('length') not in (None, '', 0):
+                    return True
+            except Exception:
+                pass
+
+            locks = profile.get('_section_locks')
+            if isinstance(locks, dict) and any(bool(v) for v in locks.values()):
+                return True
+
+            return False
+
+        has_meaningful_slot_profiles = isinstance(slot_profiles, dict) and any(
+            _slot_profile_is_meaningful(slot_profiles.get(slot_key)) for slot_key in _MODEL_KEYS
+        )
+
+        has_multi_slot_inputs = any([
+            isinstance(multi_pos_prompts, dict),
+            isinstance(multi_neg_prompts, dict),
+            isinstance(multi_seeds, dict),
+            isinstance(multi_loras, dict),
+        ])
+
+        # Absolute-truth execute path: when recipe_data is connected and no
+        # multi-slot override inputs are connected, do not let stale UI slot
+        # profiles rewrite incoming model blocks.
+        allow_slot_profile_authoring = not (isinstance(base_recipe_for_output, dict) and not has_multi_slot_inputs)
+
+        if allow_slot_profile_authoring and isinstance(slot_profiles, dict) and (has_meaningful_slot_profiles or not isinstance(base_recipe_for_output, dict)):
             try:
                 if isinstance(base_recipe_for_output, dict) and \
                         int(base_recipe_for_output.get('version', 0) or 0) >= 2 and \
@@ -1757,6 +1810,11 @@ class WorkflowBuilder:
                 for slot_key in _MODEL_KEYS:
                     raw_profile = slot_profiles.get(slot_key)
                     if not isinstance(raw_profile, dict):
+                        continue
+
+                    if not _slot_profile_is_meaningful(raw_profile):
+                        # Keep incoming recipe_data slot block untouched when
+                        # profile only contains default placeholder values.
                         continue
 
                     # Current JS shape stores per-slot profile as {ov, ls}; keep
@@ -1906,8 +1964,36 @@ class WorkflowBuilder:
         output_models = output_wf.get('models', {}) if isinstance(output_wf, dict) else {}
         for slot_key in _MODEL_KEYS:
             row = slot_profiles_src.get(slot_key) if isinstance(slot_profiles_src.get(slot_key), dict) else {}
-            row_ov = dict(row.get('ov')) if isinstance(row.get('ov'), dict) else {}
+            # Recipe data is authoritative on execute: rebuild each slot from a
+            # clean baseline, then apply this slot's model block if present.
+            # This guarantees missing slots are explicitly cleared.
+            row_ov = {
+                'positive_prompt': '',
+                'negative_prompt': '',
+                'model_a': '',
+                '_family': '',
+                'clip_type': '',
+                'loader_type': '',
+                'vae': '',
+                'clip_names': [],
+                'loras_a': [],
+                'steps_a': 20,
+                'cfg': 5.0,
+                'denoise': 1.0,
+                'seed_a': 0,
+                'sampler_name': 'euler',
+                'scheduler': 'simple',
+                'width': 768,
+                'height': 1280,
+                'batch_size': 1,
+                'length': None,
+            }
             row_ls = dict(row.get('ls')) if isinstance(row.get('ls'), dict) else {}
+
+            # Check if loras are locked BEFORE overwriting from execution output.
+            _pre_locks = row_ov.get('_section_locks', {}) if isinstance(row_ov.get('_section_locks'), dict) else {}
+            _loras_locked = bool(_pre_locks.get('loras', False))
+            _saved_loras_a = list(row_ov.get('loras_a', [])) if _loras_locked else None
 
             block = output_models.get(slot_key) if isinstance(output_models, dict) else None
             if isinstance(block, dict):
@@ -1924,6 +2010,11 @@ class WorkflowBuilder:
                     'clip_names': list(block.get('clip', [])) if isinstance(block.get('clip'), list) else [],
                     'loras_a': list(block.get('loras', [])) if isinstance(block.get('loras'), list) else [],
                     'steps_a': int(sampler_block.get('steps', 20) or 20),
+                })
+                # Restore loras if they were locked before this execution.
+                if _loras_locked and _saved_loras_a is not None:
+                    row_ov['loras_a'] = _saved_loras_a
+                row_ov.update({
                     'cfg': float(sampler_block.get('cfg', 5.0) or 5.0),
                     'denoise': float(sampler_block.get('denoise', 1.0) or 1.0),
                     'seed_a': int(sampler_block.get('seed', 0) or 0),
@@ -1934,6 +2025,19 @@ class WorkflowBuilder:
                     'batch_size': int(resolution_block.get('batch_size', 1) or 1),
                     'length': resolution_block.get('length'),
                 })
+
+            # Execution-time locks: lock a section when a multi input supplied
+            # a real value for this slot; unlock when it was absent/empty.
+            existing_locks = row_ov.get('_section_locks', {}) if isinstance(row_ov.get('_section_locks'), dict) else {}
+            lock_pos  = _extract_multi_prompt_value(multi_pos_prompts, slot_key, 'positive') is not None
+            lock_neg  = _extract_multi_prompt_value(multi_neg_prompts, slot_key, 'negative') is not None
+            lock_seed = _extract_multi_seed_value(multi_seeds, slot_key) is not None
+            row_ov['_section_locks'] = {
+                **existing_locks,
+                'positive': lock_pos,
+                'negative': lock_neg,
+                'sampler':  lock_seed,
+            }
 
             ui_slot_profiles[slot_key] = {
                 'ov': row_ov,
