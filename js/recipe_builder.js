@@ -3713,31 +3713,25 @@ app.registerExtension({
                         const currentProfiles = _normalizeSlotProfiles(node._weSlotProfiles);
                         const incomingProfiles = _normalizeSlotProfiles(pulledSlotProfiles);
 
-                        // Preserve per-slot lock maps while replacing slot content.
+                        // Merge per-slot incoming data while honoring lock state.
+                        const mergedProfiles = _emptySlotProfiles();
                         for (const slot of MODEL_SLOT_KEYS) {
-                            const curLocks = currentProfiles?.[slot]?.ov?._section_locks;
-                            if (curLocks && typeof curLocks === "object") {
-                                incomingProfiles[slot].ov._section_locks = {
-                                    model: !!curLocks.model,
-                                    sampler: !!curLocks.sampler,
-                                    positive: !!curLocks.positive,
-                                    negative: !!curLocks.negative,
-                                    loras: !!curLocks.loras,
-                                };
-                            }
+                            const cur = currentProfiles[slot] || _makeEmptySlotProfile();
+                            const inc = incomingProfiles[slot] || _makeEmptySlotProfile();
+                            mergedProfiles[slot] = mergeSlotProfileWithLocks(cur, inc);
                         }
 
                         const activeSlot = _normalizeModelSlotKey(selectedPullSlot || node._weActiveModelSlot || "model_a");
-                        const activeProfile = incomingProfiles[activeSlot] || _makeEmptySlotProfile();
+                        const activeProfile = mergedProfiles[activeSlot] || _makeEmptySlotProfile();
                         const activeOv = {
                             ...(activeProfile.ov || {}),
-                            _slot_profiles: incomingProfiles,
+                            _slot_profiles: mergedProfiles,
                             _active_model_slot: activeSlot,
                             _send_model_slot: activeSlot,
                             _pull_model_slot: activeSlot,
                         };
 
-                        node._weSlotProfiles = incomingProfiles;
+                        node._weSlotProfiles = mergedProfiles;
                         node._weActiveModelSlot = activeSlot;
                         node._weSendModelSlot = activeSlot;
                         node._wePullModelSlot = activeSlot;
