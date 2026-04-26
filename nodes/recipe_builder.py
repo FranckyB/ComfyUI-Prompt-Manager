@@ -992,6 +992,7 @@ class WorkflowBuilder:
                     'model_strength': model_strength,
                     'clip_strength': clip_strength,
                     'active': True,
+                    'source_input': True,
                 })
 
             return normalized
@@ -1095,6 +1096,8 @@ class WorkflowBuilder:
                     'clip_strength': clip_strength,
                     'active': item.get('active', True) is not False,
                 }
+                if 'source_input' in item:
+                    row['source_input'] = item.get('source_input', False) is True
                 if 'available' in item:
                     row['available'] = item.get('available', True) is not False
                 out.append(row)
@@ -1159,13 +1162,51 @@ class WorkflowBuilder:
                     extracted['loras_b'] = override_loras_b
             else:
                 if override_loras_a is not None:
-                    # Keep all UI-authored rows even when a lora_stack input is
-                    # connected. Connected rows still win on duplicate names.
-                    merged_a = _merge_lora_lists(override_loras_a, extracted.get('loras_a', []))
-                    extracted['loras_a'] = _apply_preferred_lora_order(merged_a, override_loras_a)
+                    input_names_a = {
+                        str(input_row.get('name', '')).strip()
+                        for input_row in (input_loras_a or [])
+                        if isinstance(input_row, dict) and str(input_row.get('name', '')).strip()
+                    }
+                    pruned_pref_a = []
+                    local_pref_a = []
+                    for row in override_loras_a:
+                        name = str((row or {}).get('name', '')).strip() if isinstance(row, dict) else ''
+                        if not name:
+                            continue
+                        source_input = bool(row.get('source_input', False)) if isinstance(row, dict) else False
+                        # Drop stale rows that came from a previously connected
+                        # lora_stack entry that has since been removed.
+                        if source_input and name not in input_names_a:
+                            continue
+                        pruned_pref_a.append(row)
+                        if not source_input:
+                            local_pref_a.append(row)
+
+                    # Keep local recipe/UI-authored rows, then merge current
+                    # workflow + connected input rows, then apply preferred order.
+                    merged_a = _merge_lora_lists(local_pref_a, extracted.get('loras_a', []))
+                    extracted['loras_a'] = _apply_preferred_lora_order(merged_a, pruned_pref_a)
                 if override_loras_b is not None:
-                    merged_b = _merge_lora_lists(override_loras_b, extracted.get('loras_b', []))
-                    extracted['loras_b'] = _apply_preferred_lora_order(merged_b, override_loras_b)
+                    input_names_b = {
+                        str(input_row.get('name', '')).strip()
+                        for input_row in (input_loras_b or [])
+                        if isinstance(input_row, dict) and str(input_row.get('name', '')).strip()
+                    }
+                    pruned_pref_b = []
+                    local_pref_b = []
+                    for row in override_loras_b:
+                        name = str((row or {}).get('name', '')).strip() if isinstance(row, dict) else ''
+                        if not name:
+                            continue
+                        source_input = bool(row.get('source_input', False)) if isinstance(row, dict) else False
+                        if source_input and name not in input_names_b:
+                            continue
+                        pruned_pref_b.append(row)
+                        if not source_input:
+                            local_pref_b.append(row)
+
+                    merged_b = _merge_lora_lists(local_pref_b, extracted.get('loras_b', []))
+                    extracted['loras_b'] = _apply_preferred_lora_order(merged_b, pruned_pref_b)
 
         # ── Apply overrides ──────────────────────────────────────────────
         pos_text = extracted['positive_prompt']
@@ -1602,6 +1643,9 @@ class WorkflowBuilder:
             annotated = []
             for lora in list(simplified_wf.get(lora_key, [])):
                 row = dict(lora or {})
+                # Internal provenance flag used during execute-time merging
+                # must never leak into serialized recipe_data.
+                row.pop('source_input', None)
                 name = str(row.get('name', '')).strip()
                 available = lora_availability.get(name, True) if name else True
                 row['available'] = bool(available)
@@ -1667,10 +1711,16 @@ class WorkflowBuilder:
                 'model_b_found':      model_b_found,
                 'loras_a':            extracted['loras_a'],
                 'loras_b':            extracted['loras_b'],
-                # Report effective workflow-side stack order so downstream
-                # Builder pre-update can track order-only changes.
-                'workflow_loras_a':   list(extracted['loras_a']),
-                'workflow_loras_b':   list(extracted['loras_b']),
+                # Report only non-input workflow-side rows here; connected
+                # lora_stack rows are sent separately in input_loras_*.
+                'workflow_loras_a':   [
+                    lora_row for lora_row in (extracted.get('loras_a', []) or [])
+                    if not (isinstance(lora_row, dict) and lora_row.get('source_input', False) is True)
+                ],
+                'workflow_loras_b':   [
+                    lora_row for lora_row in (extracted.get('loras_b', []) or [])
+                    if not (isinstance(lora_row, dict) and lora_row.get('source_input', False) is True)
+                ],
                 'input_loras_a':      input_loras_a,
                 'input_loras_b':      input_loras_b,
                 'vae':                effective_vae,

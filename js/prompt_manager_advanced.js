@@ -995,10 +995,22 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
     const wf = parseJsonObjectSafe(rawWorkflowData, null);
     if (!wf || typeof wf !== "object") return false;
 
+    const hasSubstantiveRootField = Object.entries(wf).some(([key, value]) => {
+        if (key === "_source" || key === "version" || key === "models") return false;
+        if (value == null) return false;
+        if (typeof value === "string") return value.trim().length > 0;
+        if (Array.isArray(value)) return value.length > 0;
+        if (typeof value === "object") return Object.keys(value).length > 0;
+        return true;
+    });
+
     if ((Number(wf.version || 0) >= 2) && wf.models && typeof wf.models === "object") {
         for (const slot of ["model_a", "model_b", "model_c", "model_d"]) {
             const block = wf.models[slot];
             if (!block || typeof block !== "object") continue;
+            if (Object.keys(block).length > 0) {
+                return true;
+            }
             const positivePrompt = String(block.positive_prompt || "").trim();
             const modelName = String(block.model || "").trim();
             const hasLoras = Array.isArray(block.loras) && block.loras.some((lora) => String(lora?.name || "").trim().length > 0);
@@ -1010,6 +1022,9 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
         }
 
         if (["LATENT", "IMAGE", "MASK"].some((key) => wf[key] != null)) {
+            return true;
+        }
+        if (hasSubstantiveRootField) {
             return true;
         }
         return false;
@@ -1026,7 +1041,7 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
     const hasLorasA = Array.isArray(wf.loras_a) && wf.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
     const hasLorasB = Array.isArray(wf.loras_b) && wf.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
 
-    return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB;
+    return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB || hasSubstantiveRootField;
 }
 
 function hasConnectedWorkflowInput(node) {
@@ -4074,9 +4089,38 @@ function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
             modelB.loras = normalizedB;
         }
     } else {
-        base.positive_prompt = normalizedPrompt;
-        base.loras_a = normalizedA;
-        base.loras_b = normalizedB;
+        // Always emit v2 shape so backend normalization doesn't drop legacy
+        // top-level fields into an empty { version:2, models:{} } payload.
+        const legacyModelA = String(base.model_a || "").trim();
+        const legacyModelB = String(base.model_b || "").trim();
+        const legacyNegative = String(base.negative_prompt || "");
+
+        base.version = 2;
+        if (!base.models || typeof base.models !== "object") base.models = {};
+
+        const modelA = (base.models.model_a && typeof base.models.model_a === "object")
+            ? base.models.model_a
+            : (base.models.model_a = {});
+
+        modelA.positive_prompt = normalizedPrompt;
+        modelA.negative_prompt = String(modelA.negative_prompt ?? legacyNegative);
+        if (!modelA.model && legacyModelA) modelA.model = legacyModelA;
+        modelA.loras = normalizedA;
+
+        const hasModelB = legacyModelB.length > 0 || normalizedB.length > 0 ||
+            (base.models.model_b && typeof base.models.model_b === "object");
+        if (hasModelB) {
+            const modelB = (base.models.model_b && typeof base.models.model_b === "object")
+                ? base.models.model_b
+                : (base.models.model_b = {});
+            if (!modelB.model && legacyModelB) modelB.model = legacyModelB;
+            modelB.loras = normalizedB;
+        }
+
+        delete base.positive_prompt;
+        delete base.negative_prompt;
+        delete base.loras_a;
+        delete base.loras_b;
     }
     base._source = "PromptManagerAdvanced";
     return base;
@@ -5050,36 +5094,36 @@ function resolveWorkflowDataForSave(node) {
             if (wfOutIdx >= 0) {
                 const out = upstream.outputs[wfOutIdx];
                 const data = out?._data ?? out?.value ?? null;
-                if (hasMeaningfulWorkflowData(data)) return data;
+                if (hasWorkflowDataPayload(data)) return data;
                 if (typeof data === "string") {
                     const parsed = parseJsonObjectSafe(data, null);
-                    if (hasMeaningfulWorkflowData(parsed)) return parsed;
+                    if (hasWorkflowDataPayload(parsed)) return parsed;
                 }
             }
 
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
-            if (hasMeaningfulWorkflowData(fromBuilder)) return fromBuilder;
+            if (hasWorkflowDataPayload(fromBuilder)) return fromBuilder;
         }
 
         if (sourceClass === "PromptExtractor" || sourceClass === "RecipeExtractor") {
             const fromExtractor = buildWorkflowDataFromExtractorNode(upstream);
-            if (hasMeaningfulWorkflowData(fromExtractor)) return fromExtractor;
+            if (hasWorkflowDataPayload(fromExtractor)) return fromExtractor;
         }
 
         const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
         if (wfOutIdx >= 0) {
             const out = upstream.outputs[wfOutIdx];
             const data = out?._data ?? out?.value ?? null;
-            if (hasMeaningfulWorkflowData(data)) return data;
+            if (hasWorkflowDataPayload(data)) return data;
             if (typeof data === "string") {
                 const parsed = parseJsonObjectSafe(data, null);
-                if (hasMeaningfulWorkflowData(parsed)) return parsed;
+                if (hasWorkflowDataPayload(parsed)) return parsed;
             }
         }
 
         // Connected input but no fresh upstream workflow_data: for Recipe Manager,
         // allow fallback to the latest live payload captured from execution updates.
-        if (node?._isWorkflowManager && hasMeaningfulWorkflowData(node.lastWorkflowData)) {
+        if (node?._isWorkflowManager && hasWorkflowDataPayload(node.lastWorkflowData)) {
             return node.lastWorkflowData;
         }
 
@@ -5088,7 +5132,7 @@ function resolveWorkflowDataForSave(node) {
         return null;
     }
 
-    return hasMeaningfulWorkflowData(node.lastWorkflowData) ? node.lastWorkflowData : null;
+    return hasWorkflowDataPayload(node.lastWorkflowData) ? node.lastWorkflowData : null;
 }
 
 async function resolveWorkflowDataForLive(node) {
@@ -5161,28 +5205,49 @@ async function resolveWorkflowDataForLive(node) {
 
 async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null, nsfw = false) {
     try {
+        // Include workflow_data when available.
+        // If use_workflow_data is enabled and workflow_data comes from a connected
+        // RecipeBuilder / RecipeBuilderWan, pull it directly from Builder UI state so saving works
+        // even before executing the graph.
+        const hasWorkflowInput = hasConnectedWorkflowInput(node);
+        const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
+        const workflowDataForSave = hasWorkflowDataPayload(liveWorkflowData)
+            ? liveWorkflowData
+            : resolveWorkflowDataForSave(node);
+
+        // In Workflow Manager mode, preserve LoRA active state from connected
+        // workflow_data as the save source of truth.
+        let lorasForSaveA = Array.isArray(lorasA) ? [...lorasA] : [];
+        let lorasForSaveB = Array.isArray(lorasB) ? [...lorasB] : [];
+        if (node?._isWorkflowManager && hasWorkflowInput && hasMeaningfulWorkflowData(workflowDataForSave)) {
+            const wfLorasA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_a"));
+            const wfLorasB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_b"));
+            if (wfLorasA.length > 0 || lorasForSaveA.length === 0) lorasForSaveA = wfLorasA;
+            if (wfLorasB.length > 0 || lorasForSaveB.length === 0) lorasForSaveB = wfLorasB;
+        }
+
         const requestBody = {
             category: category,
             name: name,
             text: text,
             nsfw: nsfw,
             // Save loras with their active state
-            loras_a: lorasA.map(l => ({
+            loras_a: lorasForSaveA.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0,
                 clip_strength: l.clip_strength ?? l.strength ?? 1.0,
-                active: l.active !== false
+                active: l.active
             })),
-            loras_b: lorasB.map(l => ({
+            loras_b: lorasForSaveB.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0,
                 clip_strength: l.clip_strength ?? l.strength ?? 1.0,
-                active: l.active !== false
+                active: l.active
             })),
             // Save all trigger words with their active states
             trigger_words: (triggerWords || []).map(tw => ({
                 text: tw.text,
-                active: tw.active !== false
+                active: tw.active
             }))
         };
 
@@ -5191,17 +5256,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             requestBody.thumbnail = thumbnail;
         }
 
-        // Include workflow_data when available.
-        // If use_workflow_data is enabled and workflow_data comes from a connected
-        // RecipeBuilder / RecipeBuilderWan, pull it directly from Builder UI state so saving works
-        // even before executing the graph.
-        const hasWorkflowInput = hasConnectedWorkflowInput(node);
-        const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
-        const workflowDataForSave = hasMeaningfulWorkflowData(liveWorkflowData)
-            ? liveWorkflowData
-            : resolveWorkflowDataForSave(node);
-
-        if (node?._isWorkflowManager && hasWorkflowInput && !hasMeaningfulWorkflowData(workflowDataForSave)) {
+        if (node?._isWorkflowManager && hasWorkflowInput && !hasWorkflowDataPayload(workflowDataForSave)) {
             await showInfo("Workflow Data", "No live workflow_data available to save yet. Execute upstream nodes and try again.");
             return;
         }
@@ -5215,7 +5270,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
                 ? wfPrompt
                 : text;
 
-            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasA, lorasB);
+            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB);
             if (node?._isWorkflowManager) {
                 liveWorkflowData._source = "RecipeManager";
             }
@@ -5242,16 +5297,16 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             }
 
             // Update saved loras with what was just saved
-            node.savedLorasA = lorasA;
-            node.savedLorasB = lorasB;
+            node.savedLorasA = lorasForSaveA;
+            node.savedLorasB = lorasForSaveB;
             node.savedTriggerWords = triggerWords || [];
 
             // Update original strengths to match saved values (Reset now resets to saved state)
-            node.originalLorasA = lorasA.map(l => ({
+            node.originalLorasA = lorasForSaveA.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0
             }));
-            node.originalLorasB = lorasB.map(l => ({
+            node.originalLorasB = lorasForSaveB.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0
             }));

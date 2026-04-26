@@ -701,7 +701,7 @@ function makeInput(label, type, value, attrs, onChange) {
 }
 
 // --- LoRA tag builder ---
-function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown) {
+function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown, onDelete) {
     const name = lora.name || "?";
     const str = lora.model_strength ?? 1.0;
     const active = lora._active !== false;
@@ -843,6 +843,7 @@ function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown) {
                 window.open(`https://civitai.red/search/models?sortBy=models_v9&query=${encodeURIComponent(name)}&modelType=LORA`, "_blank");
             });
         }
+        addMenuItem("Delete", "#ff6b6b", onDelete);
         document.body.appendChild(menu);
         const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener("mousedown", close); } };
         document.addEventListener("mousedown", close);
@@ -1624,6 +1625,28 @@ function updateLoras(node) {
         syncHidden(node);
     };
 
+    const deleteFromStack = (stackKey, index, name) => {
+        const effectiveStack = stackKey === "b" ? "b" : "a";
+        const src = effectiveStack === "b"
+            ? (Array.isArray(d.loras_b) ? d.loras_b : [])
+            : (Array.isArray(d.loras_a) ? d.loras_a : []);
+        const idx = Number(index);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= src.length) return;
+
+        src.splice(idx, 1);
+
+        const nm = String(name || "").trim();
+        if (nm && node._weLoraState) {
+            const keys = [nm, `a:${nm}`, `b:${nm}`];
+            for (const key of keys) {
+                if (key in node._weLoraState) delete node._weLoraState[key];
+            }
+        }
+
+        updateLoras(node);
+        syncHidden(node);
+    };
+
     const noLorasMsg = () => makeEl("div", {
         color: "rgba(200, 200, 200, 0.5)", fontStyle: "italic",
         fontSize: "11px", padding: "8px", width: "100%", textAlign: "center",
@@ -1655,6 +1678,7 @@ function updateLoras(node) {
                 (v) => { st.model_strength = v; st.clip_strength = v; syncHidden(node); },
                 () => moveInStack(stackForMove, index, -1),
                 () => moveInStack(stackForMove, index, 1),
+                () => deleteFromStack(stackForMove, index, name),
             );
             container.appendChild(tag);
         }
@@ -1833,6 +1857,7 @@ function syncHidden(node) {
                     clip_strength: strengths.clip_strength,
                     active: st.active !== undefined ? (st.active !== false) : (lora._active !== false && lora.active !== false),
                     available: node._weExtracted?.lora_availability?.[name] !== false,
+                    source_input: lora?.source_input === true,
                 };
             })
             .filter(Boolean);

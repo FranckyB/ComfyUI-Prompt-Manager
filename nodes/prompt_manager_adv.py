@@ -704,6 +704,33 @@ class PromptManagerAdvanced:
         all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
         all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if loras_b_toggle else []
 
+        # If no saved toggle payload exists yet, preserve active flags from
+        # incoming workflow_data loras as the initial authoritative state.
+        if not all_preset_loras_a and not loras_a_toggle:
+            all_preset_loras_a = [
+                {
+                    "name": lora.get("name", ""),
+                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
+                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
+                    "active": lora.get("active", True),
+                    "available": bool(lora.get("available", True)),
+                }
+                for lora in workflow_fields.get("loras_a", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
+        if not all_preset_loras_b and not loras_b_toggle:
+            all_preset_loras_b = [
+                {
+                    "name": lora.get("name", ""),
+                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
+                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
+                    "active": lora.get("active", True),
+                    "available": bool(lora.get("available", True)),
+                }
+                for lora in workflow_fields.get("loras_b", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
+
         # When use_lora_input is disabled, ignore connected stacks and use only saved loras
         if not use_lora_input:
             lora_stack_a = preset_stack_a
@@ -972,6 +999,20 @@ class PromptManagerAdvanced:
         """
         # Start with the available loras from the stack
         display_list = self._format_loras_for_display(lora_stack) if lora_stack else []
+        preset_by_name = {
+            str(item.get('name', '')).lower(): item
+            for item in (all_preset_loras or [])
+            if isinstance(item, dict) and item.get('name')
+        }
+
+        # Preserve active state from preset/toggle/workflow payload for rows
+        # that are already present in the display list.
+        for row in display_list:
+            row_name_lower = str(row.get('name', '')).lower()
+            preset = preset_by_name.get(row_name_lower)
+            if preset is not None:
+                row['active'] = preset.get('active', True)
+
         seen_names = set(item['name'].lower() for item in display_list)
 
         # Add any unavailable preset loras that aren't already in the list
