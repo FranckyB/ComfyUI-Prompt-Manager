@@ -1925,10 +1925,6 @@ class WorkflowBuilder:
                     else:
                         merged_profile_loras = _norm_loras(raw_profile_loras)
 
-                    effective_loras = merged_profile_loras
-                    if isinstance(existing_slot_block, dict) and not loras_locked and multi_lora_slot is None:
-                        effective_loras = existing_slot_loras
-
                     # Keep user-authored drag/drop ordering stable across execute.
                     # Merge logic decides membership/content; preferred-order pass
                     # decides final display/output sequence when names overlap.
@@ -1937,6 +1933,42 @@ class WorkflowBuilder:
                             merged_profile_loras,
                             preferred_profile_loras,
                         )
+
+                    def _apply_profile_lora_state(target_loras, profile_loras):
+                        state_by_name = {}
+                        for src_item in (profile_loras or []):
+                            if not isinstance(src_item, dict):
+                                continue
+                            src_name = str(src_item.get('name', '')).strip()
+                            if not src_name:
+                                continue
+                            ms = _norm_num(src_item.get('model_strength', src_item.get('strength', 1.0)), 1.0)
+                            cs = _norm_num(src_item.get('clip_strength', ms), ms)
+                            state_by_name[src_name] = {
+                                'active': src_item.get('active', True) is not False,
+                                'model_strength': ms,
+                                'clip_strength': cs,
+                            }
+
+                        out = []
+                        for dst_item in (target_loras or []):
+                            if not isinstance(dst_item, dict):
+                                continue
+                            row = dict(dst_item)
+                            dst_name = str(row.get('name', '')).strip()
+                            st = state_by_name.get(dst_name)
+                            if isinstance(st, dict):
+                                row['active'] = st.get('active', True) is not False
+                                row['model_strength'] = _norm_num(st.get('model_strength', row.get('model_strength', 1.0)), 1.0)
+                                row['clip_strength'] = _norm_num(st.get('clip_strength', row.get('clip_strength', row.get('model_strength', 1.0))), row.get('model_strength', 1.0))
+                            out.append(row)
+                        return out
+
+                    effective_loras = merged_profile_loras
+                    if isinstance(existing_slot_block, dict) and not loras_locked and multi_lora_slot is None:
+                        # Unlocked LoRA section should still follow incoming membership,
+                        # but preserve per-LoRA UI state (active/strength) by name.
+                        effective_loras = _apply_profile_lora_state(existing_slot_loras, preferred_profile_loras)
 
                     profile_pos = profile.get('positive_prompt', '')
                     if multi_pos_slot is None and bool(profile_input_ghosts.get('positive', False)) and isinstance(existing_slot_block, dict):

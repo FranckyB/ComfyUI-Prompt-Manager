@@ -335,6 +335,12 @@ class WorkflowRelay:
 
                 rel_path, available = get_lora_relative_path(raw_name)
                 if not available or not rel_path:
+                    # Some valid LoRA identifiers resolve via full-path lookup
+                    # but not via relative-name lookup. Keep availability in
+                    # sync with relay output path resolution behavior.
+                    _resolved_full, resolved_available = resolve_lora_path(raw_name)
+                    if resolved_available:
+                        available = True
                     rel_path = raw_name
 
                 display_name = strip_lora_extension(os.path.basename(str(rel_path).replace("\\", "/")))
