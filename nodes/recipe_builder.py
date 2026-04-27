@@ -86,6 +86,35 @@ def _v2_get_model_block(recipe_data, model_key):
     return block if isinstance(block, dict) else None
 
 
+def _blank_model_block():
+    """Return an empty model block that satisfies the v2 schema contract."""
+    return {
+        "positive_prompt": "",
+        "negative_prompt": "",
+        "family": "",
+        "model": "",
+        "loras": [],
+        "clip_type": "",
+        "loader_type": "",
+        "vae": "",
+        "clip": [],
+        "sampler": {
+            "steps": 20,
+            "cfg": 5.0,
+            "denoise": 1.0,
+            "seed": 0,
+            "sampler_name": "euler",
+            "scheduler": "simple",
+        },
+        "resolution": {
+            "width": 768,
+            "height": 1280,
+            "batch_size": 1,
+            "length": None,
+        },
+    }
+
+
 def _builder_output_to_v2(legacy_wf, base_recipe_data=None, overwrite_existing_slots=True):
     """Convert Builder legacy workflow_data shape to v2 models shape."""
     wf = legacy_wf if isinstance(legacy_wf, dict) else {}
@@ -149,19 +178,25 @@ def _builder_output_to_v2(legacy_wf, base_recipe_data=None, overwrite_existing_s
                 # (e.g. ModelPatcher), which can raise during deepcopy.
                 out["models"][key] = dict(block)
 
+    # Always ensure all 4 model slots exist so the JS UI sees distinct per-slot
+    # objects at creation time and individual slot updates don't collide.
+    for slot_key in _MODEL_KEYS:
+        if slot_key not in out["models"]:
+            out["models"][slot_key] = _blank_model_block()
+
+    # Build model_a (and optionally model_b) from the active UI state.
     primary_slot = "model_a"
+    if overwrite_existing_slots or primary_slot not in out["models"] or not str(out["models"][primary_slot].get("model", "")).strip():
+        out["models"][primary_slot] = _make_model_block("model_a")
+
     has_secondary_block = any([
         str(wf.get("model_b", "")).strip() != "",
         isinstance(wf.get("loras_b"), list) and len(wf.get("loras_b") or []) > 0,
         isinstance(sampler.get("steps_b"), (int, float)),
         isinstance(sampler.get("seed_b"), (int, float)),
     ])
-    secondary_slot = "model_b" if has_secondary_block else None
-
-    if overwrite_existing_slots or primary_slot not in out["models"]:
-        out["models"][primary_slot] = _make_model_block("model_a")
-    if secondary_slot and (overwrite_existing_slots or secondary_slot not in out["models"]):
-        out["models"][secondary_slot] = _make_model_block("model_b")
+    if has_secondary_block and (overwrite_existing_slots or not str(out["models"]["model_b"].get("model", "")).strip()):
+        out["models"]["model_b"] = _make_model_block("model_b")
 
     for key in ("LATENT", "IMAGE", "MASK", "EXTRA"):
         if key in wf:
