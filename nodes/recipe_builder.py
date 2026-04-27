@@ -811,10 +811,13 @@ class WorkflowBuilder:
         def _extract_multi_lora_stack(payload, slot_key):
             if not isinstance(payload, dict):
                 return None
+            if slot_key not in payload:
+                return None
             stack = payload.get(slot_key)
             if not isinstance(stack, list):
                 return None
-            return stack if len(stack) > 0 else None
+            # Empty list is an explicit "clear this slot" signal.
+            return stack
 
         # Unified builder_data payload (from RecipeBuilderDataBundle) maps to
         # the existing multi_* structures used by slot merge/lock logic.
@@ -851,9 +854,12 @@ class WorkflowBuilder:
                     except Exception:
                         pass
 
-                lora_val = builder_data.get(f"loras_{suffix}")
-                if isinstance(lora_val, list) and len(lora_val) > 0:
-                    multi_loras[slot_key] = lora_val
+                lora_key = f"loras_{suffix}"
+                if lora_key in builder_data:
+                    lora_val = builder_data.get(lora_key)
+                    if isinstance(lora_val, list):
+                        # Preserve empty list as explicit clear signal.
+                        multi_loras[slot_key] = lora_val
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
@@ -1913,10 +1919,14 @@ class WorkflowBuilder:
 
                     prior_lora_ghost = bool(profile_input_ghosts.get('loras', False))
                     if multi_lora_slot is not None:
-                        merged_profile_loras = _merge_lora_lists(
-                            _norm_loras(local_profile_loras),
-                            _normalize_input_lora_stack(multi_lora_slot),
-                        )
+                        normalized_input_loras = _normalize_input_lora_stack(multi_lora_slot)
+                        if len(normalized_input_loras) == 0:
+                            merged_profile_loras = []
+                        else:
+                            merged_profile_loras = _merge_lora_lists(
+                                _norm_loras(local_profile_loras),
+                                normalized_input_loras,
+                            )
                     elif prior_lora_ghost:
                         merged_profile_loras = _merge_lora_lists(
                             _norm_loras(local_profile_loras),

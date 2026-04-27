@@ -7590,8 +7590,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             currentMouseY = rect.top + rect.height / 2;
             currentThumbnail = thumbnailSrc;
             
-            // Intelligent delay: 1000ms initial, 10ms once activated
-            const delay = previewActivated ? 10 : 1000;
+            // Intelligent delay: 2000ms initial, 10ms once activated
+            const delay = previewActivated ? 10 : 2000;
             
             clearTimeout(hoverTimer);
             hoverTimer = setTimeout(() => {
@@ -7607,7 +7607,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     // Scale logic:
                     // - Thumbnails <= 200px in both dimensions: 2x scale (200px -> 400px)
                     // - Thumbnails > 200px in either dimension: 1x scale (keep original size)
-                    const scale = (naturalWidth > 200 || naturalHeight > 200) ? 1 : 2;
+                    const scale = (naturalWidth > 200 || naturalHeight > 200) ? 1 : 1;
                     
                     previewWidth = naturalWidth * scale;
                     previewHeight = naturalHeight * scale;
@@ -7643,11 +7643,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             hideTimer = setTimeout(() => {
                 hidePreview();
                 
-                // Start reset timer: after 2 seconds of no hovering, reset to slow mode
+                // Start reset timer: after 0.5 seconds of no hovering, reset to slow mode
                 clearTimeout(resetTimer);
                 resetTimer = setTimeout(() => {
                     previewActivated = false;
-                }, 2000);
+                }, 500);
             }, 100);
         };
 
