@@ -238,7 +238,7 @@ class WorkflowRelay:
             "STRING", "STRING",
             "LORA_STACK",
             "INT", "INT", "INT", "INT",
-            "STRING",
+            "STRING", "STRING",
             cls._CKPT_ENUM, cls._UNET_ENUM, cls._VAE_ENUM, cls._CLIP_ENUM,
         )
 
@@ -273,6 +273,7 @@ class WorkflowRelay:
                 "batch_size":      ("INT",          {"forceInput": True, "tooltip": "Override batch size"}),
                 "length":          ("INT",          {"forceInput": True, "tooltip": "Override video length"}),
                 "model_name":      ("STRING",       {"forceInput": True, "tooltip": "Optional model name/path. Resolves and writes recipe model field(s)."}),
+                "family":          ("STRING",       {"forceInput": True, "tooltip": "Optional model family override. Writes selected slot family in recipe_data."}),
                 "model_data":      (ANY_TYPE,       {"forceInput": True, "tooltip": "Optional structured model payload from Recipe Model Picker."}),
             },
         }
@@ -285,7 +286,7 @@ class WorkflowRelay:
         "STRING", "STRING",
         "LORA_STACK",
         "INT", "INT", "INT", "INT",
-        "STRING",
+        "STRING", "STRING",
         _LIVE_CKPTS, _LIVE_UNETS, _LIVE_VAES, _LIVE_CLIPS,
     )
     RETURN_NAMES = (
@@ -296,7 +297,7 @@ class WorkflowRelay:
         "pos_prompt", "neg_prompt",
         "lora_stack",
         "width", "height", "batch_size", "length",
-        "model_name",
+        "model_name", "family",
         "ckpt_name", "unet_name", "vae_name", "clip_name",
     )
     FUNCTION = "unpack"
@@ -384,9 +385,11 @@ class WorkflowRelay:
         has_incoming_data = isinstance(incoming_wf, dict) and bool(incoming_wf)
         has_slot_write_request = any([
             kwargs.get('lora_stack') is not None,
+            any(kwargs.get(k) is not None for k in ('pos_prompt', 'neg_prompt')),
             any(kwargs.get(k) is not None for k in ('steps', 'seed', 'cfg', 'denoise', 'sampler_name', 'scheduler')),
             any(kwargs.get(k) is not None for k in ('width', 'height', 'batch_size', 'length')),
             isinstance(kwargs.get('model_name'), str) and kwargs.get('model_name').strip() != '',
+            kwargs.get('family') is not None,
             kwargs.get('model_data') is not None,
         ])
         create_v2_block_on_write = (not has_incoming_data) or has_slot_write_request
@@ -458,10 +461,18 @@ class WorkflowRelay:
         pos_text = kwargs.get('pos_prompt')
         if pos_text is not None:
             wf['positive_prompt'] = pos_text
+            if int(wf.get('version', 0) or 0) >= 2:
+                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+                if isinstance(target_block, dict):
+                    target_block['positive_prompt'] = pos_text
 
         neg_text = kwargs.get('neg_prompt')
         if neg_text is not None:
             wf['negative_prompt'] = neg_text
+            if int(wf.get('version', 0) or 0) >= 2:
+                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+                if isinstance(target_block, dict):
+                    target_block['negative_prompt'] = neg_text
 
         # -- LoRA stack overrides ------------------------------------
         if kwargs.get('lora_stack') is not None:
@@ -751,8 +762,25 @@ class WorkflowRelay:
                 else:
                     wf['family'] = detected_family
 
+        family_in = kwargs.get('family')
+        if family_in is not None:
+            family_override = str(family_in or '').strip()
+            if is_v2_recipe:
+                family_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+                if isinstance(family_block, dict):
+                    family_block['family'] = family_override
+            else:
+                wf['family'] = family_override
+
         # -- Extract all output values -------------------------------
         model_name = _short_display_name(selected_model_name) or final_model_name
+        family_out = ''
+        if is_v2_recipe:
+            current_block = _selected_v2_block(wf, selected_slot, create=False)
+            if isinstance(current_block, dict):
+                family_out = str(current_block.get('family', '') or '').strip()
+        if not family_out:
+            family_out = str(wf.get('family', '') or v2_family or '').strip()
 
         # Always emit string outputs for combo-name sockets to avoid None flowing
         # into downstream standard loader nodes.
@@ -782,6 +810,7 @@ class WorkflowRelay:
             final_resolution.get('batch_size', 1),
             final_resolution.get('length', 0) or 0,
             model_name,
+            family_out,
             ckpt_out,
             unet_out,
             vae_name_out,

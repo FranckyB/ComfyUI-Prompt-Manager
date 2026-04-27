@@ -99,8 +99,8 @@ def _blank_model_block():
         "vae": "",
         "clip": [],
         "sampler": {
-            "steps": 20,
-            "cfg": 5.0,
+            "steps": 10,
+            "cfg": 1.0,
             "denoise": 1.0,
             "seed": 0,
             "sampler_name": "euler",
