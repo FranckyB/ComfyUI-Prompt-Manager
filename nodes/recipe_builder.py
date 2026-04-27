@@ -1781,6 +1781,7 @@ class WorkflowBuilder:
                     # backward compatibility with legacy raw slot payload.
                     ov_profile = raw_profile.get('ov') if isinstance(raw_profile.get('ov'), dict) else None
                     profile = ov_profile if isinstance(ov_profile, dict) else raw_profile
+                    profile_input_ghosts = profile.get('_input_ghosts', {}) if isinstance(profile.get('_input_ghosts'), dict) else {}
 
                     if isinstance(ov_profile, dict):
                         loras_src = profile.get('loras_a', [])
@@ -1819,12 +1820,6 @@ class WorkflowBuilder:
                     multi_neg_slot = _extract_multi_prompt_value(multi_neg_prompts, slot_key, 'negative')
                     multi_seed_slot = _extract_multi_seed_value(multi_seeds, slot_key)
                     multi_lora_slot = _extract_multi_lora_stack(multi_loras, slot_key)
-                    merged_profile_loras = _norm_loras(loras_src)
-                    if multi_lora_slot is not None:
-                        merged_profile_loras = _merge_lora_lists(
-                            merged_profile_loras,
-                            _normalize_input_lora_stack(multi_lora_slot),
-                        )
 
                     existing_slot_block = None
                     if isinstance(base_recipe_for_output, dict):
@@ -1834,13 +1829,51 @@ class WorkflowBuilder:
                             if isinstance(candidate_slot, dict):
                                 existing_slot_block = candidate_slot
 
+                    existing_slot_loras = []
+                    existing_slot_seed = 0
+                    if isinstance(existing_slot_block, dict):
+                        existing_slot_loras = _norm_loras(existing_slot_block.get('loras', []))
+                        existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
+                        existing_slot_seed = _norm_int(existing_slot_sampler.get('seed', 0), 0)
+
+                    raw_profile_loras = loras_src if isinstance(loras_src, list) else []
+                    local_profile_loras = []
+                    for item in raw_profile_loras:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get('source_input', False) is True:
+                            continue
+                        local_profile_loras.append(item)
+
+                    prior_lora_ghost = bool(profile_input_ghosts.get('loras', False))
+                    if multi_lora_slot is not None:
+                        merged_profile_loras = _merge_lora_lists(
+                            _norm_loras(local_profile_loras),
+                            _normalize_input_lora_stack(multi_lora_slot),
+                        )
+                    elif prior_lora_ghost:
+                        merged_profile_loras = _merge_lora_lists(
+                            _norm_loras(local_profile_loras),
+                            existing_slot_loras,
+                        )
+                    else:
+                        merged_profile_loras = _norm_loras(raw_profile_loras)
+
                     profile_pos = profile.get('positive_prompt', '')
+                    if multi_pos_slot is None and bool(profile_input_ghosts.get('positive', False)) and isinstance(existing_slot_block, dict):
+                        profile_pos = existing_slot_block.get('positive_prompt', '')
                     if (profile_pos is None or str(profile_pos) == '') and isinstance(existing_slot_block, dict):
                         profile_pos = existing_slot_block.get('positive_prompt', '')
 
                     profile_neg = profile.get('negative_prompt', '')
+                    if multi_neg_slot is None and bool(profile_input_ghosts.get('negative', False)) and isinstance(existing_slot_block, dict):
+                        profile_neg = existing_slot_block.get('negative_prompt', '')
                     if (profile_neg is None or str(profile_neg) == '') and isinstance(existing_slot_block, dict):
                         profile_neg = existing_slot_block.get('negative_prompt', '')
+
+                    sampler_seed = sampler_in.get('seed', 0)
+                    if multi_seed_slot is None and bool(profile_input_ghosts.get('seed', False)):
+                        sampler_seed = existing_slot_seed
 
                     slot_block = {
                         'positive_prompt': str(multi_pos_slot if multi_pos_slot is not None else (profile_pos or '')),
@@ -1856,7 +1889,7 @@ class WorkflowBuilder:
                             'steps': _norm_int(sampler_in.get('steps', 20), 20),
                             'cfg': _norm_num(sampler_in.get('cfg', 5.0), 5.0),
                             'denoise': _norm_num(sampler_in.get('denoise', 1.0), 1.0),
-                            'seed': _norm_int(multi_seed_slot if multi_seed_slot is not None else sampler_in.get('seed', 0), 0),
+                            'seed': _norm_int(multi_seed_slot if multi_seed_slot is not None else sampler_seed, 0),
                             'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
                             'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
                         },

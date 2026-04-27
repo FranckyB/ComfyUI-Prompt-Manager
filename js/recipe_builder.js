@@ -453,6 +453,7 @@ function _makeEmptySlotProfile() {
                 positive: false,
                 negative: false,
                 seed: false,
+                loras: false,
             },
             _section_locks: {
                 model: false,
