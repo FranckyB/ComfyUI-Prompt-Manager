@@ -3066,6 +3066,10 @@ app.registerExtension({
                     syncHidden(node);
 
                     const picked = _normalizeModelSlotKey(sendModelSlotRow._inp?.value || "model_a");
+                    // Slot change can flip WAN High/Low filter (A/C vs B/D), so
+                    // force model option lists to refetch on next focus/open.
+                    node._weModelRow?._resetLoaded?.();
+                    node._weModelBRow?._resetLoaded?.();
                     _loadSlotProfile(picked);
                     _syncS();
                 };
@@ -3325,7 +3329,7 @@ app.registerExtension({
                 width:  makeInput("Width",  "number", 768,  { min: 64, max: 8192, step: 8 }, () => { _applyRatioFromWidth();  _syncS(); }),
                 height: makeInput("Height", "number", 1280, { min: 64, max: 8192, step: 8 }, () => { _applyRatioFromHeight(); _syncS(); }),
                 batch:  makeInput("Batch",  "number", 1,    { min: 1, max: 128, step: 1 }, _syncS),
-                frames: makeInput("Frames", "number", 81,   { min: 1, max: 1000, step: 1 }, _syncS),
+                frames: makeInput("Length", "number", 81,   { min: 1, max: 1000, step: 1 }, _syncS),
             };
             resRows.frames.style.display = "none";
 
@@ -3491,7 +3495,10 @@ app.registerExtension({
             };
 
             const getWanSlotSplitPreference = () => {
-                const activeSlot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
+                // Read the slot directly from UI first so WAN split stays correct
+                // immediately after slot switches.
+                const activeSlot = _getCurrentlySelectedModelSlot(node)
+                    || _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
                 if (activeSlot === "model_b" || activeSlot === "model_d") {
                     return { preferHigh: false, preferLow: true };
                 }

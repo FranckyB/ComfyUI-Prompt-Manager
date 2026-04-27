@@ -73,6 +73,62 @@ def _normalize_model_slot(value):
     key = str(value or "model_a").strip().lower()
     return key if key in _MODEL_KEYS else "model_a"
 
+
+def _is_wan_video_family(family_key):
+    return str(family_key or "").strip().lower() in ("wan_video_t2v", "wan_video_i2v")
+
+
+def _wan_pair_slots(selected_slot):
+    """Return (high_slot, low_slot) for WAN model pairing.
+
+    Selecting A or B maps to (A high, B low).
+    Selecting C or D maps to (C high, D low).
+    """
+    slot = _normalize_model_slot(selected_slot)
+    if slot in ("model_a", "model_b"):
+        return "model_a", "model_b"
+    if slot in ("model_c", "model_d"):
+        return "model_c", "model_d"
+    return slot, None
+
+
+def _resolve_primary_secondary_slots(selected_slot, selected_family):
+    """Resolve render slot pair with WAN-only pairing semantics.
+
+    - WAN video families: A/B and C/D are treated as explicit High/Low pairs.
+    - Non-WAN families: render only the selected slot (no pairing).
+    """
+    slot = _normalize_model_slot(selected_slot)
+    if _is_wan_video_family(selected_family):
+        return _wan_pair_slots(slot)
+    return slot, None
+
+
+def _resolve_wan_family_hint(models, selected_slot, fallback_family=""):
+    """Infer WAN-family intent from selected slot, paired slot, or workflow fallback.
+
+    This makes pairing robust when family metadata is missing from one block but
+    present on the adjacent paired block.
+    """
+    slot = _normalize_model_slot(selected_slot)
+    models_map = models if isinstance(models, dict) else {}
+    selected_block = models_map.get(slot)
+    if isinstance(selected_block, dict):
+        fam = str(selected_block.get("family", "") or "")
+        if _is_wan_video_family(fam):
+            return fam
+
+    # Check adjacent slot in the same A/B or C/D pair.
+    high_slot, low_slot = _wan_pair_slots(slot)
+    adjacent_slot = low_slot if slot == high_slot else high_slot
+    adjacent_block = models_map.get(adjacent_slot)
+    if isinstance(adjacent_block, dict):
+        fam = str(adjacent_block.get("family", "") or "")
+        if _is_wan_video_family(fam):
+            return fam
+
+    return str(fallback_family or "")
+
 class WorkflowRenderer:
     """
     Render-only generation node.
@@ -163,57 +219,49 @@ class WorkflowRenderer:
         if isinstance(wf, dict):
             wf_sampler = wf.get("sampler", {}) if isinstance(wf.get("sampler"), dict) else {}
             wf_res = wf.get("resolution", {}) if isinstance(wf.get("resolution"), dict) else {}
+            primary_sampler = {}
+            secondary_sampler = {}
+            primary_resolution = {}
 
             family_key = str(wf.get("family", "") or "")
             slot_block = {}
             secondary_block = {}
 
-            if int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict):
-                models = wf.get("models", {})
-                primary = models.get(selected_slot)
-                if isinstance(primary, dict):
-                    slot_block = dict(primary)
-                    family_key = str(primary.get("family", family_key) or family_key)
-                    if isinstance(primary.get("sampler"), dict):
-                        merged_sampler = dict(wf_sampler)
-                        merged_sampler.update(primary.get("sampler", {}))
-                        wf_sampler = merged_sampler
-                    if isinstance(primary.get("resolution"), dict):
-                        merged_res = dict(wf_res)
-                        merged_res.update(primary.get("resolution", {}))
-                        wf_res = merged_res
+            models = wf.get("models", {}) if isinstance(wf.get("models"), dict) else {}
+            selected_family = _resolve_wan_family_hint(
+                models,
+                selected_slot,
+                fallback_family=str(wf.get("family", "") or ""),
+            )
 
-                slot_index = _MODEL_KEYS.index(selected_slot)
-                if slot_index < len(_MODEL_KEYS) - 1:
-                    secondary_key = _MODEL_KEYS[slot_index + 1]
-                    secondary = models.get(secondary_key)
-                    if isinstance(secondary, dict):
-                        secondary_block = dict(secondary)
-                        if isinstance(secondary.get("sampler"), dict):
-                            sec_sampler = secondary.get("sampler", {})
-                            if "steps_b" not in wf_sampler and sec_sampler.get("steps") is not None:
-                                wf_sampler["steps_b"] = sec_sampler.get("steps")
-                            if "seed_b" not in wf_sampler and sec_sampler.get("seed") is not None:
-                                wf_sampler["seed_b"] = sec_sampler.get("seed")
-            else:
-                if selected_slot == "model_a":
-                    slot_block = {
-                        "family": wf.get("family", ""),
-                        "model": wf.get("model_a", ""),
-                        "positive_prompt": wf.get("positive_prompt", ""),
-                        "negative_prompt": wf.get("negative_prompt", ""),
-                        "loras": wf.get("loras_a", []),
-                        "vae": wf.get("vae", ""),
-                        "clip": wf.get("clip", []),
-                        "clip_type": wf.get("clip_type", ""),
-                        "loader_type": wf.get("loader_type", ""),
-                    }
-                elif selected_slot == "model_b":
-                    slot_block = {
-                        "family": wf.get("family", ""),
-                        "model": wf.get("model_b", ""),
-                        "loras": wf.get("loras_b", []),
-                    }
+            primary_key, secondary_key = _resolve_primary_secondary_slots(selected_slot, selected_family)
+
+            primary = models.get(primary_key)
+            if isinstance(primary, dict):
+                slot_block = dict(primary)
+                family_key = str(primary.get("family", family_key) or family_key)
+                if isinstance(primary.get("sampler"), dict):
+                    primary_sampler = dict(primary.get("sampler", {}))
+                    merged_sampler = dict(wf_sampler)
+                    merged_sampler.update(primary.get("sampler", {}))
+                    wf_sampler = merged_sampler
+                if isinstance(primary.get("resolution"), dict):
+                    primary_resolution = dict(primary.get("resolution", {}))
+                    merged_res = dict(wf_res)
+                    merged_res.update(primary.get("resolution", {}))
+                    wf_res = merged_res
+
+            if secondary_key:
+                secondary = models.get(secondary_key)
+                if isinstance(secondary, dict):
+                    secondary_block = dict(secondary)
+                    if isinstance(secondary.get("sampler"), dict):
+                        sec_sampler = secondary.get("sampler", {})
+                        secondary_sampler = dict(sec_sampler)
+                        if "steps_b" not in wf_sampler and sec_sampler.get("steps") is not None:
+                            wf_sampler["steps_b"] = sec_sampler.get("steps")
+                        if "seed_b" not in wf_sampler and sec_sampler.get("seed") is not None:
+                            wf_sampler["seed_b"] = sec_sampler.get("seed")
 
             if not family_key:
                 model_ref = ""
@@ -230,11 +278,24 @@ class WorkflowRenderer:
             if not family_key:
                 family_key = "sdxl"
 
+            denoise_source = primary_sampler.get("denoise", wf_sampler.get("denoise", 1.0))
             try:
-                denoise_value = float(wf_sampler.get("denoise", 1.0))
+                denoise_value = float(denoise_source)
             except (TypeError, ValueError):
                 denoise_value = 1.0
             denoise_value = max(0.0, min(1.0, denoise_value))
+
+            sampler_hash = {
+                "steps": primary_sampler.get("steps", primary_sampler.get("steps_a", wf_sampler.get("steps", wf_sampler.get("steps_a")))),
+                "cfg": primary_sampler.get("cfg", wf_sampler.get("cfg")),
+                "seed": primary_sampler.get("seed", primary_sampler.get("seed_a", wf_sampler.get("seed", wf_sampler.get("seed_a")))),
+                "sampler_name": primary_sampler.get("sampler_name", wf_sampler.get("sampler_name")),
+                "scheduler": primary_sampler.get("scheduler", wf_sampler.get("scheduler")),
+                "denoise": denoise_value,
+                "steps_b": secondary_sampler.get("steps", secondary_sampler.get("steps_b", wf_sampler.get("steps_b"))),
+                "seed_b": secondary_sampler.get("seed", secondary_sampler.get("seed_b", wf_sampler.get("seed_b"))),
+            }
+            res_hash = primary_resolution if isinstance(primary_resolution, dict) and primary_resolution else wf_res
 
             relevant = {
                 "version": int(wf.get("version", 0) or 0),
@@ -243,8 +304,8 @@ class WorkflowRenderer:
                 "family": family_key,
                 "slot_block": strip_runtime_objects(slot_block if isinstance(slot_block, dict) else {}),
                 "secondary_block": strip_runtime_objects(secondary_block if isinstance(secondary_block, dict) else {}),
-                "sampler": strip_runtime_objects(wf_sampler),
-                "resolution": strip_runtime_objects(wf_res),
+                "sampler": strip_runtime_objects(sampler_hash),
+                "resolution": strip_runtime_objects(res_hash),
             }
             h.update(_json.dumps(relevant, sort_keys=True, default=str).encode())
 
@@ -306,6 +367,9 @@ class WorkflowRenderer:
 
         wf_out = dict(wf)
 
+        if not (int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict)):
+            raise ValueError("[RecipeRenderer] recipe_data must be v2 with a models map; legacy schema is not supported.")
+
         wf_sampler = wf.get("sampler", {})
         wf_res = wf.get("resolution", {})
         if not isinstance(wf_sampler, dict):
@@ -313,19 +377,21 @@ class WorkflowRenderer:
         if not isinstance(wf_res, dict):
             wf_res = {}
 
-        positive_prompt = wf.get("positive_prompt", "")
-        negative_prompt = wf.get("negative_prompt", "")
-        model_name_a = wf.get("model_a", "")
-        model_name_b = wf.get("model_b", "") or None
-        vae_name = wf.get("vae", "")
-        family_key = wf.get("family", "")
-        clip_names = wf.get("clip", [])
-        if isinstance(clip_names, str):
-            clip_names = [clip_names] if clip_names else []
-        clip_type_str = wf.get("clip_type", "")
-        loader_type_str = wf.get("loader_type", "")
-        loras_a = wf.get("loras_a", [])
-        loras_b = wf.get("loras_b", [])
+        primary_sampler = {}
+        secondary_sampler = {}
+        primary_resolution = {}
+
+        positive_prompt = ""
+        negative_prompt = ""
+        model_name_a = ""
+        model_name_b = None
+        vae_name = ""
+        family_key = ""
+        clip_names = []
+        clip_type_str = ""
+        loader_type_str = ""
+        loras_a = []
+        loras_b = []
         primary_key = None
         secondary_key = None
         primary = None
@@ -334,61 +400,57 @@ class WorkflowRenderer:
         selected_slot = _normalize_model_slot(model_slot)
         slot_model_defined = False
 
-        if int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict):
-            models = wf.get("models", {})
-            primary_key = selected_slot
-            secondary = None
-            idx = _MODEL_KEYS.index(selected_slot)
-            if idx < len(_MODEL_KEYS) - 1:
-                secondary_key = _MODEL_KEYS[idx + 1]
+        models = wf.get("models", {})
+        selected_family = _resolve_wan_family_hint(
+            models,
+            selected_slot,
+            fallback_family=str(wf.get("family", "") or ""),
+        )
 
-            primary = models.get(primary_key) if isinstance(models.get(primary_key), dict) else None
-            if secondary_key and isinstance(models.get(secondary_key), dict):
-                secondary = models.get(secondary_key)
+        primary_key, secondary_key = _resolve_primary_secondary_slots(selected_slot, selected_family)
 
-            if isinstance(primary, dict):
-                model_name_a = primary.get("model", model_name_a)
-                positive_prompt = primary.get("positive_prompt", positive_prompt)
-                negative_prompt = primary.get("negative_prompt", negative_prompt)
-                family_key = primary.get("family", family_key)
-                vae_name = primary.get("vae", vae_name)
-                clip_names = primary.get("clip", clip_names)
-                clip_type_str = primary.get("clip_type", clip_type_str)
-                loader_type_str = primary.get("loader_type", loader_type_str)
-                if isinstance(primary.get("loras"), list):
-                    loras_a = primary.get("loras", [])
-                if isinstance(primary.get("sampler"), dict):
-                    merged_sampler = dict(wf_sampler) if isinstance(wf_sampler, dict) else {}
-                    merged_sampler.update(primary.get("sampler", {}))
-                    wf_sampler = merged_sampler
-                if isinstance(primary.get("resolution"), dict):
-                    merged_res = dict(wf_res) if isinstance(wf_res, dict) else {}
-                    merged_res.update(primary.get("resolution", {}))
-                    wf_res = merged_res
+        primary = models.get(primary_key) if isinstance(models.get(primary_key), dict) else None
+        if secondary_key and isinstance(models.get(secondary_key), dict):
+            secondary = models.get(secondary_key)
 
-                if str(primary.get("model", "")).strip() or primary.get("MODEL") is not None:
-                    slot_model_defined = True
+        if isinstance(primary, dict):
+            model_name_a = primary.get("model", "")
+            positive_prompt = primary.get("positive_prompt", "")
+            negative_prompt = primary.get("negative_prompt", "")
+            family_key = primary.get("family", "")
+            vae_name = primary.get("vae", "")
+            clip_names = primary.get("clip", [])
+            clip_type_str = primary.get("clip_type", "")
+            loader_type_str = primary.get("loader_type", "")
+            if isinstance(primary.get("loras"), list):
+                loras_a = primary.get("loras", [])
+            if isinstance(primary.get("sampler"), dict):
+                primary_sampler = dict(primary.get("sampler", {}))
+                merged_sampler = dict(wf_sampler) if isinstance(wf_sampler, dict) else {}
+                merged_sampler.update(primary.get("sampler", {}))
+                wf_sampler = merged_sampler
+            if isinstance(primary.get("resolution"), dict):
+                primary_resolution = dict(primary.get("resolution", {}))
+                merged_res = dict(wf_res) if isinstance(wf_res, dict) else {}
+                merged_res.update(primary.get("resolution", {}))
+                wf_res = merged_res
 
-            if isinstance(secondary, dict):
-                model_name_b = secondary.get("model", model_name_b)
-                secondary_family_key = str(secondary.get("family", "") or "")
-                if isinstance(secondary.get("loras"), list):
-                    loras_b = secondary.get("loras", [])
-                if isinstance(secondary.get("sampler"), dict):
-                    sec_sampler = secondary.get("sampler", {})
-                    if isinstance(wf_sampler, dict):
-                        if "steps_b" not in wf_sampler and sec_sampler.get("steps") is not None:
-                            wf_sampler["steps_b"] = sec_sampler.get("steps")
-                        if "seed_b" not in wf_sampler and sec_sampler.get("seed") is not None:
-                            wf_sampler["seed_b"] = sec_sampler.get("seed")
-        else:
-            # Legacy schema supports root model_a/model_b only.
-            if selected_slot == "model_a":
-                slot_model_defined = bool(str(model_name_a or "").strip()) or (wf.get("MODEL_A") is not None)
-            elif selected_slot == "model_b":
-                slot_model_defined = bool(str(model_name_b or "").strip()) or (wf.get("MODEL_B") is not None)
-            else:
-                slot_model_defined = False
+            if str(primary.get("model", "")).strip() or primary.get("MODEL") is not None:
+                slot_model_defined = True
+
+        if isinstance(secondary, dict):
+            model_name_b = secondary.get("model", model_name_b)
+            secondary_family_key = str(secondary.get("family", "") or "")
+            if isinstance(secondary.get("loras"), list):
+                loras_b = secondary.get("loras", [])
+            if isinstance(secondary.get("sampler"), dict):
+                secondary_sampler = dict(secondary.get("sampler", {}))
+                sec_sampler = secondary.get("sampler", {})
+                if isinstance(wf_sampler, dict):
+                    if "steps_b" not in wf_sampler and sec_sampler.get("steps") is not None:
+                        wf_sampler["steps_b"] = sec_sampler.get("steps")
+                    if "seed_b" not in wf_sampler and sec_sampler.get("seed") is not None:
+                        wf_sampler["seed_b"] = sec_sampler.get("seed")
 
         if not slot_model_defined:
             raise ValueError(f"[RecipeRenderer] Selected model is not defined for slot '{selected_slot}'.")
@@ -397,10 +459,11 @@ class WorkflowRenderer:
             clip_names = [clip_names] if clip_names else []
 
         # Resolution
-        width = int(wf_res.get("width", 768))
-        height = int(wf_res.get("height", 1280))
-        batch = int(wf_res.get("batch_size", 1))
-        length = wf_res.get("length")
+        res_src = primary_resolution if isinstance(primary_resolution, dict) and primary_resolution else wf_res
+        width = int(res_src.get("width", 768))
+        height = int(res_src.get("height", 1280))
+        batch = int(res_src.get("batch_size", 1))
+        length = res_src.get("length")
 
         # ── Resolve family + strategy ─────────────────────────────────────
         if not family_key:
@@ -508,20 +571,33 @@ class WorkflowRenderer:
             family_key,
             {"steps_a": 20, "cfg": 5.0, "sampler": "euler", "scheduler": "simple"},
         )
+        sampler_steps = primary_sampler.get(
+            "steps",
+            primary_sampler.get("steps_a", wf_sampler.get("steps", wf_sampler.get("steps_a", family_defaults.get("steps_a", 20))))
+        )
+        sampler_seed_a = primary_sampler.get(
+            "seed",
+            primary_sampler.get("seed_a", wf_sampler.get("seed", wf_sampler.get("seed_a", 0)))
+        )
+        sampler_cfg = primary_sampler.get("cfg", wf_sampler.get("cfg", family_defaults.get("cfg", 5.0)))
+        sampler_name = primary_sampler.get("sampler_name", wf_sampler.get("sampler_name", family_defaults.get("sampler", "euler")))
+        scheduler_name = primary_sampler.get("scheduler", wf_sampler.get("scheduler", family_defaults.get("scheduler", "simple")))
+        denoise_raw = primary_sampler.get("denoise", wf_sampler.get("denoise", 1.0))
+
         sampler_params = {
-            "steps": int(wf_sampler.get("steps_a", wf_sampler.get("steps", family_defaults.get("steps_a", 20)))),
-            "cfg": float(wf_sampler.get("cfg", family_defaults.get("cfg", 5.0))),
-            "seed_a": int(wf_sampler.get("seed_a", wf_sampler.get("seed", 0))),
-            "sampler_name": wf_sampler.get("sampler_name", family_defaults.get("sampler", "euler")),
-            "scheduler": wf_sampler.get("scheduler", family_defaults.get("scheduler", "simple")),
+            "steps": int(sampler_steps),
+            "cfg": float(sampler_cfg),
+            "seed_a": int(sampler_seed_a),
+            "sampler_name": sampler_name,
+            "scheduler": scheduler_name,
         }
         try:
-            denoise_value = float(wf_sampler.get("denoise", 1.0))
+            denoise_value = float(denoise_raw)
         except (TypeError, ValueError):
             denoise_value = 1.0
         denoise_value = max(0.0, min(1.0, denoise_value))
         sampler_params["denoise"] = denoise_value
-        seed_b = wf_sampler.get("seed_b")
+        seed_b = secondary_sampler.get("seed", secondary_sampler.get("seed_b", wf_sampler.get("seed_b")))
         workflow_image = wf.get("IMAGE")
         denoise_source_image = source_image if isinstance(source_image, torch.Tensor) else workflow_image
 
@@ -530,9 +606,13 @@ class WorkflowRenderer:
         if family_key not in ("wan_video_t2v", "wan_video_i2v"):
             model_name_b = None
 
-        print(f"[RecipeRenderer] Family: {get_family_label(family_key)} "
-              f"(strategy={strategy}), model_a={model_name_a}, "
-              f"model_b={model_name_b or '—'}")
+        if family_key in ("wan_video_t2v", "wan_video_i2v"):
+            print(f"[RecipeRenderer] WAN pair resolved:")
+            print(f"[RecipeRenderer] primary={model_name_a}")
+            print(f"[RecipeRenderer] secondary={model_name_b}")
+        else:
+            print(f"[RecipeRenderer] Family: {get_family_label(family_key)} "
+                  f"(strategy={strategy}), model_a={model_name_a} ")
 
         # ── Clamp resolution for i2v ──────────────────────────────────────
         if family_key == "wan_video_i2v":
@@ -545,17 +625,11 @@ class WorkflowRenderer:
         # ── Load Model A (or reuse passthrough object) ────────────────────
         resolved_a = None
         folder_a = None
+        full_path_a = None
         _cache = WorkflowRenderer._class_model_cache
         passthrough_model_a = primary.get("MODEL") if isinstance(primary, dict) else None
         passthrough_clip = primary.get("CLIP") if isinstance(primary, dict) else None
         passthrough_vae = primary.get("VAE") if isinstance(primary, dict) else None
-
-        if passthrough_model_a is None:
-            passthrough_model_a = wf.get("MODEL_A", None)
-        if passthrough_clip is None:
-            passthrough_clip = wf.get("CLIP", None)
-        if passthrough_vae is None:
-            passthrough_vae = wf.get("VAE", None)
 
         if passthrough_model_a is not None:
             model_a = passthrough_model_a
@@ -693,24 +767,40 @@ class WorkflowRenderer:
             # Load Model B for dual-sampler
             model_b_obj = None
             passthrough_model_b = secondary.get("MODEL") if isinstance(secondary, dict) else None
-            if passthrough_model_b is None:
-                passthrough_model_b = wf.get("MODEL_B", None)
             if passthrough_model_b is not None:
                 model_b_obj = passthrough_model_b
             elif model_name_b:
                 resolved_b, folder_b = resolve_model_name(model_name_b)
                 if resolved_b:
                     full_path_b = folder_paths.get_full_path(folder_b, resolved_b)
-                    _cache_key_b = (str(unique_id), full_path_b, family_key + "_b")
-                    if _cache_key_b not in _cache:
-                        print(f"[RecipeRenderer] Loading model B: {resolved_b}")
-                        _cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b, family_is_checkpoint=_family_is_ckpt)
-                    model_b_obj, _, _ = _cache[_cache_key_b]
+                    same_as_a_path = False
+                    if full_path_a:
+                        try:
+                            same_as_a_path = os.path.realpath(full_path_a) == os.path.realpath(full_path_b)
+                        except Exception:
+                            same_as_a_path = str(full_path_a) == str(full_path_b)
+
+                    if same_as_a_path:
+                        # Reuse loaded primary model when both slots point to the same model file.
+                        model_b_obj = model_a
+                        print(f"[RecipeRenderer] Reusing model A for model B: {resolved_b}")
+                    else:
+                        _cache_key_b = (str(unique_id), full_path_b, family_key)
+                        if _cache_key_b not in _cache:
+                            print(f"[RecipeRenderer] Loading model B: {resolved_b}")
+                            _cache[_cache_key_b] = _load_model_from_path(resolved_b, folder_b, full_path_b, family_is_checkpoint=_family_is_ckpt)
+                        model_b_obj, _, _ = _cache[_cache_key_b]
 
             # WAN dual-sampler step counts
             total_steps = sampler_params["steps"]
-            steps_high = int(wf_sampler.get("steps_a", wf_sampler.get("steps_high", math.ceil(total_steps / 2))))
-            steps_low = int(wf_sampler.get("steps_b", wf_sampler.get("steps_low", total_steps - steps_high)))
+            steps_high = int(primary_sampler.get(
+                "steps",
+                primary_sampler.get("steps_a", wf_sampler.get("steps_high", math.ceil(total_steps / 2)))
+            ))
+            steps_low = int(secondary_sampler.get(
+                "steps",
+                secondary_sampler.get("steps_b", wf_sampler.get("steps_b", wf_sampler.get("steps_low", total_steps - steps_high)))
+            ))
             sampler_params["steps_high"] = steps_high
             sampler_params["steps_low"] = steps_low
             if seed_b is not None:

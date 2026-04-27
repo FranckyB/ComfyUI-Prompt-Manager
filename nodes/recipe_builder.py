@@ -1803,6 +1803,17 @@ class WorkflowBuilder:
                     except Exception:
                         return int(default)
 
+                # Resolution is global/shared in multi-slot UI state. Slot
+                # profiles intentionally omit width/height/batch/length, so use
+                # execute-time global overrides/extracted values as fallback.
+                global_resolution_fallback = extracted.get('resolution', {}) if isinstance(extracted.get('resolution'), dict) else {}
+                global_resolution = {
+                    'width': overrides.get('width', global_resolution_fallback.get('width', 768)),
+                    'height': overrides.get('height', global_resolution_fallback.get('height', 1280)),
+                    'batch_size': overrides.get('batch_size', global_resolution_fallback.get('batch_size', 1)),
+                    'length': overrides.get('length', global_resolution_fallback.get('length')),
+                }
+
                 def _norm_loras(raw_list):
                     out = []
                     if not isinstance(raw_list, list):
@@ -1857,10 +1868,10 @@ class WorkflowBuilder:
                             'scheduler': profile.get('scheduler', 'simple'),
                         }
                         resolution_in = {
-                            'width': profile.get('width', 768),
-                            'height': profile.get('height', 1280),
-                            'batch_size': profile.get('batch_size', 1),
-                            'length': profile.get('length'),
+                            'width': profile.get('width', global_resolution.get('width', 768)),
+                            'height': profile.get('height', global_resolution.get('height', 1280)),
+                            'batch_size': profile.get('batch_size', global_resolution.get('batch_size', 1)),
+                            'length': profile.get('length', global_resolution.get('length')),
                         }
                         profile_model = profile.get('model_a', profile.get('model', ''))
                         profile_family = profile.get('_family', profile.get('family', ''))
@@ -1870,7 +1881,13 @@ class WorkflowBuilder:
                         loras_src = profile.get('loras', [])
                         clip_src = profile.get('clip', [])
                         sampler_in = profile.get('sampler', {}) if isinstance(profile.get('sampler'), dict) else {}
-                        resolution_in = profile.get('resolution', {}) if isinstance(profile.get('resolution'), dict) else {}
+                        raw_resolution_in = profile.get('resolution', {}) if isinstance(profile.get('resolution'), dict) else {}
+                        resolution_in = {
+                            'width': raw_resolution_in.get('width', global_resolution.get('width', 768)),
+                            'height': raw_resolution_in.get('height', global_resolution.get('height', 1280)),
+                            'batch_size': raw_resolution_in.get('batch_size', global_resolution.get('batch_size', 1)),
+                            'length': raw_resolution_in.get('length', global_resolution.get('length')),
+                        }
                         profile_model = profile.get('model', '')
                         profile_family = profile.get('family', '')
                         profile_clip_type = profile.get('clip_type', '')
