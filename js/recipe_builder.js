@@ -429,14 +429,6 @@ function _hydrateExtractedFromSelectedSlotProfile(node) {
         loras_a: Array.isArray(ov.loras_a) ? ov.loras_a : (node._weExtracted?.loras_a || []),
         sampler,
     };
-
-    if (ov._section_locks && typeof ov._section_locks === "object") {
-        const sl = ov._section_locks;
-        const _g = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
-        _g(node._wePosBox, !!sl.positive);
-        _g(node._weNegBox, !!sl.negative);
-        _g(node._weSamplerRows?.seed_a?._inp, !!sl.sampler);
-    }
 }
 
 function _makeEmptySlotProfile() {
@@ -457,6 +449,11 @@ function _makeEmptySlotProfile() {
             scheduler: "simple",
             loras_a: [],
             loras_b: [],
+            _input_ghosts: {
+                positive: false,
+                negative: false,
+                seed: false,
+            },
             _section_locks: {
                 model: false,
                 sampler: false,
@@ -513,6 +510,23 @@ function _mergeSlotProfiles(existingRaw, incomingRaw) {
     }
 
     return merged;
+}
+
+function _getSelectedSlotInputGhosts(node) {
+    if (!node?._weUseSlotProfiles) {
+        return { positive: false, negative: false, seed: false };
+    }
+    const activeSlot = _getCurrentlySelectedModelSlot(node);
+    if (!activeSlot) {
+        return { positive: false, negative: false, seed: false };
+    }
+    const ov = node?._weSlotProfiles?.[activeSlot]?.ov;
+    const raw = (ov && typeof ov._input_ghosts === "object") ? ov._input_ghosts : {};
+    return {
+        positive: !!raw.positive,
+        negative: !!raw.negative,
+        seed: !!raw.seed,
+    };
 }
 
 function _isLoraAvailableForSort(lora, availabilityMap = null) {
@@ -1496,6 +1510,7 @@ async function updateUI(node) {
 
     // Update WAN-specific visibility
     updateWanVisibility(node);
+    if (node._updatePromptGhosting) node._updatePromptGhosting();
     if (node._updateSeedGhosting) node._updateSeedGhosting();
 
     syncHidden(node);
@@ -2167,9 +2182,15 @@ function syncHidden(node) {
     if (node._weFamily) ov._family = node._weFamily;
     if (node._weUseSlotProfiles) {
         const activeSlot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
+        const activeProfileOv = node?._weSlotProfiles?.[activeSlot]?.ov;
         node._weActiveModelSlot = activeSlot;
         ov._active_model_slot = activeSlot;
         ov._model_slot = activeSlot;
+        if (activeProfileOv && typeof activeProfileOv._input_ghosts === "object") {
+            ov._input_ghosts = { ...activeProfileOv._input_ghosts };
+        } else {
+            delete ov._input_ghosts;
+        }
     } else {
         delete ov._active_model_slot;
         if (node._weSendModelSlot) {
@@ -2396,11 +2417,6 @@ function applyOverrides(node, ovJson, lsJson) {
         for (const key of ["model", "sampler", "positive", "negative", "loras"]) {
             if (node._weSetSectionLock) node._weSetSectionLock(key, !!lockSrc[key], { sync: false });
         }
-        // For connected input override UX, keep prompt/seed ghost visuals.
-        const _ghostInput = (el, locked) => { if (!el) return; el.readOnly = locked; el.style.opacity = locked ? "0.5" : "1"; };
-        _ghostInput(node._wePosBox, !!lockSrc.positive);
-        _ghostInput(node._weNegBox, !!lockSrc.negative);
-        _ghostInput(node._weSamplerRows?.seed_a?._inp, !!lockSrc.sampler);
     } else if (ov._section_locks && typeof ov._section_locks === "object") {
         for (const key of ["resolution", "model", "sampler", "positive", "negative", "loras"]) {
             if (Object.prototype.hasOwnProperty.call(ov._section_locks, key) && node._weSetSectionLock) {
@@ -2481,6 +2497,8 @@ function applyOverrides(node, ovJson, lsJson) {
     updateLoras(node);
 
     updateWanVisibility(node);
+    if (node._updatePromptGhosting) node._updatePromptGhosting();
+    if (node._updateSeedGhosting) node._updateSeedGhosting();
     syncHidden(node);
 }
 
@@ -4017,19 +4035,16 @@ app.registerExtension({
 
             // -- Auto-ghost prompt textareas when inputs are connected --
             function _updatePromptGhosting() {
-                const posConn = node.inputs?.find(i => i.name === "pos_prompt");
-                const negConn = node.inputs?.find(i => i.name === "neg_prompt");
-                const posLinked = posConn && posConn.link != null;
-                const negLinked = negConn && negConn.link != null;
+                const ghosts = _getSelectedSlotInputGhosts(node);
 
                 if (node._wePosBox) {
-                    node._wePosBox.readOnly = posLinked;
-                    node._wePosBox.style.opacity = posLinked ? "0.5" : "1";
+                    node._wePosBox.readOnly = ghosts.positive;
+                    node._wePosBox.style.opacity = ghosts.positive ? "0.5" : "1";
                     node._wePosBox.style.pointerEvents = "auto";
                 }
                 if (node._weNegBox) {
-                    node._weNegBox.readOnly = negLinked;
-                    node._weNegBox.style.opacity = negLinked ? "0.5" : "1";
+                    node._weNegBox.readOnly = ghosts.negative;
+                    node._weNegBox.style.opacity = ghosts.negative ? "0.5" : "1";
                     node._weNegBox.style.pointerEvents = "auto";
                 }
             }
@@ -4060,13 +4075,15 @@ app.registerExtension({
             function _updateSeedGhosting() {
                 const rows = node._weSamplerRows;
                 if (!rows) return;
+                const ghosts = _getSelectedSlotInputGhosts(node);
 
-                const applySeedState = (inputName, row) => {
+                const applySeedState = (inputName, row, ghosted = false) => {
                     if (!row?._inp) return;
                     const { linked, value } = _readConnectedInputValue(inputName);
+                    const isGhosted = !!ghosted || !!linked;
 
-                    row._inp.readOnly = linked;
-                    row._inp.style.opacity = linked ? "0.5" : "1";
+                    row._inp.readOnly = isGhosted;
+                    row._inp.style.opacity = isGhosted ? "0.5" : "1";
                     row._inp.style.pointerEvents = "auto";
 
                     if (linked && value !== undefined && value !== null) {
@@ -4075,7 +4092,7 @@ app.registerExtension({
                     }
                 };
 
-                applySeedState("seed", rows.seed_a);
+                applySeedState("seed", rows.seed_a, ghosts.seed);
                 applySeedState("seed_b", rows.seed_b);
             }
             node._updateSeedGhosting = _updateSeedGhosting;

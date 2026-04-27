@@ -1923,6 +1923,7 @@ class WorkflowBuilder:
         output_models = output_wf.get('models', {}) if isinstance(output_wf, dict) else {}
         for slot_key in _MODEL_KEYS:
             row = slot_profiles_src.get(slot_key) if isinstance(slot_profiles_src.get(slot_key), dict) else {}
+            row_saved_ov = dict(row.get('ov')) if isinstance(row.get('ov'), dict) else {}
             # Recipe data is authoritative on execute: rebuild each slot from a
             # clean baseline, then apply this slot's model block if present.
             # This guarantees missing slots are explicitly cleared.
@@ -1948,11 +1949,12 @@ class WorkflowBuilder:
                 'length': None,
             }
             row_ls = dict(row.get('ls')) if isinstance(row.get('ls'), dict) else {}
+            existing_locks = dict(row_saved_ov.get('_section_locks')) if isinstance(row_saved_ov.get('_section_locks'), dict) else {}
 
             # Check if loras are locked BEFORE overwriting from execution output.
-            _pre_locks = row_ov.get('_section_locks', {}) if isinstance(row_ov.get('_section_locks'), dict) else {}
+            _pre_locks = existing_locks
             _loras_locked = bool(_pre_locks.get('loras', False))
-            _saved_loras_a = list(row_ov.get('loras_a', [])) if _loras_locked else None
+            _saved_loras_a = list(row_saved_ov.get('loras_a', [])) if _loras_locked else None
 
             block = output_models.get(slot_key) if isinstance(output_models, dict) else None
             if isinstance(block, dict):
@@ -1985,17 +1987,16 @@ class WorkflowBuilder:
                     'length': resolution_block.get('length'),
                 })
 
-            # Execution-time locks: lock a section when a multi input supplied
-            # a real value for this slot; unlock when it was absent/empty.
-            existing_locks = row_ov.get('_section_locks', {}) if isinstance(row_ov.get('_section_locks'), dict) else {}
+            # Execution-time builder_data should ghost the affected inputs for
+            # this slot without changing the user's section lock booleans.
             lock_pos  = _extract_multi_prompt_value(multi_pos_prompts, slot_key, 'positive') is not None
             lock_neg  = _extract_multi_prompt_value(multi_neg_prompts, slot_key, 'negative') is not None
             lock_seed = _extract_multi_seed_value(multi_seeds, slot_key) is not None
-            row_ov['_section_locks'] = {
-                **existing_locks,
+            row_ov['_section_locks'] = existing_locks
+            row_ov['_input_ghosts'] = {
                 'positive': lock_pos,
                 'negative': lock_neg,
-                'sampler':  lock_seed,
+                'seed': lock_seed,
             }
 
             ui_slot_profiles[slot_key] = {
