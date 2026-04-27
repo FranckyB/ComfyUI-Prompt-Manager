@@ -1789,7 +1789,9 @@ class WorkflowBuilder:
                         sampler_in = {
                             'steps': profile.get('steps_a', 20),
                             'cfg': profile.get('cfg', 5.0),
-                            'denoise': profile.get('denoise', 1.0),
+                            # Keep None when omitted so we can preserve
+                            # existing slot denoise instead of forcing 1.0.
+                            'denoise': profile.get('denoise', None),
                             'seed': profile.get('seed_a', 0),
                             'sampler_name': profile.get('sampler_name', 'euler'),
                             'scheduler': profile.get('scheduler', 'simple'),
@@ -1831,10 +1833,12 @@ class WorkflowBuilder:
 
                     existing_slot_loras = []
                     existing_slot_seed = 0
+                    existing_slot_denoise = 1.0
                     if isinstance(existing_slot_block, dict):
                         existing_slot_loras = _norm_loras(existing_slot_block.get('loras', []))
                         existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
                         existing_slot_seed = _norm_int(existing_slot_sampler.get('seed', 0), 0)
+                        existing_slot_denoise = _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0)
 
                     raw_profile_loras = loras_src if isinstance(loras_src, list) else []
                     preferred_profile_loras = _norm_loras(raw_profile_loras)
@@ -1885,6 +1889,10 @@ class WorkflowBuilder:
                     if multi_seed_slot is None and bool(profile_input_ghosts.get('seed', False)):
                         sampler_seed = existing_slot_seed
 
+                    sampler_denoise = sampler_in.get('denoise', None)
+                    if sampler_denoise is None:
+                        sampler_denoise = existing_slot_denoise
+
                     slot_block = {
                         'positive_prompt': str(multi_pos_slot if multi_pos_slot is not None else (profile_pos or '')),
                         'negative_prompt': str(multi_neg_slot if multi_neg_slot is not None else (profile_neg or '')),
@@ -1898,7 +1906,7 @@ class WorkflowBuilder:
                         'sampler': {
                             'steps': _norm_int(sampler_in.get('steps', 20), 20),
                             'cfg': _norm_num(sampler_in.get('cfg', 5.0), 5.0),
-                            'denoise': _norm_num(sampler_in.get('denoise', 1.0), 1.0),
+                            'denoise': _norm_num(sampler_denoise, 1.0),
                             'seed': _norm_int(multi_seed_slot if multi_seed_slot is not None else sampler_seed, 0),
                             'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
                             'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
