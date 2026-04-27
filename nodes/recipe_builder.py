@@ -1742,6 +1742,18 @@ class WorkflowBuilder:
             _slot_profile_is_meaningful(slot_profiles.get(slot_key)) for slot_key in _MODEL_KEYS
         )
 
+        def _slot_profile_has_locks(raw_profile):
+            if not isinstance(raw_profile, dict):
+                return False
+            ov_profile = raw_profile.get('ov') if isinstance(raw_profile.get('ov'), dict) else None
+            profile = ov_profile if isinstance(ov_profile, dict) else raw_profile
+            locks = profile.get('_section_locks') if isinstance(profile.get('_section_locks'), dict) else None
+            return bool(locks) and any(bool(v) for v in locks.values())
+
+        has_locked_slot_profiles = isinstance(slot_profiles, dict) and any(
+            _slot_profile_has_locks(slot_profiles.get(slot_key)) for slot_key in _MODEL_KEYS
+        )
+
         has_multi_slot_inputs = any([
             isinstance(multi_pos_prompts, dict) and len(multi_pos_prompts) > 0,
             isinstance(multi_neg_prompts, dict) and len(multi_neg_prompts) > 0,
@@ -1750,9 +1762,11 @@ class WorkflowBuilder:
         ])
 
         # Absolute-truth execute path: when recipe_data is connected and no
-        # multi-slot override inputs are connected, do not let stale UI slot
-        # profiles rewrite incoming model blocks.
-        allow_slot_profile_authoring = not (isinstance(base_recipe_for_output, dict) and not has_multi_slot_inputs)
+        # multi-slot override inputs are connected, keep incoming model blocks
+        # authoritative UNLESS the user has explicit section locks in slot
+        # profiles. Locked sections are explicit user intent and must be able
+        # to write back into recipe_data.
+        allow_slot_profile_authoring = not (isinstance(base_recipe_for_output, dict) and not has_multi_slot_inputs and not has_locked_slot_profiles)
 
         if allow_slot_profile_authoring and isinstance(slot_profiles, dict) and (has_meaningful_slot_profiles or not isinstance(base_recipe_for_output, dict)):
             try:
@@ -1821,6 +1835,7 @@ class WorkflowBuilder:
                     ov_profile = raw_profile.get('ov') if isinstance(raw_profile.get('ov'), dict) else None
                     profile = ov_profile if isinstance(ov_profile, dict) else raw_profile
                     profile_input_ghosts = profile.get('_input_ghosts', {}) if isinstance(profile.get('_input_ghosts'), dict) else {}
+                    profile_locks = profile.get('_section_locks', {}) if isinstance(profile.get('_section_locks'), dict) else {}
 
                     if isinstance(ov_profile, dict):
                         loras_src = profile.get('loras_a', [])
@@ -1879,6 +1894,13 @@ class WorkflowBuilder:
                         existing_slot_seed = _norm_int(existing_slot_sampler.get('seed', 0), 0)
                         existing_slot_denoise = _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0)
 
+                    model_locked = bool(profile_locks.get('model', False))
+                    positive_locked = bool(profile_locks.get('positive', False))
+                    negative_locked = bool(profile_locks.get('negative', False))
+                    sampler_locked = bool(profile_locks.get('sampler', False))
+                    loras_locked = bool(profile_locks.get('loras', False))
+                    resolution_locked = bool(profile_locks.get('resolution', False))
+
                     raw_profile_loras = loras_src if isinstance(loras_src, list) else []
                     preferred_profile_loras = _norm_loras(raw_profile_loras)
                     local_profile_loras = []
@@ -1903,6 +1925,10 @@ class WorkflowBuilder:
                     else:
                         merged_profile_loras = _norm_loras(raw_profile_loras)
 
+                    effective_loras = merged_profile_loras
+                    if isinstance(existing_slot_block, dict) and not loras_locked and multi_lora_slot is None:
+                        effective_loras = existing_slot_loras
+
                     # Keep user-authored drag/drop ordering stable across execute.
                     # Merge logic decides membership/content; preferred-order pass
                     # decides final display/output sequence when names overlap.
@@ -1917,12 +1943,18 @@ class WorkflowBuilder:
                         profile_pos = existing_slot_block.get('positive_prompt', '')
                     if (profile_pos is None or str(profile_pos) == '') and isinstance(existing_slot_block, dict):
                         profile_pos = existing_slot_block.get('positive_prompt', '')
+                    effective_pos = profile_pos
+                    if isinstance(existing_slot_block, dict) and not positive_locked and multi_pos_slot is None:
+                        effective_pos = existing_slot_block.get('positive_prompt', '')
 
                     profile_neg = profile.get('negative_prompt', '')
                     if multi_neg_slot is None and bool(profile_input_ghosts.get('negative', False)) and isinstance(existing_slot_block, dict):
                         profile_neg = existing_slot_block.get('negative_prompt', '')
                     if (profile_neg is None or str(profile_neg) == '') and isinstance(existing_slot_block, dict):
                         profile_neg = existing_slot_block.get('negative_prompt', '')
+                    effective_neg = profile_neg
+                    if isinstance(existing_slot_block, dict) and not negative_locked and multi_neg_slot is None:
+                        effective_neg = existing_slot_block.get('negative_prompt', '')
 
                     sampler_seed = sampler_in.get('seed', 0)
                     if multi_seed_slot is None and bool(profile_input_ghosts.get('seed', False)):
@@ -1932,30 +1964,77 @@ class WorkflowBuilder:
                     if sampler_denoise is None:
                         sampler_denoise = existing_slot_denoise
 
+                    effective_model = str(profile_model or '')
+                    effective_family = str(profile_family or '')
+                    effective_clip_type = str(profile_clip_type or '')
+                    effective_loader_type = str(profile_loader_type or '')
+                    effective_vae = str(profile.get('vae', '') or '')
+                    effective_clip = [str(x or '') for x in clip_raw if str(x or '').strip()]
+                    if isinstance(existing_slot_block, dict) and not model_locked:
+                        effective_model = str(existing_slot_block.get('model', '') or '')
+                        effective_family = str(existing_slot_block.get('family', '') or '')
+                        effective_clip_type = str(existing_slot_block.get('clip_type', '') or '')
+                        effective_loader_type = str(existing_slot_block.get('loader_type', '') or '')
+                        effective_vae = str(existing_slot_block.get('vae', '') or '')
+                        existing_clip_raw = existing_slot_block.get('clip', []) if isinstance(existing_slot_block.get('clip'), list) else []
+                        effective_clip = [str(x or '') for x in existing_clip_raw if str(x or '').strip()]
+
+                    effective_sampler = {
+                        'steps': _norm_int(sampler_in.get('steps', 20), 20),
+                        'cfg': _norm_num(sampler_in.get('cfg', 5.0), 5.0),
+                        'denoise': _norm_num(sampler_denoise, 1.0),
+                        'seed': _norm_int(multi_seed_slot if multi_seed_slot is not None else sampler_seed, 0),
+                        'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
+                        'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
+                    }
+                    if isinstance(existing_slot_block, dict) and not sampler_locked and multi_seed_slot is None:
+                        existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
+                        effective_sampler = {
+                            'steps': _norm_int(existing_slot_sampler.get('steps', 20), 20),
+                            'cfg': _norm_num(existing_slot_sampler.get('cfg', 5.0), 5.0),
+                            'denoise': _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0),
+                            'seed': _norm_int(existing_slot_sampler.get('seed', 0), 0),
+                            'sampler_name': str(existing_slot_sampler.get('sampler_name', 'euler') or 'euler'),
+                            'scheduler': str(existing_slot_sampler.get('scheduler', 'simple') or 'simple'),
+                        }
+                    elif isinstance(existing_slot_block, dict) and not sampler_locked and multi_seed_slot is not None:
+                        existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
+                        effective_sampler = {
+                            'steps': _norm_int(existing_slot_sampler.get('steps', 20), 20),
+                            'cfg': _norm_num(existing_slot_sampler.get('cfg', 5.0), 5.0),
+                            'denoise': _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0),
+                            'seed': _norm_int(multi_seed_slot, 0),
+                            'sampler_name': str(existing_slot_sampler.get('sampler_name', 'euler') or 'euler'),
+                            'scheduler': str(existing_slot_sampler.get('scheduler', 'simple') or 'simple'),
+                        }
+
+                    effective_resolution = {
+                        'width': _norm_int(resolution_in.get('width', 768), 768),
+                        'height': _norm_int(resolution_in.get('height', 1280), 1280),
+                        'batch_size': _norm_int(resolution_in.get('batch_size', 1), 1),
+                        'length': resolution_in.get('length'),
+                    }
+                    if isinstance(existing_slot_block, dict) and not resolution_locked:
+                        existing_resolution = existing_slot_block.get('resolution') if isinstance(existing_slot_block.get('resolution'), dict) else {}
+                        effective_resolution = {
+                            'width': _norm_int(existing_resolution.get('width', 768), 768),
+                            'height': _norm_int(existing_resolution.get('height', 1280), 1280),
+                            'batch_size': _norm_int(existing_resolution.get('batch_size', 1), 1),
+                            'length': existing_resolution.get('length'),
+                        }
+
                     slot_block = {
-                        'positive_prompt': str(multi_pos_slot if multi_pos_slot is not None else (profile_pos or '')),
-                        'negative_prompt': str(multi_neg_slot if multi_neg_slot is not None else (profile_neg or '')),
-                        'family': str(profile_family or ''),
-                        'model': str(profile_model or ''),
-                        'loras': merged_profile_loras,
-                        'clip_type': str(profile_clip_type or ''),
-                        'loader_type': str(profile_loader_type or ''),
-                        'vae': str(profile.get('vae', '') or ''),
-                        'clip': [str(x or '') for x in clip_raw if str(x or '').strip()],
-                        'sampler': {
-                            'steps': _norm_int(sampler_in.get('steps', 20), 20),
-                            'cfg': _norm_num(sampler_in.get('cfg', 5.0), 5.0),
-                            'denoise': _norm_num(sampler_denoise, 1.0),
-                            'seed': _norm_int(multi_seed_slot if multi_seed_slot is not None else sampler_seed, 0),
-                            'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
-                            'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
-                        },
-                        'resolution': {
-                            'width': _norm_int(resolution_in.get('width', 768), 768),
-                            'height': _norm_int(resolution_in.get('height', 1280), 1280),
-                            'batch_size': _norm_int(resolution_in.get('batch_size', 1), 1),
-                            'length': resolution_in.get('length'),
-                        },
+                        'positive_prompt': str(multi_pos_slot if multi_pos_slot is not None else (effective_pos or '')),
+                        'negative_prompt': str(multi_neg_slot if multi_neg_slot is not None else (effective_neg or '')),
+                        'family': effective_family,
+                        'model': effective_model,
+                        'loras': effective_loras,
+                        'clip_type': effective_clip_type,
+                        'loader_type': effective_loader_type,
+                        'vae': effective_vae,
+                        'clip': effective_clip,
+                        'sampler': effective_sampler,
+                        'resolution': effective_resolution,
                     }
                     base_recipe_for_output['models'][slot_key] = slot_block
             except Exception as e:
