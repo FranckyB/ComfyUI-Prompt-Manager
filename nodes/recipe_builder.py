@@ -1837,6 +1837,7 @@ class WorkflowBuilder:
                         existing_slot_seed = _norm_int(existing_slot_sampler.get('seed', 0), 0)
 
                     raw_profile_loras = loras_src if isinstance(loras_src, list) else []
+                    preferred_profile_loras = _norm_loras(raw_profile_loras)
                     local_profile_loras = []
                     for item in raw_profile_loras:
                         if not isinstance(item, dict):
@@ -1858,6 +1859,15 @@ class WorkflowBuilder:
                         )
                     else:
                         merged_profile_loras = _norm_loras(raw_profile_loras)
+
+                    # Keep user-authored drag/drop ordering stable across execute.
+                    # Merge logic decides membership/content; preferred-order pass
+                    # decides final display/output sequence when names overlap.
+                    if preferred_profile_loras:
+                        merged_profile_loras = _apply_preferred_lora_order(
+                            merged_profile_loras,
+                            preferred_profile_loras,
+                        )
 
                     profile_pos = profile.get('positive_prompt', '')
                     if multi_pos_slot is None and bool(profile_input_ghosts.get('positive', False)) and isinstance(existing_slot_block, dict):
