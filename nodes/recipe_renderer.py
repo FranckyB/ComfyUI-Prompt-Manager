@@ -330,6 +330,7 @@ class WorkflowRenderer:
         secondary_key = None
         primary = None
         secondary = None
+        secondary_family_key = ""
         selected_slot = _normalize_model_slot(model_slot)
         slot_model_defined = False
 
@@ -370,6 +371,7 @@ class WorkflowRenderer:
 
             if isinstance(secondary, dict):
                 model_name_b = secondary.get("model", model_name_b)
+                secondary_family_key = str(secondary.get("family", "") or "")
                 if isinstance(secondary.get("loras"), list):
                     loras_b = secondary.get("loras", [])
                 if isinstance(secondary.get("sampler"), dict):
@@ -683,6 +685,11 @@ class WorkflowRenderer:
             decoded, out_latent = _render_wan_image(**render_args)
 
         elif family_key in ("wan_video_t2v", "wan_video_i2v"):
+            if secondary_family_key and secondary_family_key != family_key:
+                raise ValueError(
+                    f"[RecipeRenderer] WAN video requires the adjacent secondary slot to use the same family "
+                    f"as the selected slot ({family_key}), got {secondary_family_key}."
+                )
             # Load Model B for dual-sampler
             model_b_obj = None
             passthrough_model_b = secondary.get("MODEL") if isinstance(secondary, dict) else None

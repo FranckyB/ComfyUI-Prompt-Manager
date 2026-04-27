@@ -1548,65 +1548,15 @@ async function checkLoraAvailability(node) {
     }
 }
 
-// --- WAN-specific visibility ---
+// --- Family-specific visibility ---
 function updateWanVisibility(node) {
     const family = node._weFamily;
     const isWanVideo = (family === "wan_video_i2v" || family === "wan_video_t2v");
-    const isWan = (isWanVideo || (family === "wan_image"));
-
-    // LoRA stack titles
-    if (node._weLoraACard?._titleLabel) {
-        node._weLoraACard._titleLabel.textContent = isWanVideo ? "LoRA Stack (High)" : "LoRA Stack";
-    }
-    if (node._weLoraB?._titleLabel) {
-        node._weLoraB._titleLabel.textContent = isWanVideo ? "LoRA Stack (Low)" : "LoRA Stack B";
-    }
-    // LoRA Stack B section: only for WAN Video
-    if (node._weLoraB) {
-        node._weLoraB.style.display = isWanVideo ? "" : "none";
-    }
-    // LoRA Stack A container: taller when alone, normal when both visible
-    if (node._weLoraAContainer) {
-        node._weLoraAContainer.style.height = "";
-        node._weLoraAContainer.style.minHeight = "";
-    }
-
-    // Model A label: "Model A" for WAN Video, "Model" otherwise
-    if (node._weModelRow?._label) {
-        node._weModelRow._label.textContent = isWanVideo ? "Model A" : "Model";
-    }
 
     // Frames row: only for WAN Video (not WAN Image)
     if (node._weResRows?.frames) {
         node._weResRows.frames.style.display = isWanVideo ? "flex" : "none";
     }
-
-    // Model B: only for WAN Video (dual sampler)
-    if (node._weModelBRow) {
-        node._weModelBRow.style.display = isWanVideo ? "flex" : "none";
-    }
-
-    // Steps B row: only for WAN Video
-    if (node._weSamplerRows?.steps_b) {
-        node._weSamplerRows.steps_b.style.display = isWanVideo ? "flex" : "none";
-    }
-    // Steps A label: "Steps A" for WAN Video, "Steps" otherwise
-    if (node._weSamplerRows?.steps_a?._label) {
-        node._weSamplerRows.steps_a._label.textContent = isWanVideo ? "Steps A" : "Steps";
-    }
-    // Seed B: only for WAN Video
-    if (node._weSamplerRows?.seed_b) {
-        node._weSamplerRows.seed_b.style.display = isWanVideo ? "flex" : "none";
-    }
-    // Denoise: hidden for WAN Video families
-    if (node._weSamplerRows?.denoise) {
-        node._weSamplerRows.denoise.style.display = isWanVideo ? "none" : "flex";
-    }
-    // Seed A label: "Seed A" for WAN Video, "Seed" otherwise
-    if (node._weSamplerRows?.seed_a?._label) {
-        node._weSamplerRows.seed_a._label.textContent = isWanVideo ? "Seed A" : "Seed";
-    }
-
 }
 
 /** Merge two LoRA lists, dedup by name (second list wins on conflict). */
@@ -2261,18 +2211,21 @@ function syncHidden(node) {
         delete ov._slot_profiles;
     }
 
-    wSet("override_data", JSON.stringify(ov));
-    wSet("lora_state", JSON.stringify(persistedLoraState));
+    const ovJson = JSON.stringify(ov);
+    const lsJson = JSON.stringify(persistedLoraState);
+    wSet("override_data", ovJson);
+    wSet("lora_state", lsJson);
 
     // Persist to node.properties for tab-switch survival
     node.properties = node.properties || {};
-    node.properties.we_override_data = JSON.stringify(ov);
     // Canonical saved UI state for workflow reload restore.
-    node.properties.we_ui_state = JSON.stringify(ov);
-    node.properties.we_lora_state = JSON.stringify(persistedLoraState);
+    node.properties.we_ui_state = ovJson;
+    node.properties.we_lora_state = lsJson;
     if (node._weWorkflowLoras) node.properties.we_workflow_loras = JSON.stringify(node._weWorkflowLoras);
     if (node._weInputLoras) node.properties.we_input_loras = JSON.stringify(node._weInputLoras);
     if (node._weWorkflowPrompts) node.properties.we_workflow_prompts = JSON.stringify(node._weWorkflowPrompts);
+    // Avoid persisting heavyweight extracted snapshot into workflow drafts.
+    delete node.properties.we_extracted_cache;
 
     // Keep a lightweight extracted snapshot for runtime features (e.g. Builder->Builder
     // Update Recipe cache). Restore uses UI state (we_ui_state/override_data), not this.
@@ -2302,9 +2255,6 @@ function syncHidden(node) {
             loras_a: [], loras_b: [],
             is_video: isVideo,
         };
-    }
-    if (node._weExtracted) {
-        node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
     }
 }
 
@@ -3540,10 +3490,18 @@ app.registerExtension({
                 } catch { return []; }
             };
 
+            const getWanSlotSplitPreference = () => {
+                const activeSlot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
+                if (activeSlot === "model_b" || activeSlot === "model_d") {
+                    return { preferHigh: false, preferLow: true };
+                }
+                return { preferHigh: true, preferLow: false };
+            };
+
             const fetchModelsA = async () => {
                 const models = await fetchBaseModels();
                 if (node._weShowAllModels) return models;
-                return applyWanVideoModelSplit(models, node._weFamily, { preferHigh: true });
+                return applyWanVideoModelSplit(models, node._weFamily, getWanSlotSplitPreference());
             };
             const fetchModelsB = async () => {
                 const models = await fetchBaseModels();
@@ -3564,7 +3522,7 @@ app.registerExtension({
                 const fetchModelsForFamilyA = async () => {
                     const models = await fetchModelsForFamilyBase();
                     if (node._weShowAllModels) return models;
-                    return applyWanVideoModelSplit(models, familyKey, { preferHigh: true });
+                    return applyWanVideoModelSplit(models, familyKey, getWanSlotSplitPreference());
                 };
                 const fetchModelsForFamilyB = async () => {
                     const models = await fetchModelsForFamilyBase();
@@ -3956,7 +3914,7 @@ app.registerExtension({
                     updateLoras(node); _syncS();
                 },
             );
-            loraBCard.style.display = "flex"; // always visible
+            loraBCard.style.display = "none";
             loraSec._body.appendChild(loraBCard);
             node._weLoraBContainer = loraBCard._tagsContainer;
             node._weLoraB = loraBCard;
@@ -4278,11 +4236,11 @@ app.registerExtension({
                 if (uiReady && typeof uiReady.then === "function") {
                     uiReady.finally(() => {
                         node.properties = node.properties || {};
-                        node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
+                        delete node.properties.we_extracted_cache;
                     });
                 } else {
                     node.properties = node.properties || {};
-                    node.properties.we_extracted_cache = JSON.stringify(node._weExtracted);
+                    delete node.properties.we_extracted_cache;
                 }
 
                 node._preUpdateApplied = true;
@@ -4422,11 +4380,11 @@ app.registerExtension({
                 if (uiReady && typeof uiReady.then === "function") {
                     uiReady.finally(() => {
                         this.properties = this.properties || {};
-                        this.properties.we_extracted_cache = JSON.stringify(this._weExtracted);
+                        delete this.properties.we_extracted_cache;
                     });
                 } else {
                     this.properties = this.properties || {};
-                    this.properties.we_extracted_cache = JSON.stringify(this._weExtracted);
+                    delete this.properties.we_extracted_cache;
                 }
             }
             // Reset flag for next execution
