@@ -777,7 +777,9 @@ class WorkflowBuilder:
             if not isinstance(payload, dict):
                 return None
             stack = payload.get(slot_key)
-            return stack if isinstance(stack, list) else None
+            if not isinstance(stack, list):
+                return None
+            return stack if len(stack) > 0 else None
 
         # Unified builder_data payload (from RecipeBuilderDataBundle) maps to
         # the existing multi_* structures used by slot merge/lock logic.
@@ -799,21 +801,23 @@ class WorkflowBuilder:
 
             for slot_key, suffix in slot_map.items():
                 pos_val = builder_data.get(f"pos_{suffix}")
-                if pos_val is not None:
+                if pos_val is not None and str(pos_val).strip() != "":
                     multi_pos_prompts[slot_key] = str(pos_val or "")
 
                 neg_val = builder_data.get(f"neg_{suffix}")
-                if neg_val is not None:
+                if neg_val is not None and str(neg_val).strip() != "":
                     multi_neg_prompts[slot_key] = str(neg_val or "")
 
                 if f"seed_{suffix}" in builder_data:
                     try:
-                        multi_seeds[slot_key] = int(builder_data.get(f"seed_{suffix}") or 0)
+                        parsed_seed = int(builder_data.get(f"seed_{suffix}") or 0)
+                        if parsed_seed != 0:
+                            multi_seeds[slot_key] = parsed_seed
                     except Exception:
                         pass
 
                 lora_val = builder_data.get(f"loras_{suffix}")
-                if isinstance(lora_val, list):
+                if isinstance(lora_val, list) and len(lora_val) > 0:
                     multi_loras[slot_key] = lora_val
 
         # ── Parse recipe_data input (if connected) ─────────────────────
@@ -1704,10 +1708,10 @@ class WorkflowBuilder:
         )
 
         has_multi_slot_inputs = any([
-            isinstance(multi_pos_prompts, dict),
-            isinstance(multi_neg_prompts, dict),
-            isinstance(multi_seeds, dict),
-            isinstance(multi_loras, dict),
+            isinstance(multi_pos_prompts, dict) and len(multi_pos_prompts) > 0,
+            isinstance(multi_neg_prompts, dict) and len(multi_neg_prompts) > 0,
+            isinstance(multi_seeds, dict) and len(multi_seeds) > 0,
+            isinstance(multi_loras, dict) and len(multi_loras) > 0,
         ])
 
         # Absolute-truth execute path: when recipe_data is connected and no

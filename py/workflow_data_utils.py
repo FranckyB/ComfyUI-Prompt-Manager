@@ -42,6 +42,101 @@ _LEGACY_TOP_LEVEL_KEYS = {
 }
 
 
+def _as_clip_list(raw_clip):
+    if isinstance(raw_clip, list):
+        return list(raw_clip)
+    if isinstance(raw_clip, tuple):
+        return list(raw_clip)
+    if raw_clip:
+        return [raw_clip]
+    return []
+
+
+def _has_meaningful_legacy_slot(recipe_data, slot_key, sampler):
+    if slot_key not in ("model_a", "model_b"):
+        return False
+
+    suffix = "a" if slot_key == "model_a" else "b"
+    model_name = str(recipe_data.get(slot_key, "") or "").strip()
+    loras_key = f"loras_{suffix}"
+    loras = recipe_data.get(loras_key, []) if isinstance(recipe_data.get(loras_key), list) else []
+    has_loras = len(loras) > 0
+
+    steps_key = f"steps_{suffix}"
+    seed_key = f"seed_{suffix}"
+    has_slot_sampler = isinstance(sampler.get(steps_key), (int, float)) or isinstance(sampler.get(seed_key), (int, float))
+
+    return bool(model_name or has_loras or has_slot_sampler)
+
+
+def _legacy_to_v2_recipe_data(recipe_data, source):
+    sampler = recipe_data.get("sampler", {}) if isinstance(recipe_data.get("sampler"), dict) else {}
+    resolution = recipe_data.get("resolution", {}) if isinstance(recipe_data.get("resolution"), dict) else {}
+
+    def _build_model_block(slot_key):
+        is_b = slot_key == "model_b"
+        suffix = "b" if is_b else "a"
+        loras_key = f"loras_{suffix}"
+
+        steps_key = f"steps_{suffix}"
+        seed_key = f"seed_{suffix}"
+        steps = sampler.get(steps_key)
+        if steps is None:
+            steps = sampler.get("steps_a", sampler.get("steps", 20))
+
+        seed = sampler.get(seed_key)
+        if seed is None:
+            seed = sampler.get("seed_a", sampler.get("seed", 0))
+
+        return {
+            "positive_prompt": str(recipe_data.get("positive_prompt", "") or ""),
+            "negative_prompt": str(recipe_data.get("negative_prompt", "") or ""),
+            "family": str(recipe_data.get("family", "") or ""),
+            "model": str(recipe_data.get(slot_key, "") or ""),
+            "loras": list(recipe_data.get(loras_key, [])) if isinstance(recipe_data.get(loras_key), list) else [],
+            "clip_type": str(recipe_data.get("clip_type", "") or ""),
+            "loader_type": str(recipe_data.get("loader_type", "") or ""),
+            "vae": str(recipe_data.get("vae", "") or ""),
+            "clip": _as_clip_list(recipe_data.get("clip", [])),
+            "sampler": {
+                "steps": int(steps if steps is not None else 20),
+                "cfg": float(sampler.get("cfg", 5.0)),
+                "denoise": float(sampler.get("denoise", 1.0)),
+                "seed": int(seed if seed is not None else 0),
+                "sampler_name": str(sampler.get("sampler_name", "euler") or "euler"),
+                "scheduler": str(sampler.get("scheduler", "simple") or "simple"),
+            },
+            "resolution": {
+                "width": int(resolution.get("width", 768)),
+                "height": int(resolution.get("height", 1280)),
+                "batch_size": int(resolution.get("batch_size", 1)),
+                "length": resolution.get("length", None),
+            },
+        }
+
+    out = {
+        "_source": str(recipe_data.get("_source") or source),
+        "version": 2,
+        "models": {},
+    }
+
+    # Preserve non-legacy metadata/runtime keys at root.
+    for key, val in recipe_data.items():
+        if key in {"_source", "version", "models"}:
+            continue
+        if key in _LEGACY_TOP_LEVEL_KEYS:
+            continue
+        out[key] = val
+
+    if _has_meaningful_legacy_slot(recipe_data, "model_a", sampler):
+        out["models"]["model_a"] = _build_model_block("model_a")
+
+    if _has_meaningful_legacy_slot(recipe_data, "model_b", sampler):
+        out["models"]["model_b"] = _build_model_block("model_b")
+
+    return out
+
+
 def get_v2_model_block(recipe_data, model_key):
     """Return a v2 model block dict for model_key, or None if unavailable."""
     if not isinstance(recipe_data, dict):
@@ -56,7 +151,8 @@ def get_v2_model_block(recipe_data, model_key):
 def ensure_v2_recipe_data(recipe_data, source="RecipeData"):
     """Normalize recipe_data to strict v2 shape.
 
-    v2 contract is authoritative. Legacy top-level recipe fields are ignored.
+    v2 contract is authoritative. Legacy top-level recipe fields are converted
+    into v2 model blocks.
     """
     if not isinstance(recipe_data, dict):
         return {
@@ -67,11 +163,7 @@ def ensure_v2_recipe_data(recipe_data, source="RecipeData"):
 
     is_v2 = int(recipe_data.get("version", 0) or 0) >= 2 and isinstance(recipe_data.get("models"), dict)
     if not is_v2:
-        return {
-            "_source": str(recipe_data.get("_source") or source),
-            "version": 2,
-            "models": {},
-        }
+        return _legacy_to_v2_recipe_data(recipe_data, source)
 
     out = {
         "_source": str(recipe_data.get("_source") or source),

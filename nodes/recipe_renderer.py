@@ -40,6 +40,7 @@ from ..py.workflow_extraction_utils import (
     resolve_vae_name,
     resolve_clip_names,
 )
+from ..py.workflow_data_utils import strip_runtime_objects
 from ..py.lora_utils import resolve_lora_path
 
 # Reuse the robust GGUF loading helper used by RecipeModelLoader when available.
@@ -123,18 +124,140 @@ class WorkflowRenderer:
 
     @classmethod
     def IS_CHANGED(cls, recipe_data, source_image=None, **kwargs):
-        """Return a stable fingerprint so ComfyUI skips re-execution when nothing changed."""
-        import hashlib, json as _json, time
+        """Return a slot-aware fingerprint so unrelated slot edits do not force rerender."""
+        import hashlib
+        import json as _json
+        import time
+
+        def _tensor_sig(tensor):
+            try:
+                return {
+                    "shape": tuple(tensor.shape),
+                    "sum": float(tensor.detach().sum().item()),
+                }
+            except Exception:
+                return {
+                    "shape": str(getattr(tensor, "shape", "")),
+                    "sum": str(tensor),
+                }
+
         h = hashlib.sha256()
-        if isinstance(recipe_data, dict):
-            h.update(_json.dumps(recipe_data, sort_keys=True, default=str).encode())
-        elif isinstance(recipe_data, str):
-            h.update(recipe_data.encode())
         clear_cache_after_render = bool(kwargs.get("clear_cache_after_render", False))
+        selected_slot = _normalize_model_slot(kwargs.get("model_slot", "model_a"))
+
+        h.update(selected_slot.encode())
         h.update(str(clear_cache_after_render).encode())
-        if source_image is not None:
-            h.update(str(source_image.shape).encode())
-            h.update(str(source_image.sum().item()).encode())
+
+        wf = None
+        if isinstance(recipe_data, dict):
+            wf = recipe_data
+        elif isinstance(recipe_data, str):
+            try:
+                wf = json.loads(recipe_data)
+            except Exception:
+                wf = None
+                h.update(recipe_data.encode())
+        else:
+            h.update(str(type(recipe_data)).encode())
+
+        if isinstance(wf, dict):
+            wf_sampler = wf.get("sampler", {}) if isinstance(wf.get("sampler"), dict) else {}
+            wf_res = wf.get("resolution", {}) if isinstance(wf.get("resolution"), dict) else {}
+
+            family_key = str(wf.get("family", "") or "")
+            slot_block = {}
+            secondary_block = {}
+
+            if int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict):
+                models = wf.get("models", {})
+                primary = models.get(selected_slot)
+                if isinstance(primary, dict):
+                    slot_block = dict(primary)
+                    family_key = str(primary.get("family", family_key) or family_key)
+                    if isinstance(primary.get("sampler"), dict):
+                        merged_sampler = dict(wf_sampler)
+                        merged_sampler.update(primary.get("sampler", {}))
+                        wf_sampler = merged_sampler
+                    if isinstance(primary.get("resolution"), dict):
+                        merged_res = dict(wf_res)
+                        merged_res.update(primary.get("resolution", {}))
+                        wf_res = merged_res
+
+                slot_index = _MODEL_KEYS.index(selected_slot)
+                if slot_index < len(_MODEL_KEYS) - 1:
+                    secondary_key = _MODEL_KEYS[slot_index + 1]
+                    secondary = models.get(secondary_key)
+                    if isinstance(secondary, dict):
+                        secondary_block = dict(secondary)
+                        if isinstance(secondary.get("sampler"), dict):
+                            sec_sampler = secondary.get("sampler", {})
+                            if "steps_b" not in wf_sampler and sec_sampler.get("steps") is not None:
+                                wf_sampler["steps_b"] = sec_sampler.get("steps")
+                            if "seed_b" not in wf_sampler and sec_sampler.get("seed") is not None:
+                                wf_sampler["seed_b"] = sec_sampler.get("seed")
+            else:
+                if selected_slot == "model_a":
+                    slot_block = {
+                        "family": wf.get("family", ""),
+                        "model": wf.get("model_a", ""),
+                        "positive_prompt": wf.get("positive_prompt", ""),
+                        "negative_prompt": wf.get("negative_prompt", ""),
+                        "loras": wf.get("loras_a", []),
+                        "vae": wf.get("vae", ""),
+                        "clip": wf.get("clip", []),
+                        "clip_type": wf.get("clip_type", ""),
+                        "loader_type": wf.get("loader_type", ""),
+                    }
+                elif selected_slot == "model_b":
+                    slot_block = {
+                        "family": wf.get("family", ""),
+                        "model": wf.get("model_b", ""),
+                        "loras": wf.get("loras_b", []),
+                    }
+
+            if not family_key:
+                model_ref = ""
+                if isinstance(slot_block, dict):
+                    model_ref = str(slot_block.get("model", "") or "")
+                if not model_ref:
+                    model_ref = str(wf.get("model_a", "") or "")
+                if model_ref:
+                    try:
+                        resolved_ref, _ = resolve_model_name(model_ref)
+                        family_key = get_model_family(resolved_ref or model_ref) or ""
+                    except Exception:
+                        family_key = ""
+            if not family_key:
+                family_key = "sdxl"
+
+            try:
+                denoise_value = float(wf_sampler.get("denoise", 1.0))
+            except (TypeError, ValueError):
+                denoise_value = 1.0
+            denoise_value = max(0.0, min(1.0, denoise_value))
+
+            relevant = {
+                "version": int(wf.get("version", 0) or 0),
+                "source": str(wf.get("_source", "") or ""),
+                "slot": selected_slot,
+                "family": family_key,
+                "slot_block": strip_runtime_objects(slot_block if isinstance(slot_block, dict) else {}),
+                "secondary_block": strip_runtime_objects(secondary_block if isinstance(secondary_block, dict) else {}),
+                "sampler": strip_runtime_objects(wf_sampler),
+                "resolution": strip_runtime_objects(wf_res),
+            }
+            h.update(_json.dumps(relevant, sort_keys=True, default=str).encode())
+
+            uses_image = (family_key == "wan_video_i2v") or (
+                family_key not in ("wan_video_t2v", "wan_video_i2v") and denoise_value < 1.0
+            )
+            if uses_image:
+                image_for_sig = source_image if isinstance(source_image, torch.Tensor) else wf.get("IMAGE")
+                if isinstance(image_for_sig, torch.Tensor):
+                    h.update(_json.dumps(_tensor_sig(image_for_sig), sort_keys=True).encode())
+                else:
+                    h.update(str(image_for_sig).encode())
+
         if clear_cache_after_render:
             # Force execution when post-render clear is enabled so purge always runs.
             return f"{h.hexdigest()}::{time.time_ns()}"
