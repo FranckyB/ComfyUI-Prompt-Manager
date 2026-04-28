@@ -901,19 +901,24 @@ class WorkflowBuilder:
 
         def _extract_multi_lora_stack(payload, slot_key):
             if not isinstance(payload, dict):
-                return None
+                return []
             if slot_key not in payload:
-                return None
+                return []
             stack = payload.get(slot_key)
             if not isinstance(stack, list):
-                return None
-            # Empty list is an explicit "clear this slot" signal.
+                return []
+            # Always return a list for deterministic comparisons.
             return stack
 
         # Ingress adapter only: normalize MULTI_LORA_STACK input into the exact
         # legacy multi_loras shape expected by downstream builder_data logic.
-        if not isinstance(multi_loras, dict):
-            multi_loras = {}
+        if isinstance(multi_loras, dict):
+            multi_loras = {
+                slot_key: (multi_loras.get(slot_key) if isinstance(multi_loras.get(slot_key), list) else [])
+                for slot_key in _MODEL_KEYS
+            }
+        else:
+            multi_loras = {slot_key: [] for slot_key in _MODEL_KEYS}
         if isinstance(multi_lora_stack, dict):
             for slot_key, suffix in {
                 "model_a": "a",
@@ -941,13 +946,7 @@ class WorkflowBuilder:
                         source_kind = "stacks"
 
                 if explicit and isinstance(candidate, list):
-                    # MultiLoraStackerLM always emits a/b/c/d keys, including
-                    # empty arrays for untouched slots. Treat those empties as
-                    # "no input for this slot" so recipe_data LoRAs remain additive.
-                    # Explicit model_* empty lists are still honored as clear.
-                    if len(candidate) == 0 and source_kind in {"suffix", "stacks"}:
-                        continue
-                    # Preserve empty list as explicit clear signal.
+                    # Preserve empty list as explicit current slot value.
                     multi_loras[slot_key] = candidate
 
         if not isinstance(multi_pos_prompts, dict):
@@ -2040,23 +2039,16 @@ class WorkflowBuilder:
                             continue
                         local_profile_loras.append(item)
 
-                    prior_lora_ghost = bool(profile_input_ghosts.get('loras', False))
-                    if multi_lora_slot is not None:
-                        normalized_input_loras = _normalize_input_lora_stack(multi_lora_slot)
-                        if len(normalized_input_loras) == 0:
-                            merged_profile_loras = []
-                        else:
-                            merged_profile_loras = _merge_lora_lists(
-                                _norm_loras(local_profile_loras),
-                                normalized_input_loras,
-                            )
-                    elif prior_lora_ghost:
-                        merged_profile_loras = _merge_lora_lists(
-                            _norm_loras(local_profile_loras),
-                            existing_slot_loras,
-                        )
-                    else:
+                    normalized_input_loras = _normalize_input_lora_stack(multi_lora_slot)
+                    if loras_locked:
                         merged_profile_loras = _norm_loras(raw_profile_loras)
+                    else:
+                        # Membership is always resolved from current execute
+                        # sources: incoming recipe slot + current multi_lora slot list.
+                        merged_profile_loras = _merge_lora_lists(
+                            _norm_loras(existing_slot_loras),
+                            normalized_input_loras,
+                        )
 
                     # Keep user-authored drag/drop ordering stable across execute.
                     # Merge logic decides membership/content; preferred-order pass
@@ -2098,10 +2090,10 @@ class WorkflowBuilder:
                         return out
 
                     effective_loras = merged_profile_loras
-                    if isinstance(existing_slot_block, dict) and not loras_locked and multi_lora_slot is None:
-                        # Unlocked LoRA section should still follow incoming membership,
-                        # but preserve per-LoRA UI state (active/strength) by name.
-                        effective_loras = _apply_profile_lora_state(existing_slot_loras, preferred_profile_loras)
+                    if not loras_locked:
+                        # Keep per-LoRA UI state (active/strength) by name
+                        # while membership follows current execute sources.
+                        effective_loras = _apply_profile_lora_state(merged_profile_loras, preferred_profile_loras)
 
                     profile_pos = profile.get('positive_prompt', '')
                     if multi_pos_slot is None and bool(profile_input_ghosts.get('positive', False)) and isinstance(existing_slot_block, dict):
