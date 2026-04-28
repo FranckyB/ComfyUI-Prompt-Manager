@@ -20,6 +20,7 @@ from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
 from .nodes.multi_inputs import RecipeBuilderDataBundle
+from .nodes.multi_lora_stacker_lm import MultiLoraStackerLM
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":         ApplyLoraPlusPlus,
@@ -36,6 +37,7 @@ NODE_CLASS_MAPPINGS = {
     "RecipeModelPicker":       RecipeModelPicker,
     "RecipeManager":           RecipeManager,
     "RecipeBuilderDataBundle": RecipeBuilderDataBundle,
+    "MultiLoraStackerLM":      MultiLoraStackerLM,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -53,6 +55,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeModelPicker":        "Recipe Model Picker",
     "RecipeManager":            "Recipe Manager",
     "RecipeBuilderDataBundle":  "Recipe Builder Data",
+    "MultiLoraStackerLM":       "Multi LoRA Stack",
 }
 
 WEB_DIRECTORY = "./js"
