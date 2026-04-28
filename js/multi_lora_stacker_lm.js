@@ -5,9 +5,13 @@ const NODE_CLASS = "MultiLoraStackerLM";
 const LM_PROVIDER_CLASS = "Lora Stacker (LoraManager)";
 const STYLE_ID = "pm-multi-lm-style";
 const MIN_NODE_WIDTH = 920;
-const MIN_NODE_HEIGHT = 540;
-const MAX_NODE_HEIGHT = 860;
-const ROOT_PADDING = 22;
+// Height constants mirroring LM's loras_widget_utils.js
+const LM_LORA_ENTRY_H = 40;
+const LM_HEADER_H = 32;
+const LM_CONTAINER_PAD = 12;
+const LM_EMPTY_H = 100;
+// Per-column chrome: title(22) + search textarea(50) + col padding(16)
+const COL_CHROME_H = 88;
 
 let loraCodeListenerAttached = false;
 
@@ -32,44 +36,8 @@ function ensureStyles() {
 .pm-multi-lm-root {
     width: 100%;
     box-sizing: border-box;
-    padding: 6px 6px 2px 6px;
-    overflow-y: auto;
-    overflow-x: hidden;
-}
-.pm-multi-lm-slot-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 8px;
-    padding: 4px 2px;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
-    flex-shrink: 0;
-}
-.pm-multi-lm-slot-label {
-    font-size: 11px;
-    color: rgba(180,188,200,0.75);
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-.pm-multi-lm-slot-btn {
-    padding: 3px 10px;
-    border: 1px solid rgba(255,255,255,0.2);
-    border-radius: 4px;
-    background: rgba(30,35,45,0.8);
-    color: #c0c8d8;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-}
-.pm-multi-lm-slot-btn:hover {
-    background: rgba(60,70,90,0.9);
-    border-color: rgba(120,150,200,0.5);
-}
-.pm-multi-lm-slot-btn.active {
-    background: rgba(50,100,200,0.45);
-    border-color: rgba(100,160,255,0.7);
-    color: #e8efff;
+    padding: 6px 6px 6px 6px;
+    overflow: hidden;
 }
 .pm-multi-lm-grid {
     display: grid;
@@ -117,12 +85,9 @@ function ensureStyles() {
 }
 .pm-multi-lm-list-host {
     flex: 1;
-    min-height: 160px;
-    overflow: hidden;
-}
-.pm-multi-lm-list-host .lm-loras-container {
-    max-height: 420px;
-    overflow: auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 `;
     document.head.appendChild(style);
@@ -171,8 +136,11 @@ function ensureStateWidget(node, name) {
 function hideWidget(widget) {
     if (!widget || widget.__pm_hidden) return;
     widget.__pm_hidden = true;
+    // Keep original widget type (STRING) so graphToPrompt includes state values.
+    widget.hidden = true;
     widget.computeSize = () => [0, -4];
-    widget.type = "converted-widget";
+    widget.draw = function () {};
+    if (widget.element) widget.element.style.display = "none";
 }
 
 function hideStateWidgets(node) {
@@ -250,41 +218,14 @@ function attachLoraCodeListener() {
 }
 
 // ---------------------------------------------------------------------------
-// Slot selector header row
+// Active-slot selection (click a section to target LM sends)
 // ---------------------------------------------------------------------------
 
-function buildSlotSelector(node) {
-    const row = document.createElement("div");
-    row.className = "pm-multi-lm-slot-row";
-
-    const label = document.createElement("span");
-    label.className = "pm-multi-lm-slot-label";
-    label.textContent = "LM sends to:";
-    row.appendChild(label);
-
-    const buttons = {};
-    const activeSlot = node.properties?.pmActiveSlot ?? "model_a";
-
-    for (const slotDef of SLOT_DEFS) {
-        const btn = document.createElement("button");
-        btn.className = "pm-multi-lm-slot-btn" + (slotDef.key === activeSlot ? " active" : "");
-        btn.textContent = slotDef.short;
-        btn.title = `LoRA Manager sends LoRAs to ${slotDef.label}`;
-
-        btn.addEventListener("click", () => {
-            if (!node.properties) node.properties = {};
-            node.properties.pmActiveSlot = slotDef.key;
-            for (const [k, b] of Object.entries(buttons)) {
-                b.classList.toggle("active", k === slotDef.key);
-            }
-            updateActiveColumnHighlight(node);
-        });
-
-        buttons[slotDef.key] = btn;
-        row.appendChild(btn);
-    }
-
-    return { row, buttons };
+function setActiveSlot(node, slotKey) {
+    if (!node) return;
+    if (!node.properties) node.properties = {};
+    node.properties.pmActiveSlot = slotKey;
+    updateActiveColumnHighlight(node);
 }
 
 function updateActiveColumnHighlight(node) {
@@ -293,15 +234,6 @@ function updateActiveColumnHighlight(node) {
     for (const slot of node.__pmMultiLmSlots) {
         if (slot?.col) slot.col.classList.toggle("active-slot", slot.key === activeSlot);
     }
-}
-
-function syncSelectorButtons(node) {
-    if (!node.__pmSlotButtons) return;
-    const activeSlot = node.properties?.pmActiveSlot ?? "model_a";
-    for (const [k, b] of Object.entries(node.__pmSlotButtons)) {
-        b.classList.toggle("active", k === activeSlot);
-    }
-    updateActiveColumnHighlight(node);
 }
 
 // ---------------------------------------------------------------------------
@@ -340,18 +272,32 @@ function createEmbeddedLorasWidget(node, lm, widgetName, initialValue, onChange)
 }
 
 // ---------------------------------------------------------------------------
-// Node height
+// Height management — mirrors LM's updateWidgetHeight approach:
+// set CSS vars on the root element so ComfyUI's layout system resizes the node,
+// never calling node.setSize() (which would prevent user resize).
 // ---------------------------------------------------------------------------
 
-function recalcNodeHeight(node, rootEl) {
-    if (!node || !rootEl) return;
-    const w = Math.max(MIN_NODE_WIDTH, Math.round(node.size?.[0] ?? MIN_NODE_WIDTH));
-    const rawH = Math.ceil(rootEl.scrollHeight + ROOT_PADDING);
-    const h = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, rawH));
-    if (Math.abs((node.size?.[0] ?? 0) - w) > 1 || Math.abs((node.size?.[1] ?? 0) - h) > 1) {
-        node.setSize([w, h]);
+function computeContentHeight(node) {
+    let maxListH = LM_EMPTY_H;
+    if (Array.isArray(node.__pmMultiLmSlots)) {
+        for (const slot of node.__pmMultiLmSlots) {
+            const count = Array.isArray(slot.lorasWidget?.value) ? slot.lorasWidget.value.length : 0;
+            const h = count === 0
+                ? LM_EMPTY_H
+                : LM_CONTAINER_PAD + LM_HEADER_H + Math.min(count, 12) * LM_LORA_ENTRY_H;
+            if (h > maxListH) maxListH = h;
+        }
     }
-    node.setDirtyCanvas(true, true);
+    return COL_CHROME_H + maxListH + 20;
+}
+
+function notifyHeightChange(node) {
+    const root = node?.__pmMultiLmRoot;
+    if (!root) return;
+    const h = computeContentHeight(node);
+    root.style.setProperty('--comfy-widget-min-height', `${h}px`);
+    root.style.setProperty('--comfy-widget-height', `${h}px`);
+    setTimeout(() => { node?.setDirtyCanvas?.(true, true); }, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +310,8 @@ function buildSlotColumn(node, lm, slotDef) {
 
     const col = document.createElement("div");
     col.className = "pm-multi-lm-col";
+    col.title = `Click to make ${slotDef.label} the LoRA Manager target`;
+    col.addEventListener("pointerdown", () => setActiveSlot(node, slotDef.key));
 
     const title = document.createElement("div");
     title.className = "pm-multi-lm-title";
@@ -373,6 +321,7 @@ function buildSlotColumn(node, lm, slotDef) {
     searchInput.className = "pm-multi-lm-search";
     searchInput.placeholder = "Search LoRAs to add\u2026";
     searchInput.rows = 1;
+    searchInput.addEventListener("focus", () => setActiveSlot(node, slotDef.key));
 
     // Attach LM autocomplete to the search textarea
     new lm.AutoComplete(searchInput, "loras", { showPreview: false });
@@ -393,8 +342,7 @@ function buildSlotColumn(node, lm, slotDef) {
                 if (searchInput.value !== nextText) searchInput.value = nextText;
             } finally {
                 isSyncing = false;
-                node.setDirtyCanvas?.(true, true);
-                if (node.__pmMultiLmRoot) requestAnimationFrame(() => recalcNodeHeight(node, node.__pmMultiLmRoot));
+                notifyHeightChange(node);
             }
         },
     );
@@ -410,14 +358,14 @@ function buildSlotColumn(node, lm, slotDef) {
             writeLorasState(stateWidget, merged);
         } finally {
             isSyncing = false;
-            node.setDirtyCanvas?.(true, true);
-            if (node.__pmMultiLmRoot) requestAnimationFrame(() => recalcNodeHeight(node, node.__pmMultiLmRoot));
+            notifyHeightChange(node);
         }
     });
 
     col.appendChild(title);
     col.appendChild(searchInput);
     col.appendChild(embedded.host);
+    embedded.host.addEventListener("pointerdown", () => setActiveSlot(node, slotDef.key));
 
     return { key: slotDef.key, stateWidget, searchInput, lorasWidget: embedded.widget, col };
 }
@@ -435,7 +383,7 @@ function refreshFromStoredValues(node) {
         if (slot.lorasWidget) slot.lorasWidget.value = merged;
         writeLorasState(slot.stateWidget, merged);
     }
-    if (node.__pmMultiLmRoot) recalcNodeHeight(node, node.__pmMultiLmRoot);
+    notifyHeightChange(node);
 }
 
 // ---------------------------------------------------------------------------
@@ -454,10 +402,6 @@ async function setupNodeUi(node) {
     const root = document.createElement("div");
     root.className = "pm-multi-lm-root";
 
-    // Slot selector row (LM sends to: A B C D)
-    const { row: selectorRow, buttons: slotButtons } = buildSlotSelector(node);
-    root.appendChild(selectorRow);
-
     // 4-column LoRA grid
     const grid = document.createElement("div");
     grid.className = "pm-multi-lm-grid";
@@ -472,22 +416,16 @@ async function setupNodeUi(node) {
     const uiWidget = node.addDOMWidget("multi_lora_ui", "div", root, {
         serialize: false,
         hideOnZoom: false,
+        getMinHeight: () => computeContentHeight(node),
     });
-
-    uiWidget.computeSize = (width) => {
-        const w = Math.max(MIN_NODE_WIDTH, Math.round(width || MIN_NODE_WIDTH));
-        const rawH = Math.ceil(root.scrollHeight + ROOT_PADDING);
-        return [w, Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, rawH))];
-    };
 
     node.__pmMultiLmBridge = lm;
     node.__pmMultiLmSlots = slots;
     node.__pmMultiLmRoot = root;
-    node.__pmSlotButtons = slotButtons;
     node.__pmMultiLmReady = true;
     node.__pmMultiLmRefresh = () => {
         refreshFromStoredValues(node);
-        syncSelectorButtons(node);
+        updateActiveColumnHighlight(node);
     };
 
     // comfyClass already set synchronously in onNodeCreated — no registry tricks needed
@@ -495,7 +433,7 @@ async function setupNodeUi(node) {
     refreshFromStoredValues(node);
     hideStateWidgets(node);
     updateActiveColumnHighlight(node);
-    requestAnimationFrame(() => recalcNodeHeight(node, root));
+    notifyHeightChange(node);
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +484,16 @@ app.registerExtension({
             return result;
         };
 
+        const onModeChange = nodeType.prototype.onModeChange;
+        nodeType.prototype.onModeChange = function () {
+            const result = onModeChange ? onModeChange.apply(this, arguments) : undefined;
+            hideStateWidgets(this);
+            if (typeof this.__pmMultiLmRefresh === "function") {
+                this.__pmMultiLmRefresh();
+            }
+            return result;
+        };
+
         // ── onRemoved ──────────────────────────────────────────────────────
         const onRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
@@ -554,7 +502,6 @@ app.registerExtension({
             this.__pmMultiLmBridge = null;
             this.__pmMultiLmReady = false;
             this.__pmMultiLmRefresh = null;
-            this.__pmSlotButtons = null;
             return onRemoved ? onRemoved.apply(this, arguments) : undefined;
         };
     },
