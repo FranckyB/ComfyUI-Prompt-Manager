@@ -55,6 +55,17 @@ function ensureStyles() {
     display: flex;
     flex-direction: column;
 }
+.pm-multi-lm-root,
+.pm-multi-lm-root * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.pm-multi-lm-root::-webkit-scrollbar,
+.pm-multi-lm-root *::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
 .pm-multi-lm-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(200px, 1fr));
@@ -109,11 +120,21 @@ function ensureStyles() {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
 }
 .pm-multi-lm-list-host .lm-loras-container {
     height: 100%;
     max-height: none;
     background: ${cardBg};
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.pm-multi-lm-list-host::-webkit-scrollbar,
+.pm-multi-lm-list-host .lm-loras-container::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
 }
 `;
     document.head.appendChild(style);
@@ -179,6 +200,17 @@ function hideStateWidgets(node) {
 
 function parseLorasState(value) {
     if (Array.isArray(value)) return value;
+    if (value && typeof value === "object" && Array.isArray(value.__value__)) {
+        return value.__value__;
+    }
+    if (value && typeof value === "object" && typeof value.__value__ === "string") {
+        try {
+            const parsed = JSON.parse(value.__value__);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (_e) {
+            return [];
+        }
+    }
     if (typeof value !== "string") return [];
     const raw = value.trim();
     if (!raw || raw === "[]") return [];
@@ -404,10 +436,16 @@ function refreshFromStoredValues(node) {
     if (!node?.__pmMultiLmSlots || !node.__pmMultiLmBridge) return;
     for (const slot of node.__pmMultiLmSlots) {
         const state = parseLorasState(slot.stateWidget?.value ?? "[]");
-        if (state.length === 0) continue;
-        const merged = node.__pmMultiLmBridge.mergeLoras(slot.searchInput.value || "", state);
-        if (slot.lorasWidget) slot.lorasWidget.value = merged;
-        writeLorasState(slot.stateWidget, merged);
+
+        // Restore from persisted JSON directly. Do NOT call mergeLoras here:
+        // mergeLoras requires syntax in text input, and would drop entries
+        // during tab-switch/workflow-load when textarea is initially empty.
+        if (slot.lorasWidget) slot.lorasWidget.value = state;
+        writeLorasState(slot.stateWidget, state);
+
+        // Keep syntax textarea consistent with restored list.
+        const nextText = node.__pmMultiLmBridge.applyLoraValuesToText(slot.searchInput.value || "", state);
+        if (slot.searchInput.value !== nextText) slot.searchInput.value = nextText;
     }
     notifyHeightChange(node);
 }
