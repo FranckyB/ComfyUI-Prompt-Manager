@@ -923,20 +923,30 @@ class WorkflowBuilder:
             }.items():
                 explicit = False
                 candidate = None
+                source_kind = None
 
                 if slot_key in multi_lora_stack:
                     candidate = multi_lora_stack.get(slot_key)
                     explicit = True
+                    source_kind = "slot_key"
                 elif suffix in multi_lora_stack:
                     candidate = multi_lora_stack.get(suffix)
                     explicit = True
+                    source_kind = "suffix"
                 else:
                     stacks_obj = multi_lora_stack.get("stacks")
                     if isinstance(stacks_obj, dict) and suffix in stacks_obj:
                         candidate = stacks_obj.get(suffix)
                         explicit = True
+                        source_kind = "stacks"
 
                 if explicit and isinstance(candidate, list):
+                    # MultiLoraStackerLM always emits a/b/c/d keys, including
+                    # empty arrays for untouched slots. Treat those empties as
+                    # "no input for this slot" so recipe_data LoRAs remain additive.
+                    # Explicit model_* empty lists are still honored as clear.
+                    if len(candidate) == 0 and source_kind in {"suffix", "stacks"}:
+                        continue
                     # Preserve empty list as explicit clear signal.
                     multi_loras[slot_key] = candidate
 
