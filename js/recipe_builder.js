@@ -2777,24 +2777,21 @@ app.registerExtension({
             node._weUseSlotProfiles = isMultiBuilder === true;
 
             const _normalizeInputNameForVariant = (name) => {
-                let key = _canonicalInputName(name);
-                if (key === "builder_data") key = "multi_prompt";
-                if (key === "seed_a") key = "seed";
-                if (key === "lora_stack_a") key = "lora_stack";
-                return key;
+                return _canonicalInputName(name);
             };
 
             const _normalizeRecipePortsNow = () => {
                 const VALID_INPUTS = new Set([
                     "recipe_data",
-                    "multi_prompt",
+                    "pos_prompts",
+                    "neg_prompts",
                     "multi_lora_stack",
                 ]);
                 if (node.inputs) {
                     for (const inp of node.inputs) {
                         if (!inp || !inp.name) continue;
                         inp.name = _normalizeInputNameForVariant(inp.name);
-                        if (inp.name === "multi_prompt") inp.type = "MULTI_PROMPT";
+                        if (inp.name === "pos_prompts" || inp.name === "neg_prompts") inp.type = "STRING";
                     }
                     const keepIndexByName = new Map();
                     for (let i = 0; i < node.inputs.length; i++) {
@@ -2823,7 +2820,8 @@ app.registerExtension({
 
                     const hasInput = (name) => node.inputs.some((inp) => _normalizeInputNameForVariant(inp?.name || "") === name);
                     if (!hasInput("recipe_data")) node.addInput("recipe_data", "RECIPE_DATA");
-                    if (!hasInput("multi_prompt")) node.addInput("multi_prompt", "MULTI_PROMPT");
+                    if (!hasInput("pos_prompts")) node.addInput("pos_prompts", "STRING");
+                    if (!hasInput("neg_prompts")) node.addInput("neg_prompts", "STRING");
                     if (!hasInput("multi_lora_stack")) node.addInput("multi_lora_stack", "MULTI_LORA_STACK");
                 }
 
@@ -4573,22 +4571,19 @@ app.registerExtension({
 
             const VALID_INPUTS = new Set([
                 "recipe_data",
-                "multi_prompt",
+                "pos_prompts",
+                "neg_prompts",
                 "multi_lora_stack",
             ]);
             const _normalizeInputNameForVariant = (name) => {
-                let key = _canonicalInputName(name);
-                if (key === "builder_data") key = "multi_prompt";
-                if (key === "seed_a") key = "seed";
-                if (key === "lora_stack_a") key = "lora_stack";
-                return key;
+                return _canonicalInputName(name);
             };
             // Normalize legacy prompt input slot names on load.
             if (node.inputs) {
                 for (const inp of node.inputs) {
                     if (!inp || !inp.name) continue;
                     inp.name = _normalizeInputNameForVariant(inp.name);
-                    if (inp.name === "multi_prompt") inp.type = "MULTI_PROMPT";
+                    if (inp.name === "pos_prompts" || inp.name === "neg_prompts") inp.type = "STRING";
                 }
 
                 // Deduplicate legacy duplicate inputs by name. Prefer keeping
@@ -4634,10 +4629,13 @@ app.registerExtension({
                 if (!hasInput("recipe_data")) {
                     node.addInput("recipe_data", "RECIPE_DATA");
                 }
-                if (node._weUseSlotProfiles && !hasInput("multi_prompt")) {
-                    node.addInput("multi_prompt", "MULTI_PROMPT");
+                if (!hasInput("pos_prompts")) {
+                    node.addInput("pos_prompts", "STRING");
                 }
-                if (node._weUseSlotProfiles && !hasInput("multi_lora_stack")) {
+                if (!hasInput("neg_prompts")) {
+                    node.addInput("neg_prompts", "STRING");
+                }
+                if (!hasInput("multi_lora_stack")) {
                     node.addInput("multi_lora_stack", "MULTI_LORA_STACK");
                 }
             }

@@ -3556,8 +3556,8 @@ class PromptExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
-    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA", "IMAGE")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "recipe_data", "image")
+    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image")
     FUNCTION = "extract"
     OUTPUT_NODE = False
 

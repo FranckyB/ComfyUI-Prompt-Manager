@@ -9210,29 +9210,8 @@ function createPromptSelectorWidget(node) {
             infoEnabled = hasMeaningfulWorkflowData(promptData?.workflow_data);
         }
 
-        if (!node._isWorkflowManager) {
-            createBadge("workflow-info-label", "info", `
-                margin-left: 6px;
-                width: 28px;
-                height: 14px;
-                border-radius: 999px;
-                border: 1px solid rgba(235, 245, 255, 0.95);
-                background: ${infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)"};
-                color: ${infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)"};
-                font-size: 8px;
-                font-weight: 700;
-                letter-spacing: 0.2px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                line-height: 1;
-                flex-shrink: 0;
-                cursor: ${infoEnabled ? "pointer" : "default"};
-                opacity: ${infoEnabled ? "1" : "0.75"};
-            `, infoEnabled ? () => {
-                void showWorkflowDiscoverySummary(node);
-            } : null);
-        }
+        // PromptManagerAdvanced: hide the small "info" pill badge.
+        // Keep RecipeManager workflow info controls intact.
     };
 
     // Get flattened list of all prompts across all categories for navigation

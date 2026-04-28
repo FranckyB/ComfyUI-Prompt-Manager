@@ -19,8 +19,8 @@ from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
-from .nodes.recipe_multi_prompt import RecipeBuilderPromptBundle
-from .nodes.multi_lora_stacker_lm import MultiLoraStackerLM
+from .nodes.multi_prompt import RecipeBuilderMultiPrompts
+from .nodes.multi_lora_stacker import MultiLoraStackerLM
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":           ApplyLoraPlusPlus,
@@ -36,7 +36,7 @@ NODE_CLASS_MAPPINGS = {
     "RecipeModelLoader":         RecipeModelLoader,
     "RecipeModelPicker":         RecipeModelPicker,
     "RecipeManager":             RecipeManager,
-    "RecipeBuilderPromptBundle": RecipeBuilderPromptBundle,
+    "RecipeBuilderMultiPrompts": RecipeBuilderMultiPrompts,
     "MultiLoraStackerLM":        MultiLoraStackerLM,
 }
 
@@ -54,10 +54,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeModelLoader":          "Recipe Model Loader",
     "RecipeModelPicker":          "Recipe Model Picker",
     "RecipeManager":              "Recipe Manager",
-    "RecipeBuilderPromptBundle":  "Recipe Prompt Bundle",
+    "RecipeBuilderMultiPrompts":  "Multi Prompts",
     "MultiLoraStackerLM":         "Multi LoRA Stack",
 }
 
 WEB_DIRECTORY = "./js"
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
-print("[PromptManager] Nodes registered: Apply LoRA++, Prompt Manager (Basic), Prompt Manager, Prompt Generator, Prompt Generator Options, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Merge, Recipe Renderer, Recipe Relay, Recipe Model Loader, Recipe Model Picker, Recipe Manager")
+print("[PromptManager] Nodes registered: Apply LoRA++, Prompt Manager, Prompt Generator, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")

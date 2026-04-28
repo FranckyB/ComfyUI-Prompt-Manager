@@ -697,7 +697,7 @@ class WorkflowBuilder:
     Workflow Builder — UI and extraction node.
 
     Can run standalone with manual settings, or accept recipe_data (from
-    PromptExtractor), multi_prompt (prompts), and multi_lora_stack
+    PromptExtractor), pos_prompts/neg_prompts, and multi_lora_stack
     inputs to pre-fill parameters.
 
     Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
@@ -725,8 +725,17 @@ class WorkflowBuilder:
                 "recipe_data": ("RECIPE_DATA", {
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
-                "multi_prompt": ("MULTI_PROMPT", {
-                    "tooltip": "Optional A/B/C/D bundle of prompts.",
+                "pos_prompts": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "forceInput": True,
+                    "tooltip": "Positive prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
+                }),
+                "neg_prompts": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "forceInput": True,
+                    "tooltip": "Negative prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
                 }),
                 "multi_lora_stack": ("MULTI_LORA_STACK", {
                     "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
@@ -756,8 +765,7 @@ class WorkflowBuilder:
                 pos_prompt=None, neg_prompt=None,
                 seed=None, seed_a=None, seed_b=None, denoise=None,
                 lora_stack=None, lora_stack_a=None, lora_stack_b=None,
-                multi_prompt=None,
-                builder_data=None,
+                pos_prompts=None, neg_prompts=None,
                 multi_pos_prompts=None, multi_neg_prompts=None,
                 multi_seeds=None, multi_lora_stack=None, multi_loras=None,
                 override_data="{}", lora_state="{}",
@@ -802,6 +810,83 @@ class WorkflowBuilder:
                 val_str = str(val)
                 return val_str if val_str.strip() else None
             return None
+
+        def _coerce_prompt_payload(raw_payload):
+            if isinstance(raw_payload, dict):
+                return raw_payload
+            if raw_payload is None:
+                return {}
+            txt = str(raw_payload)
+            if not txt.strip():
+                return {}
+            try:
+                parsed = json.loads(txt)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+            return {"all": txt}
+
+        def _is_plain_text_prompt(raw_payload):
+            if raw_payload is None:
+                return False
+            if isinstance(raw_payload, dict):
+                return False
+            txt = str(raw_payload)
+            if not txt.strip():
+                return False
+            try:
+                parsed = json.loads(txt)
+                return not isinstance(parsed, dict)
+            except Exception:
+                return True
+
+        def _apply_prompt_payload(target_map, raw_payload, kind):
+            payload = _coerce_prompt_payload(raw_payload)
+            if not isinstance(payload, dict) or not payload:
+                return
+
+            slot_map = {
+                "model_a": "a",
+                "model_b": "b",
+                "model_c": "c",
+                "model_d": "d",
+            }
+
+            # Global shortcut: plain string (or {"all": "..."}) applies to all slots.
+            global_val = payload.get(f"{kind}_all")
+            if global_val is None:
+                global_val = payload.get("all")
+            if global_val is not None and str(global_val).strip() != "":
+                g = str(global_val)
+                for slot_key in slot_map.keys():
+                    target_map[slot_key] = g
+
+            prompt_field = "positive" if kind == "pos" else "negative"
+            for slot_key, suffix in slot_map.items():
+                candidates = [
+                    payload.get(f"{kind}_{suffix}"),
+                    payload.get(f"{kind}_{slot_key}"),
+                    payload.get(slot_key),
+                    payload.get(suffix),
+                ]
+
+                slot_obj = payload.get(slot_key)
+                if isinstance(slot_obj, dict):
+                    candidates.insert(0, slot_obj.get(prompt_field))
+
+                val = None
+                for cand in candidates:
+                    if cand is None:
+                        continue
+                    s = str(cand)
+                    if s.strip() == "":
+                        continue
+                    val = s
+                    break
+
+                if val is not None:
+                    target_map[slot_key] = val
 
         def _extract_multi_seed_value(payload, slot_key):
             if not isinstance(payload, dict):
@@ -855,32 +940,19 @@ class WorkflowBuilder:
                     # Preserve empty list as explicit clear signal.
                     multi_loras[slot_key] = candidate
 
-        # Unified multi_prompt payload maps to the existing multi_* prompt
-        # structures used by slot merge/lock logic.
-        # Legacy fallback: accept builder_data dict from older workflows.
-        prompt_bundle = multi_prompt if isinstance(multi_prompt, dict) else None
-        if prompt_bundle is None and isinstance(builder_data, dict):
-            prompt_bundle = builder_data
-        if isinstance(prompt_bundle, dict):
-            slot_map = {
-                "model_a": "a",
-                "model_b": "b",
-                "model_c": "c",
-                "model_d": "d",
-            }
-            if not isinstance(multi_pos_prompts, dict):
-                multi_pos_prompts = {}
-            if not isinstance(multi_neg_prompts, dict):
-                multi_neg_prompts = {}
+        if not isinstance(multi_pos_prompts, dict):
+            multi_pos_prompts = {}
+        if not isinstance(multi_neg_prompts, dict):
+            multi_neg_prompts = {}
 
-            for slot_key, suffix in slot_map.items():
-                pos_val = prompt_bundle.get(f"pos_{suffix}")
-                if pos_val is not None and str(pos_val).strip() != "":
-                    multi_pos_prompts[slot_key] = str(pos_val or "")
+        # Exception: a single plain text prompt (applies to all slots) should
+        # NOT ghost prompt textareas, so users can still per-slot tweak + lock.
+        pos_is_plain_text = _is_plain_text_prompt(pos_prompts)
+        neg_is_plain_text = _is_plain_text_prompt(neg_prompts)
 
-                neg_val = prompt_bundle.get(f"neg_{suffix}")
-                if neg_val is not None and str(neg_val).strip() != "":
-                    multi_neg_prompts[slot_key] = str(neg_val or "")
+        # Prompt inputs: accepts plain text (applies to all slots) OR JSON object.
+        _apply_prompt_payload(multi_pos_prompts, pos_prompts, "pos")
+        _apply_prompt_payload(multi_neg_prompts, neg_prompts, "neg")
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
@@ -2245,10 +2317,10 @@ class WorkflowBuilder:
                     'length': resolution_block.get('length'),
                 })
 
-            # Execution-time multi_prompt should ghost the affected inputs for
-            # this slot without changing the user's section lock booleans.
-            lock_pos  = _extract_multi_prompt_value(multi_pos_prompts, slot_key, 'positive') is not None
-            lock_neg  = _extract_multi_prompt_value(multi_neg_prompts, slot_key, 'negative') is not None
+            # Execution-time prompt inputs ghost affected textareas except
+            # when source is a single plain text prompt (global convenience mode).
+            lock_pos  = (not pos_is_plain_text) and (_extract_multi_prompt_value(multi_pos_prompts, slot_key, 'positive') is not None)
+            lock_neg  = (not neg_is_plain_text) and (_extract_multi_prompt_value(multi_neg_prompts, slot_key, 'negative') is not None)
             lock_seed = _extract_multi_seed_value(multi_seeds, slot_key) is not None
             row_ov['_section_locks'] = existing_locks
             row_ov['_input_ghosts'] = {
@@ -2384,8 +2456,17 @@ class WorkflowBuilderMulti(WorkflowBuilder):
                 "recipe_data": ("RECIPE_DATA", {
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
-                "multi_prompt": ("MULTI_PROMPT", {
-                    "tooltip": "Optional A/B/C/D bundle of prompts.",
+                "pos_prompts": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "forceInput": True,
+                    "tooltip": "Positive prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
+                }),
+                "neg_prompts": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "forceInput": True,
+                    "tooltip": "Negative prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
                 }),
                 "multi_lora_stack": ("MULTI_LORA_STACK", {
                     "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
@@ -2406,15 +2487,15 @@ class WorkflowBuilderMulti(WorkflowBuilder):
 
     def execute(self,
                 recipe_data=None,
-                multi_prompt=None,
-                builder_data=None,
+                pos_prompts=None,
+                neg_prompts=None,
                 multi_lora_stack=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         result = super().execute(
             recipe_data=recipe_data,
-            multi_prompt=multi_prompt,
-            builder_data=builder_data,
+            pos_prompts=pos_prompts,
+            neg_prompts=neg_prompts,
             multi_lora_stack=multi_lora_stack,
             override_data=override_data,
             lora_state=lora_state,

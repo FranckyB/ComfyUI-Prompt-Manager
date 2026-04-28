@@ -7,7 +7,7 @@ const LM_PROVIDER_CLASS = "Lora Stacker (LoraManager)";
 const STYLE_ID = "pm-multi-lm-style";
 const MIN_NODE_WIDTH = 1080;
 const MIN_NODE_HEIGHT = 320;
-const DEFAULT_NODE_WIDTH = 1320;
+const DEFAULT_NODE_WIDTH = 1080;
 const DEFAULT_NODE_HEIGHT = 430;
 // Height constants mirroring LM's loras_widget_utils.js
 const LM_LORA_ENTRY_H = 40;
