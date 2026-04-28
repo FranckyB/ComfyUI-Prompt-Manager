@@ -116,6 +116,31 @@ def _blank_model_block():
     }
 
 
+def _hydrate_v2_recipe_models(recipe_data):
+    """Ensure v2 recipe_data always has dict blocks for model_a..model_d."""
+    if not isinstance(recipe_data, dict):
+        return recipe_data
+    if int(recipe_data.get("version", 0) or 0) < 2:
+        return recipe_data
+    models = recipe_data.get("models")
+    if not isinstance(models, dict):
+        return recipe_data
+
+    hydrated = None
+    hydrated_models = None
+    for slot_key in _MODEL_KEYS:
+        block = models.get(slot_key)
+        if isinstance(block, dict):
+            continue
+        if hydrated is None:
+            hydrated = dict(recipe_data)
+            hydrated_models = dict(models)
+            hydrated["models"] = hydrated_models
+        hydrated_models[slot_key] = _blank_model_block()
+
+    return hydrated if hydrated is not None else recipe_data
+
+
 def _builder_output_to_v2(legacy_wf, base_recipe_data=None, overwrite_existing_slots=True):
     """Convert Builder legacy workflow_data shape to v2 models shape."""
     wf = legacy_wf if isinstance(legacy_wf, dict) else {}
@@ -712,6 +737,9 @@ class WorkflowBuilder:
     # Cache last effective LoRA UI state per node to protect against transient
     # empty lora_state payloads when connected input stacks are unchanged.
     _class_lora_ui_cache: dict = {}
+    # Cache only the immediately previous normalized recipe_data payload.
+    # Change detection is intentionally global: compare current data with previous data.
+    _class_recipe_data_cache = None
 
     def __init__(self):
         pass  # cache lives at class level — see _class_model_cache
@@ -910,6 +938,9 @@ class WorkflowBuilder:
             # Always return a list for deterministic comparisons.
             return stack
 
+        raw_multi_loras = multi_loras if isinstance(multi_loras, dict) else None
+        multi_lora_stack_connected = isinstance(multi_lora_stack, dict)
+
         # Ingress adapter only: normalize MULTI_LORA_STACK input into the exact
         # legacy multi_loras shape expected by downstream builder_data logic.
         if isinstance(multi_loras, dict):
@@ -980,6 +1011,30 @@ class WorkflowBuilder:
             if not is_v2_recipe:
                 print("[RecipeBuilder] Warning: non-v2 recipe_data received; ignoring input payload")
                 wf_data = None
+
+        normalized_recipe_data = None
+        if isinstance(wf_data, dict):
+            try:
+                normalized_recipe_data = to_json_safe_workflow_data(strip_runtime_objects(wf_data))
+            except Exception:
+                normalized_recipe_data = None
+
+        recipe_input_changed = False
+        prev_recipe_data = WorkflowBuilder._class_recipe_data_cache
+        if isinstance(normalized_recipe_data, dict):
+            # Compare against previous raw normalized incoming recipe_data.
+            recipe_input_changed = normalized_recipe_data != prev_recipe_data
+            if recipe_input_changed:
+                print("[RecipeBuilder] recipe_data changed")
+                # Only hydrate sparse recipe_data when the incoming payload changed.
+                wf_data = _hydrate_v2_recipe_models(wf_data)
+            else:
+                print("[RecipeBuilder] recipe_data unchanged")
+            WorkflowBuilder._class_recipe_data_cache = copy.deepcopy(normalized_recipe_data)
+        else:
+            if prev_recipe_data is not None:
+                print("[RecipeBuilder] recipe_data disconnected; clearing cache")
+            WorkflowBuilder._class_recipe_data_cache = None
 
         # ── Build extracted dict from recipe_data or defaults ───────────
         if wf_data:
@@ -1840,10 +1895,6 @@ class WorkflowBuilder:
             except Exception:
                 pass
 
-            locks = profile.get('_section_locks')
-            if isinstance(locks, dict) and any(bool(v) for v in locks.values()):
-                return True
-
             if bool(profile.get('_seed_auto', False)):
                 return True
 
@@ -1865,18 +1916,23 @@ class WorkflowBuilder:
             _slot_profile_has_locks(slot_profiles.get(slot_key)) for slot_key in _MODEL_KEYS
         )
 
+        has_multi_lora_slot_inputs = bool(multi_lora_stack_connected) or (
+            isinstance(raw_multi_loras, dict) and any(
+                isinstance(raw_multi_loras.get(slot_key), list)
+                for slot_key in _MODEL_KEYS
+            )
+        )
+
         has_multi_slot_inputs = any([
             isinstance(multi_pos_prompts, dict) and len(multi_pos_prompts) > 0,
             isinstance(multi_neg_prompts, dict) and len(multi_neg_prompts) > 0,
             isinstance(multi_seeds, dict) and len(multi_seeds) > 0,
-            isinstance(multi_loras, dict) and len(multi_loras) > 0,
+            has_multi_lora_slot_inputs,
         ])
 
-        # Absolute-truth execute path: when recipe_data is connected and no
-        # multi-slot override inputs are connected, keep incoming model blocks
-        # authoritative UNLESS the user has explicit section locks in slot
-        # profiles. Locked sections are explicit user intent and must be able
-        # to write back into recipe_data.
+        # Keep incoming model blocks authoritative when recipe_data is
+        # connected and no multi-slot overrides are connected, unless the
+        # user has explicit section locks in slot profiles.
         allow_slot_profile_authoring = not (isinstance(base_recipe_for_output, dict) and not has_multi_slot_inputs and not has_locked_slot_profiles)
 
         if allow_slot_profile_authoring and isinstance(slot_profiles, dict) and (has_meaningful_slot_profiles or not isinstance(base_recipe_for_output, dict)):
@@ -2031,28 +2087,16 @@ class WorkflowBuilder:
 
                     raw_profile_loras = loras_src if isinstance(loras_src, list) else []
                     preferred_profile_loras = _norm_loras(raw_profile_loras)
-                    local_profile_loras = []
-                    for item in raw_profile_loras:
-                        if not isinstance(item, dict):
-                            continue
-                        if item.get('source_input', False) is True:
-                            continue
-                        local_profile_loras.append(item)
 
                     normalized_input_loras = _normalize_input_lora_stack(multi_lora_slot)
                     if loras_locked:
                         merged_profile_loras = _norm_loras(raw_profile_loras)
                     else:
-                        # Membership is always resolved from current execute
-                        # sources: incoming recipe slot + current multi_lora slot list.
                         merged_profile_loras = _merge_lora_lists(
                             _norm_loras(existing_slot_loras),
                             normalized_input_loras,
                         )
 
-                    # Keep user-authored drag/drop ordering stable across execute.
-                    # Merge logic decides membership/content; preferred-order pass
-                    # decides final display/output sequence when names overlap.
                     if preferred_profile_loras:
                         merged_profile_loras = _apply_preferred_lora_order(
                             merged_profile_loras,
@@ -2091,25 +2135,37 @@ class WorkflowBuilder:
 
                     effective_loras = merged_profile_loras
                     if not loras_locked:
-                        # Keep per-LoRA UI state (active/strength) by name
-                        # while membership follows current execute sources.
                         effective_loras = _apply_profile_lora_state(merged_profile_loras, preferred_profile_loras)
 
-                    # UI state is authoritative for per-slot output values.
-                    # The slot profile already contains the user-authored values
-                    # (including lock-preserved values), so execute should emit
-                    # those directly for prompt/model/sampler/resolution.
-                    effective_pos = profile.get('positive_prompt', '')
-                    effective_neg = profile.get('negative_prompt', '')
+                    profile_pos = profile.get('positive_prompt', '')
+                    if multi_pos_slot is None and bool(profile_input_ghosts.get('positive', False)) and isinstance(existing_slot_block, dict):
+                        profile_pos = existing_slot_block.get('positive_prompt', '')
+                    if (profile_pos is None or str(profile_pos) == '') and isinstance(existing_slot_block, dict):
+                        profile_pos = existing_slot_block.get('positive_prompt', '')
+                    effective_pos = profile_pos
+                    if isinstance(existing_slot_block, dict) and not positive_locked and multi_pos_slot is None:
+                        effective_pos = existing_slot_block.get('positive_prompt', '')
+
+                    profile_neg = profile.get('negative_prompt', '')
+                    if multi_neg_slot is None and bool(profile_input_ghosts.get('negative', False)) and isinstance(existing_slot_block, dict):
+                        profile_neg = existing_slot_block.get('negative_prompt', '')
+                    if (profile_neg is None or str(profile_neg) == '') and isinstance(existing_slot_block, dict):
+                        profile_neg = existing_slot_block.get('negative_prompt', '')
+                    effective_neg = profile_neg
+                    if isinstance(existing_slot_block, dict) and not negative_locked and multi_neg_slot is None:
+                        effective_neg = existing_slot_block.get('negative_prompt', '')
 
                     sampler_seed = sampler_in.get('seed', 0)
+                    if multi_seed_slot is None and bool(profile_input_ghosts.get('seed', False)):
+                        sampler_seed = existing_slot_seed
+
                     auto_seed_enabled = bool(profile.get('_seed_auto', False))
                     if auto_seed_enabled and multi_seed_slot is None:
                         sampler_seed = random.randint(0, 2**63 - 1)
 
-                    sampler_denoise = sampler_in.get('denoise', 1.0)
+                    sampler_denoise = sampler_in.get('denoise', None)
                     if sampler_denoise is None:
-                        sampler_denoise = 1.0
+                        sampler_denoise = existing_slot_denoise
 
                     effective_model = str(profile_model or '')
                     effective_family = str(profile_family or '')
@@ -2117,6 +2173,14 @@ class WorkflowBuilder:
                     effective_loader_type = str(profile_loader_type or '')
                     effective_vae = str(profile.get('vae', '') or '')
                     effective_clip = [str(x or '') for x in clip_raw if str(x or '').strip()]
+                    if isinstance(existing_slot_block, dict) and not model_locked:
+                        effective_model = str(existing_slot_block.get('model', '') or '')
+                        effective_family = str(existing_slot_block.get('family', '') or '')
+                        effective_clip_type = str(existing_slot_block.get('clip_type', '') or '')
+                        effective_loader_type = str(existing_slot_block.get('loader_type', '') or '')
+                        effective_vae = str(existing_slot_block.get('vae', '') or '')
+                        existing_clip_raw = existing_slot_block.get('clip', []) if isinstance(existing_slot_block.get('clip'), list) else []
+                        effective_clip = [str(x or '') for x in existing_clip_raw if str(x or '').strip()]
 
                     effective_sampler = {
                         'steps': _norm_int(sampler_in.get('steps', 20), 20),
@@ -2126,6 +2190,26 @@ class WorkflowBuilder:
                         'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
                         'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
                     }
+                    if isinstance(existing_slot_block, dict) and not sampler_locked and multi_seed_slot is None:
+                        existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
+                        effective_sampler = {
+                            'steps': _norm_int(existing_slot_sampler.get('steps', 20), 20),
+                            'cfg': _norm_num(existing_slot_sampler.get('cfg', 5.0), 5.0),
+                            'denoise': _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0),
+                            'seed': _norm_int(existing_slot_sampler.get('seed', 0), 0),
+                            'sampler_name': str(existing_slot_sampler.get('sampler_name', 'euler') or 'euler'),
+                            'scheduler': str(existing_slot_sampler.get('scheduler', 'simple') or 'simple'),
+                        }
+                    elif isinstance(existing_slot_block, dict) and not sampler_locked and multi_seed_slot is not None:
+                        existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
+                        effective_sampler = {
+                            'steps': _norm_int(existing_slot_sampler.get('steps', 20), 20),
+                            'cfg': _norm_num(existing_slot_sampler.get('cfg', 5.0), 5.0),
+                            'denoise': _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0),
+                            'seed': _norm_int(multi_seed_slot, 0),
+                            'sampler_name': str(existing_slot_sampler.get('sampler_name', 'euler') or 'euler'),
+                            'scheduler': str(existing_slot_sampler.get('scheduler', 'simple') or 'simple'),
+                        }
 
                     effective_resolution = {
                         'width': _norm_int(resolution_in.get('width', 768), 768),
@@ -2133,10 +2217,26 @@ class WorkflowBuilder:
                         'batch_size': _norm_int(resolution_in.get('batch_size', 1), 1),
                         'length': resolution_in.get('length'),
                     }
+                    if isinstance(existing_slot_block, dict) and not resolution_locked:
+                        existing_resolution = existing_slot_block.get('resolution') if isinstance(existing_slot_block.get('resolution'), dict) else {}
+                        effective_resolution = {
+                            'width': _norm_int(existing_resolution.get('width', 768), 768),
+                            'height': _norm_int(existing_resolution.get('height', 1280), 1280),
+                            'batch_size': _norm_int(existing_resolution.get('batch_size', 1), 1),
+                            'length': existing_resolution.get('length'),
+                        }
+
+                    slot_positive = effective_pos
+                    if not positive_locked and multi_pos_slot is not None:
+                        slot_positive = multi_pos_slot
+
+                    slot_negative = effective_neg
+                    if not negative_locked and multi_neg_slot is not None:
+                        slot_negative = multi_neg_slot
 
                     slot_block = {
-                        'positive_prompt': str(multi_pos_slot if multi_pos_slot is not None else (effective_pos or '')),
-                        'negative_prompt': str(multi_neg_slot if multi_neg_slot is not None else (effective_neg or '')),
+                        'positive_prompt': str(slot_positive or ''),
+                        'negative_prompt': str(slot_negative or ''),
                         'family': effective_family,
                         'model': effective_model,
                         'loras': effective_loras,
@@ -2306,19 +2406,19 @@ class WorkflowBuilder:
                     lora_row for lora_row in (extracted.get('loras_b', []) or [])
                     if not (isinstance(lora_row, dict) and lora_row.get('source_input', False) is True)
                 ],
-                'input_loras_a':      input_loras_a,
-                'input_loras_b':      input_loras_b,
-                'vae':                effective_vae,
-                'vae_found':          vae_found,
-                'clip':               effective_clip,
-                'sampler':            effective_sampler,
-                'resolution':         effective_resolution,
-                'is_video':           extracted.get('is_video', False),
-                'model_family':       family_key,
-                'model_family_label': get_family_label(family_key),
-                'model_slot':         active_model_slot or '',
-                'lora_availability':  lora_availability,
-                '_slot_profiles':     ui_slot_profiles,
+                'input_loras_a':         input_loras_a,
+                'input_loras_b':         input_loras_b,
+                'vae':                   effective_vae,
+                'vae_found':             vae_found,
+                'clip':                  effective_clip,
+                'sampler':               effective_sampler,
+                'resolution':            effective_resolution,
+                'is_video':              extracted.get('is_video', False),
+                'model_family':          family_key,
+                'model_family_label':    get_family_label(family_key),
+                'model_slot':            active_model_slot or '',
+                'lora_availability':     lora_availability,
+                '_slot_profiles':        ui_slot_profiles,
             }
         }
 

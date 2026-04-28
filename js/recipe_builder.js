@@ -2232,11 +2232,8 @@ function syncHidden(node) {
             delete nextLocks.resolution;
             slotOv._section_locks = nextLocks;
         }
-        if (slotOv._section_collapsed && typeof slotOv._section_collapsed === "object") {
-            const nextCollapsed = { ...slotOv._section_collapsed };
-            delete nextCollapsed.resolution;
-            slotOv._section_collapsed = nextCollapsed;
-        }
+        // Section collapse is a global UI preference, not per-slot state.
+        delete slotOv._section_collapsed;
 
         slotProfiles[activeSlot] = {
             ov: slotOv,
@@ -3065,11 +3062,8 @@ app.registerExtension({
                         delete nextLocks.resolution;
                         ovObj._section_locks = nextLocks;
                     }
-                    if (ovObj._section_collapsed && typeof ovObj._section_collapsed === "object") {
-                        const nextCollapsed = { ...ovObj._section_collapsed };
-                        delete nextCollapsed.resolution;
-                        ovObj._section_collapsed = nextCollapsed;
-                    }
+                    // Section collapse is global (shared across model slots).
+                    delete ovObj._section_collapsed;
                     ovObj._model_slot = slot;
                     slotProfiles[slot] = { ov: ovObj, ls: lsObj };
                     node._weSlotProfiles = slotProfiles;
