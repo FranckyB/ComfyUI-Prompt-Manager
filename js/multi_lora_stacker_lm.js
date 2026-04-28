@@ -15,6 +15,7 @@ const LM_EMPTY_H = 100;
 const COL_CHROME_H = 88;
 
 let loraCodeListenerAttached = false;
+let promptSerializationPatched = false;
 
 const SLOT_DEFS = [
     { key: "model_a", label: "Model A", short: "A", state: "loras_state_a" },
@@ -276,6 +277,42 @@ function attachLoraCodeListener() {
 }
 
 // ---------------------------------------------------------------------------
+// Prompt serialization shim:
+// Keep LM comfyClass for manager integration, but serialize this node as its
+// real backend class so ComfyUI validates against MultiLoraStackerLM inputs.
+// ---------------------------------------------------------------------------
+
+function attachPromptSerializationShim() {
+    if (promptSerializationPatched) return;
+    if (!app || typeof app.graphToPrompt !== "function") return;
+
+    promptSerializationPatched = true;
+    const originalGraphToPrompt = app.graphToPrompt.bind(app);
+
+    app.graphToPrompt = async function (...args) {
+        const swapped = [];
+        const nodes = app.graph?._nodes;
+
+        if (Array.isArray(nodes)) {
+            for (const node of nodes) {
+                if (!node || node.type !== NODE_CLASS) continue;
+                if (node.comfyClass !== LM_PROVIDER_CLASS) continue;
+                swapped.push(node);
+                node.comfyClass = NODE_CLASS;
+            }
+        }
+
+        try {
+            return await originalGraphToPrompt(...args);
+        } finally {
+            for (const node of swapped) {
+                node.comfyClass = LM_PROVIDER_CLASS;
+            }
+        }
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Active-slot selection (click a section to target LM sends)
 // ---------------------------------------------------------------------------
 
@@ -513,6 +550,8 @@ app.registerExtension({
 
         // Attach the send-to-node listener once, immediately (synchronous)
         attachLoraCodeListener();
+        // Ensure prompt uses backend class while keeping LM comfyClass at runtime.
+        attachPromptSerializationShim();
 
         // ── onNodeCreated ──────────────────────────────────────────────────
         const onNodeCreated = nodeType.prototype.onNodeCreated;
