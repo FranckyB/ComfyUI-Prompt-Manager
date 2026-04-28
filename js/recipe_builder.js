@@ -447,6 +447,7 @@ function _makeEmptySlotProfile() {
             cfg: 5.0,
             denoise: 1.0,
             seed_a: 0,
+            _seed_auto: false,
             sampler_name: "euler",
             scheduler: "simple",
             loras_a: [],
@@ -1229,6 +1230,22 @@ function _coerceNumericField(value, fallback, { integer = false, min = null } = 
     if (integer) out = Math.trunc(out);
     if (min != null && out < min) out = min;
     return out;
+}
+
+function _generateRandomSeed() {
+    const maxSafe = 9007199254740991; // Number.MAX_SAFE_INTEGER
+    try {
+        if (globalThis.crypto?.getRandomValues) {
+            const buf = new Uint32Array(2);
+            globalThis.crypto.getRandomValues(buf);
+            const mixed = ((BigInt(buf[0]) << 21n) ^ BigInt(buf[1])) & 0x1fffffffffffffn;
+            const out = Number(mixed);
+            if (Number.isFinite(out) && out >= 0) return out;
+        }
+    } catch {
+        // Fallback below.
+    }
+    return Math.floor(Math.random() * maxSafe);
 }
 
 function _coerceChoiceField(value, fallback, allowed = null) {
@@ -2114,11 +2131,10 @@ function syncHidden(node) {
     else delete ov._section_locks;
 
     const persistedCollapsed = {};
-    for (const [key, collapsed] of Object.entries(sectionCollapsed)) {
-        if (collapsed) persistedCollapsed[key] = true;
+    for (const key of ["resolution", "model", "sampler", "positive", "negative", "loras"]) {
+        persistedCollapsed[key] = !!sectionCollapsed[key];
     }
-    if (Object.keys(persistedCollapsed).length > 0) ov._section_collapsed = persistedCollapsed;
-    else delete ov._section_collapsed;
+    ov._section_collapsed = persistedCollapsed;
 
     // Persist resolution UI state
     if (node._weRatio) ov._ratio = node._weRatio;
@@ -2220,15 +2236,19 @@ function syncHidden(node) {
     wSet("override_data", ovJson);
     wSet("lora_state", lsJson);
 
-    // Persist to node.properties for tab-switch survival
+    // Keep properties lightweight to reduce workflow/localStorage footprint.
+    // Full state is persisted in hidden widgets (override_data/lora_state),
+    // which are serialized with the workflow and restored on configure.
     node.properties = node.properties || {};
-    // Canonical saved UI state for workflow reload restore.
-    node.properties.we_ui_state = ovJson;
-    node.properties.we_lora_state = lsJson;
-    if (node._weWorkflowLoras) node.properties.we_workflow_loras = JSON.stringify(node._weWorkflowLoras);
-    if (node._weInputLoras) node.properties.we_input_loras = JSON.stringify(node._weInputLoras);
-    if (node._weWorkflowPrompts) node.properties.we_workflow_prompts = JSON.stringify(node._weWorkflowPrompts);
-    // Avoid persisting heavyweight extracted snapshot into workflow drafts.
+    node.properties.we_active_model_slot = _normalizeModelSlotKey(ov._active_model_slot || ov._model_slot || "model_a");
+    node.properties.we_show_all_models = !!ov._show_all_models;
+    node.properties.we_family = String(ov._family || "");
+    delete node.properties.we_ui_state;
+    delete node.properties.we_lora_state;
+    delete node.properties.we_workflow_loras;
+    delete node.properties.we_input_loras;
+    delete node.properties.we_workflow_prompts;
+    delete node.properties.we_override_data;
     delete node.properties.we_extracted_cache;
 
     // Keep a lightweight extracted snapshot for runtime features (e.g. Builder->Builder
@@ -2384,6 +2404,17 @@ function applyOverrides(node, ovJson, lsJson) {
         else if (node._weSetResDisabled) node._weSetResDisabled(true);
     }
 
+    if (ov._section_collapsed && typeof ov._section_collapsed === "object") {
+        node._weCollapsedSections = node._weCollapsedSections || {};
+        for (const key of ["resolution", "model", "sampler", "positive", "negative", "loras"]) {
+            if (!Object.prototype.hasOwnProperty.call(ov._section_collapsed, key)) continue;
+            const collapsed = !!ov._section_collapsed[key];
+            node._weCollapsedSections[key] = collapsed;
+            const sec = node._weSections?.[key];
+            if (sec?.setCollapsed) sec.setCollapsed(collapsed, { sync: false });
+        }
+    }
+
     if (Object.prototype.hasOwnProperty.call(ov, "model_a")) {
         applySelect(node._weModelRow, ov.model_a ?? "", true);
     }
@@ -2454,6 +2485,7 @@ function applyOverrides(node, ovJson, lsJson) {
     updateWanVisibility(node);
     if (node._updatePromptGhosting) node._updatePromptGhosting();
     if (node._updateSeedGhosting) node._updateSeedGhosting();
+    if (node._weRefreshSeedDiceVisual) node._weRefreshSeedDiceVisual();
     syncHidden(node);
 }
 
@@ -2746,6 +2778,7 @@ app.registerExtension({
 
             const _normalizeInputNameForVariant = (name) => {
                 let key = _canonicalInputName(name);
+                if (key === "builder_data") key = "multi_prompt";
                 if (key === "seed_a") key = "seed";
                 if (key === "lora_stack_a") key = "lora_stack";
                 return key;
@@ -2754,13 +2787,14 @@ app.registerExtension({
             const _normalizeRecipePortsNow = () => {
                 const VALID_INPUTS = new Set([
                     "recipe_data",
-                    "builder_data",
+                    "multi_prompt",
                     "multi_lora_stack",
                 ]);
                 if (node.inputs) {
                     for (const inp of node.inputs) {
                         if (!inp || !inp.name) continue;
                         inp.name = _normalizeInputNameForVariant(inp.name);
+                        if (inp.name === "multi_prompt") inp.type = "MULTI_PROMPT";
                     }
                     const keepIndexByName = new Map();
                     for (let i = 0; i < node.inputs.length; i++) {
@@ -2789,7 +2823,7 @@ app.registerExtension({
 
                     const hasInput = (name) => node.inputs.some((inp) => _normalizeInputNameForVariant(inp?.name || "") === name);
                     if (!hasInput("recipe_data")) node.addInput("recipe_data", "RECIPE_DATA");
-                    if (!hasInput("builder_data")) node.addInput("builder_data", "BUILDER_DATA");
+                    if (!hasInput("multi_prompt")) node.addInput("multi_prompt", "MULTI_PROMPT");
                     if (!hasInput("multi_lora_stack")) node.addInput("multi_lora_stack", "MULTI_LORA_STACK");
                 }
 
@@ -2982,8 +3016,17 @@ app.registerExtension({
                 const _captureCurrentSlotProfile = () => {
                     const slot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
                     const slotProfiles = _normalizeSlotProfiles(node._weSlotProfiles);
-                    const ovRaw = node.properties?.we_ui_state || node.properties?.we_override_data || "{}";
-                    const lsRaw = node.properties?.we_lora_state || "{}";
+                    const ovRaw = String(
+                        node.widgets?.find((w) => w?.name === "override_data")?.value
+                        ?? node.properties?.we_ui_state
+                        ?? node.properties?.we_override_data
+                        ?? "{}"
+                    );
+                    const lsRaw = String(
+                        node.widgets?.find((w) => w?.name === "lora_state")?.value
+                        ?? node.properties?.we_lora_state
+                        ?? "{}"
+                    );
                     let ovObj = {};
                     let lsObj = {};
                     try { ovObj = JSON.parse(ovRaw || "{}"); } catch { ovObj = {}; }
@@ -3531,6 +3574,7 @@ app.registerExtension({
                         const r = await fetch(url);
                         const d = await r.json(); return d.models || [];
                     } catch { return []; }
+                    if (node._weRefreshSeedDiceVisual) node._weRefreshSeedDiceVisual();
                 };
                 const fetchModelsForFamilyA = async () => {
                     const models = await fetchModelsForFamilyBase();
@@ -3756,6 +3800,94 @@ app.registerExtension({
             const seedRow  = makeInput("Seed", "number", 0, { min: 0, step: 1 }, _syncS);
             const seedBRow = makeInput("Seed B", "number", 0, { min: 0, step: 1 }, _syncS);
             seedBRow.style.display = "none";
+
+            const seedDiceIcon = makeEl("span", {
+                width: "22px", flexShrink: "0", display: "inline-flex",
+                alignItems: "center", justifyContent: "center", cursor: "pointer",
+                lineHeight: "1", userSelect: "none",
+                position: "absolute", right: "0px", top: "50%", transform: "translateY(-50%)",
+            });
+            const _diceIconSvg = (color) => (`<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><polygon points="10,2.2 16.5,5.9 10,9.6 3.5,5.9" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><polygon points="3.5,5.9 10,9.6 10,17.1 3.5,13.4" fill="${color}" fill-opacity="0.12" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><polygon points="16.5,5.9 10,9.6 10,17.1 16.5,13.4" fill="${color}" fill-opacity="0.10" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><circle cx="10" cy="6.2" r="1.05" fill="${color}"/><circle cx="6.6" cy="9.8" r="1.0" fill="${color}"/><circle cx="6.6" cy="13.0" r="1.0" fill="${color}"/><circle cx="13.3" cy="9.9" r="1.0" fill="${color}"/><circle cx="13.3" cy="13.0" r="1.0" fill="${color}"/></svg>`);
+            seedRow.style.position = "relative";
+            seedRow.appendChild(seedDiceIcon);
+            node._weSeedDiceIcon = seedDiceIcon;
+
+            const _getSeedAutoForActiveSlot = () => {
+                if (node._weUseSlotProfiles) {
+                    const slot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
+                    const ov = node._weSlotProfiles?.[slot]?.ov;
+                    return !!(ov && ov._seed_auto);
+                }
+                return !!(node._weOverrides?._seed_auto);
+            };
+
+            const _setSeedAutoForActiveSlot = (enabled) => {
+                const next = !!enabled;
+                if (node._weUseSlotProfiles) {
+                    const slot = _normalizeModelSlotKey(node._weActiveModelSlot || node._weSendModelSlot || "model_a");
+                    const profiles = _normalizeSlotProfiles(node._weSlotProfiles);
+                    const row = profiles[slot] || _makeEmptySlotProfile();
+                    row.ov = { ...(row.ov || {}), _seed_auto: next };
+                    profiles[slot] = row;
+                    node._weSlotProfiles = profiles;
+                }
+                node._weOverrides = node._weOverrides || {};
+                node._weOverrides._seed_auto = next;
+            };
+
+            const _refreshSeedDiceVisual = () => {
+                const auto = _getSeedAutoForActiveSlot();
+                if (auto) {
+                    seedDiceIcon.innerHTML = _diceIconSvg(C.accent || "#4da6ff");
+                    seedDiceIcon.title = "Auto-seed ON. Single-click disables. Double-click toggles auto mode.";
+                } else {
+                    seedDiceIcon.innerHTML = _diceIconSvg("rgba(255,255,255,0.92)");
+                    seedDiceIcon.title = "Single-click randomizes seed once. Double-click toggles auto-seed mode.";
+                }
+            };
+            node._weRefreshSeedDiceVisual = _refreshSeedDiceVisual;
+
+            const _randomizeVisibleSeed = () => {
+                const seedInp = node._weSamplerRows?.seed_a?._inp;
+                if (!seedInp) return;
+                const seedVal = _generateRandomSeed();
+                seedInp.value = String(seedVal);
+                if (node._weSamplerRows?.seed_a?._resetBtn) {
+                    node._weSamplerRows.seed_a._resetBtn.style.visibility = "visible";
+                }
+                node._weOverrides = node._weOverrides || {};
+                node._weOverrides.seed_a = seedVal;
+                _syncS();
+            };
+
+            let _seedDiceClickTimer = null;
+            seedDiceIcon.onclick = (e) => {
+                e.stopPropagation();
+                if (_seedDiceClickTimer) clearTimeout(_seedDiceClickTimer);
+                _seedDiceClickTimer = setTimeout(() => {
+                    _seedDiceClickTimer = null;
+                    const autoEnabled = _getSeedAutoForActiveSlot();
+                    if (autoEnabled) {
+                        _setSeedAutoForActiveSlot(false);
+                        _syncS();
+                    } else {
+                        _randomizeVisibleSeed();
+                    }
+                    _refreshSeedDiceVisual();
+                }, 420);
+            };
+            seedDiceIcon.ondblclick = (e) => {
+                e.stopPropagation();
+                if (_seedDiceClickTimer) {
+                    clearTimeout(_seedDiceClickTimer);
+                    _seedDiceClickTimer = null;
+                }
+                const next = !_getSeedAutoForActiveSlot();
+                _setSeedAutoForActiveSlot(next);
+                _syncS();
+                _refreshSeedDiceVisual();
+            };
+            _refreshSeedDiceVisual();
 
             const sampRows = {
                 steps_a:    stepsARow,
@@ -4441,11 +4573,12 @@ app.registerExtension({
 
             const VALID_INPUTS = new Set([
                 "recipe_data",
-                "builder_data",
+                "multi_prompt",
                 "multi_lora_stack",
             ]);
             const _normalizeInputNameForVariant = (name) => {
                 let key = _canonicalInputName(name);
+                if (key === "builder_data") key = "multi_prompt";
                 if (key === "seed_a") key = "seed";
                 if (key === "lora_stack_a") key = "lora_stack";
                 return key;
@@ -4455,6 +4588,7 @@ app.registerExtension({
                 for (const inp of node.inputs) {
                     if (!inp || !inp.name) continue;
                     inp.name = _normalizeInputNameForVariant(inp.name);
+                    if (inp.name === "multi_prompt") inp.type = "MULTI_PROMPT";
                 }
 
                 // Deduplicate legacy duplicate inputs by name. Prefer keeping
@@ -4500,8 +4634,8 @@ app.registerExtension({
                 if (!hasInput("recipe_data")) {
                     node.addInput("recipe_data", "RECIPE_DATA");
                 }
-                if (node._weUseSlotProfiles && !hasInput("builder_data")) {
-                    node.addInput("builder_data", "BUILDER_DATA");
+                if (node._weUseSlotProfiles && !hasInput("multi_prompt")) {
+                    node.addInput("multi_prompt", "MULTI_PROMPT");
                 }
                 if (node._weUseSlotProfiles && !hasInput("multi_lora_stack")) {
                     node.addInput("multi_lora_stack", "MULTI_LORA_STACK");

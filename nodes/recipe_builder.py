@@ -10,6 +10,7 @@ Family system and extraction helpers live in py/ for reuse.
 import os
 import json
 import copy
+import random
 import traceback
 import numpy as np
 import torch
@@ -696,7 +697,7 @@ class WorkflowBuilder:
     Workflow Builder — UI and extraction node.
 
     Can run standalone with manual settings, or accept recipe_data (from
-    PromptExtractor), builder_data (prompts/seeds), and multi_lora_stack
+    PromptExtractor), multi_prompt (prompts), and multi_lora_stack
     inputs to pre-fill parameters.
 
     Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
@@ -724,8 +725,8 @@ class WorkflowBuilder:
                 "recipe_data": ("RECIPE_DATA", {
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
-                "builder_data": ("BUILDER_DATA", {
-                    "tooltip": "Optional A/B/C/D bundle of prompts and seeds.",
+                "multi_prompt": ("MULTI_PROMPT", {
+                    "tooltip": "Optional A/B/C/D bundle of prompts.",
                 }),
                 "multi_lora_stack": ("MULTI_LORA_STACK", {
                     "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
@@ -755,6 +756,7 @@ class WorkflowBuilder:
                 pos_prompt=None, neg_prompt=None,
                 seed=None, seed_a=None, seed_b=None, denoise=None,
                 lora_stack=None, lora_stack_a=None, lora_stack_b=None,
+                multi_prompt=None,
                 builder_data=None,
                 multi_pos_prompts=None, multi_neg_prompts=None,
                 multi_seeds=None, multi_lora_stack=None, multi_loras=None,
@@ -853,9 +855,13 @@ class WorkflowBuilder:
                     # Preserve empty list as explicit clear signal.
                     multi_loras[slot_key] = candidate
 
-        # Unified builder_data payload (from RecipeBuilderDataBundle) maps to
-        # the existing multi_* structures used by slot merge/lock logic.
-        if isinstance(builder_data, dict):
+        # Unified multi_prompt payload maps to the existing multi_* prompt
+        # structures used by slot merge/lock logic.
+        # Legacy fallback: accept builder_data dict from older workflows.
+        prompt_bundle = multi_prompt if isinstance(multi_prompt, dict) else None
+        if prompt_bundle is None and isinstance(builder_data, dict):
+            prompt_bundle = builder_data
+        if isinstance(prompt_bundle, dict):
             slot_map = {
                 "model_a": "a",
                 "model_b": "b",
@@ -866,25 +872,15 @@ class WorkflowBuilder:
                 multi_pos_prompts = {}
             if not isinstance(multi_neg_prompts, dict):
                 multi_neg_prompts = {}
-            if not isinstance(multi_seeds, dict):
-                multi_seeds = {}
 
             for slot_key, suffix in slot_map.items():
-                pos_val = builder_data.get(f"pos_{suffix}")
+                pos_val = prompt_bundle.get(f"pos_{suffix}")
                 if pos_val is not None and str(pos_val).strip() != "":
                     multi_pos_prompts[slot_key] = str(pos_val or "")
 
-                neg_val = builder_data.get(f"neg_{suffix}")
+                neg_val = prompt_bundle.get(f"neg_{suffix}")
                 if neg_val is not None and str(neg_val).strip() != "":
                     multi_neg_prompts[slot_key] = str(neg_val or "")
-
-                if f"seed_{suffix}" in builder_data:
-                    try:
-                        parsed_seed = int(builder_data.get(f"seed_{suffix}") or 0)
-                        if parsed_seed != 0:
-                            multi_seeds[slot_key] = parsed_seed
-                    except Exception:
-                        pass
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
@@ -1767,6 +1763,9 @@ class WorkflowBuilder:
             if isinstance(locks, dict) and any(bool(v) for v in locks.values()):
                 return True
 
+            if bool(profile.get('_seed_auto', False)):
+                return True
+
             return False
 
         has_meaningful_slot_profiles = isinstance(slot_profiles, dict) and any(
@@ -2044,6 +2043,10 @@ class WorkflowBuilder:
                     if multi_seed_slot is None and bool(profile_input_ghosts.get('seed', False)):
                         sampler_seed = existing_slot_seed
 
+                    auto_seed_enabled = bool(profile.get('_seed_auto', False))
+                    if auto_seed_enabled and multi_seed_slot is None:
+                        sampler_seed = random.randint(0, 2**63 - 1)
+
                     sampler_denoise = sampler_in.get('denoise', None)
                     if sampler_denoise is None:
                         sampler_denoise = existing_slot_denoise
@@ -2196,6 +2199,7 @@ class WorkflowBuilder:
                 'seed_a': 0,
                 'sampler_name': 'euler',
                 'scheduler': 'simple',
+                '_seed_auto': False,
                 'width': 768,
                 'height': 1280,
                 'batch_size': 1,
@@ -2208,6 +2212,7 @@ class WorkflowBuilder:
             _pre_locks = existing_locks
             _loras_locked = bool(_pre_locks.get('loras', False))
             _saved_loras_a = list(row_saved_ov.get('loras_a', [])) if _loras_locked else None
+            row_ov['_seed_auto'] = bool(row_saved_ov.get('_seed_auto', False))
 
             block = output_models.get(slot_key) if isinstance(output_models, dict) else None
             if isinstance(block, dict):
@@ -2240,7 +2245,7 @@ class WorkflowBuilder:
                     'length': resolution_block.get('length'),
                 })
 
-            # Execution-time builder_data should ghost the affected inputs for
+            # Execution-time multi_prompt should ghost the affected inputs for
             # this slot without changing the user's section lock booleans.
             lock_pos  = _extract_multi_prompt_value(multi_pos_prompts, slot_key, 'positive') is not None
             lock_neg  = _extract_multi_prompt_value(multi_neg_prompts, slot_key, 'negative') is not None
@@ -2379,8 +2384,8 @@ class WorkflowBuilderMulti(WorkflowBuilder):
                 "recipe_data": ("RECIPE_DATA", {
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
-                "builder_data": ("BUILDER_DATA", {
-                    "tooltip": "Optional A/B/C/D bundle of prompts and seeds.",
+                "multi_prompt": ("MULTI_PROMPT", {
+                    "tooltip": "Optional A/B/C/D bundle of prompts.",
                 }),
                 "multi_lora_stack": ("MULTI_LORA_STACK", {
                     "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
@@ -2401,12 +2406,14 @@ class WorkflowBuilderMulti(WorkflowBuilder):
 
     def execute(self,
                 recipe_data=None,
+                multi_prompt=None,
                 builder_data=None,
                 multi_lora_stack=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         result = super().execute(
             recipe_data=recipe_data,
+            multi_prompt=multi_prompt,
             builder_data=builder_data,
             multi_lora_stack=multi_lora_stack,
             override_data=override_data,

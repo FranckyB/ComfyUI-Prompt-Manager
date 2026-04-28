@@ -1,7 +1,7 @@
-"""Bundled multi-slot helper node for Recipe Builder (Multi Model)."""
+"""Bundled multi-slot helper node for Recipe Builder."""
 
 
-class RecipeBuilderDataBundle:
+class RecipeBuilderPromptBundle:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -15,23 +15,18 @@ class RecipeBuilderDataBundle:
                 "neg_b": ("STRING", {"forceInput": True}),
                 "neg_c": ("STRING", {"forceInput": True}),
                 "neg_d": ("STRING", {"forceInput": True}),
-                "seed_a": ("INT", {"forceInput": True}),
-                "seed_b": ("INT", {"forceInput": True}),
-                "seed_c": ("INT", {"forceInput": True}),
-                "seed_d": ("INT", {"forceInput": True}),
             },
         }
 
-    RETURN_TYPES = ("BUILDER_DATA",)
-    RETURN_NAMES = ("builder_data",)
+    RETURN_TYPES = ("MULTI_PROMPT",)
+    RETURN_NAMES = ("multi_prompt",)
     FUNCTION = "bundle"
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Bundle A/B/C/D prompts and seeds into one builder_data payload for Recipe Builder."
+    DESCRIPTION = "Bundle A/B/C/D prompts into a multi_prompt payload for Recipe Builder."
 
     def bundle(self,
                pos_a="", pos_b="", pos_c="", pos_d="",
-               neg_a="", neg_b="", neg_c="", neg_d="",
-               seed_a=0, seed_b=0, seed_c=0, seed_d=0):
+               neg_a="", neg_b="", neg_c="", neg_d=""):
         payload = {
             "pos_a": str(pos_a or ""),
             "pos_b": str(pos_b or ""),
@@ -41,9 +36,5 @@ class RecipeBuilderDataBundle:
             "neg_b": str(neg_b or ""),
             "neg_c": str(neg_c or ""),
             "neg_d": str(neg_d or ""),
-            "seed_a": int(seed_a or 0),
-            "seed_b": int(seed_b or 0),
-            "seed_c": int(seed_c or 0),
-            "seed_d": int(seed_d or 0),
         }
         return (payload,)

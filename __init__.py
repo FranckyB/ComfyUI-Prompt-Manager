@@ -19,43 +19,43 @@ from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
-from .nodes.multi_inputs import RecipeBuilderDataBundle
+from .nodes.recipe_multi_prompt import RecipeBuilderPromptBundle
 from .nodes.multi_lora_stacker_lm import MultiLoraStackerLM
 
 NODE_CLASS_MAPPINGS = {
-    "PromptApplyLora":         ApplyLoraPlusPlus,
-    "PromptManagerAdvanced":   PromptManagerAdvanced,
-    "PromptManager":           PromptManager,
-    "PromptGenerator":         PromptGenerator,
-    "PromptGenOptions":        PromptGenOptions,
-    "PromptExtractor":         PromptExtractor,
-    "RecipeExtractor":         RecipeExtractor,
-    "RecipeBuilder":           RecipeBuilder,
-    "RecipeRenderer":          RecipeRenderer,
-    "RecipeRelay":             RecipeRelay,
-    "RecipeModelLoader":       RecipeModelLoader,
-    "RecipeModelPicker":       RecipeModelPicker,
-    "RecipeManager":           RecipeManager,
-    "RecipeBuilderDataBundle": RecipeBuilderDataBundle,
-    "MultiLoraStackerLM":      MultiLoraStackerLM,
+    "PromptApplyLora":           ApplyLoraPlusPlus,
+    "PromptManagerAdvanced":     PromptManagerAdvanced,
+    "PromptManager":             PromptManager,
+    "PromptGenerator":           PromptGenerator,
+    "PromptGenOptions":          PromptGenOptions,
+    "PromptExtractor":           PromptExtractor,
+    "RecipeExtractor":           RecipeExtractor,
+    "RecipeBuilder":             RecipeBuilder,
+    "RecipeRenderer":            RecipeRenderer,
+    "RecipeRelay":               RecipeRelay,
+    "RecipeModelLoader":         RecipeModelLoader,
+    "RecipeModelPicker":         RecipeModelPicker,
+    "RecipeManager":             RecipeManager,
+    "RecipeBuilderPromptBundle": RecipeBuilderPromptBundle,
+    "MultiLoraStackerLM":        MultiLoraStackerLM,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptApplyLora":          "Apply LoRA++",
-    "PromptManagerAdvanced":    "Prompt Manager",
-    "PromptManager":            "Prompt Manager (Basic)",
-    "PromptGenerator":          "Prompt Generator",
-    "PromptGenOptions":         "Prompt Generator Options",
-    "PromptExtractor":          "Prompt Extractor",
-    "RecipeExtractor":          "Recipe Extractor",
-    "RecipeBuilder":            "Recipe Builder",
-    "RecipeRenderer":           "Recipe Renderer",
-    "RecipeRelay":              "Recipe Relay",
-    "RecipeModelLoader":        "Recipe Model Loader",
-    "RecipeModelPicker":        "Recipe Model Picker",
-    "RecipeManager":            "Recipe Manager",
-    "RecipeBuilderDataBundle":  "Recipe Builder Data",
-    "MultiLoraStackerLM":       "Multi LoRA Stack",
+    "PromptApplyLora":            "Apply LoRA++",
+    "PromptManagerAdvanced":      "Prompt Manager",
+    "PromptManager":              "Prompt Manager (Basic)",
+    "PromptGenerator":            "Prompt Generator",
+    "PromptGenOptions":           "Prompt Generator Options",
+    "PromptExtractor":            "Prompt Extractor",
+    "RecipeExtractor":            "Recipe Extractor",
+    "RecipeBuilder":              "Recipe Builder",
+    "RecipeRenderer":             "Recipe Renderer",
+    "RecipeRelay":                "Recipe Relay",
+    "RecipeModelLoader":          "Recipe Model Loader",
+    "RecipeModelPicker":          "Recipe Model Picker",
+    "RecipeManager":              "Recipe Manager",
+    "RecipeBuilderPromptBundle":  "Recipe Prompt Bundle",
+    "MultiLoraStackerLM":         "Multi LoRA Stack",
 }
 
 WEB_DIRECTORY = "./js"
