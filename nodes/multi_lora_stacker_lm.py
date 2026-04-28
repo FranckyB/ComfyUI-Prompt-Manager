@@ -103,12 +103,12 @@ class MultiLoraStackerLM:
             },
         }
 
-    RETURN_TYPES = ("LORA_STACK", "LORA_STACK", "LORA_STACK", "LORA_STACK")
-    RETURN_NAMES = ("lora_stack_a", "lora_stack_b", "lora_stack_c", "lora_stack_d")
+    RETURN_TYPES = ("MULTI_LORA_STACK",)
+    RETURN_NAMES = ("multi_lora_stack",)
     FUNCTION = "stack_multi"
     DESCRIPTION = (
         "Multi-slot LoRA stacker with a visual 4-panel UI (A / B / C / D). "
-        "Each panel outputs a standard LORA_STACK compatible with Lora-Manager's loaders."
+        "Outputs one MULTI_LORA_STACK payload containing all four stacks."
     )
 
     def stack_multi(
@@ -123,4 +123,18 @@ class MultiLoraStackerLM:
         stack_b = _build_lora_stack(loras_state_b)
         stack_c = _build_lora_stack(loras_state_c)
         stack_d = _build_lora_stack(loras_state_d)
-        return (stack_a, stack_b, stack_c, stack_d)
+        multi_lora_stack = {
+            "a": stack_a,
+            "b": stack_b,
+            "c": stack_c,
+            "d": stack_d,
+            "stacks": {
+                "a": stack_a,
+                "b": stack_b,
+                "c": stack_c,
+                "d": stack_d,
+            },
+            "order": ["a", "b", "c", "d"],
+            "version": 1,
+        }
+        return (multi_lora_stack,)

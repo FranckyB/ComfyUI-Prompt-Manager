@@ -5,7 +5,10 @@ import { PM_UI_PALETTE } from "./ui_palette.js";
 const NODE_CLASS = "MultiLoraStackerLM";
 const LM_PROVIDER_CLASS = "Lora Stacker (LoraManager)";
 const STYLE_ID = "pm-multi-lm-style";
-const MIN_NODE_WIDTH = 920;
+const MIN_NODE_WIDTH = 1080;
+const MIN_NODE_HEIGHT = 320;
+const DEFAULT_NODE_WIDTH = 1320;
+const DEFAULT_NODE_HEIGHT = 430;
 // Height constants mirroring LM's loras_widget_utils.js
 const LM_LORA_ENTRY_H = 40;
 const LM_HEADER_H = 32;
@@ -392,7 +395,32 @@ function notifyHeightChange(node) {
     const h = computeContentHeight(node);
     root.style.setProperty('--comfy-widget-min-height', `${h}px`);
     root.style.setProperty('--comfy-widget-height', `${h}px`);
+    applyNodeSizeConstraints(node);
     setTimeout(() => { node?.setDirtyCanvas?.(true, true); }, 10);
+}
+
+function applyNodeSizeConstraints(node, useDefaultSize = false) {
+    if (!node || node.__pmApplyingSizeConstraint) return;
+
+    const currentW = Number(node?.size?.[0]) || 0;
+    const currentH = Number(node?.size?.[1]) || 0;
+
+    const targetW = useDefaultSize
+        ? Math.max(DEFAULT_NODE_WIDTH, MIN_NODE_WIDTH, currentW)
+        : Math.max(MIN_NODE_WIDTH, currentW);
+
+    const targetH = useDefaultSize
+        ? Math.max(DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, currentH)
+        : Math.max(MIN_NODE_HEIGHT, currentH);
+
+    if (targetW === currentW && targetH === currentH) return;
+
+    node.__pmApplyingSizeConstraint = true;
+    try {
+        node.setSize([targetW, targetH]);
+    } finally {
+        node.__pmApplyingSizeConstraint = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +564,7 @@ async function setupNodeUi(node) {
     hideStateWidgets(node);
     updateActiveColumnHighlight(node);
     notifyHeightChange(node);
+    applyNodeSizeConstraints(node);
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +596,8 @@ app.registerExtension({
             if (!this.properties) this.properties = {};
             if (!this.properties.pmActiveSlot) this.properties.pmActiveSlot = "model_a";
 
+            applyNodeSizeConstraints(this, true);
+
             void setupNodeUi(this);
             return result;
         };
@@ -585,6 +616,8 @@ app.registerExtension({
                 this.__pmMultiLmRefresh();
             }
 
+            applyNodeSizeConstraints(this);
+
             return result;
         };
 
@@ -595,6 +628,14 @@ app.registerExtension({
             if (typeof this.__pmMultiLmRefresh === "function") {
                 this.__pmMultiLmRefresh();
             }
+            applyNodeSizeConstraints(this);
+            return result;
+        };
+
+        const onResize = nodeType.prototype.onResize;
+        nodeType.prototype.onResize = function () {
+            const result = onResize ? onResize.apply(this, arguments) : undefined;
+            applyNodeSizeConstraints(this);
             return result;
         };
 

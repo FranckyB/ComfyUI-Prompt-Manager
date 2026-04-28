@@ -2755,6 +2755,7 @@ app.registerExtension({
                 const VALID_INPUTS = new Set([
                     "recipe_data",
                     "builder_data",
+                    "multi_lora_stack",
                 ]);
                 if (node.inputs) {
                     for (const inp of node.inputs) {
@@ -2789,6 +2790,7 @@ app.registerExtension({
                     const hasInput = (name) => node.inputs.some((inp) => _normalizeInputNameForVariant(inp?.name || "") === name);
                     if (!hasInput("recipe_data")) node.addInput("recipe_data", "RECIPE_DATA");
                     if (!hasInput("builder_data")) node.addInput("builder_data", "BUILDER_DATA");
+                    if (!hasInput("multi_lora_stack")) node.addInput("multi_lora_stack", "MULTI_LORA_STACK");
                 }
 
                 const VALID_OUTPUTS = [
@@ -4086,17 +4088,16 @@ app.registerExtension({
                 _updateSeedGhosting();
 
                 // Clear input LoRAs for disconnected stacks and re-merge
-                const loraAConn = _findInput(node, "lora_stack", "lora_stack_a");
-                const loraBConn = node.inputs?.find(i => i.name === "lora_stack_b");
+                const multiLoraConn = node.inputs?.find(i => i.name === "multi_lora_stack");
                 let changed = false;
                 const oldMergedLorasA = node._weExtracted?.loras_a || [];
                 const oldMergedLorasB = node._weExtracted?.loras_b || [];
                 if (!node._weInputLoras) node._weInputLoras = { a: [], b: [] };
-                if (loraAConn?.link == null && node._weInputLoras.a.length > 0) {
+                if (multiLoraConn?.link == null && node._weInputLoras.a.length > 0) {
                     node._weInputLoras.a = [];
                     changed = true;
                 }
-                if (loraBConn?.link == null && node._weInputLoras.b.length > 0) {
+                if (multiLoraConn?.link == null && node._weInputLoras.b.length > 0) {
                     node._weInputLoras.b = [];
                     changed = true;
                 }
@@ -4441,6 +4442,7 @@ app.registerExtension({
             const VALID_INPUTS = new Set([
                 "recipe_data",
                 "builder_data",
+                "multi_lora_stack",
             ]);
             const _normalizeInputNameForVariant = (name) => {
                 let key = _canonicalInputName(name);
@@ -4500,6 +4502,9 @@ app.registerExtension({
                 }
                 if (node._weUseSlotProfiles && !hasInput("builder_data")) {
                     node.addInput("builder_data", "BUILDER_DATA");
+                }
+                if (node._weUseSlotProfiles && !hasInput("multi_lora_stack")) {
+                    node.addInput("multi_lora_stack", "MULTI_LORA_STACK");
                 }
             }
             const VALID_OUTPUTS = [

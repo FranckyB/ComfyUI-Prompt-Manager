@@ -696,7 +696,8 @@ class WorkflowBuilder:
     Workflow Builder — UI and extraction node.
 
     Can run standalone with manual settings, or accept recipe_data (from
-    PromptExtractor) and/or lora_stack inputs to pre-fill all parameters.
+    PromptExtractor), builder_data (prompts/seeds), and multi_lora_stack
+    inputs to pre-fill parameters.
 
     Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
     Outputs RECIPE_DATA (JSON string) for the Workflow Renderer render node.
@@ -724,7 +725,10 @@ class WorkflowBuilder:
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
                 "builder_data": ("BUILDER_DATA", {
-                    "tooltip": "Optional A/B/C/D bundle of prompts, seeds, and LoRA stacks.",
+                    "tooltip": "Optional A/B/C/D bundle of prompts and seeds.",
+                }),
+                "multi_lora_stack": ("MULTI_LORA_STACK", {
+                    "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
                 }),
                 # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
@@ -753,7 +757,7 @@ class WorkflowBuilder:
                 lora_stack=None, lora_stack_a=None, lora_stack_b=None,
                 builder_data=None,
                 multi_pos_prompts=None, multi_neg_prompts=None,
-                multi_seeds=None, multi_loras=None,
+                multi_seeds=None, multi_lora_stack=None, multi_loras=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         """
@@ -819,6 +823,36 @@ class WorkflowBuilder:
             # Empty list is an explicit "clear this slot" signal.
             return stack
 
+        # Ingress adapter only: normalize MULTI_LORA_STACK input into the exact
+        # legacy multi_loras shape expected by downstream builder_data logic.
+        if not isinstance(multi_loras, dict):
+            multi_loras = {}
+        if isinstance(multi_lora_stack, dict):
+            for slot_key, suffix in {
+                "model_a": "a",
+                "model_b": "b",
+                "model_c": "c",
+                "model_d": "d",
+            }.items():
+                explicit = False
+                candidate = None
+
+                if slot_key in multi_lora_stack:
+                    candidate = multi_lora_stack.get(slot_key)
+                    explicit = True
+                elif suffix in multi_lora_stack:
+                    candidate = multi_lora_stack.get(suffix)
+                    explicit = True
+                else:
+                    stacks_obj = multi_lora_stack.get("stacks")
+                    if isinstance(stacks_obj, dict) and suffix in stacks_obj:
+                        candidate = stacks_obj.get(suffix)
+                        explicit = True
+
+                if explicit and isinstance(candidate, list):
+                    # Preserve empty list as explicit clear signal.
+                    multi_loras[slot_key] = candidate
+
         # Unified builder_data payload (from RecipeBuilderDataBundle) maps to
         # the existing multi_* structures used by slot merge/lock logic.
         if isinstance(builder_data, dict):
@@ -834,8 +868,6 @@ class WorkflowBuilder:
                 multi_neg_prompts = {}
             if not isinstance(multi_seeds, dict):
                 multi_seeds = {}
-            if not isinstance(multi_loras, dict):
-                multi_loras = {}
 
             for slot_key, suffix in slot_map.items():
                 pos_val = builder_data.get(f"pos_{suffix}")
@@ -853,13 +885,6 @@ class WorkflowBuilder:
                             multi_seeds[slot_key] = parsed_seed
                     except Exception:
                         pass
-
-                lora_key = f"loras_{suffix}"
-                if lora_key in builder_data:
-                    lora_val = builder_data.get(lora_key)
-                    if isinstance(lora_val, list):
-                        # Preserve empty list as explicit clear signal.
-                        multi_loras[slot_key] = lora_val
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
@@ -2355,7 +2380,10 @@ class WorkflowBuilderMulti(WorkflowBuilder):
                     "tooltip": "Optional recipe_data input for prefill/update.",
                 }),
                 "builder_data": ("BUILDER_DATA", {
-                    "tooltip": "Optional A/B/C/D bundle of prompts, seeds, and LoRA stacks.",
+                    "tooltip": "Optional A/B/C/D bundle of prompts and seeds.",
+                }),
+                "multi_lora_stack": ("MULTI_LORA_STACK", {
+                    "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
                 }),
                 "override_data": ("STRING", {"default": "{}", "multiline": True}),
                 "lora_state": ("STRING", {"default": "{}", "multiline": True}),
@@ -2374,11 +2402,13 @@ class WorkflowBuilderMulti(WorkflowBuilder):
     def execute(self,
                 recipe_data=None,
                 builder_data=None,
+                multi_lora_stack=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         result = super().execute(
             recipe_data=recipe_data,
             builder_data=builder_data,
+            multi_lora_stack=multi_lora_stack,
             override_data=override_data,
             lora_state=lora_state,
             unique_id=unique_id,
