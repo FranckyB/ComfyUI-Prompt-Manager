@@ -2095,35 +2095,21 @@ class WorkflowBuilder:
                         # while membership follows current execute sources.
                         effective_loras = _apply_profile_lora_state(merged_profile_loras, preferred_profile_loras)
 
-                    profile_pos = profile.get('positive_prompt', '')
-                    if multi_pos_slot is None and bool(profile_input_ghosts.get('positive', False)) and isinstance(existing_slot_block, dict):
-                        profile_pos = existing_slot_block.get('positive_prompt', '')
-                    if (profile_pos is None or str(profile_pos) == '') and isinstance(existing_slot_block, dict):
-                        profile_pos = existing_slot_block.get('positive_prompt', '')
-                    effective_pos = profile_pos
-                    if isinstance(existing_slot_block, dict) and not positive_locked and multi_pos_slot is None:
-                        effective_pos = existing_slot_block.get('positive_prompt', '')
-
-                    profile_neg = profile.get('negative_prompt', '')
-                    if multi_neg_slot is None and bool(profile_input_ghosts.get('negative', False)) and isinstance(existing_slot_block, dict):
-                        profile_neg = existing_slot_block.get('negative_prompt', '')
-                    if (profile_neg is None or str(profile_neg) == '') and isinstance(existing_slot_block, dict):
-                        profile_neg = existing_slot_block.get('negative_prompt', '')
-                    effective_neg = profile_neg
-                    if isinstance(existing_slot_block, dict) and not negative_locked and multi_neg_slot is None:
-                        effective_neg = existing_slot_block.get('negative_prompt', '')
+                    # UI state is authoritative for per-slot output values.
+                    # The slot profile already contains the user-authored values
+                    # (including lock-preserved values), so execute should emit
+                    # those directly for prompt/model/sampler/resolution.
+                    effective_pos = profile.get('positive_prompt', '')
+                    effective_neg = profile.get('negative_prompt', '')
 
                     sampler_seed = sampler_in.get('seed', 0)
-                    if multi_seed_slot is None and bool(profile_input_ghosts.get('seed', False)):
-                        sampler_seed = existing_slot_seed
-
                     auto_seed_enabled = bool(profile.get('_seed_auto', False))
                     if auto_seed_enabled and multi_seed_slot is None:
                         sampler_seed = random.randint(0, 2**63 - 1)
 
-                    sampler_denoise = sampler_in.get('denoise', None)
+                    sampler_denoise = sampler_in.get('denoise', 1.0)
                     if sampler_denoise is None:
-                        sampler_denoise = existing_slot_denoise
+                        sampler_denoise = 1.0
 
                     effective_model = str(profile_model or '')
                     effective_family = str(profile_family or '')
@@ -2131,14 +2117,6 @@ class WorkflowBuilder:
                     effective_loader_type = str(profile_loader_type or '')
                     effective_vae = str(profile.get('vae', '') or '')
                     effective_clip = [str(x or '') for x in clip_raw if str(x or '').strip()]
-                    if isinstance(existing_slot_block, dict) and not model_locked:
-                        effective_model = str(existing_slot_block.get('model', '') or '')
-                        effective_family = str(existing_slot_block.get('family', '') or '')
-                        effective_clip_type = str(existing_slot_block.get('clip_type', '') or '')
-                        effective_loader_type = str(existing_slot_block.get('loader_type', '') or '')
-                        effective_vae = str(existing_slot_block.get('vae', '') or '')
-                        existing_clip_raw = existing_slot_block.get('clip', []) if isinstance(existing_slot_block.get('clip'), list) else []
-                        effective_clip = [str(x or '') for x in existing_clip_raw if str(x or '').strip()]
 
                     effective_sampler = {
                         'steps': _norm_int(sampler_in.get('steps', 20), 20),
@@ -2148,26 +2126,6 @@ class WorkflowBuilder:
                         'sampler_name': str(sampler_in.get('sampler_name', 'euler') or 'euler'),
                         'scheduler': str(sampler_in.get('scheduler', 'simple') or 'simple'),
                     }
-                    if isinstance(existing_slot_block, dict) and not sampler_locked and multi_seed_slot is None:
-                        existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
-                        effective_sampler = {
-                            'steps': _norm_int(existing_slot_sampler.get('steps', 20), 20),
-                            'cfg': _norm_num(existing_slot_sampler.get('cfg', 5.0), 5.0),
-                            'denoise': _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0),
-                            'seed': _norm_int(existing_slot_sampler.get('seed', 0), 0),
-                            'sampler_name': str(existing_slot_sampler.get('sampler_name', 'euler') or 'euler'),
-                            'scheduler': str(existing_slot_sampler.get('scheduler', 'simple') or 'simple'),
-                        }
-                    elif isinstance(existing_slot_block, dict) and not sampler_locked and multi_seed_slot is not None:
-                        existing_slot_sampler = existing_slot_block.get('sampler') if isinstance(existing_slot_block.get('sampler'), dict) else {}
-                        effective_sampler = {
-                            'steps': _norm_int(existing_slot_sampler.get('steps', 20), 20),
-                            'cfg': _norm_num(existing_slot_sampler.get('cfg', 5.0), 5.0),
-                            'denoise': _norm_num(existing_slot_sampler.get('denoise', 1.0), 1.0),
-                            'seed': _norm_int(multi_seed_slot, 0),
-                            'sampler_name': str(existing_slot_sampler.get('sampler_name', 'euler') or 'euler'),
-                            'scheduler': str(existing_slot_sampler.get('scheduler', 'simple') or 'simple'),
-                        }
 
                     effective_resolution = {
                         'width': _norm_int(resolution_in.get('width', 768), 768),
@@ -2175,14 +2133,6 @@ class WorkflowBuilder:
                         'batch_size': _norm_int(resolution_in.get('batch_size', 1), 1),
                         'length': resolution_in.get('length'),
                     }
-                    if isinstance(existing_slot_block, dict) and not resolution_locked:
-                        existing_resolution = existing_slot_block.get('resolution') if isinstance(existing_slot_block.get('resolution'), dict) else {}
-                        effective_resolution = {
-                            'width': _norm_int(existing_resolution.get('width', 768), 768),
-                            'height': _norm_int(existing_resolution.get('height', 1280), 1280),
-                            'batch_size': _norm_int(existing_resolution.get('batch_size', 1), 1),
-                            'length': existing_resolution.get('length'),
-                        }
 
                     slot_block = {
                         'positive_prompt': str(multi_pos_slot if multi_pos_slot is not None else (effective_pos or '')),

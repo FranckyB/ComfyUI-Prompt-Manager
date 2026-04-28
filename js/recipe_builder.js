@@ -223,8 +223,16 @@ function makeSection(title, node = null, key = null, opts = {}) {
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
     }, title);
     const lockBtn = makeEl("span", {
-        width: "20px", flexShrink: "0", display: "inline-flex",
-        alignItems: "center", justifyContent: "center", cursor: "pointer",
+        // Larger click target to avoid accidental section collapse.
+        width: "32px",
+        height: "24px",
+        marginRight: "-4px",
+        borderRadius: "6px",
+        flexShrink: "0",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
     });
     left.append(chevron, label);
     header.append(left, lockBtn);
@@ -271,6 +279,8 @@ function makeSection(title, node = null, key = null, opts = {}) {
         wrap._setLocked(next);
         if (wrap._onLockChanged) wrap._onLockChanged(next);
     };
+    lockBtn.onmousedown = (e) => e.stopPropagation();
+    lockBtn.onpointerdown = (e) => e.stopPropagation();
     wrap._lockBtn = lockBtn;
     wrap._titleLabel = label;
     wrap._chevron = chevron;
@@ -4279,10 +4289,13 @@ app.registerExtension({
                 // even when extractor-connected mode skips full UI refresh.
                 const posInputConn = node.inputs?.find(i => i.name === "pos_prompt");
                 const negInputConn = node.inputs?.find(i => i.name === "neg_prompt");
-                if (posInputConn?.link != null && info.positive_prompt != null && node._wePosBox) {
+                const promptLocks = node._weSectionLocks || {};
+                const positiveLocked = !!promptLocks.positive;
+                const negativeLocked = !!promptLocks.negative;
+                if (!positiveLocked && posInputConn?.link != null && info.positive_prompt != null && node._wePosBox) {
                     node._wePosBox.value = info.positive_prompt;
                 }
-                if (negInputConn?.link != null && info.negative_prompt != null && node._weNegBox) {
+                if (!negativeLocked && negInputConn?.link != null && info.negative_prompt != null && node._weNegBox) {
                     node._weNegBox.value = info.negative_prompt;
                 }
                 const seedAInputConn = _findInput(node, "seed", "seed_a");
@@ -4429,10 +4442,13 @@ app.registerExtension({
                     this._weSlotProfiles = _mergeSlotProfiles(this._weSlotProfiles, info._slot_profiles);
                     _hydrateExtractedFromSelectedSlotProfile(this);
                 }
-                if (posConn?.link != null && info.positive_prompt != null && this._wePosBox) {
+                const promptLocks = this._weSectionLocks || {};
+                const positiveLocked = !!promptLocks.positive;
+                const negativeLocked = !!promptLocks.negative;
+                if (!positiveLocked && posConn?.link != null && info.positive_prompt != null && this._wePosBox) {
                     this._wePosBox.value = info.positive_prompt;
                 }
-                if (negConn?.link != null && info.negative_prompt != null && this._weNegBox) {
+                if (!negativeLocked && negConn?.link != null && info.negative_prompt != null && this._weNegBox) {
                     this._weNegBox.value = info.negative_prompt;
                 }
                 const seedAConn = _findInput(this, "seed", "seed_a");
