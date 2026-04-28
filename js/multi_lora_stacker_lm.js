@@ -44,8 +44,8 @@ function ensureStyles() {
     const textPrimary = p.textPrimary || "hsl(0 0% 87%)";
     const textHint = p.textHint || "hsl(216 15% 65%)";
     const cardBg = p.cardBg || "hsl(219 16% 18%)";
-    const accentBorder = p.accentBorder || "hsl(208 73% 57% / 0.65)";
-    const accentSoft = p.accentSoft || "hsl(208 73% 57% / 0.16)";
+    const accentBorder = "rgba(255,255,255,0.98)";
+    const accentSoft = "rgba(255,255,255,0.42)";
 
     const style = document.createElement("style");
     style.id = STYLE_ID;
@@ -92,7 +92,10 @@ function ensureStyles() {
 }
 .pm-multi-lm-col.active-slot {
     border-color: ${accentBorder};
-    box-shadow: 0 0 0 1px ${accentSoft};
+    box-shadow: inset 0 0 0 1px ${accentSoft};
+}
+.pm-multi-lm-col.active-slot .pm-multi-lm-title {
+    color: ${accentBorder};
 }
 .pm-multi-lm-title {
     font-weight: 700;
