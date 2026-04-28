@@ -1,5 +1,6 @@
 ﻿import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { PM_UI_PALETTE } from "./ui_palette.js";
 
 const NODE_CLASS = "MultiLoraStackerLM";
 const LM_PROVIDER_CLASS = "Lora Stacker (LoraManager)";
@@ -30,6 +31,18 @@ let lmBridgePromise = null;
 
 function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
+    const p = PM_UI_PALETTE || {};
+    const panel = p.panel || "hsl(216 11% 15%)";
+    const panelBorder = p.panelBorder || "hsl(216 20% 65% / 0.24)";
+    const inputBg = p.inputBg || "hsl(220 15% 10%)";
+    const inputBorder = p.inputBorder || "hsl(218 10% 41%)";
+    const textHeading = p.textHeading || "hsl(220 13% 85%)";
+    const textPrimary = p.textPrimary || "hsl(0 0% 87%)";
+    const textHint = p.textHint || "hsl(216 15% 65%)";
+    const cardBg = p.cardBg || "hsl(219 16% 18%)";
+    const accentBorder = p.accentBorder || "hsl(208 73% 57% / 0.65)";
+    const accentSoft = p.accentSoft || "hsl(208 73% 57% / 0.16)";
+
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = `
@@ -51,9 +64,9 @@ function ensureStyles() {
     align-items: stretch;
 }
 .pm-multi-lm-col {
-    border: 1px solid rgba(255,255,255,0.15);
+    border: 1px solid ${panelBorder};
     border-radius: 8px;
-    background: rgba(18, 22, 28, 0.9);
+    background: ${panel};
     padding: 8px;
     min-width: 0;
     display: flex;
@@ -63,14 +76,14 @@ function ensureStyles() {
     height: 100%;
 }
 .pm-multi-lm-col.active-slot {
-    border-color: rgba(100,160,255,0.55);
-    box-shadow: 0 0 0 1px rgba(100,160,255,0.2);
+    border-color: ${accentBorder};
+    box-shadow: 0 0 0 1px ${accentSoft};
 }
 .pm-multi-lm-title {
     font-weight: 700;
     font-size: 12px;
     letter-spacing: 0.02em;
-    color: #d7dee8;
+    color: ${textHeading};
     margin-bottom: 6px;
     flex-shrink: 0;
 }
@@ -79,17 +92,17 @@ function ensureStyles() {
     min-height: 38px;
     resize: vertical;
     box-sizing: border-box;
-    border: 1px solid rgba(255,255,255,0.12);
+    border: 1px solid ${inputBorder};
     border-radius: 6px;
     padding: 6px 8px;
-    background: rgba(8, 10, 14, 0.95);
-    color: #dde4ee;
+    background: ${inputBg};
+    color: ${textPrimary};
     margin-bottom: 6px;
     font-size: 12px;
     flex-shrink: 0;
 }
 .pm-multi-lm-search::placeholder {
-    color: rgba(180,188,200,0.5);
+    color: ${textHint};
 }
 .pm-multi-lm-list-host {
     flex: 1;
@@ -100,6 +113,7 @@ function ensureStyles() {
 .pm-multi-lm-list-host .lm-loras-container {
     height: 100%;
     max-height: none;
+    background: ${cardBg};
 }
 `;
     document.head.appendChild(style);
