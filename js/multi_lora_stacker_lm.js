@@ -35,14 +35,20 @@ function ensureStyles() {
     style.textContent = `
 .pm-multi-lm-root {
     width: 100%;
+    height: 100%;
     box-sizing: border-box;
     padding: 6px 6px 6px 6px;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 .pm-multi-lm-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(200px, 1fr));
     gap: 8px;
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
 }
 .pm-multi-lm-col {
     border: 1px solid rgba(255,255,255,0.15);
@@ -53,6 +59,8 @@ function ensureStyles() {
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    min-height: 0;
+    height: 100%;
 }
 .pm-multi-lm-col.active-slot {
     border-color: rgba(100,160,255,0.55);
@@ -88,6 +96,10 @@ function ensureStyles() {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+}
+.pm-multi-lm-list-host .lm-loras-container {
+    height: 100%;
+    max-height: none;
 }
 `;
     document.head.appendChild(style);
@@ -417,6 +429,7 @@ async function setupNodeUi(node) {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => computeContentHeight(node),
+        getHeight: () => "100%",
     });
 
     node.__pmMultiLmBridge = lm;
