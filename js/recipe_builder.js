@@ -11,6 +11,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { PM_UI_PALETTE } from "./ui_palette.js";
 
 // Inject CSS to hide scrollbars on lora tag containers (webkit)
 if (!document.getElementById("we-lora-scroll-css")) {
@@ -86,15 +87,16 @@ function applyZoomScaling(rootEl) {
 }
 
 // --- Colour palette ---
+const P = PM_UI_PALETTE || {};
 const C = {
-    bgDark:    "rgba(40, 44, 52, 0.6)",
-    bgCard:    "rgba(40, 44, 52, 0.6)",
-    bgInput:   "#1a1a1a",
-    accent:    "rgba(66, 153, 225, 0.9)",
-    accentDim: "rgba(66, 153, 225, 0.7)",
-    text:      "#ccc",
-    textMuted: "#aaa",
-    border:    "rgba(226, 232, 240, 0.15)",
+    bgDark:    P.panel || "hsl(216 11% 15%)",
+    bgCard:    P.cardBg || "hsl(219 16% 18%)",
+    bgInput:   P.inputBg || "hsl(220 15% 10%)",
+    accent:    P.accent || "hsl(208 73% 57% / 0.9)",
+    accentDim: P.accentDim || "hsl(208 73% 57% / 0.7)",
+    text:      P.textPrimary || "hsl(0 0% 87%)",
+    textMuted: P.textMuted || "hsl(0 0% 67%)",
+    border:    P.inputBorder || "hsl(218 10% 41%)",
     success:   "#6c6",
     warning:   "#da3",
     error:     "rgba(220, 53, 69, 0.9)",
@@ -1116,11 +1118,13 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
         b.textContent = text;
         Object.assign(b.style, {
             fontSize: "10px", padding: "2px 8px",
-            backgroundColor: "#333", color: "#ccc",
-            border: "1px solid #555", borderRadius: "6px", cursor: "pointer",
+            backgroundColor: P.buttonBg || C.bgCard,
+            color: C.text,
+            border: `1px solid ${C.border}`,
+            borderRadius: "6px", cursor: "pointer",
         });
-        b.onmouseenter = () => b.style.backgroundColor = "#444";
-        b.onmouseleave = () => b.style.backgroundColor = "#333";
+        b.onmouseenter = () => b.style.backgroundColor = P.accentSoft || C.bgCard;
+        b.onmouseleave = () => b.style.backgroundColor = P.buttonBg || C.bgCard;
         b.onclick = (e) => { e.stopPropagation(); fn(); };
         return b;
     };

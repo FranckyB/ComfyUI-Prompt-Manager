@@ -2,6 +2,22 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 
+const PMA_THEME = {
+    panel: UI.panel || "hsl(216 11% 15%)",
+    panelBorder: UI.panelBorder || "hsl(216 20% 65% / 0.24)",
+    sectionBorder: UI.sectionBorder || "hsl(216 20% 65% / 0.20)",
+    inputBg: UI.inputBg || "hsl(220 15% 10%)",
+    inputBorder: UI.inputBorder || "hsl(218 10% 41%)",
+    buttonBg: UI.buttonBg || "hsl(219 16% 18%)",
+    cardBg: UI.cardBg || "hsl(219 16% 18%)",
+    textPrimary: UI.textPrimary || "hsl(0 0% 87%)",
+    textMuted: UI.textMuted || "hsl(0 0% 67%)",
+    textHint: UI.textHint || "hsl(216 15% 65%)",
+    accent: UI.accent || "hsl(208 73% 57% / 0.9)",
+    accentSoft: UI.accentSoft || "hsl(208 73% 57% / 0.16)",
+    accentBorder: UI.accentBorder || "hsl(208 73% 57% / 0.65)",
+};
+
 /**
  * PromptManagerAdvanced Extension for ComfyUI
  * Extends prompt management with LoRA stack support and toggleable LoRA displays
@@ -1142,8 +1158,8 @@ function updateWorkflowManagerPreview(node) {
     const infoEnabled = infoSummary.modelCount > 0;
     if (ui.infoBtn) {
         ui.infoBtn.disabled = !infoEnabled;
-        ui.infoBtn.style.background = infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)";
-        ui.infoBtn.style.color = infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)";
+        ui.infoBtn.style.background = infoEnabled ? PMA_THEME.accent : PMA_THEME.buttonBg;
+        ui.infoBtn.style.color = infoEnabled ? "#ffffff" : PMA_THEME.textHint;
         ui.infoBtn.style.cursor = infoEnabled ? "pointer" : "default";
         ui.infoBtn.style.opacity = infoEnabled ? "1" : "0.8";
         ui.infoBtn.title = infoEnabled ? "Show workflow summary" : "No workflow metadata";
@@ -1211,8 +1227,8 @@ function addWorkflowManagerPreview(node) {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        background: #1e1e1e;
-        border: 1px solid #3a3a3a;
+        background: ${PMA_THEME.panel};
+        border: 1px solid ${PMA_THEME.panelBorder};
         border-radius: 8px;
         padding: 8px;
         box-sizing: border-box;
@@ -1223,7 +1239,7 @@ function addWorkflowManagerPreview(node) {
     title.textContent = "Workflow Preview";
     title.style.cssText = `
         font-size: 11px;
-        color: #9aa;
+        color: ${PMA_THEME.textHint};
         font-weight: 600;
         letter-spacing: 0.2px;
     `;
@@ -1234,8 +1250,8 @@ function addWorkflowManagerPreview(node) {
         width: 100%;
         aspect-ratio: 1 / 1;
         border-radius: 6px;
-        background: #111;
-        border: 1px solid #333;
+        background: ${PMA_THEME.inputBg};
+        border: 1px solid ${PMA_THEME.inputBorder};
         overflow: hidden;
         box-sizing: border-box;
     `;
@@ -1261,9 +1277,9 @@ function addWorkflowManagerPreview(node) {
         justify-content: center;
         text-align: center;
         font-size: 11px;
-        color: #777;
-        background: #141414;
-        border: 1px dashed rgba(110, 110, 110, 0.5);
+        color: ${PMA_THEME.textMuted};
+        background: ${PMA_THEME.inputBg};
+        border: 1px dashed ${PMA_THEME.inputBorder};
         border-radius: 5px;
         padding: 8px;
         box-sizing: border-box;
@@ -1281,9 +1297,9 @@ function addWorkflowManagerPreview(node) {
         width: 28px;
         height: 14px;
         border-radius: 999px;
-        border: 1px solid rgba(240, 248, 255, 0.95);
-        background: rgba(120, 130, 140, 0.35);
-        color: rgba(220, 226, 234, 0.75);
+        border: 1px solid ${PMA_THEME.inputBorder};
+        background: ${PMA_THEME.buttonBg};
+        color: ${PMA_THEME.textHint};
         font-size: 8px;
         font-weight: 700;
         letter-spacing: 0.2px;
@@ -1738,12 +1754,12 @@ function attachWorkflowCornerInfoHandlers(node) {
 
         ctx.save();
         drawRoundRect(infoX, infoY, infoWidth, infoHeight, cornerRadius);
-        ctx.fillStyle = infoEnabled ? 'rgba(55, 142, 255, 0.92)' : 'rgba(120, 130, 140, 0.35)';
+        ctx.fillStyle = infoEnabled ? PMA_THEME.accent : PMA_THEME.buttonBg;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(240, 248, 255, 0.95)';
+        ctx.strokeStyle = PMA_THEME.inputBorder;
         ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.fillStyle = infoEnabled ? '#ffffff' : 'rgba(220, 226, 234, 0.75)';
+        ctx.fillStyle = infoEnabled ? '#ffffff' : PMA_THEME.textHint;
         ctx.font = 'bold 8px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1905,7 +1921,7 @@ function createLoraDisplayContainer(title, stackId, node) {
         flexDirection: "column",
         gap: "4px",
         padding: "8px",
-        backgroundColor: "rgba(40, 44, 52, 0.6)",
+        backgroundColor: PMA_THEME.cardBg,
         borderRadius: "6px",
         width: "100%",
         boxSizing: "border-box",
@@ -1926,7 +1942,7 @@ function createLoraDisplayContainer(title, stackId, node) {
         alignItems: "center",
         marginBottom: "4px",
         paddingBottom: "4px",
-        borderBottom: "1px solid rgba(255,255,255,0.1)"
+        borderBottom: `1px solid ${PMA_THEME.sectionBorder}`
     });
 
     const titleLabel = document.createElement("span");
@@ -1934,7 +1950,7 @@ function createLoraDisplayContainer(title, stackId, node) {
     Object.assign(titleLabel.style, {
         fontSize: "12px",
         fontWeight: "bold",
-        color: "#aaa"
+        color: PMA_THEME.textMuted
     });
     titleBar.appendChild(titleLabel);
 
@@ -1952,9 +1968,9 @@ function createLoraDisplayContainer(title, stackId, node) {
     Object.assign(resetBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#333",
-        color: "#ccc",
-        border: "1px solid #555",
+        backgroundColor: PMA_THEME.buttonBg,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.inputBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -1967,9 +1983,9 @@ function createLoraDisplayContainer(title, stackId, node) {
     Object.assign(toggleAllBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#333",
-        color: "#ccc",
-        border: "1px solid #555",
+        backgroundColor: PMA_THEME.buttonBg,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.inputBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -2856,7 +2872,7 @@ function createTriggerWordsDisplayContainer(title, node) {
         flexDirection: "column",
         gap: "4px",
         padding: "8px",
-        backgroundColor: "rgba(40, 44, 52, 0.6)",
+        backgroundColor: PMA_THEME.cardBg,
         borderRadius: "6px",
         width: "100%",
         boxSizing: "border-box",
@@ -2877,7 +2893,7 @@ function createTriggerWordsDisplayContainer(title, node) {
         alignItems: "center",
         marginBottom: "4px",
         paddingBottom: "4px",
-        borderBottom: "1px solid rgba(255,255,255,0.1)"
+        borderBottom: `1px solid ${PMA_THEME.sectionBorder}`
     });
 
     const titleLabel = document.createElement("span");
@@ -2885,7 +2901,7 @@ function createTriggerWordsDisplayContainer(title, node) {
     Object.assign(titleLabel.style, {
         fontSize: "12px",
         fontWeight: "bold",
-        color: "#aaa"
+        color: PMA_THEME.textMuted
     });
     titleBar.appendChild(titleLabel);
 
@@ -2902,9 +2918,9 @@ function createTriggerWordsDisplayContainer(title, node) {
     Object.assign(addBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#2a5a3a",
-        color: "#ccc",
-        border: "1px solid #3a7a4a",
+        backgroundColor: PMA_THEME.accentSoft,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.accentBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -2917,9 +2933,9 @@ function createTriggerWordsDisplayContainer(title, node) {
     Object.assign(toggleAllBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#333",
-        color: "#ccc",
-        border: "1px solid #555",
+        backgroundColor: PMA_THEME.buttonBg,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.inputBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -5563,8 +5579,8 @@ function createDropdownButton(text, items) {
     const dropdown = document.createElement("div");
     dropdown.style.cssText = `
         position: fixed;
-        background: #2a2a2a;
-        border: 1px solid #555;
+        background: ${PMA_THEME.panel};
+        border: 1px solid ${PMA_THEME.inputBorder};
         border-radius: 6px;
         z-index: 999999;
         display: none;
@@ -5576,7 +5592,7 @@ function createDropdownButton(text, items) {
     items.forEach(item => {
         if (item.divider) {
             const divider = document.createElement("div");
-            divider.style.cssText = "height: 1px; background: #444; margin: 4px 0;";
+            divider.style.cssText = `height: 1px; background: ${PMA_THEME.sectionBorder}; margin: 4px 0;`;
             dropdown.appendChild(divider);
         } else {
             const menuItem = document.createElement("div");
@@ -5585,11 +5601,11 @@ function createDropdownButton(text, items) {
                 padding: 8px 12px;
                 cursor: pointer;
                 font-size: 11px;
-                color: #fff;
+                color: ${PMA_THEME.textPrimary};
                 white-space: nowrap;
             `;
             menuItem.addEventListener("mouseenter", () => {
-                menuItem.style.backgroundColor = "#4a4a4a";
+                menuItem.style.backgroundColor = PMA_THEME.accentSoft;
             });
             menuItem.addEventListener("mouseleave", () => {
                 menuItem.style.backgroundColor = "transparent";
