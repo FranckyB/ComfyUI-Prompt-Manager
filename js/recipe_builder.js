@@ -1548,8 +1548,14 @@ async function checkLoraAvailability(node) {
     const allLoras = [...(d.loras_a || []), ...(d.loras_b || [])];
     const names = [...new Set(allLoras.map(l => l.name).filter(Boolean))];
     if (names.length === 0) return;
-    // Skip if we already have availability data from Python
-    if (d.lora_availability && Object.keys(d.lora_availability).length >= names.length) return;
+    // Skip only when cached availability explicitly covers current names.
+    const availabilityMap = (d.lora_availability && typeof d.lora_availability === "object")
+        ? d.lora_availability
+        : null;
+    const hasCoverage = !!availabilityMap && names.every((name) =>
+        Object.prototype.hasOwnProperty.call(availabilityMap, name)
+    );
+    if (hasCoverage) return;
     try {
         const resp = await fetch("/prompt-manager-advanced/check-loras", {
             method: "POST",
@@ -1870,7 +1876,11 @@ function updateLoras(node) {
             const lora = loras[index];
             const name = lora.name || "";
             const stateKey = stackKey ? `${stackKey}:${name}` : name;
-            const avail = d.lora_availability?.[name] !== false;
+            // Match PMA behavior: row-level availability is authoritative when present.
+            // Availability map is a fallback for rows that do not carry flags yet.
+            const rowAvailable = (lora?.available !== false) && (lora?.found !== false);
+            const mapAvailable = d.lora_availability?.[name] !== false;
+            const avail = rowAvailable && mapAvailable;
             if (node._weLoraState[stateKey] === undefined) {
                 node._weLoraState[stateKey] = {
                     active: lora.active !== false,
@@ -2481,6 +2491,7 @@ function applyOverrides(node, ovJson, lsJson) {
     }
 
     updateLoras(node);
+    void checkLoraAvailability(node);
 
     updateWanVisibility(node);
     if (node._updatePromptGhosting) node._updatePromptGhosting();
@@ -4344,6 +4355,7 @@ app.registerExtension({
                     };
                     node._wePopulated = true;
                     updateLoras(node);
+                    void checkLoraAvailability(node);
                     syncHidden(node);
                     node.setDirtyCanvas(true, true);
                     app.graph.setDirtyCanvas(true, true);
@@ -4493,6 +4505,7 @@ app.registerExtension({
                     };
                     this._wePopulated = true;
                     updateLoras(this);
+                    void checkLoraAvailability(this);
                     syncHidden(this);
                     this.setDirtyCanvas(true, true);
                     app.graph.setDirtyCanvas(true, true);

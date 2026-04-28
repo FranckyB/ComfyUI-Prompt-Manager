@@ -1666,17 +1666,22 @@ def extract_power_lora_loader(node):
             # Format: {"on": true, "lora": "path/to/lora.safetensors", "strength": 1.0, "strengthTwo": null}
             # Extract ALL LoRAs, not just active ones
             if val.get('lora'):
-                lora_path = val['lora']
+                lora_name = os.path.splitext(os.path.basename(val['lora']))[0]
+                resolved_lora, available = resolve_lora_path(lora_name)
+                if not available:
+                    resolved_lora = lora_name
+
                 strength = float(val.get('strength', 1.0))
                 strength_two = val.get('strengthTwo')
                 clip_strength = float(strength_two) if strength_two is not None else strength
                 is_active = val.get('on', True)
 
                 loras.append({
-                    'name': os.path.splitext(os.path.basename(lora_path))[0],
-                    'path': lora_path,
+                    'name': lora_name,
+                    'path': resolved_lora,
                     'model_strength': strength,
                     'clip_strength': clip_strength,
+                    'available': available,
                     'active': is_active
                 })
 
@@ -1697,6 +1702,9 @@ def extract_lora_manager_stacker(node):
                     lora_name = lora.get('name', '')
                     # Extract ALL LoRAs, not just active ones
                     if lora_name:
+                        resolved_lora, available = resolve_lora_path(lora_name)
+                        if not available:
+                            resolved_lora = lora_name
                         # Handle strength as string or number
                         strength = lora.get('strength', 1.0)
                         if isinstance(strength, str):
@@ -1708,9 +1716,10 @@ def extract_lora_manager_stacker(node):
 
                         loras.append({
                             'name': lora_name,
-                            'path': '',
+                            'path': resolved_lora,
                             'model_strength': float(strength),
                             'clip_strength': float(clip_strength),
+                            'available': available,
                             'active': is_active
                         })
 
@@ -1745,11 +1754,17 @@ def extract_wan_video_lora_select_multi(node):
                 if isinstance(strength_val, (int, float)):
                     strength = float(strength_val)
 
+                    lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     loras.append({
-                        'name': os.path.splitext(os.path.basename(lora_name))[0],
-                        'path': lora_name,
+                        'name': lora_name,
+                        'path': resolved_lora,
                         'model_strength': strength,
                         'clip_strength': strength,  # WanVideo doesn't separate model/clip strength
+                        'available': available,
                         'active': True  # All LoRAs in the list are considered active
                     })
 
@@ -1785,20 +1800,32 @@ def extract_wan_video_lora_select_multi(node):
 
                         is_active = item.get('on', item.get('active', item.get('enabled', True)))
 
+                        lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                        resolved_lora, available = resolve_lora_path(lora_name)
+                        if not available:
+                            resolved_lora = lora_name
+
                         loras.append({
-                            'name': os.path.splitext(os.path.basename(lora_name))[0],
-                            'path': lora_name,
+                            'name': lora_name,
+                            'path': resolved_lora,
                             'model_strength': strength,
                             'clip_strength': clip_strength,
+                            'available': available,
                             'active': is_active
                         })
                 elif isinstance(item, str) and item and item != 'None':
                     # Format 2: Simple string list of LoRA names
+                    lora_name = os.path.splitext(os.path.basename(item))[0]
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     loras.append({
-                        'name': os.path.splitext(os.path.basename(item))[0],
-                        'path': item,
+                        'name': lora_name,
+                        'path': resolved_lora,
                         'model_strength': 1.0,
                         'clip_strength': 1.0,
+                        'available': available,
                         'active': True
                     })
         # Format 3: Dictionary containing LoRA info
@@ -1822,11 +1849,17 @@ def extract_wan_video_lora_select_multi(node):
 
                 is_active = val.get('on', val.get('active', val.get('enabled', True)))
 
+                lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                resolved_lora, available = resolve_lora_path(lora_name)
+                if not available:
+                    resolved_lora = lora_name
+
                 loras.append({
-                    'name': os.path.splitext(os.path.basename(lora_name))[0],
-                    'path': lora_name,
+                    'name': lora_name,
+                    'path': resolved_lora,
                     'model_strength': strength,
                     'clip_strength': clip_strength,
+                    'available': available,
                     'active': is_active
                 })
 
@@ -1861,11 +1894,17 @@ def extract_lora_loader_stack_rgthree(node):
                 if isinstance(strength_val, (int, float)):
                     strength = float(strength_val)
 
+                    lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     loras.append({
-                        'name': os.path.splitext(os.path.basename(lora_name))[0],
-                        'path': lora_name,
+                        'name': lora_name,
+                        'path': resolved_lora,
                         'model_strength': strength,
                         'clip_strength': strength,  # No separate model/clip strength
+                        'available': available,
                         'active': True  # All LoRAs are active (no on/off toggle)
                     })
 
@@ -1899,20 +1938,26 @@ def extract_standard_lora_loader(node):
     else:
         clip_strength = model_strength
 
+    lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+    resolved_lora, available = resolve_lora_path(lora_name)
+    if not available:
+        resolved_lora = lora_name
+
     # Standard LoRA loaders are always active (no on/off toggle)
     return [{
-        'name': os.path.splitext(os.path.basename(lora_name))[0],
-        'path': lora_name,
+        'name': lora_name,
+        'path': resolved_lora,
         'model_strength': model_strength,
         'clip_strength': clip_strength,
-        'active': True
+        'available': available,
+        'active': True,
     }]
 
 
 def extract_loras_from_node(node):
     """
     Extract LoRAs from any supported LoRA loader node type.
-    Returns a list of LoRA dicts: {name, path, model_strength, clip_strength}
+    Returns a list of LoRA dicts: {name, path, model_strength, clip_strength, available, active}
     """
     node_type = node.get('type', '')
 
@@ -2320,10 +2365,18 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             # Skip blacklisted LoRAs
             if is_lora_blacklisted(lora['name']):
                 continue
+
+            lora_name = os.path.splitext(os.path.basename(lora['name']))[0]
+            resolved_lora, available = resolve_lora_path(lora_name)
+            if not available:
+                resolved_lora = lora_name
+
             result['loras_a'].append({
-                'name': lora['name'],
+                'name': lora_name,
+                'path': resolved_lora,
                 'model_strength': lora['model_strength'],
                 'clip_strength': lora['clip_strength'],
+                'available': available,
                 'active': True
             })
 
@@ -2813,11 +2866,17 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         continue
                     strength = float(lora_item.get('strength', 1.0))
                     clip_strength = float(lora_item.get('clip_strength', strength))
+
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     chain_loras_list.append({
                         'name': lora_name,
-                        'path': lora_name,
+                        'path': resolved_lora,
                         'model_strength': strength,
                         'clip_strength': clip_strength,
+                        'available': available,
                         'active': True
                     })
 
@@ -3072,11 +3131,15 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         target_seen.add(lora_name)
                         strength = float(lora_item.get('strength', 1.0))
                         clip_strength = float(lora_item.get('clip_strength', strength))
+                        resolved_lora, available = resolve_lora_path(lora_name)
+                        if not available:
+                            resolved_lora = lora_name
                         target_stack.append({
                             'name': lora_name,
-                            'path': lora_name,
+                            'path': resolved_lora,
                             'model_strength': strength,
-                            'clip_strength': clip_strength
+                            'clip_strength': clip_strength,
+                            'available': available,
                         })
 
         # Standard LoRA loaders (API format)
@@ -3106,11 +3169,17 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 lora_names_seen_a.add(lora_name)
                 model_strength = float(inputs.get('strength_model', inputs.get('strength', 1.0)))
                 clip_strength = float(inputs.get('strength_clip', model_strength))
+
+                resolved_lora, available = resolve_lora_path(lora_basename)
+                if not available:
+                    resolved_lora = lora_basename
+
                 loras_a.append({
                     'name': lora_basename,
-                    'path': lora_name,
+                    'path': resolved_lora,
                     'model_strength': model_strength,
-                    'clip_strength': clip_strength
+                    'clip_strength': clip_strength,
+                    'available': found
                 })
 
     # Also check for LoRA syntax in prompts: <lora:name:strength>
@@ -3127,11 +3196,17 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 lora_names_seen_a.add(lora_name)
                 model_strength = float(match.group(2)) if match.group(2) else 1.0
                 clip_strength = float(match.group(3)) if match.group(3) else model_strength
+
+                resolved_lora, available = resolve_lora_path(lora_name)
+                if not available:
+                    resolved_lora = lora_name
+
                 loras_a.append({
                     'name': lora_name,
-                    'path': '',
+                    'path': resolved_lora,
                     'model_strength': model_strength,
-                    'clip_strength': clip_strength
+                    'clip_strength': clip_strength,
+                    'available': found
                 })
 
     # Embedded prompt text is fallback-only. Prefer prompts extracted from
@@ -4133,14 +4208,18 @@ class PromptExtractor:
                 enriched = []
                 for lora_path, strength, clip_strength in stack_tuples:
                     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                    _, available = resolve_lora_path(lora_name)
+
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     enriched.append({
                         'name': lora_name,
-                        'path': lora_path,
+                        'path': resolved_lora,
                         'strength': strength,
                         'clip_strength': clip_strength,
-                        'active': True,
                         'available': available,
+                        'active': True,
                     })
                 return enriched
 
