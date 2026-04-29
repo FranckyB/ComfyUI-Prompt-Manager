@@ -2,7 +2,7 @@
 ComfyUI Prompt Manager - A comprehensive prompt and workflow management system for ComfyUI.
 Features: prompt & workflow management, LoRA stacks, workflow extraction, workflow generation.
 """
-__version__ = "2.2.0"
+__version__ = "2.5.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
@@ -20,7 +20,7 @@ from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
 from .nodes.multi_prompt import RecipeBuilderMultiPrompts
-from .nodes.multi_lora_stacker import MultiLoraStackerLM
+from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine
 
 NODE_CLASS_MAPPINGS = {
     "PromptApplyLora":           ApplyLoraPlusPlus,
@@ -38,6 +38,7 @@ NODE_CLASS_MAPPINGS = {
     "RecipeManager":             RecipeManager,
     "RecipeBuilderMultiPrompts": RecipeBuilderMultiPrompts,
     "MultiLoraStackerLM":        MultiLoraStackerLM,
+    "MultiLoraCombine":          MultiLoraCombine,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -56,6 +57,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeManager":              "Recipe Manager",
     "RecipeBuilderMultiPrompts":  "Multi Prompts",
     "MultiLoraStackerLM":         "Multi LoRA Stack",
+    "MultiLoraCombine":           "Multi LoRA Combine",
 }
 
 WEB_DIRECTORY = "./js"

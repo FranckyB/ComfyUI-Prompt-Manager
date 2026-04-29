@@ -595,6 +595,10 @@ async def extract_preview(request):
 
         vae_found = True
         vae_name_str = vae.get('name', '') if isinstance(vae, dict) else (vae or '')
+        if isinstance(vae_name_str, list):
+            vae_name_str = next((v for v in vae_name_str if isinstance(v, str) and v.strip()), '')
+        elif not isinstance(vae_name_str, str):
+            vae_name_str = str(vae_name_str or '')
         if vae_name_str and not vae_name_str.startswith('('):
             vae_found = resolve_vae_name(vae_name_str) is not None
 
@@ -3656,6 +3660,10 @@ class PromptExtractor:
         workflow_data = ""
         model_a = ""
         model_b = ""
+        authoritative_builder_v2 = False
+
+        class _BuilderV2Done(Exception):
+            pass
 
         # Handle None or missing image parameter
         if image is None:
@@ -3773,12 +3781,71 @@ class PromptExtractor:
                         extract_clip_info,
                         extract_resolution,
                         extract_recipe_builder_models_from_workflow,
+                        _get_authoritative_builder_v2_payload,
                         build_simplified_workflow_data,
                         get_model_family,
                         get_family_label,
                     )
                     # Use raw workflow_data dict (before we overwrite the var below)
                     _raw_wf = workflow_data  # still a dict here
+
+                    _builder_v2_payload = _get_authoritative_builder_v2_payload(_raw_wf)
+                    if isinstance(_builder_v2_payload, dict):
+                        authoritative_builder_v2 = True
+                        workflow_data = ensure_v2_recipe_data(_builder_v2_payload, source="PromptExtractor")
+
+                        _models = workflow_data.get('models', {}) if isinstance(workflow_data.get('models'), dict) else {}
+                        _model_a_block = _models.get('model_a') if isinstance(_models.get('model_a'), dict) else {}
+                        _model_b_block = _models.get('model_b') if isinstance(_models.get('model_b'), dict) else {}
+
+                        positive_prompt = str(_model_a_block.get('positive_prompt', positive_prompt) or '')
+                        negative_prompt = str(_model_a_block.get('negative_prompt', negative_prompt) or '')
+                        model_a = str(_model_a_block.get('model', model_a) or '')
+                        model_b = str(_model_b_block.get('model', model_b) or '')
+                        loras_a = _model_a_block.get('loras', loras_a) if isinstance(_model_a_block.get('loras'), list) else loras_a
+                        loras_b = _model_b_block.get('loras', loras_b) if isinstance(_model_b_block.get('loras'), list) else loras_b
+
+                        if unique_id is not None:
+                            from ..py.lora_utils import resolve_lora_path as _resolve_lora
+                            _lora_avail = {}
+                            for _l in loras_a + loras_b:
+                                _ln = _l.get('name', '') if isinstance(_l, dict) else ''
+                                if _ln:
+                                    _, _found = _resolve_lora(_ln)
+                                    _lora_avail[_ln] = _found
+
+                            _m_a_sampler = _model_a_block.get('sampler') if isinstance(_model_a_block.get('sampler'), dict) else {}
+                            _m_a_res = _model_a_block.get('resolution') if isinstance(_model_a_block.get('resolution'), dict) else {}
+                            _m_a_clip = _model_a_block.get('clip', [])
+                            if not isinstance(_m_a_clip, list):
+                                _m_a_clip = [_m_a_clip] if _m_a_clip else []
+
+                            _last_extracted_info[str(unique_id)] = {
+                                '_source_file':       file_path,
+                                '_source_folder':     source_folder,
+                                'positive_prompt':    positive_prompt,
+                                'negative_prompt':    negative_prompt,
+                                'model_a':            model_a,
+                                'model_b':            model_b,
+                                'model_a_found':      True,
+                                'model_b_found':      True,
+                                'loras_a':            loras_a,
+                                'loras_b':            loras_b,
+                                'vae':                {'name': str(_model_a_block.get('vae', '') or ''), 'source': 'RecipeBuilder'},
+                                'vae_found':          True,
+                                'clip':               {'names': _m_a_clip, 'type': str(_model_a_block.get('clip_type', '') or ''), 'source': 'RecipeBuilder'},
+                                'sampler':            _m_a_sampler,
+                                'resolution':         _m_a_res,
+                                'is_video':           ext in ['.mp4', '.webm', '.mov', '.avi'],
+                                'model_family':       str(_model_a_block.get('family', '') or ''),
+                                'model_family_label': get_family_label(str(_model_a_block.get('family', '') or '')),
+                                'lora_availability':  _lora_avail,
+                            }
+                            print(f"[PromptExtractor] Cached authoritative Builder v2 info for node {unique_id}")
+
+                        print(f"[PromptExtractor] Using authoritative Builder v2 metadata ({len(_models)} model slots)")
+                        raise _BuilderV2Done()
+
                     _is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
 
                     _sampler  = extract_sampler_params(prompt_data, _raw_wf)
@@ -3915,6 +3982,10 @@ class PromptExtractor:
                         _res_b, _ = resolve_model_name(model_b)
                         _simplified['model_b_found'] = _res_b is not None
                     _vae_name = _vae.get('name', '') if isinstance(_vae, dict) else (_vae or '')
+                    if isinstance(_vae_name, list):
+                        _vae_name = next((v for v in _vae_name if isinstance(v, str) and v.strip()), '')
+                    elif not isinstance(_vae_name, str):
+                        _vae_name = str(_vae_name or '')
                     if _vae_name and not _vae_name.startswith('('):
                         _simplified['vae_found'] = resolve_vae_name(_vae_name) is not None
                     workflow_data = _simplified
@@ -3953,6 +4024,8 @@ class PromptExtractor:
                         }
                         print(f"[PromptExtractor] Cached extracted info for node {unique_id}")
 
+                except _BuilderV2Done:
+                    pass
                 except Exception as e:
                     print(f"[PromptExtractor] Error building structured workflow_data: {e}")
                     import traceback
@@ -4130,7 +4203,7 @@ class PromptExtractor:
         # the extracted metadata.  Push the merged set into workflow_data
         # (the _simplified dict) and the _last_extracted_info cache so
         # RecipeBuilder's "Update Workflow" button sees the full set.
-        if isinstance(workflow_data, dict) and (final_lora_stack_a or final_lora_stack_b):
+        if isinstance(workflow_data, dict) and not authoritative_builder_v2 and (final_lora_stack_a or final_lora_stack_b):
             def _tuples_to_lora_dicts(stack_tuples):
                 """Convert (path, model_str, clip_str) tuples to LoRA dicts."""
                 result = []

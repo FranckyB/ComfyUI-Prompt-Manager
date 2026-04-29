@@ -194,6 +194,49 @@ def extract_recipe_builder_models_from_workflow(workflow_data):
     return models
 
 
+def _get_authoritative_builder_v2_payload(workflow_data):
+    """Return authoritative v2 payload from RecipeBuilder/WorkflowBuilder extracted_data.
+
+    New multi-model Builder saves a complete v2 workflow payload into node
+    ``extracted_data``. When present, this is the only trustworthy source for
+    extraction because downstream nodes and runtime carriers may not reflect
+    what originally generated the file.
+    """
+    if not isinstance(workflow_data, dict):
+        return None
+
+    best = None
+    best_order = -10**9
+    best_index = -1
+
+    for index, node in enumerate(workflow_data.get('nodes', [])):
+        if not isinstance(node, dict):
+            continue
+        ntype = str(node.get('type', '') or '')
+        if ntype not in ('RecipeBuilder', 'WorkflowBuilder'):
+            continue
+        ed = node.get('extracted_data')
+        if not isinstance(ed, dict):
+            continue
+        if int(ed.get('version', 0) or 0) < 2:
+            continue
+        if not isinstance(ed.get('models'), dict):
+            continue
+
+        try:
+            order = int(node.get('order', index))
+        except Exception:
+            order = index
+
+        # Last Builder in execution/layout order wins.
+        if (best is None) or (order > best_order) or (order == best_order and index > best_index):
+            best = ed
+            best_order = order
+            best_index = index
+
+    return best
+
+
 def _get_embedded_extracted_data(workflow_data):
     """Return the best ``extracted_data`` dict from a WR/WG or PE node, or *None*.
 
@@ -881,6 +924,78 @@ def extract_all_from_file(file_path, source_folder='input'):
         result['is_video'] = True
 
     if not prompt_data and not workflow_data:
+        return result
+
+    # New multi-model Builder format: if a RecipeBuilder/WorkflowBuilder node
+    # embedded a full v2 payload, treat it as authoritative and stop here.
+    builder_v2 = _get_authoritative_builder_v2_payload(workflow_data)
+    if isinstance(builder_v2, dict):
+        models_in = builder_v2.get('models') if isinstance(builder_v2.get('models'), dict) else {}
+        model_slots = ('model_a', 'model_b', 'model_c', 'model_d')
+        models = {}
+        for slot in model_slots:
+            block = models_in.get(slot)
+            if isinstance(block, dict):
+                models[slot] = block
+
+        result['models'] = models
+        for slot in model_slots:
+            block = models.get(slot)
+            result[slot] = str((block or {}).get('model', '') or '') if isinstance(block, dict) else ''
+
+        # Primary preview fields come from model_a for backward compatibility.
+        primary = models.get('model_a') if isinstance(models.get('model_a'), dict) else None
+        if not primary:
+            for slot in model_slots:
+                candidate = models.get(slot)
+                if isinstance(candidate, dict):
+                    primary = candidate
+                    break
+
+        if isinstance(primary, dict):
+            result['positive_prompt'] = str(primary.get('positive_prompt', '') or '')
+            result['negative_prompt'] = str(primary.get('negative_prompt', '') or '')
+            result['loras_a'] = _normalize_builder_lora_list(primary.get('loras', []))
+            model_b_block = models.get('model_b') if isinstance(models.get('model_b'), dict) else None
+            result['loras_b'] = _normalize_builder_lora_list(model_b_block.get('loras', [])) if isinstance(model_b_block, dict) else []
+
+            sampler = primary.get('sampler') if isinstance(primary.get('sampler'), dict) else {}
+            sampler_b = model_b_block.get('sampler') if isinstance(model_b_block, dict) and isinstance(model_b_block.get('sampler'), dict) else {}
+            result['sampler'] = {
+                'steps_a': int(sampler.get('steps', 20) or 20),
+                'steps_b': int(sampler_b.get('steps')) if sampler_b.get('steps') is not None else None,
+                'cfg': float(sampler.get('cfg', 7.0) or 7.0),
+                'denoise': float(sampler.get('denoise', 1.0) or 1.0),
+                'seed_a': int(sampler.get('seed', 0) or 0),
+                'seed_b': int(sampler_b.get('seed')) if sampler_b.get('seed') is not None else None,
+                'sampler_name': str(sampler.get('sampler_name', 'euler') or 'euler'),
+                'scheduler': str(sampler.get('scheduler', 'normal') or 'normal'),
+            }
+
+            resolution = primary.get('resolution') if isinstance(primary.get('resolution'), dict) else {}
+            result['resolution'] = {
+                'width': int(resolution.get('width', 512) or 512),
+                'height': int(resolution.get('height', 512) or 512),
+                'batch_size': int(resolution.get('batch_size', 1) or 1),
+                'length': resolution.get('length'),
+            }
+
+            vae_name = str(primary.get('vae', '') or '')
+            result['vae'] = {'name': vae_name, 'source': 'RecipeBuilder'}
+            clip_names = primary.get('clip', []) if isinstance(primary.get('clip'), list) else []
+            result['clip'] = {
+                'names': [str(x) for x in clip_names if str(x or '').strip()],
+                'type': str(primary.get('clip_type', '') or ''),
+                'source': 'RecipeBuilder',
+            }
+
+        # Video if any slot declares latent length.
+        result['is_video'] = any(
+            isinstance(models.get(slot), dict) and
+            isinstance(models[slot].get('resolution'), dict) and
+            models[slot]['resolution'].get('length') is not None
+            for slot in model_slots
+        )
         return result
 
     extracted = parse_workflow_for_prompts(prompt_data, workflow_data)

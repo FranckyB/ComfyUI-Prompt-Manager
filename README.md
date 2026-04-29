@@ -49,6 +49,8 @@ ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, b
   <img src="docs/images/adv_file_loading.png" alt="Recipe Builder">
 </div>
 
+
+
 ## v2.0 Introduces The Recipe Toolset
 
 Version 2.x introduces a Recipe toolset that can be used on its own, or in combination with the Prompt toolset.
