@@ -75,6 +75,7 @@ let loraManagerAvailable = false;
 let sessionHideNSFW = null;   // null = use preference default
 let sessionViewMode = null;   // null = use preference default
 let sessionEnableThumbnailPreview = null;  // null = use localStorage default
+let sessionBrowserContentFilter = null; // null = use preference default
 
 function getHideNSFW() {
     if (sessionHideNSFW !== null) return sessionHideNSFW;
@@ -93,6 +94,12 @@ function getThumbnailPreviewEnabled() {
     if (settingValue !== undefined) return settingValue;
     const stored = localStorage.getItem("PromptManager.EnableThumbnailPreview");
     return stored !== null ? stored === "true" : true; // Default to true
+}
+
+function getBrowserContentFilter() {
+    if (sessionBrowserContentFilter !== null) return sessionBrowserContentFilter;
+    const saved = String(app.ui.settings.getSettingValue("PromptManager.BrowserContentFilter") || "all").toLowerCase();
+    return (saved === "prompt" || saved === "recipe" || saved === "all") ? saved : "all";
 }
 
 /**
@@ -1077,6 +1084,7 @@ function hasConnectedWorkflowInput(node) {
 function getPromptNamesForCategory(node, category, options = {}) {
     const hideNSFW = options.hideNSFW === true;
     const workflowOnly = options.workflowOnly === true;
+    const contentFilter = String(options.contentFilter || "all").toLowerCase();
     const categoryPrompts = node?.prompts?.[category];
     if (!categoryPrompts || typeof categoryPrompts !== "object") return [];
 
@@ -1088,10 +1096,22 @@ function getPromptNamesForCategory(node, category, options = {}) {
         promptNames = promptNames.filter((name) => categoryPrompts?.[name]?.nsfw !== true);
     }
 
-    if (workflowOnly) {
+    if (workflowOnly || contentFilter !== "all") {
         promptNames = promptNames.filter((name) => {
             const entry = categoryPrompts?.[name];
-            return hasWorkflowDataPayload(entry?.workflow_data) || hasPromptPresetPayload(entry);
+            const hasRecipeData = hasWorkflowDataPayload(entry?.workflow_data);
+            const hasPromptData = hasPromptPresetPayload(entry);
+
+            if (workflowOnly && !(hasRecipeData || hasPromptData)) {
+                return false;
+            }
+            if (contentFilter === "prompt") {
+                return hasPromptData;
+            }
+            if (contentFilter === "recipe") {
+                return hasRecipeData;
+            }
+            return true;
         });
     }
 
@@ -1099,12 +1119,28 @@ function getPromptNamesForCategory(node, category, options = {}) {
 }
 
 function getVisibleCategories(node, options = {}) {
+    const hideNSFW = options.hideNSFW === true;
+    const workflowOnly = options.workflowOnly === true;
+    const contentFilter = String(options.contentFilter || "all").toLowerCase();
+    const filterEmptyCategories = options.filterEmptyCategories === true;
+    const keepCategory = String(options.keepCategory || "");
+
     const categories = Object.keys(node?.prompts || {})
         .filter((c) => c !== "__meta__")
         .sort((a, b) => a.localeCompare(b));
 
-    // Keep empty categories visible so users can still save prompts/workflows into them.
-    return categories;
+    if (!filterEmptyCategories) {
+        // Keep empty categories visible so users can still save prompts/workflows into them.
+        return categories;
+    }
+
+    const filtered = categories.filter((category) => {
+        if (keepCategory && category === keepCategory) return true;
+        const names = getPromptNamesForCategory(node, category, { hideNSFW, workflowOnly, contentFilter });
+        return names.length > 0;
+    });
+
+    return filtered;
 }
 
 function filterPromptDropdown(node, options = {}) {
@@ -6597,6 +6633,10 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         searchWrapper.appendChild(searchInput);
         searchWrapper.appendChild(clearBtn);
 
+        // Prompt/Recipe/All filter button
+        let contentFilterState = getBrowserContentFilter();
+        const contentFilterBtn = document.createElement("button");
+
         // NSFW toggle button
         let hideNSFWState = getHideNSFW();
         const nsfwBtn = document.createElement("button");
@@ -6620,7 +6660,35 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             }
             nsfwBtn.title = hideNSFWState ? "NSFW content is hidden — click to show" : "NSFW content is visible — click to hide";
         };
+        const updateContentFilterBtn = () => {
+            if (contentFilterState === "prompt") {
+                contentFilterBtn.textContent = "Type: Prompt";
+                contentFilterBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.18); border-color: rgba(56, 130, 246, 0.75); color: #dbeafe;`;
+                contentFilterBtn.title = "Showing prompt entries only";
+            } else if (contentFilterState === "recipe") {
+                contentFilterBtn.textContent = "Type: Recipe";
+                contentFilterBtn.style.cssText = btnStyle + `background: rgba(235, 140, 35, 0.18); border-color: rgba(235, 140, 35, 0.8); color: #ffe7c2;`;
+                contentFilterBtn.title = "Showing recipe entries only";
+            } else {
+                contentFilterBtn.textContent = "Type: All";
+                contentFilterBtn.style.cssText = btnStyle;
+                contentFilterBtn.title = "Showing prompts and recipes";
+            }
+        };
+        updateContentFilterBtn();
         updateNsfwBtn();
+        contentFilterBtn.onmouseover = () => {
+            if (contentFilterState === "all") {
+                contentFilterBtn.style.background = "#38414c";
+                contentFilterBtn.style.color = "#fff";
+            }
+        };
+        contentFilterBtn.onmouseout = () => {
+            if (contentFilterState === "all") {
+                contentFilterBtn.style.background = "#313843";
+                contentFilterBtn.style.color = "#aaa";
+            }
+        };
         nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#38414c'; nsfwBtn.style.color = '#fff'; } };
         nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#313843'; nsfwBtn.style.color = '#aaa'; } };
 
@@ -6637,6 +6705,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         updateViewModeBtn();
 
         controlsBar.appendChild(searchWrapper);
+        controlsBar.appendChild(contentFilterBtn);
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
 
@@ -6654,6 +6723,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         let categories = getVisibleCategories(node, {
             hideNSFW: hideNSFWState,
             workflowOnly,
+            contentFilter: contentFilterState,
+            filterEmptyCategories: true,
             keepCategory: mode === "save" ? selectedCategory : "",
         });
         let selectedSaveName = initialSaveName;
@@ -6667,6 +6738,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             categories = getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
+                contentFilter: contentFilterState,
+                filterEmptyCategories: true,
                 keepCategory: mode === "save" ? selectedCategory : "",
             });
 
@@ -6971,6 +7044,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             categories = getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
+                contentFilter: contentFilterState,
+                filterEmptyCategories: true,
                 keepCategory: mode === "save" ? selectedCategory : "",
             });
             ensureSelectedCategory();
@@ -7080,6 +7155,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             let promptNames = getPromptNamesForCategory(node, selectedCategory, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
+                contentFilter: contentFilterState,
             });
 
             // Filter by search
@@ -7739,6 +7815,22 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         // Event handlers for controls
+        contentFilterBtn.onclick = () => {
+            if (contentFilterState === "all") {
+                contentFilterState = "prompt";
+            } else if (contentFilterState === "prompt") {
+                contentFilterState = "recipe";
+            } else {
+                contentFilterState = "all";
+            }
+
+            sessionBrowserContentFilter = contentFilterState;
+            app.ui.settings.setSettingValue("PromptManager.BrowserContentFilter", contentFilterState);
+            updateContentFilterBtn();
+            rebuildCategoryList();
+            renderContent(searchInput.value);
+        };
+
         nsfwBtn.onclick = () => {
             hideNSFWState = !hideNSFWState;
             sessionHideNSFW = hideNSFWState;
