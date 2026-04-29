@@ -127,21 +127,6 @@ _LIVE_CKPTS, _LIVE_UNETS, _LIVE_VAES, _LIVE_CLIPS = _get_live_loader_combo_types
 
 
 _MODEL_KEYS = ("model_a", "model_b", "model_c", "model_d")
-_LEGACY_TOP_LEVEL_RECIPE_KEYS = (
-    "family",
-    "model_a",
-    "model_b",
-    "positive_prompt",
-    "negative_prompt",
-    "loras_a",
-    "loras_b",
-    "vae",
-    "clip",
-    "clip_type",
-    "loader_type",
-    "sampler",
-    "resolution",
-)
 
 
 def _normalize_model_slot(value):
@@ -185,9 +170,7 @@ def _relay_default_model_block():
     }
 
 
-def _selected_v2_block(wf, model_slot, create=False):
-    if int(wf.get("version", 0) or 0) < 2:
-        return None
+def _selected_model_block(wf, model_slot, create=False):
     if not isinstance(wf.get("models"), dict):
         if not create:
             return None
@@ -248,33 +231,33 @@ class WorkflowRelay:
         return {
             "required": {},
             "optional": {
-                "recipe_data":     ("RECIPE_DATA",  {"forceInput": True, "tooltip": "Optional recipe_data input. If omitted, bridge starts from an empty payload dict."}),
-                "model_slot":      (_MODEL_KEYS,    {"default": "model_a", "tooltip": "Select which model slot to read/update in recipe_data."}),
-                "model":           ("MODEL",        {"tooltip": "Pass-through Model"}),
-                "clip":            ("CLIP",         {"tooltip": "Pass-through CLIP"}),
-                "positive":        ("CONDITIONING", {"tooltip": "Pass-through positive conditioning"}),
-                "negative":        ("CONDITIONING", {"tooltip": "Pass-through negative conditioning"}),
-                "vae":             ("VAE",          {"tooltip": "Pass-through VAE"}),
-                "latent":          ("LATENT",       {"tooltip": "Pass-through latent"}),
-                "image":           ("IMAGE",        {"tooltip": "Pass-through image"}),
-                "mask":            ("MASK",         {"tooltip": "Pass-through mask"}),
-                "extra":           (ANY_TYPE,       {"tooltip": "Pass-through extra data (any type)"}),
-                "seed":            ("INT",          {"forceInput": True, "tooltip": "Override sampler seed"}),
-                "steps":           ("INT",          {"forceInput": True, "tooltip": "Override sampling steps"}),
-                "cfg":             ("FLOAT",        {"forceInput": True, "tooltip": "Override CFG scale"}),
+                "recipe_data":     ("RECIPE_DATA",       {"forceInput": True, "tooltip": "Optional recipe_data input. If omitted, bridge starts from an empty payload dict."}),
+                "model_slot":      (_MODEL_KEYS,         {"default": "model_a", "tooltip": "Select which model slot to read/update in recipe_data."}),
+                "model":           ("MODEL",             {"tooltip": "Pass-through Model"}),
+                "clip":            ("CLIP",              {"tooltip": "Pass-through CLIP"}),
+                "positive":        ("CONDITIONING",      {"tooltip": "Pass-through positive conditioning"}),
+                "negative":        ("CONDITIONING",      {"tooltip": "Pass-through negative conditioning"}),
+                "vae":             ("VAE",               {"tooltip": "Pass-through VAE"}),
+                "latent":          ("LATENT",            {"tooltip": "Pass-through latent"}),
+                "image":           ("IMAGE",             {"tooltip": "Pass-through image"}),
+                "mask":            ("MASK",              {"tooltip": "Pass-through mask"}),
+                "extra":           (ANY_TYPE,            {"tooltip": "Pass-through extra data (any type)"}),
+                "seed":            ("INT",               {"forceInput": True, "tooltip": "Override sampler seed"}),
+                "steps":           ("INT",               {"forceInput": True, "tooltip": "Override sampling steps"}),
+                "cfg":             ("FLOAT",             {"forceInput": True, "tooltip": "Override CFG scale"}),
                 "sampler_name":    (cls._SAMPLER_ENUM,   {"forceInput": True, "tooltip": "Override sampler name"}),
                 "scheduler":       (cls._SCHEDULER_ENUM, {"forceInput": True, "tooltip": "Override scheduler"}),
-                "denoise":         ("FLOAT",        {"forceInput": True, "tooltip": "Override denoise"}),
-                "pos_prompt":      ("STRING",       {"forceInput": True, "tooltip": "Override positive prompt"}),
-                "neg_prompt":      ("STRING",       {"forceInput": True, "tooltip": "Override negative prompt"}),
-                "lora_stack":      ("LORA_STACK",   {"tooltip": "Override LoRA stack"}),
-                "width":           ("INT",          {"forceInput": True, "tooltip": "Override width"}),
-                "height":          ("INT",          {"forceInput": True, "tooltip": "Override height"}),
-                "batch_size":      ("INT",          {"forceInput": True, "tooltip": "Override batch size"}),
-                "length":          ("INT",          {"forceInput": True, "tooltip": "Override video length"}),
-                "model_name":      ("STRING",       {"forceInput": True, "tooltip": "Optional model name/path. Resolves and writes recipe model field(s)."}),
-                "family":          ("STRING",       {"forceInput": True, "tooltip": "Optional model family override. Writes selected slot family in recipe_data."}),
-                "model_data":      (ANY_TYPE,       {"forceInput": True, "tooltip": "Optional structured model payload from Recipe Model Picker."}),
+                "denoise":         ("FLOAT",             {"forceInput": True, "tooltip": "Override denoise"}),
+                "pos_prompt":      ("STRING",            {"forceInput": True, "tooltip": "Override positive prompt"}),
+                "neg_prompt":      ("STRING",            {"forceInput": True, "tooltip": "Override negative prompt"}),
+                "lora_stack":      ("LORA_STACK",        {"tooltip": "Override LoRA stack"}),
+                "width":           ("INT",               {"forceInput": True, "tooltip": "Override width"}),
+                "height":          ("INT",               {"forceInput": True, "tooltip": "Override height"}),
+                "batch_size":      ("INT",               {"forceInput": True, "tooltip": "Override batch size"}),
+                "length":          ("INT",               {"forceInput": True, "tooltip": "Override video length"}),
+                "model_name":      ("STRING",            {"forceInput": True, "tooltip": "Optional model name/path. Resolves and writes recipe model field(s)."}),
+                "family":          ("STRING",            {"forceInput": True, "tooltip": "Optional model family override. Writes selected slot family in recipe_data."}),
+                "model_data":      (ANY_TYPE,            {"forceInput": True, "tooltip": "Optional structured model payload from Recipe Model Picker."}),
             },
         }
 
@@ -367,8 +350,41 @@ class WorkflowRelay:
             if available and rel_path:
                 return rel_path, True
 
+            # Some stored payloads contain absolute paths or names with extensions.
+            # Retry with basename and extension-stripped basename before declaring missing.
+            candidate_base = os.path.basename(candidate.replace("\\", "/")).strip()
+            if candidate_base:
+                rel_path, available = get_lora_relative_path(candidate_base)
+                if available and rel_path:
+                    return rel_path, True
+
+                candidate_base_no_ext = strip_lora_extension(candidate_base)
+                if candidate_base_no_ext and candidate_base_no_ext != candidate_base:
+                    rel_path, available = get_lora_relative_path(candidate_base_no_ext)
+                    if available and rel_path:
+                        return rel_path, True
+
             _, resolved_available = resolve_lora_path(candidate)
-            return candidate, bool(resolved_available)
+            if resolved_available:
+                rel_path, available = get_lora_relative_path(candidate)
+                if available and rel_path:
+                    return rel_path, True
+
+            if candidate_base:
+                _, resolved_available = resolve_lora_path(candidate_base)
+                if resolved_available:
+                    rel_path, available = get_lora_relative_path(candidate_base)
+                    if available and rel_path:
+                        return rel_path, True
+                candidate_base_no_ext = strip_lora_extension(candidate_base)
+                if candidate_base_no_ext and candidate_base_no_ext != candidate_base:
+                    _, resolved_available = resolve_lora_path(candidate_base_no_ext)
+                    if resolved_available:
+                        rel_path, available = get_lora_relative_path(candidate_base_no_ext)
+                        if available and rel_path:
+                            return rel_path, True
+
+            return candidate_base or candidate, False
 
         def _short_display_name(name):
             raw = str(name or "").strip()
@@ -398,7 +414,7 @@ class WorkflowRelay:
             kwargs.get('family') is not None,
             kwargs.get('model_data') is not None,
         ])
-        create_v2_block_on_write = (not has_incoming_data) or has_slot_write_request
+        create_block_on_write = (not has_incoming_data) or has_slot_write_request
 
         # Preserve incoming recipe_data exactly when present.
         # Only fall back to the empty template when no input payload exists.
@@ -417,81 +433,55 @@ class WorkflowRelay:
             wf = dict(DEFAULT_RECIPE_DATA)
             wf['models'] = {}
 
-        selected_slot = _normalize_model_slot(model_slot)
-        selected_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+        # Relay now treats recipe payloads as v2-only canonical data.
+        wf['version'] = 2
+        if not isinstance(wf.get('models'), dict):
+            wf['models'] = {}
 
-        v2_family = selected_block.get('family', '') if isinstance(selected_block, dict) else ''
-        v2_model_name = selected_block.get('model', '') if isinstance(selected_block, dict) else ''
-        v2_positive = selected_block.get('positive_prompt', '') if isinstance(selected_block, dict) else ''
-        v2_negative = selected_block.get('negative_prompt', '') if isinstance(selected_block, dict) else ''
-        v2_vae = selected_block.get('vae', '') if isinstance(selected_block, dict) else ''
-        v2_clip = selected_block.get('clip', []) if isinstance(selected_block, dict) else []
-        v2_clip_type = selected_block.get('clip_type', '') if isinstance(selected_block, dict) else ''
-        v2_loader_type = selected_block.get('loader_type', '') if isinstance(selected_block, dict) else ''
-        v2_loras = selected_block.get('loras', []) if isinstance(selected_block, dict) else []
-        v2_sampler = selected_block.get('sampler', {}) if isinstance(selected_block, dict) and isinstance(selected_block.get('sampler'), dict) else {}
-        v2_resolution = selected_block.get('resolution', {}) if isinstance(selected_block, dict) and isinstance(selected_block.get('resolution'), dict) else {}
+        selected_slot = _normalize_model_slot(model_slot)
+        selected_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+
+        slot_family = selected_block.get('family', '') if isinstance(selected_block, dict) else ''
+        slot_model_name = selected_block.get('model', '') if isinstance(selected_block, dict) else ''
+        slot_positive = selected_block.get('positive_prompt', '') if isinstance(selected_block, dict) else ''
+        slot_negative = selected_block.get('negative_prompt', '') if isinstance(selected_block, dict) else ''
+        slot_vae = selected_block.get('vae', '') if isinstance(selected_block, dict) else ''
+        slot_clip = selected_block.get('clip', []) if isinstance(selected_block, dict) else []
+        slot_loras = selected_block.get('loras', []) if isinstance(selected_block, dict) else []
+        slot_sampler = selected_block.get('sampler', {}) if isinstance(selected_block, dict) and isinstance(selected_block.get('sampler'), dict) else {}
+        slot_resolution = selected_block.get('resolution', {}) if isinstance(selected_block, dict) and isinstance(selected_block.get('resolution'), dict) else {}
 
         sampler = dict(_relay_default_sampler())
         if isinstance(wf.get('sampler'), dict):
             sampler.update(wf.get('sampler', {}))
-        if isinstance(v2_sampler, dict):
-            sampler.update(v2_sampler)
+        if isinstance(slot_sampler, dict):
+            sampler.update(slot_sampler)
 
         resolution = dict(_relay_default_resolution())
         if isinstance(wf.get('resolution'), dict):
             resolution.update(wf.get('resolution', {}))
-        if isinstance(v2_resolution, dict):
-            resolution.update(v2_resolution)
-
-        if isinstance(v2_positive, str) and v2_positive and not wf.get('positive_prompt'):
-            wf['positive_prompt'] = v2_positive
-        if isinstance(v2_negative, str) and v2_negative and not wf.get('negative_prompt'):
-            wf['negative_prompt'] = v2_negative
-        if isinstance(v2_family, str) and v2_family and not wf.get('family'):
-            wf['family'] = v2_family
-        if isinstance(v2_vae, str) and v2_vae and not wf.get('vae'):
-            wf['vae'] = v2_vae
-        if isinstance(v2_clip, list) and v2_clip and not wf.get('clip'):
-            wf['clip'] = v2_clip
-        if isinstance(v2_clip_type, str) and v2_clip_type and not wf.get('clip_type'):
-            wf['clip_type'] = v2_clip_type
-        if isinstance(v2_loader_type, str) and v2_loader_type and not wf.get('loader_type'):
-            wf['loader_type'] = v2_loader_type
-        if isinstance(v2_model_name, str) and v2_model_name and not wf.get('model_a'):
-            wf['model_a'] = v2_model_name
-        if isinstance(v2_loras, list) and v2_loras and not wf.get('loras_a'):
-            wf['loras_a'] = v2_loras
+        if isinstance(slot_resolution, dict):
+            resolution.update(slot_resolution)
 
         # -- Apply top-level overrides -------------------------------
         pos_text = kwargs.get('pos_prompt')
         if pos_text is not None:
-            wf['positive_prompt'] = pos_text
-            if int(wf.get('version', 0) or 0) >= 2:
-                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-                if isinstance(target_block, dict):
-                    target_block['positive_prompt'] = pos_text
+            target_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+            if isinstance(target_block, dict):
+                target_block['positive_prompt'] = pos_text
 
         neg_text = kwargs.get('neg_prompt')
         if neg_text is not None:
-            wf['negative_prompt'] = neg_text
-            if int(wf.get('version', 0) or 0) >= 2:
-                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-                if isinstance(target_block, dict):
-                    target_block['negative_prompt'] = neg_text
+            target_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+            if isinstance(target_block, dict):
+                target_block['negative_prompt'] = neg_text
 
         # -- LoRA stack overrides ------------------------------------
         if kwargs.get('lora_stack') is not None:
             normalized_stack = _normalize_lora_stack_input(kwargs['lora_stack'])
-            wf['loras_a'] = normalized_stack
-            # Keep dual-stack recipes coherent when a single override is used.
-            if 'loras_b' in wf:
-                wf['loras_b'] = normalized_stack
-
-            if int(wf.get('version', 0) or 0) >= 2:
-                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-                if isinstance(target_block, dict):
-                    target_block['loras'] = normalized_stack
+            target_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+            if isinstance(target_block, dict):
+                target_block['loras'] = normalized_stack
 
         # -- Resolution overrides ------------------------------------
         for key in ('width', 'height', 'batch_size', 'length'):
@@ -512,44 +502,42 @@ class WorkflowRelay:
                 sampler[key] = kwargs[key]
         wf['sampler'] = sampler
 
-        if int(wf.get('version', 0) or 0) >= 2:
-            target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-            if isinstance(target_block, dict):
-                bs = target_block.get('sampler', {}) if isinstance(target_block.get('sampler'), dict) else {}
-                if kwargs.get('steps') is not None:
-                    bs['steps'] = kwargs['steps']
-                if kwargs.get('seed') is not None:
-                    bs['seed'] = kwargs['seed']
-                for key in ('cfg', 'denoise', 'sampler_name', 'scheduler'):
-                    if kwargs.get(key) is not None:
-                        bs[key] = kwargs[key]
-                target_block['sampler'] = bs
+        target_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+        if isinstance(target_block, dict):
+            bs = target_block.get('sampler', {}) if isinstance(target_block.get('sampler'), dict) else {}
+            if kwargs.get('steps') is not None:
+                bs['steps'] = kwargs['steps']
+            if kwargs.get('seed') is not None:
+                bs['seed'] = kwargs['seed']
+            for key in ('cfg', 'denoise', 'sampler_name', 'scheduler'):
+                if kwargs.get(key) is not None:
+                    bs[key] = kwargs[key]
+            target_block['sampler'] = bs
 
-                br = target_block.get('resolution', {}) if isinstance(target_block.get('resolution'), dict) else {}
-                for key in ('width', 'height', 'batch_size', 'length'):
-                    if kwargs.get(key) is not None:
-                        br[key] = kwargs[key]
-                if br:
-                    target_block['resolution'] = br
+            br = target_block.get('resolution', {}) if isinstance(target_block.get('resolution'), dict) else {}
+            for key in ('width', 'height', 'batch_size', 'length'):
+                if kwargs.get(key) is not None:
+                    br[key] = kwargs[key]
+            if br:
+                target_block['resolution'] = br
 
         # -- Model/CLIP/VAE name overrides ---------------------------
         model_name_in = kwargs.get('model_name')
         if isinstance(model_name_in, str) and model_name_in.strip():
             resolved_name, _ = resolve_model_name(model_name_in)
             chosen_name = resolved_name or os.path.basename(model_name_in.strip().replace("\\", "/"))
-            wf['model_a'] = chosen_name
-
-            if int(wf.get('version', 0) or 0) >= 2:
-                target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-                if isinstance(target_block, dict):
-                    target_block['model'] = chosen_name
+            target_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+            if isinstance(target_block, dict):
+                target_block['model'] = chosen_name
 
             family = get_model_family(chosen_name)
             if family:
-                wf['family'] = family
                 family_spec = MODEL_FAMILIES.get(family, {})
-                wf['clip_type'] = family_spec.get('clip_type', '')
-                wf['loader_type'] = 'checkpoint' if family_spec.get('checkpoint', False) else 'unet'
+                target_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+                if isinstance(target_block, dict):
+                    target_block['family'] = family
+                    target_block['clip_type'] = family_spec.get('clip_type', '')
+                    target_block['loader_type'] = 'checkpoint' if family_spec.get('checkpoint', False) else 'unet'
 
         # -- Pass-through MODEL / CLIP / VAE -------------------------
         # Priority: explicit connected inputs > embedded objects in workflow_data.
@@ -564,7 +552,7 @@ class WorkflowRelay:
         selected_loader_type = (
             str((selected_block or {}).get('loader_type', '')).strip().lower()
             if isinstance(selected_block, dict)
-            else str(wf.get('loader_type', '')).strip().lower()
+            else ''
         )
 
         clip = kwargs.get('clip')
@@ -629,16 +617,17 @@ class WorkflowRelay:
                 return False
             if lora_item.get('active', True) is False:
                 return False
-            if lora_item.get('available', True) is False:
-                return False
+            # Ignore persisted availability flags; they may be stale across sessions.
+            # Use current filesystem resolution as source of truth.
             return available
 
+        legacy_slot_loras = []
         lora_stack = [
             (_resolve_lora_output_path(item)[0], item.get('model_strength', 1.0), item.get('clip_strength', 1.0))
-            for item in (wf.get('loras_a', []) if isinstance(wf.get('loras_a', []), list) else [])
+            for item in legacy_slot_loras
             if _is_active_available(item)
         ]
-        final_selected = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
+        final_selected = _selected_model_block(wf, selected_slot, create=create_block_on_write)
         selected_loras = final_selected.get('loras', []) if isinstance(final_selected, dict) and isinstance(final_selected.get('loras'), list) else []
         if selected_loras:
             lora_stack = [
@@ -646,10 +635,10 @@ class WorkflowRelay:
                 for item in selected_loras
                 if _is_active_available(item)
             ]
-        elif not lora_stack and isinstance(v2_loras, list):
+        elif not lora_stack and isinstance(slot_loras, list):
             lora_stack = [
                 (_resolve_lora_output_path(item)[0], item.get('model_strength', 1.0), item.get('clip_strength', 1.0))
-                for item in v2_loras
+                for item in slot_loras
                 if _is_active_available(item)
             ]
 
@@ -665,10 +654,10 @@ class WorkflowRelay:
         if isinstance(final_selected, dict):
             final_model_name = _short_display_name(final_selected.get('model', ''))
         if not final_model_name:
-            final_model_name = _short_display_name(wf.get('model_a', '') or v2_model_name)
+            final_model_name = _short_display_name(slot_model_name)
 
-        final_pos = (final_selected.get('positive_prompt', '') if isinstance(final_selected, dict) else '') or wf.get('positive_prompt', '') or v2_positive
-        final_neg = (final_selected.get('negative_prompt', '') if isinstance(final_selected, dict) else '') or wf.get('negative_prompt', '') or v2_negative
+        final_pos = (final_selected.get('positive_prompt', '') if isinstance(final_selected, dict) else '') or slot_positive
+        final_neg = (final_selected.get('negative_prompt', '') if isinstance(final_selected, dict) else '') or slot_negative
 
         raw_model_data = kwargs.get('model_data')
         if isinstance(raw_model_data, str):
@@ -692,15 +681,13 @@ class WorkflowRelay:
         family_from_data = str(model_data_in.get('family', '') or '').strip()
         clip_type_from_data = str(model_data_in.get('clip_type', '') or '').strip()
 
-        selected_model_raw = (final_selected.get('model', '') if isinstance(final_selected, dict) else '') or wf.get('model_a', '') or v2_model_name or ''
-        selected_vae_raw = (final_selected.get('vae', '') if isinstance(final_selected, dict) else '') or wf.get('vae', '') or v2_vae or ''
+        selected_model_raw = (final_selected.get('model', '') if isinstance(final_selected, dict) else '') or slot_model_name or ''
+        selected_vae_raw = (final_selected.get('vae', '') if isinstance(final_selected, dict) else '') or slot_vae or ''
         selected_clip_raw = ''
         if isinstance(final_selected, dict) and isinstance(final_selected.get('clip'), list) and final_selected.get('clip'):
             selected_clip_raw = str(final_selected.get('clip')[0] or '').strip()
-        elif isinstance(wf.get('clip'), list) and wf.get('clip'):
-            selected_clip_raw = str(wf.get('clip')[0] or '').strip()
-        elif isinstance(v2_clip, list) and v2_clip:
-            selected_clip_raw = str(v2_clip[0] or '').strip()
+        elif isinstance(slot_clip, list) and slot_clip:
+            selected_clip_raw = str(slot_clip[0] or '').strip()
 
         selected_model_name = str(selected_model_raw or '').strip()
         selected_vae_name = str(selected_vae_raw or '').strip()
@@ -726,78 +713,78 @@ class WorkflowRelay:
         if clip_name_in:
             selected_clip_name = clip_name_in
 
-        is_v2_recipe = int(wf.get('version', 0) or 0) >= 2
-
-        if is_v2_recipe:
-            target_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-            if isinstance(target_block, dict):
-                if selected_model_name:
-                    target_block['model'] = selected_model_name
-                if selected_loader_type:
-                    target_block['loader_type'] = selected_loader_type
-                if family_from_data:
-                    target_block['family'] = family_from_data
-                if clip_type_from_data:
-                    target_block['clip_type'] = clip_type_from_data
-                if selected_vae_name:
-                    target_block['vae'] = selected_vae_name
-                if selected_clip_name:
-                    target_block['clip'] = [selected_clip_name]
-        else:
-            # Legacy payload fallback: keep top-level writes for non-v2 dicts.
+        target_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+        if isinstance(target_block, dict):
             if selected_model_name:
-                wf['model_a'] = selected_model_name
+                target_block['model'] = selected_model_name
             if selected_loader_type:
-                wf['loader_type'] = selected_loader_type
+                target_block['loader_type'] = selected_loader_type
             if family_from_data:
-                wf['family'] = family_from_data
+                target_block['family'] = family_from_data
             if clip_type_from_data:
-                wf['clip_type'] = clip_type_from_data
+                target_block['clip_type'] = clip_type_from_data
             if selected_vae_name:
-                wf['vae'] = selected_vae_name
+                target_block['vae'] = selected_vae_name
             if selected_clip_name:
-                wf['clip'] = [selected_clip_name]
+                target_block['clip'] = [selected_clip_name]
 
         if selected_model_name:
             detected_family = get_model_family(selected_model_name)
             if detected_family:
-                if is_v2_recipe:
-                    detected_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-                    if isinstance(detected_block, dict):
-                        detected_block['family'] = detected_family
-                else:
-                    wf['family'] = detected_family
+                detected_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+                if isinstance(detected_block, dict):
+                    detected_block['family'] = detected_family
 
         family_in = kwargs.get('family')
         if family_in is not None:
             family_override = str(family_in or '').strip()
-            if is_v2_recipe:
-                family_block = _selected_v2_block(wf, selected_slot, create=create_v2_block_on_write)
-                if isinstance(family_block, dict):
-                    family_block['family'] = family_override
-            else:
-                wf['family'] = family_override
+            family_block = _selected_model_block(wf, selected_slot, create=create_block_on_write)
+            if isinstance(family_block, dict):
+                family_block['family'] = family_override
 
         # -- Extract all output values -------------------------------
         model_name = _short_display_name(selected_model_name) or final_model_name
         family_out = ''
-        if is_v2_recipe:
-            current_block = _selected_v2_block(wf, selected_slot, create=False)
-            if isinstance(current_block, dict):
-                family_out = str(current_block.get('family', '') or '').strip()
+        current_block = _selected_model_block(wf, selected_slot, create=False)
+        if isinstance(current_block, dict):
+            family_out = str(current_block.get('family', '') or '').strip()
         if not family_out:
-            family_out = str(wf.get('family', '') or v2_family or '').strip()
+            family_out = str(slot_family or '').strip()
+
+        resolved_ckpt_name, ckpt_found = _resolve_rel_path(selected_model_name, ("checkpoints",))
+        resolved_unet_name, unet_found = _resolve_rel_path(selected_model_name, ("diffusion_models", "unet", "unet_gguf"))
+
+        # Infer loader type when metadata is missing but model path resolves.
+        if selected_loader_type not in ('checkpoint', 'unet', 'diffusion'):
+            if ckpt_found and not unet_found:
+                selected_loader_type = 'checkpoint'
+            elif unet_found and not ckpt_found:
+                selected_loader_type = 'unet'
+            elif ckpt_found and unet_found:
+                family_spec = MODEL_FAMILIES.get(family_out, {}) if family_out else {}
+                selected_loader_type = 'checkpoint' if family_spec.get('checkpoint', False) else 'unet'
 
         # Always emit string outputs for combo-name sockets to avoid None flowing
         # into downstream standard loader nodes.
-        ckpt_out = ckpt_name_in or (selected_model_name if selected_loader_type == 'checkpoint' else "")
-        unet_out = unet_name_in or (selected_model_name if selected_loader_type in ('unet', 'diffusion') else "")
+        if ckpt_name_in:
+            ckpt_out = ckpt_name_in
+        elif selected_loader_type == 'checkpoint':
+            ckpt_out = resolved_ckpt_name if ckpt_found else (selected_model_name or "")
+        elif ckpt_found and not unet_found:
+            ckpt_out = resolved_ckpt_name
+        else:
+            ckpt_out = ""
+
+        if unet_name_in:
+            unet_out = unet_name_in
+        elif selected_loader_type in ('unet', 'diffusion'):
+            unet_out = resolved_unet_name if unet_found else (selected_model_name or "")
+        elif unet_found and not ckpt_found:
+            unet_out = resolved_unet_name
+        else:
+            unet_out = ""
         vae_name_out = selected_vae_name or ""
         clip_name_out = selected_clip_name or ""
-
-        if is_v2_recipe:
-            for legacy_key in _LEGACY_TOP_LEVEL_RECIPE_KEYS:
-                wf.pop(legacy_key, None)
 
         return (
             wf,

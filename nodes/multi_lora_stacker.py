@@ -5,6 +5,11 @@ import os
 import sys
 
 from ..py.lora_utils import resolve_lora_path
+try:
+    from ..py.lora_utils import get_lora_relative_path
+except Exception:
+    def get_lora_relative_path(lora_name):
+        return str(lora_name or ""), False
 
 
 def _try_get_lm_get_lora_info():
@@ -46,6 +51,26 @@ def _build_lora_stack(loras_json):
     get_lora_info = _try_get_lm_get_lora_info()
     stack = []
 
+    def _normalize_to_relative_lora(raw_value, fallback_name):
+        candidate = str(raw_value or "").strip()
+        if candidate:
+            rel_path, available = get_lora_relative_path(candidate)
+            if available and rel_path:
+                return rel_path
+
+            candidate_base = os.path.basename(candidate.replace("\\", "/")).strip()
+            if candidate_base:
+                rel_path, available = get_lora_relative_path(candidate_base)
+                if available and rel_path:
+                    return rel_path
+
+        fallback = str(fallback_name or "").strip()
+        if fallback:
+            rel_path, available = get_lora_relative_path(fallback)
+            if available and rel_path:
+                return rel_path
+        return fallback
+
     for lora in loras:
         if not isinstance(lora, dict):
             continue
@@ -72,15 +97,15 @@ def _build_lora_stack(loras_json):
             try:
                 result = get_lora_info(name)
                 if isinstance(result, tuple) and result[0]:
-                    lora_path = result[0]
+                    lora_path = _normalize_to_relative_lora(result[0], name)
             except Exception:
                 pass
 
         if not lora_path:
             resolved, available = resolve_lora_path(name)
-            lora_path = resolved if (available and resolved) else name
+            lora_path = _normalize_to_relative_lora(resolved if (available and resolved) else name, name)
 
-        stack.append((lora_path.replace("/", os.sep), strength, clip_strength))
+        stack.append((lora_path, strength, clip_strength))
 
     return stack
 

@@ -61,6 +61,11 @@ from .prompt_extractor import (
     get_placeholder_image_tensor,
 )
 from ..py.lora_utils import resolve_lora_path, strip_lora_extension
+try:
+    from ..py.lora_utils import get_lora_relative_path
+except Exception:
+    def get_lora_relative_path(lora_name):
+        return str(lora_name or ''), False
 
 # ── Sampler/scheduler lists ──────────────────────────────────────────────────
 SAMPLERS   = comfy.samplers.KSampler.SAMPLERS
@@ -1162,6 +1167,22 @@ class WorkflowBuilder:
                 by_name[lst.get('name', '')] = lst
             return list(by_name.values())
 
+        def _canonical_lora_path(path_or_name):
+            candidate = str(path_or_name or '').strip()
+            if not candidate:
+                return ''
+
+            rel_path, available = get_lora_relative_path(candidate)
+            if available and rel_path:
+                return rel_path
+
+            candidate_base = os.path.basename(candidate.replace('\\', '/')).strip()
+            if candidate_base:
+                rel_path, available = get_lora_relative_path(candidate_base)
+                if available and rel_path:
+                    return rel_path
+            return candidate
+
         def _normalize_input_lora_stack(raw_stack):
             normalized = []
             if not raw_stack:
@@ -1202,7 +1223,7 @@ class WorkflowBuilder:
                 if not name:
                     continue
 
-                path_name = str(name)
+                path_name = _canonical_lora_path(name)
                 norm_name = strip_lora_extension(os.path.basename(path_name))
                 normalized.append({
                     'name': norm_name,
@@ -1279,7 +1300,7 @@ class WorkflowBuilder:
                 if not name:
                     continue
 
-                path = str(item.get('path', name)).strip() or name
+                path = _canonical_lora_path(item.get('path', name)) or name
                 try:
                     model_strength = float(item.get('model_strength', item.get('strength', 1.0)))
                 except Exception:
@@ -1979,7 +2000,7 @@ class WorkflowBuilder:
                         name = str(item.get('name', '')).strip()
                         if not name:
                             continue
-                        path = str(item.get('path', name)).strip() or name
+                        path = _canonical_lora_path(item.get('path', name)) or name
                         model_strength = _norm_num(item.get('model_strength', item.get('strength', 1.0)), 1.0)
                         clip_strength = _norm_num(item.get('clip_strength', model_strength), model_strength)
                         out.append({
@@ -2487,7 +2508,7 @@ class WorkflowBuilder:
                         active = ov.get('active', lora.get('active', True)) if ov else lora.get('active', True)
                         enriched.append({
                             'name': name,
-                            'path': lora.get('path', name),
+                            'path': _canonical_lora_path(lora.get('path', name)) or name,
                             'strength': float(ov.get('model_strength', lora.get('model_strength', 1.0))),
                             'clip_strength': float(ov.get('clip_strength', lora.get('clip_strength', 1.0))),
                             'active': active,
