@@ -1007,6 +1007,15 @@ function hasWorkflowDataPayload(rawWorkflowData) {
     );
 }
 
+function hasPromptPresetPayload(promptData) {
+    if (!promptData || typeof promptData !== "object") return false;
+    const promptText = String(promptData.prompt || "").trim();
+    const negativeText = String(promptData.negative_prompt || "").trim();
+    const hasLorasA = Array.isArray(promptData.loras_a) && promptData.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
+    const hasLorasB = Array.isArray(promptData.loras_b) && promptData.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
+    return promptText.length > 0 || negativeText.length > 0 || hasLorasA || hasLorasB;
+}
+
 function hasMeaningfulWorkflowData(rawWorkflowData) {
     const wf = parseJsonObjectSafe(rawWorkflowData, null);
     if (!wf || typeof wf !== "object") return false;
@@ -1080,7 +1089,10 @@ function getPromptNamesForCategory(node, category, options = {}) {
     }
 
     if (workflowOnly) {
-        promptNames = promptNames.filter((name) => hasWorkflowDataPayload(categoryPrompts?.[name]?.workflow_data));
+        promptNames = promptNames.filter((name) => {
+            const entry = categoryPrompts?.[name];
+            return hasWorkflowDataPayload(entry?.workflow_data) || hasPromptPresetPayload(entry);
+        });
     }
 
     return promptNames;
@@ -4707,7 +4719,8 @@ async function loadPromptData(node, category, promptName) {
         textWidget.value = promptData.prompt || "";
     }
 
-    // Restore saved workflow_data if present
+    // Restore saved workflow_data if present. Prompt->recipe conversion now
+    // happens in Python execution paths for both managers.
     node.lastWorkflowData = promptData.workflow_data || null;
     syncSavedWorkflowDataWidget(node);
 
@@ -6527,7 +6540,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         // Search input (fills remaining space)
         const searchInput = document.createElement("input");
         searchInput.type = "text";
-        searchInput.placeholder = workflowOnly ? "Search workflows..." : "Search prompts...";
+        searchInput.placeholder = workflowOnly ? "Search recipes and prompts..." : "Search prompts...";
         searchInput.style.cssText = `
             flex: 1;
             min-width: 0;
@@ -7121,6 +7134,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
+                const hasPromptPayload = hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
                 if (isSelected) {
@@ -7154,7 +7168,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
                 const showWorkflowBadge = !workflowOnly && hasWorkflowData;
-                if (isNSFW || showWorkflowBadge) {
+                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
+                if (isNSFW || showWorkflowBadge || showPromptBadge) {
                     const badgeStack = document.createElement("div");
                     badgeStack.style.cssText = `
                         position: absolute;
@@ -7200,6 +7215,26 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                             line-height: 1;
                         `;
                         badgeStack.appendChild(workflowBadge);
+                    }
+
+                    if (showPromptBadge) {
+                        const promptBadge = document.createElement("div");
+                        promptBadge.textContent = "P";
+                        promptBadge.title = "Prompt Data (Converted to Recipe)";
+                        promptBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(56, 130, 246, 0.96);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(promptBadge);
                     }
 
                     card.appendChild(badgeStack);
@@ -7360,6 +7395,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
+                const hasPromptPayload = hasPromptPresetPayload(promptData);
                 const lorasACount = (promptData?.loras_a || []).length;
                 const lorasBCount = (promptData?.loras_b || []).length;
                 const triggerCount = (promptData?.trigger_words || []).length;
@@ -7418,6 +7454,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 thumbWrap.appendChild(thumbDiv);
 
                 const showWorkflowBadge = !workflowOnly && hasWorkflowData;
+                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
                 if (showWorkflowBadge) {
                     const workflowBadge = document.createElement("div");
                     workflowBadge.textContent = "R";
@@ -7441,6 +7478,31 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         z-index: 1;
                     `;
                     thumbWrap.appendChild(workflowBadge);
+                }
+
+                if (showPromptBadge) {
+                    const promptBadge = document.createElement("div");
+                    promptBadge.textContent = "P";
+                    promptBadge.title = "Prompt Data (Converted to Recipe)";
+                    promptBadge.style.cssText = `
+                        position: absolute;
+                        right: -2px;
+                        bottom: -2px;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 50%;
+                        background: rgba(56, 130, 246, 0.96);
+                        color: #fff;
+                        font-size: 8px;
+                        font-weight: bold;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        line-height: 1;
+                        border: 1px solid rgba(0, 0, 0, 0.4);
+                        z-index: 1;
+                    `;
+                    thumbWrap.appendChild(promptBadge);
                 }
 
                 // Name + optional NSFW badge

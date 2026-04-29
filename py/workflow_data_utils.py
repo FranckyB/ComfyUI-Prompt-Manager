@@ -188,6 +188,130 @@ def ensure_v2_recipe_data(recipe_data, source="RecipeData"):
     return out
 
 
+def _coerce_prompt_loras(raw_loras):
+    """Convert prompt-style LoRA entries into canonical workflow LoRA dicts."""
+    if not isinstance(raw_loras, list):
+        return []
+
+    out = []
+    for lora in raw_loras:
+        if not isinstance(lora, dict):
+            continue
+        name = str(lora.get("name", "") or "").strip()
+        if not name:
+            continue
+
+        model_strength = lora.get("model_strength", lora.get("strength", 1.0))
+        clip_strength = lora.get("clip_strength", lora.get("strength", model_strength))
+        out.append({
+            "name": name,
+            "path": lora.get("path", name),
+            "model_strength": model_strength,
+            "clip_strength": clip_strength,
+            "active": lora.get("active", True),
+            "available": lora.get("available", True),
+        })
+
+    return out
+
+
+def _blank_v2_model_block():
+    """Return a blank v2 model block matching RecipeBuilder defaults."""
+    return {
+        "positive_prompt": "",
+        "negative_prompt": "",
+        "family": "",
+        "model": "",
+        "loras": [],
+        "clip_type": "",
+        "loader_type": "",
+        "vae": "",
+        "clip": [],
+        "sampler": {
+            "steps": 20,
+            "cfg": 5.0,
+            "denoise": 1.0,
+            "seed": 0,
+            "sampler_name": "dpmpp_2m_sde",
+            "scheduler": "karras",
+        },
+        "resolution": {
+            "width": 768,
+            "height": 1280,
+            "batch_size": 1,
+            "length": None,
+        },
+    }
+
+
+def _merge_model_block_with_template(existing_block):
+    """Merge an existing model block onto the blank v2 template."""
+    merged = _blank_v2_model_block()
+    if not isinstance(existing_block, dict):
+        return merged
+
+    for key, value in existing_block.items():
+        if key == "sampler" and isinstance(value, dict):
+            sampler = dict(merged["sampler"])
+            sampler.update(value)
+            merged["sampler"] = sampler
+            continue
+        if key == "resolution" and isinstance(value, dict):
+            resolution = dict(merged["resolution"])
+            resolution.update(value)
+            merged["resolution"] = resolution
+            continue
+        merged[key] = value
+
+    return merged
+
+
+def build_v2_recipe_data_from_prompt(
+    prompt_text="",
+    negative_prompt="",
+    loras_a=None,
+    loras_b=None,
+    source="RecipeData",
+    base_recipe_data=None,
+):
+    """Build/update v2 recipe_data from prompt text and LoRA stacks.
+
+    - Preserves existing non-legacy root metadata from base_recipe_data.
+    - Preserves existing model names when available.
+    - Writes prompt + negative_prompt + loras into model_a/model_b.
+    """
+    out = ensure_v2_recipe_data(
+        dict(base_recipe_data) if isinstance(base_recipe_data, dict) else {},
+        source=source,
+    )
+
+    models = out.get("models", {})
+    if not isinstance(models, dict):
+        models = {}
+        out["models"] = models
+
+    model_a = _merge_model_block_with_template(models.get("model_a"))
+    model_b = _merge_model_block_with_template(models.get("model_b"))
+
+    prompt_text = str(prompt_text or "")
+    negative_prompt = str(negative_prompt or "")
+
+    model_a["positive_prompt"] = prompt_text
+    model_b["positive_prompt"] = prompt_text
+
+    model_a["negative_prompt"] = negative_prompt
+    model_b["negative_prompt"] = negative_prompt
+
+    model_a["loras"] = _coerce_prompt_loras(loras_a)
+    model_b["loras"] = _coerce_prompt_loras(loras_b)
+
+    models["model_a"] = model_a
+    models["model_b"] = model_b
+
+    out["_source"] = source
+    return ensure_v2_recipe_data(out, source=source)
+
+
 def _strip_runtime_keys_deep(value):
     """Recursively strip runtime-only keys from dict/list containers."""
     if isinstance(value, dict):

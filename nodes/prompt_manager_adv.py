@@ -11,7 +11,7 @@ from datetime import datetime
 from io import BytesIO
 import folder_paths
 import server
-from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data
+from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 
 # Import numpy and PIL for image processing (available in ComfyUI environment)
 try:
@@ -798,38 +798,15 @@ class PromptManagerAdvanced:
         if swap_lora_outputs:
             out_stack_a, out_stack_b = out_stack_b, out_stack_a
 
-        # Build workflow_data output — start from incoming or saved data, update with PMA state
-        if isinstance(resolved_workflow_data, dict):
-            out_workflow_data = dict(resolved_workflow_data)
-        else:
-            out_workflow_data = {}
-        out_workflow_data['positive_prompt'] = final_output
-        out_workflow_data['loras_a'] = [
-            {
-                'name': lora.get('name', ''),
-                'path': lora.get('path', lora.get('name', '')),
-                'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
-                'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
-                'active': lora.get('active', True),
-                'available': lora.get('available', True),
-            }
-            for lora in loras_a_display
-            if isinstance(lora, dict) and lora.get('name')
-        ]
-        out_workflow_data['loras_b'] = [
-            {
-                'name': lora.get('name', ''),
-                'path': lora.get('path', lora.get('name', '')),
-                'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
-                'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
-                'active': lora.get('active', True),
-                'available': lora.get('available', True),
-            }
-            for lora in loras_b_display
-            if isinstance(lora, dict) and lora.get('name')
-        ]
-        out_workflow_data['_source'] = 'PromptManagerAdvanced'
-        out_workflow_data = ensure_v2_recipe_data(out_workflow_data, source='PromptManagerAdvanced')
+        neg_prompt = str(workflow_fields.get('negative_prompt', '') or '')
+        out_workflow_data = build_v2_recipe_data_from_prompt(
+            prompt_text=final_output,
+            negative_prompt=neg_prompt,
+            loras_a=loras_a_display,
+            loras_b=loras_b_display,
+            source='PromptManagerAdvanced',
+            base_recipe_data=resolved_workflow_data,
+        )
 
         return (final_output, out_stack_a, out_stack_b, out_workflow_data)
 

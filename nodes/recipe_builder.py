@@ -1041,11 +1041,18 @@ class WorkflowBuilder:
             v2_a = _v2_get_model_block(wf_data, load_model_slot) if load_model_slot else None
             v2_b = _v2_get_model_block(wf_data, load_secondary_pull_slot) if load_secondary_pull_slot else None
 
-            # Strict multi behavior: if selected slot has no model, treat as
-            # empty selection and clear extracted UI state.
+            # Accept prompt/LoRA-only model blocks too. A blank model name is
+            # only treated as empty when the selected slot has no authored
+            # prompt text and no LoRA rows.
             if isinstance(v2_a, dict) and str(v2_a.get('model', '') or '').strip() == '':
-                v2_a = None
-                v2_b = None
+                has_authored_prompt = bool(
+                    str(v2_a.get('positive_prompt', '') or '').strip() or
+                    str(v2_a.get('negative_prompt', '') or '').strip()
+                )
+                has_authored_loras = isinstance(v2_a.get('loras'), list) and len(v2_a.get('loras') or []) > 0
+                if not has_authored_prompt and not has_authored_loras:
+                    v2_a = None
+                    v2_b = None
 
             if isinstance(v2_a, dict):
                 sa = v2_a.get('sampler', {}) if isinstance(v2_a.get('sampler'), dict) else {}
@@ -1251,24 +1258,10 @@ class WorkflowBuilder:
         # values during execute; keep current UI state unless explicit inputs
         # (prompt/seed/lora stacks) are connected.
         has_workflow_input = (wf_data is not None)
-        upstream_source = str((wf_data or {}).get('_source', '')).strip().lower() if isinstance(wf_data, dict) else ""
-        # Sources that should keep RecipeBuilder in manual-edit mode while connected.
-        # This includes extractors and manager nodes that users actively edit.
-        manual_override_sources = {
-            "promptextractor",
-            "workflowextractor",
-            "promptmanageradvanced",
-            "workflowmanager",
-        }
-        manual_sourced_input = upstream_source in manual_override_sources
 
         def _allow_override(section_name):
-            # Extractor/Manager sourced workflow_data keeps WB in manual-edit mode.
-            # Other chained workflow_data sources are lock-gated to stay in sync.
-            if has_workflow_input and manual_sourced_input:
-                return True
-            # If workflow_data is connected from non-extractor sources,
-            # only locked sections keep local UI overrides.
+            # Connected recipe_data is authoritative at execute time.
+            # Only explicitly locked sections keep local UI overrides.
             if has_workflow_input:
                 return bool(section_locks.get(section_name, False))
             # Standalone mode (no workflow_data): local UI overrides apply normally.

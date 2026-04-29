@@ -13,7 +13,7 @@ from io import BytesIO
 
 import server
 
-from ..py.workflow_data_utils import ensure_v2_recipe_data, get_v2_model_block, to_json_safe_workflow_data
+from ..py.workflow_data_utils import ensure_v2_recipe_data, get_v2_model_block, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 from .prompt_manager_adv import PromptManagerAdvanced
 
 try:
@@ -164,6 +164,30 @@ class WorkflowManager(PromptManagerAdvanced):
             resolved_workflow_data = ensure_v2_recipe_data(hidden_saved_wf, source="RecipeManager") if isinstance(hidden_saved_wf, dict) else None
         if resolved_workflow_data is None and isinstance(stored_prompt_wf, dict):
             resolved_workflow_data = ensure_v2_recipe_data(stored_prompt_wf, source="RecipeManager")
+
+        # Prompt-only fallback: allow RecipeManager to open saved PMA prompts
+        # (prompt + lora stacks) by synthesizing minimal v2 recipe_data.
+        if resolved_workflow_data is None and isinstance(prompt_entry, dict):
+            prompt_text = str(prompt_entry.get("prompt", "") or text or "")
+            negative_text = str(prompt_entry.get("negative_prompt", "") or "")
+            prompt_loras_a = prompt_entry.get("loras_a", []) if isinstance(prompt_entry.get("loras_a"), list) else []
+            prompt_loras_b = prompt_entry.get("loras_b", []) if isinstance(prompt_entry.get("loras_b"), list) else []
+
+            has_prompt_payload = bool(
+                prompt_text.strip() or
+                negative_text.strip() or
+                len(prompt_loras_a) > 0 or
+                len(prompt_loras_b) > 0
+            )
+
+            if has_prompt_payload:
+                resolved_workflow_data = build_v2_recipe_data_from_prompt(
+                    prompt_text=prompt_text,
+                    negative_prompt=negative_text,
+                    loras_a=prompt_loras_a,
+                    loras_b=prompt_loras_b,
+                    source="RecipeManager",
+                )
 
         wf = resolved_workflow_data if isinstance(resolved_workflow_data, dict) else {}
         wf_model_a = get_v2_model_block(wf, "model_a") or {}
