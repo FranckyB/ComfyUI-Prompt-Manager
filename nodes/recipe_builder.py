@@ -1935,6 +1935,7 @@ class WorkflowBuilder:
         # user has explicit section locks in slot profiles.
         allow_slot_profile_authoring = not (isinstance(base_recipe_for_output, dict) and not has_multi_slot_inputs and not has_locked_slot_profiles)
 
+        _base_slot_loras = {}  # merged (recipe+input) loras per slot, before user-state overrides
         if allow_slot_profile_authoring and isinstance(slot_profiles, dict) and (has_meaningful_slot_profiles or not isinstance(base_recipe_for_output, dict)):
             try:
                 if isinstance(base_recipe_for_output, dict) and \
@@ -2133,6 +2134,7 @@ class WorkflowBuilder:
                             out.append(row)
                         return out
 
+                    _base_slot_loras[slot_key] = list(merged_profile_loras)
                     effective_loras = merged_profile_loras
                     if not loras_locked:
                         effective_loras = _apply_profile_lora_state(merged_profile_loras, preferred_profile_loras)
@@ -2298,6 +2300,50 @@ class WorkflowBuilder:
         if _allow_override('model') and overrides.get('clip_names'):
             effective_clip = {'names': overrides['clip_names'], 'type': '', 'source': 'override'}
 
+        # Build original_strengths per slot for "Reset Strength" button.
+        # Priority order:
+        #   1. _base_slot_loras[slot] — merged_profile_loras BEFORE _apply_profile_lora_state;
+        #      covers ALL loras in the slot (recipe + multi_loras + user-added via UI).
+        #   2. Fallback: recipe_data.models[slot].loras + multi_loras[slot] directly
+        #      (used when allow_slot_profile_authoring was False, so _base_slot_loras is empty).
+        _original_slot_strengths = {}
+        _wf_models = (wf_data.get('models') or {}) if isinstance(wf_data, dict) else {}
+        for _sk in _MODEL_KEYS:
+            if _sk in _base_slot_loras:
+                # Use pre-user-state merged loras — most accurate source.
+                _orig = {}
+                for _l in _base_slot_loras[_sk]:
+                    if not isinstance(_l, dict):
+                        continue
+                    _n = str(_l.get('name', '')).strip()
+                    if _n:
+                        _ms = float(_l.get('model_strength', _l.get('strength', 1.0)) or 1.0)
+                        _cs = float(_l.get('clip_strength', _ms) or _ms)
+                        _orig[_n] = {'model_strength': _ms, 'clip_strength': _cs}
+                _original_slot_strengths[_sk] = _orig
+            else:
+                # Fallback: build from raw recipe_data + multi_loras inputs.
+                _orig = {}
+                _sb = _wf_models.get(_sk)
+                if isinstance(_sb, dict):
+                    for _l in (_sb.get('loras') or []):
+                        if not isinstance(_l, dict):
+                            continue
+                        _n = str(_l.get('name', '')).strip()
+                        if _n:
+                            _ms = float(_l.get('model_strength', _l.get('strength', 1.0)) or 1.0)
+                            _cs = float(_l.get('clip_strength', _ms) or _ms)
+                            _orig[_n] = {'model_strength': _ms, 'clip_strength': _cs}
+                for _l in (multi_loras.get(_sk) or []):
+                    if not isinstance(_l, dict):
+                        continue
+                    _n = str(_l.get('name', '')).strip()
+                    if _n and _n not in _orig:
+                        _ms = float(_l.get('model_strength', _l.get('strength', 1.0)) or 1.0)
+                        _cs = float(_l.get('clip_strength', _ms) or _ms)
+                        _orig[_n] = {'model_strength': _ms, 'clip_strength': _cs}
+                _original_slot_strengths[_sk] = _orig
+
         ui_slot_profiles = {}
         slot_profiles_src = slot_profiles if isinstance(slot_profiles, dict) else {}
         output_models = output_wf.get('models', {}) if isinstance(output_wf, dict) else {}
@@ -2380,6 +2426,8 @@ class WorkflowBuilder:
                 'negative': lock_neg,
                 'seed': lock_seed,
             }
+            # Original strengths from raw inputs — used by JS "Reset Strength" button.
+            row_ov['original_strengths_a'] = _original_slot_strengths.get(slot_key, {})
 
             ui_slot_profiles[slot_key] = {
                 'ov': row_ov,

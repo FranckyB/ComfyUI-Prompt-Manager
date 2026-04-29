@@ -1789,6 +1789,39 @@ function _captureLoraOriginalStrengths(node, lorasA, lorasB) {
     node._weLoraOriginalStrengths = baseline;
 }
 
+// Captures original lora strengths for every model slot from the slot-profiles
+// payload sent by Python (before any syncHidden mutation overwrites them).
+function _captureSlotProfileOriginalStrengths(node, infoSlotProfiles) {
+    if (!infoSlotProfiles || typeof infoSlotProfiles !== "object") return;
+    if (!node._weSlotOriginalStrengths) node._weSlotOriginalStrengths = {};
+    for (const slot of MODEL_SLOT_KEYS) {
+        const slotOv = infoSlotProfiles[slot]?.ov;
+        if (!slotOv) continue;
+        // original_strengths_a is a {name: {model_strength, clip_strength}} dict built by Python
+        // from raw recipe_data + multi_lora_stack inputs — neither source carries user modifications.
+        const incoming = slotOv.original_strengths_a;
+        if (incoming && typeof incoming === "object") {
+            // Normalise: values may arrive as numbers (PMA-style) or {model_strength,clip_strength} objects.
+            const baseline = {};
+            for (const [name, val] of Object.entries(incoming)) {
+                if (!name) continue;
+                if (typeof val === "object" && val !== null) {
+                    const ms = Number(val.model_strength ?? 1);
+                    const cs = Number(val.clip_strength ?? ms);
+                    baseline[name] = {
+                        model_strength: Number.isFinite(ms) ? ms : 1,
+                        clip_strength:  Number.isFinite(cs) ? cs : 1,
+                    };
+                } else {
+                    const ms = Number(val ?? 1);
+                    baseline[name] = { model_strength: Number.isFinite(ms) ? ms : 1, clip_strength: Number.isFinite(ms) ? ms : 1 };
+                }
+            }
+            node._weSlotOriginalStrengths[slot] = baseline;
+        }
+    }
+}
+
 function _getLoraOriginalStrength(node, stateKey, lora) {
     const baseline = node?._weLoraOriginalStrengths || {};
     const byKey = baseline[stateKey];
@@ -2907,8 +2940,7 @@ app.registerExtension({
             const origOnSerialize = node.onSerialize;
             node.onSerialize = function (o) {
                 try { syncHidden(node); } catch { /* non-fatal */ }
-                if (origOnSerialize) return origOnSerialize.apply(this, arguments);
-                return o;
+                if (origOnSerialize) origOnSerialize.apply(this, arguments);
             };
 
             // ============================================================
@@ -3999,23 +4031,26 @@ app.registerExtension({
                     const d = node._weExtracted;
                     const lorasA = d?.loras_a || [];
                     const hasBoth = lorasA.length > 0 && (d?.loras_b || []).length > 0;
+                    // In slot-profile mode use per-slot originals captured from Python response.
+                    const activeSlot = node._weUseSlotProfiles ? (_getCurrentlySelectedModelSlot(node) || "model_a") : null;
+                    const slotOriginals = activeSlot ? (node._weSlotOriginalStrengths?.[activeSlot] || null) : null;
                     for (const lora of lorasA) {
                         const name = String(lora?.name || "");
                         if (!name) continue;
                         const stateKey = hasBoth ? `a:${name}` : name;
-                        const altAKey = `a:${name}`;
-                        const altNameKey = name;
 
                         if (!node._weLoraState[stateKey]) {
                             node._weLoraState[stateKey] = { active: lora.active !== false, model_strength: 1.0, clip_strength: 1.0 };
                         }
-                        const orig = _getLoraOriginalStrength(node, stateKey, lora);
+                        const orig = (slotOriginals && slotOriginals[name])
+                            ? slotOriginals[name]
+                            : _getLoraOriginalStrength(node, stateKey, lora);
                         node._weLoraState[stateKey].model_strength = orig.model_strength;
                         node._weLoraState[stateKey].clip_strength = orig.clip_strength;
 
                         // Keep both A-key variants in sync so reset works across
                         // transitions between single-stack and dual-stack modes.
-                        for (const key of [altAKey, altNameKey]) {
+                        for (const key of [`a:${name}`, name]) {
                             if (!key || key === stateKey) continue;
                             if (!node._weLoraState[key]) continue;
                             node._weLoraState[key].model_strength = orig.model_strength;
@@ -4250,7 +4285,9 @@ app.registerExtension({
                     const wl = node._weWorkflowLoras || { a: [], b: [] };
                     node._weExtracted.loras_a = _mergeLoraLists(wl.a, node._weInputLoras.a);
                     node._weExtracted.loras_b = _mergeLoraLists(wl.b, node._weInputLoras.b);
-                    _captureLoraOriginalStrengths(node, node._weExtracted.loras_a, node._weExtracted.loras_b);
+                    if (!node._weUseSlotProfiles) {
+                        _captureLoraOriginalStrengths(node, node._weExtracted.loras_a, node._weExtracted.loras_b);
+                    }
                     _resetChangedLoraState(node, oldMergedLorasA, oldMergedLorasB, node._weExtracted.loras_a, node._weExtracted.loras_b);
                     updateLoras(node);
                     node.setDirtyCanvas(true, true);
@@ -4275,6 +4312,7 @@ app.registerExtension({
                 if (!info) return;
 
                 if (node._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
+                    _captureSlotProfileOriginalStrengths(node, info._slot_profiles);
                     node._weSlotProfiles = _mergeSlotProfiles(node._weSlotProfiles, info._slot_profiles);
                     _hydrateExtractedFromSelectedSlotProfile(node);
                 }
@@ -4342,7 +4380,11 @@ app.registerExtension({
                     : _loraStacksSignature(node._weWorkflowLoras, node._weInputLoras);
                 const lorasLocked = !!(node._weSectionLocks?.loras);
                 if (!lorasLocked && oldSig !== newSig) {
-                    _captureLoraOriginalStrengths(node, mergedLorasA, mergedLorasB);
+                    // Slot-profile nodes get originals via _captureSlotProfileOriginalStrengths.
+                    // Calling _captureLoraOriginalStrengths here would overwrite with user-modified effective loras.
+                    if (!node._weUseSlotProfiles) {
+                        _captureLoraOriginalStrengths(node, mergedLorasA, mergedLorasB);
+                    }
                     _resetChangedLoraState(
                         node,
                         node._weExtracted?.loras_a || [],
@@ -4433,6 +4475,7 @@ app.registerExtension({
             const negConn = this.inputs?.find(i => i.name === "neg_prompt");
             if (info) {
                 if (this._weUseSlotProfiles && info._slot_profiles && typeof info._slot_profiles === "object") {
+                    _captureSlotProfileOriginalStrengths(this, info._slot_profiles);
                     this._weSlotProfiles = _mergeSlotProfiles(this._weSlotProfiles, info._slot_profiles);
                     _hydrateExtractedFromSelectedSlotProfile(this);
                 }
@@ -4496,7 +4539,9 @@ app.registerExtension({
                     : _loraStacksSignature(this._weWorkflowLoras, this._weInputLoras);
                 const lorasLocked = !!(this._weSectionLocks?.loras);
                 if (!lorasLocked && oldSig !== newSig) {
-                    _captureLoraOriginalStrengths(this, mergedLorasA, mergedLorasB);
+                    if (!this._weUseSlotProfiles) {
+                        _captureLoraOriginalStrengths(this, mergedLorasA, mergedLorasB);
+                    }
                     _resetChangedLoraState(
                         this,
                         this._weExtracted?.loras_a || [],
