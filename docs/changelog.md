@@ -1,7 +1,7 @@
 # Changelog
 
 ## version 2.5.0
-- **Recipe Builder is now Multi-model**
+- **Recipe Builder is now Multi-model Only**
   - Expanded Builder authoring around `recipe_data` with slot-aware model blocks (`model_a`/`model_b`/`model_c`/`model_d`).
   - Improved cross-slot behavior for prompts, LoRAs, sampler settings, and resolution handling in multi-model workflows.
 - **Authoritative Builder extraction flow**
