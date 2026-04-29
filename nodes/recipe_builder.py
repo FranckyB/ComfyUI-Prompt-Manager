@@ -1275,6 +1275,7 @@ class WorkflowBuilder:
                     lora_overrides = dict(cached_overrides)
 
         section_locks = overrides.get('_section_locks', {}) if isinstance(overrides, dict) else {}
+        resolution_locked_flag = bool(overrides.get('_res_locked', False)) if isinstance(overrides, dict) else False
         # Pull From none means connected recipe_data should not drive section
         # values during execute; keep current UI state unless explicit inputs
         # (prompt/seed/lora stacks) are connected.
@@ -1284,6 +1285,10 @@ class WorkflowBuilder:
             # Connected recipe_data is authoritative at execute time.
             # Only explicitly locked sections keep local UI overrides.
             if has_workflow_input:
+                if section_name == 'resolution':
+                    # In multi-slot mode, resolution lock is persisted as _res_locked
+                    # (global), not inside _section_locks.
+                    return bool(section_locks.get('resolution', False) or resolution_locked_flag)
                 return bool(section_locks.get(section_name, False))
             # Standalone mode (no workflow_data): local UI overrides apply normally.
             return True
@@ -2305,6 +2310,21 @@ class WorkflowBuilder:
             for key in ['width', 'height', 'batch_size', 'length']:
                 if key in overrides:
                     effective_resolution[key] = overrides[key]
+
+        # Keep recipe_data model resolutions in sync with current Builder UI
+        # resolution on every execute, for all model slots.
+        output_models = output_wf.get('models') if isinstance(output_wf, dict) else None
+        if isinstance(output_models, dict):
+            normalized_resolution = {
+                'width': int(effective_resolution.get('width', 768) or 768),
+                'height': int(effective_resolution.get('height', 1280) or 1280),
+                'batch_size': int(effective_resolution.get('batch_size', 1) or 1),
+                'length': effective_resolution.get('length'),
+            }
+            for slot_key in _MODEL_KEYS:
+                block = output_models.get(slot_key)
+                if isinstance(block, dict):
+                    block['resolution'] = dict(normalized_resolution)
 
         effective_vae = extracted['vae']
         if _allow_override('model') and overrides.get('vae'):
