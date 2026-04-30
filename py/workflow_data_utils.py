@@ -19,7 +19,8 @@ RUNTIME_OBJECT_KEYS = frozenset({
     "LATENT",
     "IMAGE",
     "MASK",
-    "EXTRA",
+    "EXTRA_1",
+    "EXTRA_2",
     "POSITIVE",
     "NEGATIVE",
 })

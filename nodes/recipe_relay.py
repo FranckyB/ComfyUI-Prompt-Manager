@@ -17,16 +17,6 @@ from ..py.workflow_families import get_model_family, MODEL_FAMILIES
 MODEL_EXTENSIONS = (".safetensors", ".ckpt", ".pt", ".pth", ".gguf")
 
 
-class _AnyType(str):
-    """Comfy wildcard type that can connect to any socket type."""
-
-    def __ne__(self, _other):
-        return False
-
-
-ANY_TYPE = _AnyType("ANY")
-
-
 def _strip_model_ext(name):
     base = os.path.basename(str(name or "").replace("\\", "/"))
     lower = base.lower()
@@ -215,7 +205,7 @@ class WorkflowRelay:
         cls._CLIP_ENUM = clips
         cls.RETURN_TYPES = (
             "RECIPE_DATA",
-            "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", ANY_TYPE,
+            "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", "*", "*",
             "INT", "INT", "FLOAT",
             cls._SAMPLER_ENUM, cls._SCHEDULER_ENUM, "FLOAT",
             "STRING", "STRING",
@@ -241,7 +231,8 @@ class WorkflowRelay:
                 "latent":          ("LATENT",            {"tooltip": "Pass-through latent"}),
                 "image":           ("IMAGE",             {"tooltip": "Pass-through image"}),
                 "mask":            ("MASK",              {"tooltip": "Pass-through mask"}),
-                "extra":           (ANY_TYPE,            {"tooltip": "Pass-through extra data (any type)"}),
+                "extra_1":         ("*",                 {"tooltip": "Pass-through extra data (any type)"}),
+                "extra_2":         ("*",                 {"tooltip": "Pass-through extra data (any type)"}),
                 "seed":            ("INT",               {"forceInput": True, "tooltip": "Override sampler seed"}),
                 "steps":           ("INT",               {"forceInput": True, "tooltip": "Override sampling steps"}),
                 "cfg":             ("FLOAT",             {"forceInput": True, "tooltip": "Override CFG scale"}),
@@ -257,13 +248,13 @@ class WorkflowRelay:
                 "length":          ("INT",               {"forceInput": True, "tooltip": "Override video length"}),
                 "model_name":      ("STRING",            {"forceInput": True, "tooltip": "Optional model name/path. Resolves and writes recipe model field(s)."}),
                 "family":          ("STRING",            {"forceInput": True, "tooltip": "Optional model family override. Writes selected slot family in recipe_data."}),
-                "model_data":      (ANY_TYPE,            {"forceInput": True, "tooltip": "Optional structured model payload from Recipe Model Picker."}),
+                "model_data":      ("*",                 {"forceInput": True, "tooltip": "Optional structured model payload from Recipe Model Picker."}),
             },
         }
 
     RETURN_TYPES = (
         "RECIPE_DATA",
-        "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", ANY_TYPE,
+        "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", "*", "*",
         "INT", "INT", "FLOAT",
         _LIVE_SAMPLERS, _LIVE_SCHEDULERS, "FLOAT",
         "STRING", "STRING",
@@ -274,7 +265,7 @@ class WorkflowRelay:
     )
     RETURN_NAMES = (
         "recipe_data",
-        "model", "clip", "positive", "negative", "vae", "latent", "image", "mask", "extra",
+        "model", "clip", "positive", "negative", "vae", "latent", "image", "mask", "extra_1", "extra_2",
         "seed", "steps", "cfg",
         "sampler_name", "scheduler", "denoise",
         "pos_prompt", "neg_prompt",
@@ -489,13 +480,13 @@ class WorkflowRelay:
                 resolution[key] = kwargs[key]
         wf['resolution'] = resolution
 
-        # -- Sampler overrides ---------------------------------------
-        if kwargs.get('steps') is not None:
-            sampler['steps_a'] = kwargs['steps']
-            sampler['steps_b'] = kwargs['steps']
-        if kwargs.get('seed') is not None:
-            sampler['seed_a'] = kwargs['seed']
-            sampler['seed_b'] = kwargs['seed']
+        # # -- Sampler overrides ---------------------------------------
+        # if kwargs.get('steps') is not None:
+        #     sampler['steps_a'] = kwargs['steps']
+        #     sampler['steps_b'] = kwargs['steps']
+        # if kwargs.get('seed') is not None:
+        #     sampler['seed_a'] = kwargs['seed']
+        #     sampler['seed_b'] = kwargs['seed']
 
         for key in ('cfg', 'denoise', 'sampler_name', 'scheduler'):
             if kwargs.get(key) is not None:
@@ -544,10 +535,10 @@ class WorkflowRelay:
         model = kwargs.get('model')
         if model is None:
             model = selected_block.get('MODEL') if isinstance(selected_block, dict) else None
-        if model is None:
-            model = wf.get('MODEL')
-        if model is None:
-            model = wf.get('MODEL_A')
+        # if model is None:
+        #     model = wf.get('MODEL')
+        # if model is None:
+        #     model = wf.get('MODEL_A')
 
         selected_loader_type = (
             str((selected_block or {}).get('loader_type', '')).strip().lower()
@@ -591,9 +582,13 @@ class WorkflowRelay:
         if mask is None:
             mask = wf.get('MASK')
 
-        extra = kwargs.get('extra')
-        if extra is None:
-            extra = wf.get('EXTRA')
+        extra_1 = kwargs.get('extra_1')
+        if extra_1 is None:
+            extra_1 = wf.get('EXTRA_1')
+
+        extra_2 = kwargs.get('extra_2')
+        if extra_2 is None:
+            extra_2 = wf.get('EXTRA_2')
 
         if latent is not None:
             wf['LATENT'] = latent
@@ -601,8 +596,10 @@ class WorkflowRelay:
             wf['IMAGE'] = image
         if mask is not None:
             wf['MASK'] = mask
-        if extra is not None:
-            wf['EXTRA'] = extra
+        if extra_1 is not None:
+            wf['EXTRA_1'] = extra_1
+        if extra_2 is not None:
+            wf['EXTRA_2'] = extra_2
 
         # -- Build lora stacks as tuples for LORA_STACK output -------
         # Filter not-found LoRAs here so downstream nodes receiving
@@ -788,7 +785,7 @@ class WorkflowRelay:
 
         return (
             wf,
-            model, clip, positive, negative, vae, latent, image, mask, extra,
+            model, clip, positive, negative, vae, latent, image, mask, extra_1, extra_2,
             final_sampler.get('seed_a', final_sampler.get('seed', 0)),
             final_sampler.get('steps_a', final_sampler.get('steps', 10)),
             final_sampler.get('cfg', 5.0),
