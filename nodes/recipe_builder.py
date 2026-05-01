@@ -844,9 +844,14 @@ class WorkflowBuilder:
                 return val_str if val_str.strip() else None
             return None
 
+        def _is_model_prompt_payload(payload):
+            if not isinstance(payload, dict):
+                return False
+            return all(slot_key in payload for slot_key in _MODEL_KEYS)
+
         def _coerce_prompt_payload(raw_payload):
             if isinstance(raw_payload, dict):
-                return raw_payload
+                return raw_payload if _is_model_prompt_payload(raw_payload) else {"all": str(raw_payload)}
             if raw_payload is None:
                 return {}
             txt = str(raw_payload)
@@ -854,7 +859,7 @@ class WorkflowBuilder:
                 return {}
             try:
                 parsed = json.loads(txt)
-                if isinstance(parsed, dict):
+                if isinstance(parsed, dict) and _is_model_prompt_payload(parsed):
                     return parsed
             except Exception:
                 pass
@@ -864,13 +869,15 @@ class WorkflowBuilder:
             if raw_payload is None:
                 return False
             if isinstance(raw_payload, dict):
-                return False
+                return not _is_model_prompt_payload(raw_payload)
             txt = str(raw_payload)
             if not txt.strip():
                 return False
             try:
                 parsed = json.loads(txt)
-                return not isinstance(parsed, dict)
+                if isinstance(parsed, dict):
+                    return not _is_model_prompt_payload(parsed)
+                return True
             except Exception:
                 return True
 
