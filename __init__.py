@@ -13,7 +13,7 @@ from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_extractor import PromptExtractor
 from .nodes.prompt_extractor import WorkflowExtractor as RecipeExtractor
-from .nodes.recipe_builder import WorkflowBuilderMulti as RecipeBuilder
+from .nodes.recipe_builder import RecipeBuilder
 from .nodes.recipe_renderer import WorkflowRenderer as RecipeRenderer
 from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader

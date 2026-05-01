@@ -4634,7 +4634,7 @@ app.registerExtension({
             // RETURN_TYPES changed between versions, phantom slots persist.
             if (node._weUseSlotProfiles == null) {
                 const cls = String(node.comfyClass || node.type || "");
-                node._weUseSlotProfiles = (cls === "RecipeBuilder") || (cls === "WorkflowBuilderMulti");
+                node._weUseSlotProfiles = (cls === "RecipeBuilder") || (cls === "WorkflowBuilder");
             }
 
             const VALID_INPUTS = new Set([

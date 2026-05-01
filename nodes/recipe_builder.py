@@ -2585,7 +2585,7 @@ class WorkflowBuilder:
         }
 
 
-class WorkflowBuilderMulti(WorkflowBuilder):
+class RecipeBuilder(WorkflowBuilder):
     RETURN_TYPES = ("RECIPE_DATA",)
     RETURN_NAMES = ("recipe_data",)
 

@@ -153,14 +153,6 @@ class MultiLoraStackerLM:
             "b": stack_b,
             "c": stack_c,
             "d": stack_d,
-            "stacks": {
-                "a": stack_a,
-                "b": stack_b,
-                "c": stack_c,
-                "d": stack_d,
-            },
-            "order": ["a", "b", "c", "d"],
-            "version": 1,
         }
         return (multi_lora_stack,)
 
@@ -263,11 +255,10 @@ class MultiLoraCombine:
         out_d = []
 
         if isinstance(multi_lora_stack, dict):
-            stacks_obj = multi_lora_stack.get("stacks") if isinstance(multi_lora_stack.get("stacks"), dict) else {}
-            out_a = _coerce_lora_stack(multi_lora_stack.get("a", stacks_obj.get("a")))
-            out_b = _coerce_lora_stack(multi_lora_stack.get("b", stacks_obj.get("b")))
-            out_c = _coerce_lora_stack(multi_lora_stack.get("c", stacks_obj.get("c")))
-            out_d = _coerce_lora_stack(multi_lora_stack.get("d", stacks_obj.get("d")))
+            out_a = _coerce_lora_stack(multi_lora_stack.get("a"))
+            out_b = _coerce_lora_stack(multi_lora_stack.get("b"))
+            out_c = _coerce_lora_stack(multi_lora_stack.get("c"))
+            out_d = _coerce_lora_stack(multi_lora_stack.get("d"))
 
         # Append separate stack inputs to each slot (if connected).
         out_a.extend(_coerce_lora_stack(lora_stack_a))
@@ -280,13 +271,5 @@ class MultiLoraCombine:
             "b": out_b,
             "c": out_c,
             "d": out_d,
-            "stacks": {
-                "a": out_a,
-                "b": out_b,
-                "c": out_c,
-                "d": out_d,
-            },
-            "order": ["a", "b", "c", "d"],
-            "version": 1,
         }
         return (merged,)
