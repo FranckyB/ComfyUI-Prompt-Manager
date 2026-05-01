@@ -2,7 +2,8 @@
 ComfyUI Workflow Bridge - Pure passthrough node.
 Unpacks recipe_data into individual typed outputs.
 Any connected optional input overrides the corresponding field before output.
-Models (MODEL/CLIP/VAE) are passed through only - use RecipeModelLoader for loading.
+Models (MODEL/CLIP/VAE) are passed through only and cached on the selected model block.
+Use RecipeModelLoader for loading from authored model names.
 """
 import json
 import os
@@ -278,7 +279,7 @@ class WorkflowRelay:
     CATEGORY = "Prompt Manager"
     DESCRIPTION = (
         "Pure passthrough bridge node. Unpacks recipe_data into individual "
-        "typed outputs. Models are forwarded from connected inputs only."
+        "typed outputs. Slot runtime objects are cached on the selected model block."
     )
 
     # ------------------------------------------------------------------
@@ -570,6 +571,18 @@ class WorkflowRelay:
         if negative is None:
             negative = wf.get('NEGATIVE')
 
+        extra_1 = kwargs.get('extra_1')
+        if extra_1 is None:
+            extra_1 = selected_block.get('EXTRA_1') if isinstance(selected_block, dict) else None
+        if extra_1 is None:
+            extra_1 = wf.get('EXTRA_1')
+
+        extra_2 = kwargs.get('extra_2')
+        if extra_2 is None:
+            extra_2 = selected_block.get('EXTRA_2') if isinstance(selected_block, dict) else None
+        if extra_2 is None:
+            extra_2 = wf.get('EXTRA_2')
+
         latent = kwargs.get('latent')
         if latent is None:
             latent = wf.get('LATENT')
@@ -582,13 +595,21 @@ class WorkflowRelay:
         if mask is None:
             mask = wf.get('MASK')
 
-        extra_1 = kwargs.get('extra_1')
-        if extra_1 is None:
-            extra_1 = wf.get('EXTRA_1')
-
-        extra_2 = kwargs.get('extra_2')
-        if extra_2 is None:
-            extra_2 = wf.get('EXTRA_2')
+        if isinstance(target_block, dict):
+            if model is not None:
+                target_block['MODEL'] = model
+            if clip is not None:
+                target_block['CLIP'] = clip
+            if vae is not None:
+                target_block['VAE'] = vae
+            if positive is not None:
+                target_block['POSITIVE'] = positive
+            if negative is not None:
+                target_block['NEGATIVE'] = negative
+            if extra_1 is not None:
+                target_block['EXTRA_1'] = extra_1
+            if extra_2 is not None:
+                target_block['EXTRA_2'] = extra_2
 
         if latent is not None:
             wf['LATENT'] = latent
@@ -596,10 +617,6 @@ class WorkflowRelay:
             wf['IMAGE'] = image
         if mask is not None:
             wf['MASK'] = mask
-        if extra_1 is not None:
-            wf['EXTRA_1'] = extra_1
-        if extra_2 is not None:
-            wf['EXTRA_2'] = extra_2
 
         # -- Build lora stacks as tuples for LORA_STACK output -------
         # Filter not-found LoRAs here so downstream nodes receiving
