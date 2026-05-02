@@ -1,5 +1,22 @@
 # Changelog
 
+## version 2.5.0
+- **Recipe Builder is now Multi-model Only**
+  - Expanded Builder authoring around `recipe_data` with slot-aware model blocks (`model_a`/`model_b`/`model_c`/`model_d`).
+  - Improved cross-slot behavior for prompts, LoRAs, sampler settings, and resolution handling in multi-model workflows.
+- **Authoritative Builder extraction flow**
+  - Extraction now preserves Builder-authored v2 model data as the source of truth when embedded Builder v2 metadata is present.
+  - Added compatibility safeguards so legacy/non-v2 workflows continue to use fallback extraction logic.
+- **Builder lock/reset and execution consistency**
+  - Improved update and execute behavior so incoming recipe values, lock states, and current UI values resolve more predictably.
+  - Strength/reset handling was tightened for better consistency across slot updates and reruns.
+- **New LoRA utility node: MultiLoraCombine**
+  - Added `MultiLoraCombine` to merge optional multi-stack input with optional stack A/B/C/D inputs into a single `MULTI_LORA_STACK` output.
+  - Helps consolidate mixed LoRA sources for multi-model Builder and downstream recipe flows.
+- **New feature: Multi LoRA Stacker with Lora-Manager compatibility**
+  - Added a new Multi LoRA Stacker for slot-aware and multi-stack recipe flows.
+  - Compatible with [Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager), including interoperability with managed LoRA selections and previews.
+
 ## version 2.2.0
 - **Recipe_data v2 expansion and slot-aware workflows**
   - Expanded v2 compatibility across Builder, Relay, Renderer, Manager, and extraction utilities.

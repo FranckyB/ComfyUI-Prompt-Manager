@@ -11,7 +11,7 @@ from datetime import datetime
 from io import BytesIO
 import folder_paths
 import server
-from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data
+from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 
 # Import numpy and PIL for image processing (available in ComfyUI environment)
 try:
@@ -128,6 +128,7 @@ def _normalize_workflow_loras_for_prompt(loras):
         clip_strength = lora.get("clip_strength", strength)
         normalized.append({
             "name": name,
+            "path": str(lora.get("path", name) or name),
             "strength": strength,
             "clip_strength": clip_strength,
             "active": lora.get("active", True),
@@ -217,13 +218,9 @@ class PromptManagerAdvanced:
         first_category = categories[0] if categories else "Default"
 
         # Get first prompt from first category
+        # Keep new node instances empty until the user explicitly selects a prompt.
         first_prompt = ""
         first_prompt_text = ""
-        if prompts_data and first_category in prompts_data and prompts_data[first_category]:
-            first_category_prompts = [k for k in prompts_data[first_category].keys() if k != "__meta__"]
-            first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
-            if first_prompt:
-                first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
 
         return {
             "required": {
@@ -703,6 +700,33 @@ class PromptManagerAdvanced:
         all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
         all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if loras_b_toggle else []
 
+        # If no saved toggle payload exists yet, preserve active flags from
+        # incoming workflow_data loras as the initial authoritative state.
+        if not all_preset_loras_a and not loras_a_toggle:
+            all_preset_loras_a = [
+                {
+                    "name": lora.get("name", ""),
+                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
+                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
+                    "active": lora.get("active", True),
+                    "available": bool(lora.get("available", True)),
+                }
+                for lora in workflow_fields.get("loras_a", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
+        if not all_preset_loras_b and not loras_b_toggle:
+            all_preset_loras_b = [
+                {
+                    "name": lora.get("name", ""),
+                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
+                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
+                    "active": lora.get("active", True),
+                    "available": bool(lora.get("available", True)),
+                }
+                for lora in workflow_fields.get("loras_b", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
+
         # When use_lora_input is disabled, ignore connected stacks and use only saved loras
         if not use_lora_input:
             lora_stack_a = preset_stack_a
@@ -774,36 +798,15 @@ class PromptManagerAdvanced:
         if swap_lora_outputs:
             out_stack_a, out_stack_b = out_stack_b, out_stack_a
 
-        # Build workflow_data output — start from incoming or saved data, update with PMA state
-        if isinstance(resolved_workflow_data, dict):
-            out_workflow_data = dict(resolved_workflow_data)
-        else:
-            out_workflow_data = {}
-        out_workflow_data['positive_prompt'] = final_output
-        out_workflow_data['loras_a'] = [
-            {
-                'name': lora.get('name', ''),
-                'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
-                'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
-                'active': lora.get('active', True),
-                'available': lora.get('available', True),
-            }
-            for lora in loras_a_display
-            if isinstance(lora, dict) and lora.get('name')
-        ]
-        out_workflow_data['loras_b'] = [
-            {
-                'name': lora.get('name', ''),
-                'model_strength': lora.get('model_strength', lora.get('strength', 1.0)),
-                'clip_strength': lora.get('clip_strength', lora.get('strength', 1.0)),
-                'active': lora.get('active', True),
-                'available': lora.get('available', True),
-            }
-            for lora in loras_b_display
-            if isinstance(lora, dict) and lora.get('name')
-        ]
-        out_workflow_data['_source'] = 'PromptManagerAdvanced'
-        out_workflow_data = ensure_v2_recipe_data(out_workflow_data, source='PromptManagerAdvanced')
+        neg_prompt = str(workflow_fields.get('negative_prompt', '') or '')
+        out_workflow_data = build_v2_recipe_data_from_prompt(
+            prompt_text=final_output,
+            negative_prompt=neg_prompt,
+            loras_a=loras_a_display,
+            loras_b=loras_b_display,
+            source='PromptManagerAdvanced',
+            base_recipe_data=resolved_workflow_data,
+        )
 
         return (final_output, out_stack_a, out_stack_b, out_workflow_data)
 
@@ -969,6 +972,20 @@ class PromptManagerAdvanced:
         """
         # Start with the available loras from the stack
         display_list = self._format_loras_for_display(lora_stack) if lora_stack else []
+        preset_by_name = {
+            str(item.get('name', '')).lower(): item
+            for item in (all_preset_loras or [])
+            if isinstance(item, dict) and item.get('name')
+        }
+
+        # Preserve active state from preset/toggle/workflow payload for rows
+        # that are already present in the display list.
+        for row in display_list:
+            row_name_lower = str(row.get('name', '')).lower()
+            preset = preset_by_name.get(row_name_lower)
+            if preset is not None:
+                row['active'] = preset.get('active', True)
+
         seen_names = set(item['name'].lower() for item in display_list)
 
         # Add any unavailable preset loras that aren't already in the list
@@ -1213,8 +1230,7 @@ async def save_prompt_advanced(request):
                 print(f"[PromptManagerAdvanced] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
-        # Normalize lora data - save name, strengths, and active state
-        # Paths are resolved at runtime for portability
+        # Normalize lora data - keep path when present for lossless save/restore.
         def normalize_lora_data(loras):
             normalized = []
             for lora in loras:
@@ -1222,6 +1238,7 @@ async def save_prompt_advanced(request):
                     available = lora.get('available', lora.get('available', True))
                     normalized.append({
                         "name": lora.get('name'),
+                        "path": lora.get('path', lora.get('name')),
                         "strength": lora.get('strength', lora.get('model_strength', 1.0)),
                         "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0)),
                         "active": lora.get('active', True),
@@ -1245,6 +1262,7 @@ async def save_prompt_advanced(request):
                 available = lora.get('available', lora.get('available', True))
                 normalized.append({
                     "name": name,
+                    "path": lora.get('path', name),
                     "strength": strength,
                     "clip_strength": clip_strength,
                     "active": lora.get('active', True),

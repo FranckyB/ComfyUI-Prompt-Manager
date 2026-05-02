@@ -19,7 +19,8 @@ RUNTIME_OBJECT_KEYS = frozenset({
     "LATENT",
     "IMAGE",
     "MASK",
-    "EXTRA",
+    "EXTRA_1",
+    "EXTRA_2",
     "POSITIVE",
     "NEGATIVE",
 })
@@ -42,32 +43,99 @@ _LEGACY_TOP_LEVEL_KEYS = {
 }
 
 
-def _default_v2_model_block():
-    return {
-        "positive_prompt": "",
-        "negative_prompt": "",
-        "family": "sdxl",
-        "model": "",
-        "loras": [],
-        "clip_type": "",
-        "loader_type": "",
-        "vae": "",
-        "clip": [],
-        "sampler": {
-            "steps": 20,
-            "cfg": 5.0,
-            "denoise": 1.0,
-            "seed": 0,
-            "sampler_name": "euler",
-            "scheduler": "simple",
-        },
-        "resolution": {
-            "width": 768,
-            "height": 1280,
-            "batch_size": 1,
-            "length": None,
-        },
+def _as_clip_list(raw_clip):
+    if isinstance(raw_clip, list):
+        return list(raw_clip)
+    if isinstance(raw_clip, tuple):
+        return list(raw_clip)
+    if raw_clip:
+        return [raw_clip]
+    return []
+
+
+def _has_meaningful_legacy_slot(recipe_data, slot_key, sampler):
+    if slot_key not in ("model_a", "model_b"):
+        return False
+
+    suffix = "a" if slot_key == "model_a" else "b"
+    model_name = str(recipe_data.get(slot_key, "") or "").strip()
+    loras_key = f"loras_{suffix}"
+    loras = recipe_data.get(loras_key, []) if isinstance(recipe_data.get(loras_key), list) else []
+    has_loras = len(loras) > 0
+
+    steps_key = f"steps_{suffix}"
+    seed_key = f"seed_{suffix}"
+    has_slot_sampler = isinstance(sampler.get(steps_key), (int, float)) or isinstance(sampler.get(seed_key), (int, float))
+
+    return bool(model_name or has_loras or has_slot_sampler)
+
+
+def _legacy_to_v2_recipe_data(recipe_data, source):
+    sampler = recipe_data.get("sampler", {}) if isinstance(recipe_data.get("sampler"), dict) else {}
+    resolution = recipe_data.get("resolution", {}) if isinstance(recipe_data.get("resolution"), dict) else {}
+
+    def _build_model_block(slot_key):
+        is_b = slot_key == "model_b"
+        suffix = "b" if is_b else "a"
+        loras_key = f"loras_{suffix}"
+
+        steps_key = f"steps_{suffix}"
+        seed_key = f"seed_{suffix}"
+        steps = sampler.get(steps_key)
+        if steps is None:
+            steps = sampler.get("steps_a", sampler.get("steps", 20))
+
+        seed = sampler.get(seed_key)
+        if seed is None:
+            seed = sampler.get("seed_a", sampler.get("seed", 0))
+
+        return {
+            "positive_prompt": str(recipe_data.get("positive_prompt", "") or ""),
+            "negative_prompt": str(recipe_data.get("negative_prompt", "") or ""),
+            "family": str(recipe_data.get("family", "") or ""),
+            "model": str(recipe_data.get(slot_key, "") or ""),
+            "loras": list(recipe_data.get(loras_key, [])) if isinstance(recipe_data.get(loras_key), list) else [],
+            "clip_type": str(recipe_data.get("clip_type", "") or ""),
+            "loader_type": str(recipe_data.get("loader_type", "") or ""),
+            "vae": str(recipe_data.get("vae", "") or ""),
+            "clip": _as_clip_list(recipe_data.get("clip", [])),
+            "sampler": {
+                "steps": int(steps if steps is not None else 20),
+                "cfg": float(sampler.get("cfg", 5.0)),
+                "denoise": float(sampler.get("denoise", 1.0)),
+                "seed": int(seed if seed is not None else 0),
+                "sampler_name": str(sampler.get("sampler_name", "euler") or "euler"),
+                "scheduler": str(sampler.get("scheduler", "simple") or "simple"),
+            },
+            "resolution": {
+                "width": int(resolution.get("width", 768)),
+                "height": int(resolution.get("height", 1280)),
+                "batch_size": int(resolution.get("batch_size", 1)),
+                "length": resolution.get("length", None),
+            },
+        }
+
+    out = {
+        "_source": str(recipe_data.get("_source") or source),
+        "version": 2,
+        "models": {},
     }
+
+    # Preserve non-legacy metadata/runtime keys at root.
+    for key, val in recipe_data.items():
+        if key in {"_source", "version", "models"}:
+            continue
+        if key in _LEGACY_TOP_LEVEL_KEYS:
+            continue
+        out[key] = val
+
+    if _has_meaningful_legacy_slot(recipe_data, "model_a", sampler):
+        out["models"]["model_a"] = _build_model_block("model_a")
+
+    if _has_meaningful_legacy_slot(recipe_data, "model_b", sampler):
+        out["models"]["model_b"] = _build_model_block("model_b")
+
+    return out
 
 
 def get_v2_model_block(recipe_data, model_key):
@@ -82,11 +150,10 @@ def get_v2_model_block(recipe_data, model_key):
 
 
 def ensure_v2_recipe_data(recipe_data, source="RecipeData"):
-    """Normalize recipe_data to v2 shape.
+    """Normalize recipe_data to strict v2 shape.
 
-    - Accepts both legacy v1-ish payloads and current v2 payloads.
-    - Preserves unknown/root passthrough fields (e.g. IMAGE/LATENT/MASK).
-    - Applies legacy top-level recipe fields onto model_a/model_b blocks.
+    v2 contract is authoritative. Legacy top-level recipe fields are converted
+    into v2 model blocks.
     """
     if not isinstance(recipe_data, dict):
         return {
@@ -96,6 +163,8 @@ def ensure_v2_recipe_data(recipe_data, source="RecipeData"):
         }
 
     is_v2 = int(recipe_data.get("version", 0) or 0) >= 2 and isinstance(recipe_data.get("models"), dict)
+    if not is_v2:
+        return _legacy_to_v2_recipe_data(recipe_data, source)
 
     out = {
         "_source": str(recipe_data.get("_source") or source),
@@ -117,119 +186,131 @@ def ensure_v2_recipe_data(recipe_data, source="RecipeData"):
             if isinstance(block, dict):
                 out["models"][mk] = dict(block)
 
-    family = str(recipe_data.get("family", "") or "").strip()
-    vae = str(recipe_data.get("vae", "") or "")
-    clip_raw = recipe_data.get("clip", [])
-    if isinstance(clip_raw, list):
-        clip_names = clip_raw
-    elif isinstance(clip_raw, str) and clip_raw:
-        clip_names = [clip_raw]
-    else:
-        clip_names = []
-    clip_type = str(recipe_data.get("clip_type", "") or "")
-    loader_type = str(recipe_data.get("loader_type", "") or "")
+    return out
 
-    sampler = recipe_data.get("sampler", {}) if isinstance(recipe_data.get("sampler"), dict) else {}
-    resolution = recipe_data.get("resolution", {}) if isinstance(recipe_data.get("resolution"), dict) else {}
 
-    def _overlay_slot(slot_key, model_name, loras, prompt_override=True):
-        if not model_name and not loras and not prompt_override and slot_key not in out["models"]:
-            return
-        block = dict(out["models"].get(slot_key, _default_v2_model_block()))
-        if prompt_override:
-            block["positive_prompt"] = str(recipe_data.get("positive_prompt", block.get("positive_prompt", "")) or "")
-            block["negative_prompt"] = str(recipe_data.get("negative_prompt", block.get("negative_prompt", "")) or "")
-        if family:
-            block["family"] = family
-        if model_name:
-            block["model"] = model_name
-        if isinstance(loras, list):
-            block["loras"] = loras
-        if clip_type:
-            block["clip_type"] = clip_type
-        if loader_type:
-            block["loader_type"] = loader_type
-        if vae:
-            block["vae"] = vae
-        if clip_names:
-            block["clip"] = clip_names
+def _coerce_prompt_loras(raw_loras):
+    """Convert prompt-style LoRA entries into canonical workflow LoRA dicts."""
+    if not isinstance(raw_loras, list):
+        return []
 
-        bs = block.get("sampler", {}) if isinstance(block.get("sampler"), dict) else {}
-        if slot_key == "model_b":
-            if sampler.get("steps_b") is not None:
-                bs["steps"] = sampler.get("steps_b")
-            elif sampler.get("steps_a") is not None:
-                bs["steps"] = sampler.get("steps_a")
-            elif sampler.get("steps") is not None:
-                bs["steps"] = sampler.get("steps")
-            if sampler.get("seed_b") is not None:
-                bs["seed"] = sampler.get("seed_b")
-            elif sampler.get("seed_a") is not None:
-                bs["seed"] = sampler.get("seed_a")
-            elif sampler.get("seed") is not None:
-                bs["seed"] = sampler.get("seed")
-        else:
-            if sampler.get("steps_a") is not None:
-                bs["steps"] = sampler.get("steps_a")
-            elif sampler.get("steps") is not None:
-                bs["steps"] = sampler.get("steps")
-            if sampler.get("seed_a") is not None:
-                bs["seed"] = sampler.get("seed_a")
-            elif sampler.get("seed") is not None:
-                bs["seed"] = sampler.get("seed")
+    out = []
+    for lora in raw_loras:
+        if not isinstance(lora, dict):
+            continue
+        name = str(lora.get("name", "") or "").strip()
+        if not name:
+            continue
 
-        for key in ("cfg", "denoise", "sampler_name", "scheduler"):
-            if sampler.get(key) is not None:
-                bs[key] = sampler.get(key)
-        if bs:
-            block["sampler"] = bs
-
-        br = block.get("resolution", {}) if isinstance(block.get("resolution"), dict) else {}
-        for key in ("width", "height", "batch_size", "length"):
-            if resolution.get(key) is not None:
-                br[key] = resolution.get(key)
-        if br:
-            block["resolution"] = br
-
-        out["models"][slot_key] = block
-
-    model_a = str(recipe_data.get("model_a", "") or "")
-    model_b = str(recipe_data.get("model_b", "") or "")
-    loras_a = recipe_data.get("loras_a", []) if isinstance(recipe_data.get("loras_a"), list) else []
-    loras_b = recipe_data.get("loras_b", []) if isinstance(recipe_data.get("loras_b"), list) else []
-
-    if model_a or loras_a or recipe_data.get("positive_prompt") or recipe_data.get("negative_prompt"):
-        _overlay_slot("model_a", model_a, loras_a, prompt_override=True)
-    if model_b or loras_b:
-        _overlay_slot("model_b", model_b, loras_b, prompt_override=False)
-
-    # Legacy runtime object mapping into v2 model blocks.
-    if "MODEL_A" in recipe_data:
-        block = dict(out["models"].get("model_a", _default_v2_model_block()))
-        block["MODEL"] = recipe_data.get("MODEL_A")
-        out["models"]["model_a"] = block
-    if "MODEL_B" in recipe_data:
-        block = dict(out["models"].get("model_b", _default_v2_model_block()))
-        block["MODEL"] = recipe_data.get("MODEL_B")
-        out["models"]["model_b"] = block
-    if "CLIP" in recipe_data:
-        block = dict(out["models"].get("model_a", _default_v2_model_block()))
-        block["CLIP"] = recipe_data.get("CLIP")
-        out["models"]["model_a"] = block
-    if "VAE" in recipe_data:
-        block = dict(out["models"].get("model_a", _default_v2_model_block()))
-        block["VAE"] = recipe_data.get("VAE")
-        out["models"]["model_a"] = block
-    if "POSITIVE" in recipe_data:
-        block = dict(out["models"].get("model_a", _default_v2_model_block()))
-        block["POSITIVE"] = recipe_data.get("POSITIVE")
-        out["models"]["model_a"] = block
-    if "NEGATIVE" in recipe_data:
-        block = dict(out["models"].get("model_a", _default_v2_model_block()))
-        block["NEGATIVE"] = recipe_data.get("NEGATIVE")
-        out["models"]["model_a"] = block
+        model_strength = lora.get("model_strength", lora.get("strength", 1.0))
+        clip_strength = lora.get("clip_strength", lora.get("strength", model_strength))
+        out.append({
+            "name": name,
+            "path": lora.get("path", name),
+            "model_strength": model_strength,
+            "clip_strength": clip_strength,
+            "active": lora.get("active", True),
+            "available": lora.get("available", True),
+        })
 
     return out
+
+
+def _blank_v2_model_block():
+    """Return a blank v2 model block matching RecipeBuilder defaults."""
+    return {
+        "positive_prompt": "",
+        "negative_prompt": "",
+        "family": "",
+        "model": "",
+        "loras": [],
+        "clip_type": "",
+        "loader_type": "",
+        "vae": "",
+        "clip": [],
+        "sampler": {
+            "steps": 20,
+            "cfg": 5.0,
+            "denoise": 1.0,
+            "seed": 0,
+            "sampler_name": "dpmpp_2m_sde",
+            "scheduler": "karras",
+        },
+        "resolution": {
+            "width": 768,
+            "height": 1280,
+            "batch_size": 1,
+            "length": None,
+        },
+    }
+
+
+def _merge_model_block_with_template(existing_block):
+    """Merge an existing model block onto the blank v2 template."""
+    merged = _blank_v2_model_block()
+    if not isinstance(existing_block, dict):
+        return merged
+
+    for key, value in existing_block.items():
+        if key == "sampler" and isinstance(value, dict):
+            sampler = dict(merged["sampler"])
+            sampler.update(value)
+            merged["sampler"] = sampler
+            continue
+        if key == "resolution" and isinstance(value, dict):
+            resolution = dict(merged["resolution"])
+            resolution.update(value)
+            merged["resolution"] = resolution
+            continue
+        merged[key] = value
+
+    return merged
+
+
+def build_v2_recipe_data_from_prompt(
+    prompt_text="",
+    negative_prompt="",
+    loras_a=None,
+    loras_b=None,
+    source="RecipeData",
+    base_recipe_data=None,
+):
+    """Build/update v2 recipe_data from prompt text and LoRA stacks.
+
+    - Preserves existing non-legacy root metadata from base_recipe_data.
+    - Preserves existing model names when available.
+    - Writes prompt + negative_prompt + loras into model_a/model_b.
+    """
+    out = ensure_v2_recipe_data(
+        dict(base_recipe_data) if isinstance(base_recipe_data, dict) else {},
+        source=source,
+    )
+
+    models = out.get("models", {})
+    if not isinstance(models, dict):
+        models = {}
+        out["models"] = models
+
+    model_a = _merge_model_block_with_template(models.get("model_a"))
+    model_b = _merge_model_block_with_template(models.get("model_b"))
+
+    prompt_text = str(prompt_text or "")
+    negative_prompt = str(negative_prompt or "")
+
+    model_a["positive_prompt"] = prompt_text
+    model_b["positive_prompt"] = prompt_text
+
+    model_a["negative_prompt"] = negative_prompt
+    model_b["negative_prompt"] = negative_prompt
+
+    model_a["loras"] = _coerce_prompt_loras(loras_a)
+    model_b["loras"] = _coerce_prompt_loras(loras_b)
+
+    models["model_a"] = model_a
+    models["model_b"] = model_b
+
+    out["_source"] = source
+    return ensure_v2_recipe_data(out, source=source)
 
 
 def _strip_runtime_keys_deep(value):

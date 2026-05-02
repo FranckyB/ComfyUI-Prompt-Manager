@@ -2,6 +2,22 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 
+const PMA_THEME = {
+    panel: UI.panel || "hsl(216 11% 15%)",
+    panelBorder: UI.panelBorder || "hsl(216 20% 65% / 0.24)",
+    sectionBorder: UI.sectionBorder || "hsl(216 20% 65% / 0.20)",
+    inputBg: UI.inputBg || "hsl(220 15% 10%)",
+    inputBorder: UI.inputBorder || "hsl(218 10% 41%)",
+    buttonBg: UI.buttonBg || "hsl(219 16% 18%)",
+    cardBg: UI.cardBg || "hsl(219 16% 18%)",
+    textPrimary: UI.textPrimary || "hsl(0 0% 87%)",
+    textMuted: UI.textMuted || "hsl(0 0% 67%)",
+    textHint: UI.textHint || "hsl(216 15% 65%)",
+    accent: UI.accent || "hsl(208 73% 57% / 0.9)",
+    accentSoft: UI.accentSoft || "hsl(208 73% 57% / 0.16)",
+    accentBorder: UI.accentBorder || "hsl(208 73% 57% / 0.65)",
+};
+
 /**
  * PromptManagerAdvanced Extension for ComfyUI
  * Extends prompt management with LoRA stack support and toggleable LoRA displays
@@ -59,6 +75,7 @@ let loraManagerAvailable = false;
 let sessionHideNSFW = null;   // null = use preference default
 let sessionViewMode = null;   // null = use preference default
 let sessionEnableThumbnailPreview = null;  // null = use localStorage default
+let sessionBrowserContentFilter = null; // null = use preference default
 
 function getHideNSFW() {
     if (sessionHideNSFW !== null) return sessionHideNSFW;
@@ -77,6 +94,12 @@ function getThumbnailPreviewEnabled() {
     if (settingValue !== undefined) return settingValue;
     const stored = localStorage.getItem("PromptManager.EnableThumbnailPreview");
     return stored !== null ? stored === "true" : true; // Default to true
+}
+
+function getBrowserContentFilter() {
+    if (sessionBrowserContentFilter !== null) return sessionBrowserContentFilter;
+    const saved = String(app.ui.settings.getSettingValue("PromptManager.BrowserContentFilter") || "all").toLowerCase();
+    return (saved === "prompt" || saved === "recipe" || saved === "all") ? saved : "all";
 }
 
 /**
@@ -202,7 +225,6 @@ app.registerExtension({
                         const normalizedLoraListSig = (list) => JSON.stringify(
                             (Array.isArray(list) ? list : [])
                                 .map(normalizeLoraForSig)
-                                .sort((a, b) => a.name.localeCompare(b.name))
                         );
 
                         let newLorasA = event.detail.loras_a || [];
@@ -228,15 +250,15 @@ app.registerExtension({
                             use_workflow_data: shouldIngestWorkflowExecution,
                             use_lora_input: (this.widgets?.find(w => w.name === "use_lora_input")?.value !== false),
                             prompt_input: String(event.detail.prompt_input || ""),
-                            workflow_prompt: String(wfDataEvent?.positive_prompt || ""),
+                            workflow_prompt: getWorkflowPromptText(wfDataEvent || null),
                             connected_thumbnail_sig: (() => {
                                 const t = String(event.detail.connected_thumbnail || "");
                                 return t ? `${t.length}:${t.slice(0, 64)}` : "";
                             })(),
                             workflow_data_sig: wfDataEvent ? JSON.stringify({
-                                positive_prompt: String(wfDataEvent.positive_prompt || ""),
-                                loras_a: (Array.isArray(wfDataEvent.loras_a) ? wfDataEvent.loras_a : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
-                                loras_b: (Array.isArray(wfDataEvent.loras_b) ? wfDataEvent.loras_b : []).map(normalizeLoraForSig).sort((a, b) => a.name.localeCompare(b.name)),
+                                positive_prompt: getWorkflowPromptText(wfDataEvent),
+                                loras_a: getWorkflowLorasBySlot(wfDataEvent, "model_a").map(normalizeLoraForSig),
+                                loras_b: getWorkflowLorasBySlot(wfDataEvent, "model_b").map(normalizeLoraForSig),
                             }) : null,
                             loras_a_sig: normalizedLoraListSig(newLorasA),
                             loras_b_sig: normalizedLoraListSig(newLorasB),
@@ -462,9 +484,9 @@ app.registerExtension({
                                     promptTextWidget.inputEl.style.pointerEvents = "auto";
                                     promptTextWidget.inputEl.readOnly = true;
                                 }
-                            } else if (useWorkflow && wfData && wfData.positive_prompt) {
+                            } else if (useWorkflow && wfData && getWorkflowPromptText(wfData)) {
                                 // Using workflow_data prompt — display it (grayed out)
-                                promptTextWidget.value = wfData.positive_prompt;
+                                promptTextWidget.value = getWorkflowPromptText(wfData);
                                 promptTextWidget.disabled = true;
                                 if (promptTextWidget.inputEl) {
                                     promptTextWidget.inputEl.style.pointerEvents = "auto";
@@ -992,14 +1014,35 @@ function hasWorkflowDataPayload(rawWorkflowData) {
     );
 }
 
+function hasPromptPresetPayload(promptData) {
+    if (!promptData || typeof promptData !== "object") return false;
+    const promptText = String(promptData.prompt || "").trim();
+    const negativeText = String(promptData.negative_prompt || "").trim();
+    const hasLorasA = Array.isArray(promptData.loras_a) && promptData.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
+    const hasLorasB = Array.isArray(promptData.loras_b) && promptData.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
+    return promptText.length > 0 || negativeText.length > 0 || hasLorasA || hasLorasB;
+}
+
 function hasMeaningfulWorkflowData(rawWorkflowData) {
     const wf = parseJsonObjectSafe(rawWorkflowData, null);
     if (!wf || typeof wf !== "object") return false;
+
+    const hasSubstantiveRootField = Object.entries(wf).some(([key, value]) => {
+        if (key === "_source" || key === "version" || key === "models") return false;
+        if (value == null) return false;
+        if (typeof value === "string") return value.trim().length > 0;
+        if (Array.isArray(value)) return value.length > 0;
+        if (typeof value === "object") return Object.keys(value).length > 0;
+        return true;
+    });
 
     if ((Number(wf.version || 0) >= 2) && wf.models && typeof wf.models === "object") {
         for (const slot of ["model_a", "model_b", "model_c", "model_d"]) {
             const block = wf.models[slot];
             if (!block || typeof block !== "object") continue;
+            if (Object.keys(block).length > 0) {
+                return true;
+            }
             const positivePrompt = String(block.positive_prompt || "").trim();
             const modelName = String(block.model || "").trim();
             const hasLoras = Array.isArray(block.loras) && block.loras.some((lora) => String(lora?.name || "").trim().length > 0);
@@ -1011,6 +1054,9 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
         }
 
         if (["LATENT", "IMAGE", "MASK"].some((key) => wf[key] != null)) {
+            return true;
+        }
+        if (hasSubstantiveRootField) {
             return true;
         }
         return false;
@@ -1027,7 +1073,7 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
     const hasLorasA = Array.isArray(wf.loras_a) && wf.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
     const hasLorasB = Array.isArray(wf.loras_b) && wf.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
 
-    return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB;
+    return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB || hasSubstantiveRootField;
 }
 
 function hasConnectedWorkflowInput(node) {
@@ -1038,6 +1084,7 @@ function hasConnectedWorkflowInput(node) {
 function getPromptNamesForCategory(node, category, options = {}) {
     const hideNSFW = options.hideNSFW === true;
     const workflowOnly = options.workflowOnly === true;
+    const contentFilter = String(options.contentFilter || "all").toLowerCase();
     const categoryPrompts = node?.prompts?.[category];
     if (!categoryPrompts || typeof categoryPrompts !== "object") return [];
 
@@ -1049,20 +1096,51 @@ function getPromptNamesForCategory(node, category, options = {}) {
         promptNames = promptNames.filter((name) => categoryPrompts?.[name]?.nsfw !== true);
     }
 
-    if (workflowOnly) {
-        promptNames = promptNames.filter((name) => hasWorkflowDataPayload(categoryPrompts?.[name]?.workflow_data));
+    if (workflowOnly || contentFilter !== "all") {
+        promptNames = promptNames.filter((name) => {
+            const entry = categoryPrompts?.[name];
+            const hasRecipeData = hasWorkflowDataPayload(entry?.workflow_data);
+            const hasPromptData = hasPromptPresetPayload(entry);
+
+            if (workflowOnly && !(hasRecipeData || hasPromptData)) {
+                return false;
+            }
+            if (contentFilter === "prompt") {
+                return hasPromptData;
+            }
+            if (contentFilter === "recipe") {
+                return hasRecipeData;
+            }
+            return true;
+        });
     }
 
     return promptNames;
 }
 
 function getVisibleCategories(node, options = {}) {
+    const hideNSFW = options.hideNSFW === true;
+    const workflowOnly = options.workflowOnly === true;
+    const contentFilter = String(options.contentFilter || "all").toLowerCase();
+    const filterEmptyCategories = options.filterEmptyCategories === true;
+    const keepCategory = String(options.keepCategory || "");
+
     const categories = Object.keys(node?.prompts || {})
         .filter((c) => c !== "__meta__")
         .sort((a, b) => a.localeCompare(b));
 
-    // Keep empty categories visible so users can still save prompts/workflows into them.
-    return categories;
+    if (!filterEmptyCategories) {
+        // Keep empty categories visible so users can still save prompts/workflows into them.
+        return categories;
+    }
+
+    const filtered = categories.filter((category) => {
+        if (keepCategory && category === keepCategory) return true;
+        const names = getPromptNamesForCategory(node, category, { hideNSFW, workflowOnly, contentFilter });
+        return names.length > 0;
+    });
+
+    return filtered;
 }
 
 function filterPromptDropdown(node, options = {}) {
@@ -1128,8 +1206,8 @@ function updateWorkflowManagerPreview(node) {
     const infoEnabled = infoSummary.modelCount > 0;
     if (ui.infoBtn) {
         ui.infoBtn.disabled = !infoEnabled;
-        ui.infoBtn.style.background = infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)";
-        ui.infoBtn.style.color = infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)";
+        ui.infoBtn.style.background = infoEnabled ? PMA_THEME.accent : PMA_THEME.buttonBg;
+        ui.infoBtn.style.color = infoEnabled ? "#ffffff" : PMA_THEME.textHint;
         ui.infoBtn.style.cursor = infoEnabled ? "pointer" : "default";
         ui.infoBtn.style.opacity = infoEnabled ? "1" : "0.8";
         ui.infoBtn.title = infoEnabled ? "Show workflow summary" : "No workflow metadata";
@@ -1197,8 +1275,8 @@ function addWorkflowManagerPreview(node) {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        background: #1e1e1e;
-        border: 1px solid #3a3a3a;
+        background: ${PMA_THEME.panel};
+        border: 1px solid ${PMA_THEME.panelBorder};
         border-radius: 8px;
         padding: 8px;
         box-sizing: border-box;
@@ -1209,7 +1287,7 @@ function addWorkflowManagerPreview(node) {
     title.textContent = "Workflow Preview";
     title.style.cssText = `
         font-size: 11px;
-        color: #9aa;
+        color: ${PMA_THEME.textHint};
         font-weight: 600;
         letter-spacing: 0.2px;
     `;
@@ -1220,8 +1298,8 @@ function addWorkflowManagerPreview(node) {
         width: 100%;
         aspect-ratio: 1 / 1;
         border-radius: 6px;
-        background: #111;
-        border: 1px solid #333;
+        background: ${PMA_THEME.inputBg};
+        border: 1px solid ${PMA_THEME.inputBorder};
         overflow: hidden;
         box-sizing: border-box;
     `;
@@ -1247,9 +1325,9 @@ function addWorkflowManagerPreview(node) {
         justify-content: center;
         text-align: center;
         font-size: 11px;
-        color: #777;
-        background: #141414;
-        border: 1px dashed rgba(110, 110, 110, 0.5);
+        color: ${PMA_THEME.textMuted};
+        background: ${PMA_THEME.inputBg};
+        border: 1px dashed ${PMA_THEME.inputBorder};
         border-radius: 5px;
         padding: 8px;
         box-sizing: border-box;
@@ -1267,9 +1345,9 @@ function addWorkflowManagerPreview(node) {
         width: 28px;
         height: 14px;
         border-radius: 999px;
-        border: 1px solid rgba(240, 248, 255, 0.95);
-        background: rgba(120, 130, 140, 0.35);
-        color: rgba(220, 226, 234, 0.75);
+        border: 1px solid ${PMA_THEME.inputBorder};
+        background: ${PMA_THEME.buttonBg};
+        color: ${PMA_THEME.textHint};
         font-size: 8px;
         font-weight: 700;
         letter-spacing: 0.2px;
@@ -1343,8 +1421,7 @@ function _normalizeSummaryLoras(list) {
                 found: item.found !== false,
             };
         })
-        .filter(Boolean)
-        .sort(compareLorasMissingLast);
+            .filter(Boolean);
 }
 
 function _summarizeWorkflowDataDiscovery(rawWorkflowData) {
@@ -1725,12 +1802,12 @@ function attachWorkflowCornerInfoHandlers(node) {
 
         ctx.save();
         drawRoundRect(infoX, infoY, infoWidth, infoHeight, cornerRadius);
-        ctx.fillStyle = infoEnabled ? 'rgba(55, 142, 255, 0.92)' : 'rgba(120, 130, 140, 0.35)';
+        ctx.fillStyle = infoEnabled ? PMA_THEME.accent : PMA_THEME.buttonBg;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(240, 248, 255, 0.95)';
+        ctx.strokeStyle = PMA_THEME.inputBorder;
         ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.fillStyle = infoEnabled ? '#ffffff' : 'rgba(220, 226, 234, 0.75)';
+        ctx.fillStyle = infoEnabled ? '#ffffff' : PMA_THEME.textHint;
         ctx.font = 'bold 8px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1892,7 +1969,7 @@ function createLoraDisplayContainer(title, stackId, node) {
         flexDirection: "column",
         gap: "4px",
         padding: "8px",
-        backgroundColor: "rgba(40, 44, 52, 0.6)",
+        backgroundColor: PMA_THEME.cardBg,
         borderRadius: "6px",
         width: "100%",
         boxSizing: "border-box",
@@ -1913,7 +1990,7 @@ function createLoraDisplayContainer(title, stackId, node) {
         alignItems: "center",
         marginBottom: "4px",
         paddingBottom: "4px",
-        borderBottom: "1px solid rgba(255,255,255,0.1)"
+        borderBottom: `1px solid ${PMA_THEME.sectionBorder}`
     });
 
     const titleLabel = document.createElement("span");
@@ -1921,7 +1998,7 @@ function createLoraDisplayContainer(title, stackId, node) {
     Object.assign(titleLabel.style, {
         fontSize: "12px",
         fontWeight: "bold",
-        color: "#aaa"
+        color: PMA_THEME.textMuted
     });
     titleBar.appendChild(titleLabel);
 
@@ -1939,9 +2016,9 @@ function createLoraDisplayContainer(title, stackId, node) {
     Object.assign(resetBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#333",
-        color: "#ccc",
-        border: "1px solid #555",
+        backgroundColor: PMA_THEME.buttonBg,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.inputBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -1954,9 +2031,9 @@ function createLoraDisplayContainer(title, stackId, node) {
     Object.assign(toggleAllBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#333",
-        color: "#ccc",
-        border: "1px solid #555",
+        backgroundColor: PMA_THEME.buttonBg,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.inputBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -1995,8 +2072,14 @@ function updateLoraDisplays(node) {
         lorasB = (node.savedLorasB || []).map(l => ({ ...l, source: 'saved' }));
     } else {
         // Override OFF: Merge current (from input) and saved (from prompt) loras
-        lorasA = mergeLoraLists(node.currentLorasA, node.savedLorasA);
-        lorasB = mergeLoraLists(node.currentLorasB, node.savedLorasB);
+        lorasA = applyPreferredOrder(
+            mergeLoraLists(node.currentLorasA, node.savedLorasA),
+            node.properties?.preferredLoraOrderA
+        );
+        lorasB = applyPreferredOrder(
+            mergeLoraLists(node.currentLorasB, node.savedLorasB),
+            node.properties?.preferredLoraOrderB
+        );
     }
 
     // Update display A
@@ -2017,6 +2100,26 @@ function updateLoraDisplays(node) {
     // Just redraw canvas - the computeSize functions already handle correct sizing
     // using node.size[0] for accurate width calculation
     app.graph.setDirtyCanvas(true, true);
+}
+
+/**
+ * Reorder a lora list to match a preferred order (array of names).
+ * Items not in preferredOrder are appended at the end in their original relative order.
+ */
+function applyPreferredOrder(list, preferredOrder) {
+    if (!Array.isArray(preferredOrder) || preferredOrder.length === 0) return list;
+    const orderMap = new Map(preferredOrder.map((name, i) => [name.toLowerCase(), i]));
+    const ordered = Array(preferredOrder.length).fill(null);
+    const rest = [];
+    list.forEach(lora => {
+        const idx = orderMap.get(lora.name.toLowerCase());
+        if (idx !== undefined) {
+            ordered[idx] = lora;
+        } else {
+            rest.push(lora);
+        }
+    });
+    return [...ordered.filter(x => x !== null), ...rest];
 }
 
 function mergeLoraLists(currentLoras, savedLoras) {
@@ -2059,9 +2162,6 @@ function mergeLoraLists(currentLoras, savedLoras) {
         }
     });
 
-    // Keep available LoRAs first, then missing ones, each group alphabetical.
-    merged.sort(compareLorasMissingLast);
-
     return merged;
 }
 
@@ -2102,7 +2202,7 @@ function renderLoraTags(container, loras, stackId, node) {
         return;
     }
 
-    const orderedLoras = (Array.isArray(loras) ? [...loras] : []).sort(compareLorasMissingLast);
+    const orderedLoras = Array.isArray(loras) ? loras : [];
     orderedLoras.forEach((lora, index) => {
         const tag = createLoraTag(lora, index, stackId, node);
         container.appendChild(tag);
@@ -2405,54 +2505,42 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
     `;
     menu.appendChild(titleItem);
 
-    // Search on CivitAI option (only for missing LoRAs)
-    if (!isAvailable) {
-        const searchItem = document.createElement("div");
-        searchItem.textContent = "🔍 Search on CivitAI";
-        searchItem.style.cssText = `
+    const addMenuItem = (label, color, onClick) => {
+        const item = document.createElement("div");
+        item.textContent = label;
+        item.style.cssText = `
             padding: 8px 12px;
             cursor: pointer;
             font-size: 12px;
-            color: #4da6ff;
+            color: ${color};
             white-space: nowrap;
         `;
-        searchItem.addEventListener("mouseenter", () => {
-            searchItem.style.backgroundColor = "#3a3a3a";
+        item.addEventListener("mouseenter", () => {
+            item.style.backgroundColor = "#3a3a3a";
         });
-        searchItem.addEventListener("mouseleave", () => {
-            searchItem.style.backgroundColor = "transparent";
+        item.addEventListener("mouseleave", () => {
+            item.style.backgroundColor = "transparent";
         });
-        searchItem.addEventListener("click", (evt) => {
+        item.addEventListener("click", (evt) => {
             evt.stopPropagation();
             menu.remove();
-            // Open CivitAI search in new tab
+            onClick();
+        });
+        menu.appendChild(item);
+    };
+
+    addMenuItem("Move Up", "#ddd", () => moveLora(node, stackId, index, -1));
+    addMenuItem("Move Down", "#ddd", () => moveLora(node, stackId, index, 1));
+
+    // Search on CivitAI option (only for missing LoRAs)
+    if (!isAvailable) {
+        addMenuItem("🔍 Search on CivitAI", "#4da6ff", () => {
             const searchQuery = encodeURIComponent(loraName);
             window.open(`https://civitai.red/search/models?sortBy=models_v9&query=${searchQuery}&modelType=LORA`, "_blank");
         });
-        menu.appendChild(searchItem);
     }
 
-    const deleteItem = document.createElement("div");
-    deleteItem.textContent = "Delete";
-    deleteItem.style.cssText = `
-        padding: 8px 12px;
-        cursor: pointer;
-        font-size: 12px;
-        color: #ff6b6b;
-        white-space: nowrap;
-    `;
-    deleteItem.addEventListener("mouseenter", () => {
-        deleteItem.style.backgroundColor = "#3a3a3a";
-    });
-    deleteItem.addEventListener("mouseleave", () => {
-        deleteItem.style.backgroundColor = "transparent";
-    });
-    deleteItem.addEventListener("click", (evt) => {
-        evt.stopPropagation();
-        menu.remove();
-        removeLora(node, stackId, index);
-    });
-    menu.appendChild(deleteItem);
+    addMenuItem("Delete", "#ff6b6b", () => removeLora(node, stackId, index));
 
     document.body.appendChild(menu);
 
@@ -2516,6 +2604,56 @@ function removeLora(node, stackId, index) {
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
     }
+}
+
+function moveLora(node, stackId, index, delta) {
+    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
+    const useLoraInput = useLoraInputWidget?.value !== false;
+
+    let loraList;
+    if (!useLoraInput) {
+        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
+    } else {
+        loraList = applyPreferredOrder(
+            stackId === "a"
+                ? mergeLoraLists(node.currentLorasA, node.savedLorasA)
+                : mergeLoraLists(node.currentLorasB, node.savedLorasB),
+            stackId === "a" ? node.properties?.preferredLoraOrderA : node.properties?.preferredLoraOrderB
+        );
+    }
+
+    if (!Array.isArray(loraList) || loraList.length === 0) {
+        return;
+    }
+
+    const from = Number(index);
+    const to = from + Number(delta || 0);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= loraList.length || to >= loraList.length) {
+        return;
+    }
+
+    loraList.splice(to, 0, loraList.splice(from, 1)[0]);
+
+    if (!useLoraInput) {
+        // When lora input is disabled, directly update savedLoras order
+        if (stackId === "a") {
+            node.savedLorasA = loraList;
+        } else {
+            node.savedLorasB = loraList;
+        }
+    } else {
+        // Store preferred order as names — does NOT change source/color
+        if (!node.properties) node.properties = {};
+        const orderNames = loraList.map(l => l.name);
+        if (stackId === "a") {
+            node.properties.preferredLoraOrderA = orderNames;
+        } else {
+            node.properties.preferredLoraOrderB = orderNames;
+        }
+    }
+
+    updateLoraDisplays(node);
+    app.graph.setDirtyCanvas(true, true);
 }
 
 /**
@@ -2782,7 +2920,7 @@ function createTriggerWordsDisplayContainer(title, node) {
         flexDirection: "column",
         gap: "4px",
         padding: "8px",
-        backgroundColor: "rgba(40, 44, 52, 0.6)",
+        backgroundColor: PMA_THEME.cardBg,
         borderRadius: "6px",
         width: "100%",
         boxSizing: "border-box",
@@ -2803,7 +2941,7 @@ function createTriggerWordsDisplayContainer(title, node) {
         alignItems: "center",
         marginBottom: "4px",
         paddingBottom: "4px",
-        borderBottom: "1px solid rgba(255,255,255,0.1)"
+        borderBottom: `1px solid ${PMA_THEME.sectionBorder}`
     });
 
     const titleLabel = document.createElement("span");
@@ -2811,7 +2949,7 @@ function createTriggerWordsDisplayContainer(title, node) {
     Object.assign(titleLabel.style, {
         fontSize: "12px",
         fontWeight: "bold",
-        color: "#aaa"
+        color: PMA_THEME.textMuted
     });
     titleBar.appendChild(titleLabel);
 
@@ -2828,9 +2966,9 @@ function createTriggerWordsDisplayContainer(title, node) {
     Object.assign(addBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#2a5a3a",
-        color: "#ccc",
-        border: "1px solid #3a7a4a",
+        backgroundColor: PMA_THEME.accentSoft,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.accentBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -2843,9 +2981,9 @@ function createTriggerWordsDisplayContainer(title, node) {
     Object.assign(toggleAllBtn.style, {
         fontSize: "10px",
         padding: "2px 8px",
-        backgroundColor: "#333",
-        color: "#ccc",
-        border: "1px solid #555",
+        backgroundColor: PMA_THEME.buttonBg,
+        color: PMA_THEME.textPrimary,
+        border: `1px solid ${PMA_THEME.inputBorder}`,
         borderRadius: "6px",
         cursor: "pointer"
     });
@@ -3864,10 +4002,38 @@ function mapWorkflowLorasToUi(list) {
         .filter(Boolean);
 }
 
+function getWorkflowModelBlock(workflowData, slot = "model_a") {
+    if (!workflowData || typeof workflowData !== "object") return null;
+    if (Number(workflowData.version || 0) < 2) return null;
+    const models = workflowData.models;
+    if (!models || typeof models !== "object") return null;
+    const block = models[slot];
+    return block && typeof block === "object" ? block : null;
+}
+
+function getWorkflowPromptText(workflowData) {
+    const modelA = getWorkflowModelBlock(workflowData, "model_a");
+    if (modelA && typeof modelA.positive_prompt === "string") {
+        return String(modelA.positive_prompt || "");
+    }
+    return String(workflowData?.positive_prompt || "");
+}
+
+function getWorkflowLorasBySlot(workflowData, slot = "model_a") {
+    const block = getWorkflowModelBlock(workflowData, slot);
+    if (block && Array.isArray(block.loras)) {
+        return block.loras;
+    }
+    if (slot === "model_b") {
+        return Array.isArray(workflowData?.loras_b) ? workflowData.loras_b : [];
+    }
+    return Array.isArray(workflowData?.loras_a) ? workflowData.loras_a : [];
+}
+
 function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, fallbackLorasB = null, options = null) {
     const preserveLocal = options?.preserveUserState !== false;
-    const mappedPrimaryA = Array.isArray(workflowData?.loras_a) ? mapWorkflowLorasToUi(workflowData.loras_a) : [];
-    const mappedPrimaryB = Array.isArray(workflowData?.loras_b) ? mapWorkflowLorasToUi(workflowData.loras_b) : [];
+    const mappedPrimaryA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_a"));
+    const mappedPrimaryB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_b"));
     const mappedFallbackA = mapWorkflowLorasToUi(fallbackLorasA || []);
     const mappedFallbackB = mapWorkflowLorasToUi(fallbackLorasB || []);
 
@@ -3940,23 +4106,86 @@ function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
         ? JSON.parse(JSON.stringify(baseWorkflowData))
         : {};
 
-    base.positive_prompt = String(promptText || "");
-    base.loras_a = (lorasA || []).map((l) => ({
+    const normalizedPrompt = String(promptText || "");
+    const normalizedA = (lorasA || []).map((l) => ({
         name: l.name,
+        path: String(l.path || l.name || ""),
         model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
         clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
         active: l.active !== false,
         available: l.available !== false,
         found: l.found !== false,
     }));
-    base.loras_b = (lorasB || []).map((l) => ({
+    const normalizedB = (lorasB || []).map((l) => ({
         name: l.name,
+        path: String(l.path || l.name || ""),
         model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
         clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
         active: l.active !== false,
         available: l.available !== false,
         found: l.found !== false,
     }));
+
+    if (Number(base.version || 0) >= 2 && base.models && typeof base.models === "object") {
+        const modelA = (base.models.model_a && typeof base.models.model_a === "object")
+            ? base.models.model_a
+            : (base.models.model_a = {});
+        const hasExistingModelB = !!(base.models.model_b && typeof base.models.model_b === "object");
+        const existingModelB = hasExistingModelB ? base.models.model_b : null;
+        const modelAName = String(modelA?.model || "").trim();
+        const modelBName = String(existingModelB?.model || "").trim();
+        const modelBPos = String(existingModelB?.positive_prompt || "").trim();
+        const modelBNeg = String(existingModelB?.negative_prompt || "").trim();
+        const modelBHasLoras = Array.isArray(existingModelB?.loras) && existingModelB.loras.length > 0;
+        const modelBHasRuntime = ["MODEL", "CLIP", "VAE", "POSITIVE", "NEGATIVE"].some((k) => existingModelB?.[k] != null);
+        const isGhostModelB = hasExistingModelB && !modelBHasLoras && !modelBPos && !modelBNeg && !modelBHasRuntime && (!modelBName || modelBName === modelAName);
+
+        if (isGhostModelB) {
+            delete base.models.model_b;
+        }
+
+        modelA.positive_prompt = normalizedPrompt;
+        modelA.loras = normalizedA;
+        if ((hasExistingModelB && !isGhostModelB) || normalizedB.length > 0) {
+            const modelB = (hasExistingModelB && !isGhostModelB)
+                ? base.models.model_b
+                : (base.models.model_b = {});
+            modelB.loras = normalizedB;
+        }
+    } else {
+        // Always emit v2 shape so backend normalization doesn't drop legacy
+        // top-level fields into an empty { version:2, models:{} } payload.
+        const legacyModelA = String(base.model_a || "").trim();
+        const legacyModelB = String(base.model_b || "").trim();
+        const legacyNegative = String(base.negative_prompt || "");
+
+        base.version = 2;
+        if (!base.models || typeof base.models !== "object") base.models = {};
+
+        const modelA = (base.models.model_a && typeof base.models.model_a === "object")
+            ? base.models.model_a
+            : (base.models.model_a = {});
+
+        modelA.positive_prompt = normalizedPrompt;
+        modelA.negative_prompt = String(modelA.negative_prompt ?? legacyNegative);
+        if (!modelA.model && legacyModelA) modelA.model = legacyModelA;
+        modelA.loras = normalizedA;
+
+        const hasModelB = legacyModelB.length > 0 || normalizedB.length > 0 ||
+            (base.models.model_b && typeof base.models.model_b === "object");
+        if (hasModelB) {
+            const modelB = (base.models.model_b && typeof base.models.model_b === "object")
+                ? base.models.model_b
+                : (base.models.model_b = {});
+            if (!modelB.model && legacyModelB) modelB.model = legacyModelB;
+            modelB.loras = normalizedB;
+        }
+
+        delete base.positive_prompt;
+        delete base.negative_prompt;
+        delete base.loras_a;
+        delete base.loras_b;
+    }
     base._source = "PromptManagerAdvanced";
     return base;
 }
@@ -4017,8 +4246,9 @@ async function pullWorkflowIntoNode(node) {
     const textWidget = node.widgets?.find((w) => w.name === "text");
     const usePromptInputWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
     const usePromptInput = usePromptInputWidget?.value === true;
-    if (!usePromptInput && textWidget && wfData.positive_prompt) {
-        textWidget.value = String(wfData.positive_prompt);
+    const wfPrompt = getWorkflowPromptText(wfData);
+    if (!usePromptInput && textWidget && wfPrompt) {
+        textWidget.value = wfPrompt;
     }
 
     node.lastWorkflowData = wfData;
@@ -4030,8 +4260,8 @@ async function pullWorkflowIntoNode(node) {
     // Pull Workflow should only replace fields that are NOT controlled by live inputs.
     // If use_lora_input is ON, connected stacks control LoRAs at execution; keep PMA stacks unchanged.
     if (!useLoraInput) {
-        let pulledA = mapWorkflowLorasToUi(wfData.loras_a || []).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
-        let pulledB = mapWorkflowLorasToUi(wfData.loras_b || []).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
+        let pulledA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_a")).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
+        let pulledB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_b")).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
         pulledA = await applyLoraFoundState(pulledA);
         pulledB = await applyLoraFoundState(pulledB);
 
@@ -4117,13 +4347,11 @@ function getWorkflowDataLiveSig(workflowData) {
         found: lora?.found !== false,
     });
     return JSON.stringify({
-        positive_prompt: String(workflowData.positive_prompt || ""),
-        loras_a: (Array.isArray(workflowData.loras_a) ? workflowData.loras_a : [])
-            .map(normalize)
-            .sort((a, b) => a.name.localeCompare(b.name)),
-        loras_b: (Array.isArray(workflowData.loras_b) ? workflowData.loras_b : [])
-            .map(normalize)
-            .sort((a, b) => a.name.localeCompare(b.name)),
+        positive_prompt: getWorkflowPromptText(workflowData),
+        loras_a: getWorkflowLorasBySlot(workflowData, "model_a")
+            .map(normalize),
+        loras_b: getWorkflowLorasBySlot(workflowData, "model_b")
+            .map(normalize),
     });
 }
 
@@ -4140,8 +4368,8 @@ async function tryLiveWorkflowPickup(node, { force = false } = {}) {
         return false;
     }
 
-    let liveA = mapWorkflowLorasToUi(wfData.loras_a || []);
-    let liveB = mapWorkflowLorasToUi(wfData.loras_b || []);
+    let liveA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_a"));
+    let liveB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_b"));
     liveA = await applyLoraFoundState(liveA);
     liveB = await applyLoraFoundState(liveB);
 
@@ -4151,8 +4379,9 @@ async function tryLiveWorkflowPickup(node, { force = false } = {}) {
 
     const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
     const textWidget = node.widgets?.find((w) => w.name === "text");
-    if (textWidget && !(useExternalWidget?.value === true) && wfData.positive_prompt != null) {
-        textWidget.value = String(wfData.positive_prompt);
+    const wfPrompt = getWorkflowPromptText(wfData);
+    if (textWidget && !(useExternalWidget?.value === true) && wfPrompt.length > 0) {
+        textWidget.value = wfPrompt;
     }
 
     node.currentTriggerWords = [];
@@ -4526,7 +4755,8 @@ async function loadPromptData(node, category, promptName) {
         textWidget.value = promptData.prompt || "";
     }
 
-    // Restore saved workflow_data if present
+    // Restore saved workflow_data if present. Prompt->recipe conversion now
+    // happens in Python execution paths for both managers.
     node.lastWorkflowData = promptData.workflow_data || null;
     syncSavedWorkflowDataWidget(node);
 
@@ -4615,12 +4845,10 @@ function getCurrentStateSnapshot(node) {
 
     // Get all loras with their states
     const lorasA = (node.savedLorasA || [])
-        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }));
 
     const lorasB = (node.savedLorasB || [])
-        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }));
 
     // Get all trigger words with their states
     const triggerWords = (node.savedTriggerWords || [])
@@ -4931,36 +5159,36 @@ function resolveWorkflowDataForSave(node) {
             if (wfOutIdx >= 0) {
                 const out = upstream.outputs[wfOutIdx];
                 const data = out?._data ?? out?.value ?? null;
-                if (hasMeaningfulWorkflowData(data)) return data;
+                if (hasWorkflowDataPayload(data)) return data;
                 if (typeof data === "string") {
                     const parsed = parseJsonObjectSafe(data, null);
-                    if (hasMeaningfulWorkflowData(parsed)) return parsed;
+                    if (hasWorkflowDataPayload(parsed)) return parsed;
                 }
             }
 
             const fromBuilder = buildWorkflowDataFromBuilderNode(upstream);
-            if (hasMeaningfulWorkflowData(fromBuilder)) return fromBuilder;
+            if (hasWorkflowDataPayload(fromBuilder)) return fromBuilder;
         }
 
         if (sourceClass === "PromptExtractor" || sourceClass === "RecipeExtractor") {
             const fromExtractor = buildWorkflowDataFromExtractorNode(upstream);
-            if (hasMeaningfulWorkflowData(fromExtractor)) return fromExtractor;
+            if (hasWorkflowDataPayload(fromExtractor)) return fromExtractor;
         }
 
         const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
         if (wfOutIdx >= 0) {
             const out = upstream.outputs[wfOutIdx];
             const data = out?._data ?? out?.value ?? null;
-            if (hasMeaningfulWorkflowData(data)) return data;
+            if (hasWorkflowDataPayload(data)) return data;
             if (typeof data === "string") {
                 const parsed = parseJsonObjectSafe(data, null);
-                if (hasMeaningfulWorkflowData(parsed)) return parsed;
+                if (hasWorkflowDataPayload(parsed)) return parsed;
             }
         }
 
         // Connected input but no fresh upstream workflow_data: for Recipe Manager,
         // allow fallback to the latest live payload captured from execution updates.
-        if (node?._isWorkflowManager && hasMeaningfulWorkflowData(node.lastWorkflowData)) {
+        if (node?._isWorkflowManager && hasWorkflowDataPayload(node.lastWorkflowData)) {
             return node.lastWorkflowData;
         }
 
@@ -4969,7 +5197,7 @@ function resolveWorkflowDataForSave(node) {
         return null;
     }
 
-    return hasMeaningfulWorkflowData(node.lastWorkflowData) ? node.lastWorkflowData : null;
+    return hasWorkflowDataPayload(node.lastWorkflowData) ? node.lastWorkflowData : null;
 }
 
 async function resolveWorkflowDataForLive(node) {
@@ -5042,28 +5270,49 @@ async function resolveWorkflowDataForLive(node) {
 
 async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null, nsfw = false) {
     try {
+        // Include workflow_data when available.
+        // If use_workflow_data is enabled and workflow_data comes from a connected
+        // RecipeBuilder / RecipeBuilderWan, pull it directly from Builder UI state so saving works
+        // even before executing the graph.
+        const hasWorkflowInput = hasConnectedWorkflowInput(node);
+        const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
+        const workflowDataForSave = hasWorkflowDataPayload(liveWorkflowData)
+            ? liveWorkflowData
+            : resolveWorkflowDataForSave(node);
+
+        // In Workflow Manager mode, preserve LoRA active state from connected
+        // workflow_data as the save source of truth.
+        let lorasForSaveA = Array.isArray(lorasA) ? [...lorasA] : [];
+        let lorasForSaveB = Array.isArray(lorasB) ? [...lorasB] : [];
+        if (node?._isWorkflowManager && hasWorkflowInput && hasMeaningfulWorkflowData(workflowDataForSave)) {
+            const wfLorasA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_a"));
+            const wfLorasB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_b"));
+            if (wfLorasA.length > 0 || lorasForSaveA.length === 0) lorasForSaveA = wfLorasA;
+            if (wfLorasB.length > 0 || lorasForSaveB.length === 0) lorasForSaveB = wfLorasB;
+        }
+
         const requestBody = {
             category: category,
             name: name,
             text: text,
             nsfw: nsfw,
             // Save loras with their active state
-            loras_a: lorasA.map(l => ({
+            loras_a: lorasForSaveA.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0,
                 clip_strength: l.clip_strength ?? l.strength ?? 1.0,
-                active: l.active !== false
+                active: l.active
             })),
-            loras_b: lorasB.map(l => ({
+            loras_b: lorasForSaveB.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0,
                 clip_strength: l.clip_strength ?? l.strength ?? 1.0,
-                active: l.active !== false
+                active: l.active
             })),
             // Save all trigger words with their active states
             trigger_words: (triggerWords || []).map(tw => ({
                 text: tw.text,
-                active: tw.active !== false
+                active: tw.active
             }))
         };
 
@@ -5072,31 +5321,21 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             requestBody.thumbnail = thumbnail;
         }
 
-        // Include workflow_data when available.
-        // If use_workflow_data is enabled and workflow_data comes from a connected
-        // RecipeBuilder / RecipeBuilderWan, pull it directly from Builder UI state so saving works
-        // even before executing the graph.
-        const hasWorkflowInput = hasConnectedWorkflowInput(node);
-        const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
-        const workflowDataForSave = hasMeaningfulWorkflowData(liveWorkflowData)
-            ? liveWorkflowData
-            : resolveWorkflowDataForSave(node);
-
-        if (node?._isWorkflowManager && hasWorkflowInput && !hasMeaningfulWorkflowData(workflowDataForSave)) {
+        if (node?._isWorkflowManager && hasWorkflowInput && !hasWorkflowDataPayload(workflowDataForSave)) {
             await showInfo("Workflow Data", "No live workflow_data available to save yet. Execute upstream nodes and try again.");
             return;
         }
         if (workflowDataForSave) {
+            const wfPrompt = getWorkflowPromptText(workflowDataForSave);
             const effectivePromptText = (
                 node?._isWorkflowManager &&
                 hasWorkflowInput &&
-                typeof workflowDataForSave?.positive_prompt === "string" &&
-                workflowDataForSave.positive_prompt.trim().length > 0
+                wfPrompt.trim().length > 0
             )
-                ? workflowDataForSave.positive_prompt
+                ? wfPrompt
                 : text;
 
-            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasA, lorasB);
+            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB);
             if (node?._isWorkflowManager) {
                 liveWorkflowData._source = "RecipeManager";
             }
@@ -5123,16 +5362,16 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             }
 
             // Update saved loras with what was just saved
-            node.savedLorasA = lorasA;
-            node.savedLorasB = lorasB;
+            node.savedLorasA = lorasForSaveA;
+            node.savedLorasB = lorasForSaveB;
             node.savedTriggerWords = triggerWords || [];
 
             // Update original strengths to match saved values (Reset now resets to saved state)
-            node.originalLorasA = lorasA.map(l => ({
+            node.originalLorasA = lorasForSaveA.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0
             }));
-            node.originalLorasB = lorasB.map(l => ({
+            node.originalLorasB = lorasForSaveB.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0
             }));
@@ -5389,8 +5628,8 @@ function createDropdownButton(text, items) {
     const dropdown = document.createElement("div");
     dropdown.style.cssText = `
         position: fixed;
-        background: #2a2a2a;
-        border: 1px solid #555;
+        background: ${PMA_THEME.panel};
+        border: 1px solid ${PMA_THEME.inputBorder};
         border-radius: 6px;
         z-index: 999999;
         display: none;
@@ -5402,7 +5641,7 @@ function createDropdownButton(text, items) {
     items.forEach(item => {
         if (item.divider) {
             const divider = document.createElement("div");
-            divider.style.cssText = "height: 1px; background: #444; margin: 4px 0;";
+            divider.style.cssText = `height: 1px; background: ${PMA_THEME.sectionBorder}; margin: 4px 0;`;
             dropdown.appendChild(divider);
         } else {
             const menuItem = document.createElement("div");
@@ -5411,11 +5650,11 @@ function createDropdownButton(text, items) {
                 padding: 8px 12px;
                 cursor: pointer;
                 font-size: 11px;
-                color: #fff;
+                color: ${PMA_THEME.textPrimary};
                 white-space: nowrap;
             `;
             menuItem.addEventListener("mouseenter", () => {
-                menuItem.style.backgroundColor = "#4a4a4a";
+                menuItem.style.backgroundColor = PMA_THEME.accentSoft;
             });
             menuItem.addEventListener("mouseleave", () => {
                 menuItem.style.backgroundColor = "transparent";
@@ -6337,7 +6576,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         // Search input (fills remaining space)
         const searchInput = document.createElement("input");
         searchInput.type = "text";
-        searchInput.placeholder = workflowOnly ? "Search workflows..." : "Search prompts...";
+        searchInput.placeholder = workflowOnly ? "Search recipes and prompts..." : "Search prompts...";
         searchInput.style.cssText = `
             flex: 1;
             min-width: 0;
@@ -6394,6 +6633,10 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         searchWrapper.appendChild(searchInput);
         searchWrapper.appendChild(clearBtn);
 
+        // Prompt/Recipe/All filter button
+        let contentFilterState = getBrowserContentFilter();
+        const contentFilterBtn = document.createElement("button");
+
         // NSFW toggle button
         let hideNSFWState = getHideNSFW();
         const nsfwBtn = document.createElement("button");
@@ -6417,7 +6660,35 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             }
             nsfwBtn.title = hideNSFWState ? "NSFW content is hidden — click to show" : "NSFW content is visible — click to hide";
         };
+        const updateContentFilterBtn = () => {
+            if (contentFilterState === "prompt") {
+                contentFilterBtn.textContent = "Type: Prompt";
+                contentFilterBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.18); border-color: rgba(56, 130, 246, 0.75); color: #dbeafe;`;
+                contentFilterBtn.title = "Showing prompt entries only";
+            } else if (contentFilterState === "recipe") {
+                contentFilterBtn.textContent = "Type: Recipe";
+                contentFilterBtn.style.cssText = btnStyle + `background: rgba(235, 140, 35, 0.18); border-color: rgba(235, 140, 35, 0.8); color: #ffe7c2;`;
+                contentFilterBtn.title = "Showing recipe entries only";
+            } else {
+                contentFilterBtn.textContent = "Type: All";
+                contentFilterBtn.style.cssText = btnStyle;
+                contentFilterBtn.title = "Showing prompts and recipes";
+            }
+        };
+        updateContentFilterBtn();
         updateNsfwBtn();
+        contentFilterBtn.onmouseover = () => {
+            if (contentFilterState === "all") {
+                contentFilterBtn.style.background = "#38414c";
+                contentFilterBtn.style.color = "#fff";
+            }
+        };
+        contentFilterBtn.onmouseout = () => {
+            if (contentFilterState === "all") {
+                contentFilterBtn.style.background = "#313843";
+                contentFilterBtn.style.color = "#aaa";
+            }
+        };
         nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#38414c'; nsfwBtn.style.color = '#fff'; } };
         nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#313843'; nsfwBtn.style.color = '#aaa'; } };
 
@@ -6434,6 +6705,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         updateViewModeBtn();
 
         controlsBar.appendChild(searchWrapper);
+        controlsBar.appendChild(contentFilterBtn);
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
 
@@ -6451,6 +6723,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         let categories = getVisibleCategories(node, {
             hideNSFW: hideNSFWState,
             workflowOnly,
+            contentFilter: contentFilterState,
+            filterEmptyCategories: true,
             keepCategory: mode === "save" ? selectedCategory : "",
         });
         let selectedSaveName = initialSaveName;
@@ -6464,6 +6738,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             categories = getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
+                contentFilter: contentFilterState,
+                filterEmptyCategories: true,
                 keepCategory: mode === "save" ? selectedCategory : "",
             });
 
@@ -6768,6 +7044,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             categories = getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
+                contentFilter: contentFilterState,
+                filterEmptyCategories: true,
                 keepCategory: mode === "save" ? selectedCategory : "",
             });
             ensureSelectedCategory();
@@ -6877,6 +7155,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             let promptNames = getPromptNamesForCategory(node, selectedCategory, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
+                contentFilter: contentFilterState,
             });
 
             // Filter by search
@@ -6931,6 +7210,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
+                const hasPromptPayload = hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
                 if (isSelected) {
@@ -6964,7 +7244,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
                 const showWorkflowBadge = !workflowOnly && hasWorkflowData;
-                if (isNSFW || showWorkflowBadge) {
+                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
+                if (isNSFW || showWorkflowBadge || showPromptBadge) {
                     const badgeStack = document.createElement("div");
                     badgeStack.style.cssText = `
                         position: absolute;
@@ -7010,6 +7291,26 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                             line-height: 1;
                         `;
                         badgeStack.appendChild(workflowBadge);
+                    }
+
+                    if (showPromptBadge) {
+                        const promptBadge = document.createElement("div");
+                        promptBadge.textContent = "P";
+                        promptBadge.title = "Prompt Data (Converted to Recipe)";
+                        promptBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(56, 130, 246, 0.96);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(promptBadge);
                     }
 
                     card.appendChild(badgeStack);
@@ -7170,6 +7471,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
+                const hasPromptPayload = hasPromptPresetPayload(promptData);
                 const lorasACount = (promptData?.loras_a || []).length;
                 const lorasBCount = (promptData?.loras_b || []).length;
                 const triggerCount = (promptData?.trigger_words || []).length;
@@ -7228,6 +7530,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 thumbWrap.appendChild(thumbDiv);
 
                 const showWorkflowBadge = !workflowOnly && hasWorkflowData;
+                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
                 if (showWorkflowBadge) {
                     const workflowBadge = document.createElement("div");
                     workflowBadge.textContent = "R";
@@ -7251,6 +7554,31 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         z-index: 1;
                     `;
                     thumbWrap.appendChild(workflowBadge);
+                }
+
+                if (showPromptBadge) {
+                    const promptBadge = document.createElement("div");
+                    promptBadge.textContent = "P";
+                    promptBadge.title = "Prompt Data (Converted to Recipe)";
+                    promptBadge.style.cssText = `
+                        position: absolute;
+                        right: -2px;
+                        bottom: -2px;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 50%;
+                        background: rgba(56, 130, 246, 0.96);
+                        color: #fff;
+                        font-size: 8px;
+                        font-weight: bold;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        line-height: 1;
+                        border: 1px solid rgba(0, 0, 0, 0.4);
+                        z-index: 1;
+                    `;
+                    thumbWrap.appendChild(promptBadge);
                 }
 
                 // Name + optional NSFW badge
@@ -7416,8 +7744,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             currentMouseY = rect.top + rect.height / 2;
             currentThumbnail = thumbnailSrc;
             
-            // Intelligent delay: 1000ms initial, 10ms once activated
-            const delay = previewActivated ? 10 : 1000;
+            // Intelligent delay: 2000ms initial, 10ms once activated
+            const delay = previewActivated ? 10 : 2000;
             
             clearTimeout(hoverTimer);
             hoverTimer = setTimeout(() => {
@@ -7433,7 +7761,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     // Scale logic:
                     // - Thumbnails <= 200px in both dimensions: 2x scale (200px -> 400px)
                     // - Thumbnails > 200px in either dimension: 1x scale (keep original size)
-                    const scale = (naturalWidth > 200 || naturalHeight > 200) ? 1 : 2;
+                    const scale = (naturalWidth > 200 || naturalHeight > 200) ? 1 : 1;
                     
                     previewWidth = naturalWidth * scale;
                     previewHeight = naturalHeight * scale;
@@ -7469,11 +7797,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             hideTimer = setTimeout(() => {
                 hidePreview();
                 
-                // Start reset timer: after 2 seconds of no hovering, reset to slow mode
+                // Start reset timer: after 0.5 seconds of no hovering, reset to slow mode
                 clearTimeout(resetTimer);
                 resetTimer = setTimeout(() => {
                     previewActivated = false;
-                }, 2000);
+                }, 500);
             }, 100);
         };
 
@@ -7487,6 +7815,22 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         // Event handlers for controls
+        contentFilterBtn.onclick = () => {
+            if (contentFilterState === "all") {
+                contentFilterState = "prompt";
+            } else if (contentFilterState === "prompt") {
+                contentFilterState = "recipe";
+            } else {
+                contentFilterState = "all";
+            }
+
+            sessionBrowserContentFilter = contentFilterState;
+            app.ui.settings.setSettingValue("PromptManager.BrowserContentFilter", contentFilterState);
+            updateContentFilterBtn();
+            rebuildCategoryList();
+            renderContent(searchInput.value);
+        };
+
         nsfwBtn.onclick = () => {
             hideNSFWState = !hideNSFWState;
             sessionHideNSFW = hideNSFWState;
@@ -9020,29 +9364,8 @@ function createPromptSelectorWidget(node) {
             infoEnabled = hasMeaningfulWorkflowData(promptData?.workflow_data);
         }
 
-        if (!node._isWorkflowManager) {
-            createBadge("workflow-info-label", "info", `
-                margin-left: 6px;
-                width: 28px;
-                height: 14px;
-                border-radius: 999px;
-                border: 1px solid rgba(235, 245, 255, 0.95);
-                background: ${infoEnabled ? "rgba(55, 142, 255, 0.92)" : "rgba(120, 130, 140, 0.35)"};
-                color: ${infoEnabled ? "#ffffff" : "rgba(220, 226, 234, 0.75)"};
-                font-size: 8px;
-                font-weight: 700;
-                letter-spacing: 0.2px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                line-height: 1;
-                flex-shrink: 0;
-                cursor: ${infoEnabled ? "pointer" : "default"};
-                opacity: ${infoEnabled ? "1" : "0.75"};
-            `, infoEnabled ? () => {
-                void showWorkflowDiscoverySummary(node);
-            } : null);
-        }
+        // PromptManagerAdvanced: hide the small "info" pill badge.
+        // Keep RecipeManager workflow info controls intact.
     };
 
     // Get flattened list of all prompts across all categories for navigation

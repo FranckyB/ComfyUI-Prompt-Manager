@@ -7,6 +7,12 @@ ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, b
 > We have shifted from using the term "Workflow" to "Recipe" for this toolset.
 > This is an unfortunate but needed naming change to better represent the purpose of this tool.
 
+> **New in v2.5.0:**
+> Recipe Builder can now setup Multi Model all in one Node. Gone is the need to stack multiple Builder nodes when setting multi model workflows.
+> You can build and route `model_a` through `model_d` in one node, keep per-slot prompts/LoRAs/sampler data, and extract Builder-authored recipes from media with v2 metadata preserved as the authoritative source.
+> Added a New Multi Lora Stack node, that is based on Lora-Manager and works with it.  Simply select the column you want to add to and then added loras with be added to it.
+> This new Multi Model may break combatibility wirh previous workflows, but this is now MUCH closer to the initial visioin!  One node to build the entire Recipe.
+
 ## What This Provides
 
 - **Prompt tools**: Prompt Manager, Prompt Extractor
@@ -48,6 +54,8 @@ ComfyUI Prompt Manager is an all-in-one prompt and recipe toolkit for ComfyUI, b
   <figcaption>Use Extractor Nodes as an Image Loader, allowing browsing from Input and Output folder.</figcaption>
   <img src="docs/images/adv_file_loading.png" alt="Recipe Builder">
 </div>
+
+
 
 ## v2.0 Introduces The Recipe Toolset
 

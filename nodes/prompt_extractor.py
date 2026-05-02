@@ -595,6 +595,10 @@ async def extract_preview(request):
 
         vae_found = True
         vae_name_str = vae.get('name', '') if isinstance(vae, dict) else (vae or '')
+        if isinstance(vae_name_str, list):
+            vae_name_str = next((v for v in vae_name_str if isinstance(v, str) and v.strip()), '')
+        elif not isinstance(vae_name_str, str):
+            vae_name_str = str(vae_name_str or '')
         if vae_name_str and not vae_name_str.startswith('('):
             vae_found = resolve_vae_name(vae_name_str) is not None
 
@@ -1666,17 +1670,22 @@ def extract_power_lora_loader(node):
             # Format: {"on": true, "lora": "path/to/lora.safetensors", "strength": 1.0, "strengthTwo": null}
             # Extract ALL LoRAs, not just active ones
             if val.get('lora'):
-                lora_path = val['lora']
+                lora_name = os.path.splitext(os.path.basename(val['lora']))[0]
+                resolved_lora, available = resolve_lora_path(lora_name)
+                if not available:
+                    resolved_lora = lora_name
+
                 strength = float(val.get('strength', 1.0))
                 strength_two = val.get('strengthTwo')
                 clip_strength = float(strength_two) if strength_two is not None else strength
                 is_active = val.get('on', True)
 
                 loras.append({
-                    'name': os.path.splitext(os.path.basename(lora_path))[0],
-                    'path': lora_path,
+                    'name': lora_name,
+                    'path': resolved_lora,
                     'model_strength': strength,
                     'clip_strength': clip_strength,
+                    'available': available,
                     'active': is_active
                 })
 
@@ -1697,6 +1706,9 @@ def extract_lora_manager_stacker(node):
                     lora_name = lora.get('name', '')
                     # Extract ALL LoRAs, not just active ones
                     if lora_name:
+                        resolved_lora, available = resolve_lora_path(lora_name)
+                        if not available:
+                            resolved_lora = lora_name
                         # Handle strength as string or number
                         strength = lora.get('strength', 1.0)
                         if isinstance(strength, str):
@@ -1708,9 +1720,10 @@ def extract_lora_manager_stacker(node):
 
                         loras.append({
                             'name': lora_name,
-                            'path': '',
+                            'path': resolved_lora,
                             'model_strength': float(strength),
                             'clip_strength': float(clip_strength),
+                            'available': available,
                             'active': is_active
                         })
 
@@ -1745,11 +1758,17 @@ def extract_wan_video_lora_select_multi(node):
                 if isinstance(strength_val, (int, float)):
                     strength = float(strength_val)
 
+                    lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     loras.append({
-                        'name': os.path.splitext(os.path.basename(lora_name))[0],
-                        'path': lora_name,
+                        'name': lora_name,
+                        'path': resolved_lora,
                         'model_strength': strength,
                         'clip_strength': strength,  # WanVideo doesn't separate model/clip strength
+                        'available': available,
                         'active': True  # All LoRAs in the list are considered active
                     })
 
@@ -1785,20 +1804,32 @@ def extract_wan_video_lora_select_multi(node):
 
                         is_active = item.get('on', item.get('active', item.get('enabled', True)))
 
+                        lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                        resolved_lora, available = resolve_lora_path(lora_name)
+                        if not available:
+                            resolved_lora = lora_name
+
                         loras.append({
-                            'name': os.path.splitext(os.path.basename(lora_name))[0],
-                            'path': lora_name,
+                            'name': lora_name,
+                            'path': resolved_lora,
                             'model_strength': strength,
                             'clip_strength': clip_strength,
+                            'available': available,
                             'active': is_active
                         })
                 elif isinstance(item, str) and item and item != 'None':
                     # Format 2: Simple string list of LoRA names
+                    lora_name = os.path.splitext(os.path.basename(item))[0]
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     loras.append({
-                        'name': os.path.splitext(os.path.basename(item))[0],
-                        'path': item,
+                        'name': lora_name,
+                        'path': resolved_lora,
                         'model_strength': 1.0,
                         'clip_strength': 1.0,
+                        'available': available,
                         'active': True
                     })
         # Format 3: Dictionary containing LoRA info
@@ -1822,11 +1853,17 @@ def extract_wan_video_lora_select_multi(node):
 
                 is_active = val.get('on', val.get('active', val.get('enabled', True)))
 
+                lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                resolved_lora, available = resolve_lora_path(lora_name)
+                if not available:
+                    resolved_lora = lora_name
+
                 loras.append({
-                    'name': os.path.splitext(os.path.basename(lora_name))[0],
-                    'path': lora_name,
+                    'name': lora_name,
+                    'path': resolved_lora,
                     'model_strength': strength,
                     'clip_strength': clip_strength,
+                    'available': available,
                     'active': is_active
                 })
 
@@ -1861,11 +1898,17 @@ def extract_lora_loader_stack_rgthree(node):
                 if isinstance(strength_val, (int, float)):
                     strength = float(strength_val)
 
+                    lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     loras.append({
-                        'name': os.path.splitext(os.path.basename(lora_name))[0],
-                        'path': lora_name,
+                        'name': lora_name,
+                        'path': resolved_lora,
                         'model_strength': strength,
                         'clip_strength': strength,  # No separate model/clip strength
+                        'available': available,
                         'active': True  # All LoRAs are active (no on/off toggle)
                     })
 
@@ -1899,20 +1942,26 @@ def extract_standard_lora_loader(node):
     else:
         clip_strength = model_strength
 
+    lora_name = os.path.splitext(os.path.basename(lora_name))[0]
+    resolved_lora, available = resolve_lora_path(lora_name)
+    if not available:
+        resolved_lora = lora_name
+
     # Standard LoRA loaders are always active (no on/off toggle)
     return [{
-        'name': os.path.splitext(os.path.basename(lora_name))[0],
-        'path': lora_name,
+        'name': lora_name,
+        'path': resolved_lora,
         'model_strength': model_strength,
         'clip_strength': clip_strength,
-        'active': True
+        'available': available,
+        'active': True,
     }]
 
 
 def extract_loras_from_node(node):
     """
     Extract LoRAs from any supported LoRA loader node type.
-    Returns a list of LoRA dicts: {name, path, model_strength, clip_strength}
+    Returns a list of LoRA dicts: {name, path, model_strength, clip_strength, available, active}
     """
     node_type = node.get('type', '')
 
@@ -2320,10 +2369,18 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
             # Skip blacklisted LoRAs
             if is_lora_blacklisted(lora['name']):
                 continue
+
+            lora_name = os.path.splitext(os.path.basename(lora['name']))[0]
+            resolved_lora, available = resolve_lora_path(lora_name)
+            if not available:
+                resolved_lora = lora_name
+
             result['loras_a'].append({
-                'name': lora['name'],
+                'name': lora_name,
+                'path': resolved_lora,
                 'model_strength': lora['model_strength'],
                 'clip_strength': lora['clip_strength'],
+                'available': available,
                 'active': True
             })
 
@@ -2813,11 +2870,17 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         continue
                     strength = float(lora_item.get('strength', 1.0))
                     clip_strength = float(lora_item.get('clip_strength', strength))
+
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     chain_loras_list.append({
                         'name': lora_name,
-                        'path': lora_name,
+                        'path': resolved_lora,
                         'model_strength': strength,
                         'clip_strength': clip_strength,
+                        'available': available,
                         'active': True
                     })
 
@@ -3072,11 +3135,15 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                         target_seen.add(lora_name)
                         strength = float(lora_item.get('strength', 1.0))
                         clip_strength = float(lora_item.get('clip_strength', strength))
+                        resolved_lora, available = resolve_lora_path(lora_name)
+                        if not available:
+                            resolved_lora = lora_name
                         target_stack.append({
                             'name': lora_name,
-                            'path': lora_name,
+                            'path': resolved_lora,
                             'model_strength': strength,
-                            'clip_strength': clip_strength
+                            'clip_strength': clip_strength,
+                            'available': available,
                         })
 
         # Standard LoRA loaders (API format)
@@ -3106,11 +3173,17 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 lora_names_seen_a.add(lora_name)
                 model_strength = float(inputs.get('strength_model', inputs.get('strength', 1.0)))
                 clip_strength = float(inputs.get('strength_clip', model_strength))
+
+                resolved_lora, available = resolve_lora_path(lora_basename)
+                if not available:
+                    resolved_lora = lora_basename
+
                 loras_a.append({
                     'name': lora_basename,
-                    'path': lora_name,
+                    'path': resolved_lora,
                     'model_strength': model_strength,
-                    'clip_strength': clip_strength
+                    'clip_strength': clip_strength,
+                    'available': found
                 })
 
     # Also check for LoRA syntax in prompts: <lora:name:strength>
@@ -3127,11 +3200,17 @@ def parse_workflow_for_prompts(prompt_data, workflow_data=None):
                 lora_names_seen_a.add(lora_name)
                 model_strength = float(match.group(2)) if match.group(2) else 1.0
                 clip_strength = float(match.group(3)) if match.group(3) else model_strength
+
+                resolved_lora, available = resolve_lora_path(lora_name)
+                if not available:
+                    resolved_lora = lora_name
+
                 loras_a.append({
                     'name': lora_name,
-                    'path': '',
+                    'path': resolved_lora,
                     'model_strength': model_strength,
-                    'clip_strength': clip_strength
+                    'clip_strength': clip_strength,
+                    'available': found
                 })
 
     # Embedded prompt text is fallback-only. Prefer prompts extracted from
@@ -3556,8 +3635,8 @@ class PromptExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract prompts, LoRA configurations, and model paths from images, videos, and workflow files."
-    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA", "IMAGE")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "recipe_data", "image")
+    RETURN_TYPES = ("STRING", "STRING", "LORA_STACK", "LORA_STACK", "IMAGE")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt", "lora_stack_a", "lora_stack_b", "image")
     FUNCTION = "extract"
     OUTPUT_NODE = False
 
@@ -3581,6 +3660,10 @@ class PromptExtractor:
         workflow_data = ""
         model_a = ""
         model_b = ""
+        authoritative_builder_v2 = False
+
+        class _BuilderV2Done(Exception):
+            pass
 
         # Handle None or missing image parameter
         if image is None:
@@ -3698,12 +3781,71 @@ class PromptExtractor:
                         extract_clip_info,
                         extract_resolution,
                         extract_recipe_builder_models_from_workflow,
+                        _get_authoritative_builder_v2_payload,
                         build_simplified_workflow_data,
                         get_model_family,
                         get_family_label,
                     )
                     # Use raw workflow_data dict (before we overwrite the var below)
                     _raw_wf = workflow_data  # still a dict here
+
+                    _builder_v2_payload = _get_authoritative_builder_v2_payload(_raw_wf)
+                    if isinstance(_builder_v2_payload, dict):
+                        authoritative_builder_v2 = True
+                        workflow_data = ensure_v2_recipe_data(_builder_v2_payload, source="PromptExtractor")
+
+                        _models = workflow_data.get('models', {}) if isinstance(workflow_data.get('models'), dict) else {}
+                        _model_a_block = _models.get('model_a') if isinstance(_models.get('model_a'), dict) else {}
+                        _model_b_block = _models.get('model_b') if isinstance(_models.get('model_b'), dict) else {}
+
+                        positive_prompt = str(_model_a_block.get('positive_prompt', positive_prompt) or '')
+                        negative_prompt = str(_model_a_block.get('negative_prompt', negative_prompt) or '')
+                        model_a = str(_model_a_block.get('model', model_a) or '')
+                        model_b = str(_model_b_block.get('model', model_b) or '')
+                        loras_a = _model_a_block.get('loras', loras_a) if isinstance(_model_a_block.get('loras'), list) else loras_a
+                        loras_b = _model_b_block.get('loras', loras_b) if isinstance(_model_b_block.get('loras'), list) else loras_b
+
+                        if unique_id is not None:
+                            from ..py.lora_utils import resolve_lora_path as _resolve_lora
+                            _lora_avail = {}
+                            for _l in loras_a + loras_b:
+                                _ln = _l.get('name', '') if isinstance(_l, dict) else ''
+                                if _ln:
+                                    _, _found = _resolve_lora(_ln)
+                                    _lora_avail[_ln] = _found
+
+                            _m_a_sampler = _model_a_block.get('sampler') if isinstance(_model_a_block.get('sampler'), dict) else {}
+                            _m_a_res = _model_a_block.get('resolution') if isinstance(_model_a_block.get('resolution'), dict) else {}
+                            _m_a_clip = _model_a_block.get('clip', [])
+                            if not isinstance(_m_a_clip, list):
+                                _m_a_clip = [_m_a_clip] if _m_a_clip else []
+
+                            _last_extracted_info[str(unique_id)] = {
+                                '_source_file':       file_path,
+                                '_source_folder':     source_folder,
+                                'positive_prompt':    positive_prompt,
+                                'negative_prompt':    negative_prompt,
+                                'model_a':            model_a,
+                                'model_b':            model_b,
+                                'model_a_found':      True,
+                                'model_b_found':      True,
+                                'loras_a':            loras_a,
+                                'loras_b':            loras_b,
+                                'vae':                {'name': str(_model_a_block.get('vae', '') or ''), 'source': 'RecipeBuilder'},
+                                'vae_found':          True,
+                                'clip':               {'names': _m_a_clip, 'type': str(_model_a_block.get('clip_type', '') or ''), 'source': 'RecipeBuilder'},
+                                'sampler':            _m_a_sampler,
+                                'resolution':         _m_a_res,
+                                'is_video':           ext in ['.mp4', '.webm', '.mov', '.avi'],
+                                'model_family':       str(_model_a_block.get('family', '') or ''),
+                                'model_family_label': get_family_label(str(_model_a_block.get('family', '') or '')),
+                                'lora_availability':  _lora_avail,
+                            }
+                            print(f"[PromptExtractor] Cached authoritative Builder v2 info for node {unique_id}")
+
+                        print(f"[PromptExtractor] Using authoritative Builder v2 metadata ({len(_models)} model slots)")
+                        raise _BuilderV2Done()
+
                     _is_a1111 = isinstance(prompt_data, dict) and 'prompt' in prompt_data and 'loras' in prompt_data
 
                     _sampler  = extract_sampler_params(prompt_data, _raw_wf)
@@ -3840,6 +3982,10 @@ class PromptExtractor:
                         _res_b, _ = resolve_model_name(model_b)
                         _simplified['model_b_found'] = _res_b is not None
                     _vae_name = _vae.get('name', '') if isinstance(_vae, dict) else (_vae or '')
+                    if isinstance(_vae_name, list):
+                        _vae_name = next((v for v in _vae_name if isinstance(v, str) and v.strip()), '')
+                    elif not isinstance(_vae_name, str):
+                        _vae_name = str(_vae_name or '')
                     if _vae_name and not _vae_name.startswith('('):
                         _simplified['vae_found'] = resolve_vae_name(_vae_name) is not None
                     workflow_data = _simplified
@@ -3878,6 +4024,8 @@ class PromptExtractor:
                         }
                         print(f"[PromptExtractor] Cached extracted info for node {unique_id}")
 
+                except _BuilderV2Done:
+                    pass
                 except Exception as e:
                     print(f"[PromptExtractor] Error building structured workflow_data: {e}")
                     import traceback
@@ -3933,21 +4081,34 @@ class PromptExtractor:
                     except Exception:
                         pass
 
-                    workflow_data = ensure_v2_recipe_data({
-                        "_source": "PromptExtractor",
+                    model_a_block = {
                         "family": family_fallback,
-                        "model_a": model_a,
-                        "model_b": model_b,
+                        "model": model_a,
                         "positive_prompt": positive_prompt,
                         "negative_prompt": negative_prompt,
-                        "loras_a": loras_a if isinstance(loras_a, list) else [],
-                        "loras_b": loras_b if isinstance(loras_b, list) else [],
+                        "loras": loras_a if isinstance(loras_a, list) else [],
                         "vae": vae_name,
                         "clip": clip_names,
                         "clip_type": clip_type,
-                        "sampler": sampler_fallback,
-                        "resolution": resolution_fallback,
-                    }, source="PromptExtractor")
+                        "sampler": sampler_fallback if isinstance(sampler_fallback, dict) else {},
+                        "resolution": resolution_fallback if isinstance(resolution_fallback, dict) else {},
+                    }
+                    workflow_data = {
+                        "_source": "PromptExtractor",
+                        "version": 2,
+                        "models": {
+                            "model_a": model_a_block,
+                        },
+                    }
+                    if model_b or (isinstance(loras_b, list) and loras_b):
+                        workflow_data["models"]["model_b"] = {
+                            "family": family_fallback,
+                            "model": model_b,
+                            "loras": loras_b if isinstance(loras_b, list) else [],
+                            "sampler": sampler_fallback if isinstance(sampler_fallback, dict) else {},
+                            "resolution": resolution_fallback if isinstance(resolution_fallback, dict) else {},
+                        }
+                    workflow_data = ensure_v2_recipe_data(workflow_data, source="PromptExtractor")
             else:
                 workflow_data = ensure_v2_recipe_data({}, source="PromptExtractor")
 
@@ -4042,7 +4203,7 @@ class PromptExtractor:
         # the extracted metadata.  Push the merged set into workflow_data
         # (the _simplified dict) and the _last_extracted_info cache so
         # RecipeBuilder's "Update Workflow" button sees the full set.
-        if isinstance(workflow_data, dict) and (final_lora_stack_a or final_lora_stack_b):
+        if isinstance(workflow_data, dict) and not authoritative_builder_v2 and (final_lora_stack_a or final_lora_stack_b):
             def _tuples_to_lora_dicts(stack_tuples):
                 """Convert (path, model_str, clip_str) tuples to LoRA dicts."""
                 result = []
@@ -4058,8 +4219,17 @@ class PromptExtractor:
 
             merged_a = _tuples_to_lora_dicts(final_lora_stack_a)
             merged_b = _tuples_to_lora_dicts(final_lora_stack_b)
-            workflow_data['loras_a'] = merged_a
-            workflow_data['loras_b'] = merged_b
+            models = workflow_data.get('models', {}) if isinstance(workflow_data.get('models'), dict) else {}
+            model_a_block = models.get('model_a') if isinstance(models.get('model_a'), dict) else {}
+            model_a_block['loras'] = merged_a
+            models['model_a'] = model_a_block
+
+            if merged_b or isinstance(models.get('model_b'), dict):
+                model_b_block = models.get('model_b') if isinstance(models.get('model_b'), dict) else {}
+                model_b_block['loras'] = merged_b
+                models['model_b'] = model_b_block
+
+            workflow_data['models'] = models
 
             # Update the _last_extracted_info cache too
             uid_str = str(unique_id) if unique_id is not None else None
@@ -4111,14 +4281,18 @@ class PromptExtractor:
                 enriched = []
                 for lora_path, strength, clip_strength in stack_tuples:
                     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-                    _, available = resolve_lora_path(lora_name)
+
+                    resolved_lora, available = resolve_lora_path(lora_name)
+                    if not available:
+                        resolved_lora = lora_name
+
                     enriched.append({
                         'name': lora_name,
-                        'path': lora_path,
+                        'path': resolved_lora,
                         'strength': strength,
                         'clip_strength': clip_strength,
-                        'active': True,
                         'available': available,
+                        'active': True,
                     })
                 return enriched
 
@@ -4139,7 +4313,8 @@ class PromptExtractor:
             extracted_data.setdefault('positive_prompt', positive_prompt.strip())
             extracted_data.setdefault('negative_prompt', negative_prompt.strip())
             extracted_data.setdefault('model_a', model_a.strip())
-            extracted_data.setdefault('model_b', model_b.strip())
+            if model_b and model_b.strip():
+                extracted_data.setdefault('model_b', model_b.strip())
 
             wf_nodes = workflow.get('nodes', []) if isinstance(workflow, dict) else []
             for wf_node in wf_nodes:
