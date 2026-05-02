@@ -762,16 +762,17 @@ class WorkflowBuilder:
                     "default": "",
                     "multiline": True,
                     "forceInput": True,
-                    "tooltip": "Positive prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
+                    "tooltip": "Positive prompts.\nPlain text applies to all slots,\nUse MultiPrompts for model-specific prompts."
                 }),
                 "neg_prompts": ("STRING", {
                     "default": "",
                     "multiline": True,
                     "forceInput": True,
-                    "tooltip": "Negative prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
+                    "tooltip": "Negative prompts.\nPlain text applies to all slots,\nUse MultiPrompts for model-specific prompts."
                 }),
-                "multi_lora_stack": ("MULTI_LORA_STACK", {
-                    "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
+                "multi_lora_stack": ("LORA_STACK,MULTI_LORA_STACK", {
+                    "forceInput": True,
+                    "tooltip": "Optional multi LoRA input.\nAccepts LORA_STACK or MULTI_LORA_STACK.",
                 }),
                 # ── Hidden state widgets — written by JS, read by Python ──
                 "override_data":   ("STRING", {"default": "{}", "multiline": True}),
@@ -782,6 +783,15 @@ class WorkflowBuilder:
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
+        t = (input_types or {}).get("multi_lora_stack") if isinstance(input_types, dict) else None
+        if t is None:
+            return True
+        if t not in ("LORA_STACK", "MULTI_LORA_STACK"):
+            return f"Unsupported type for multi_lora_stack: {t}"
+        return True
 
     RETURN_TYPES  = ("RECIPE_DATA",)
     RETURN_NAMES  = ("recipe_data",)
@@ -950,6 +960,44 @@ class WorkflowBuilder:
             # Always return a list for deterministic comparisons.
             return stack
 
+        def _coerce_plain_lora_stack(raw_stack):
+            """Normalize a plain LORA_STACK payload into list[[path, model, clip]]."""
+            if isinstance(raw_stack, dict) and "__value__" in raw_stack:
+                raw_stack = raw_stack.get("__value__")
+            if not isinstance(raw_stack, list):
+                return None
+
+            normalized = []
+            for entry in raw_stack:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 1:
+                    name = entry[0]
+                    if not name:
+                        continue
+                    try:
+                        model_strength = float(entry[1]) if len(entry) >= 2 else 1.0
+                    except Exception:
+                        model_strength = 1.0
+                    try:
+                        clip_strength = float(entry[2]) if len(entry) >= 3 else model_strength
+                    except Exception:
+                        clip_strength = model_strength
+                    normalized.append([name, model_strength, clip_strength])
+                elif isinstance(entry, dict):
+                    name = entry.get("path") or entry.get("name")
+                    if not name:
+                        continue
+                    try:
+                        model_strength = float(entry.get("model_strength", entry.get("strength", 1.0)))
+                    except Exception:
+                        model_strength = 1.0
+                    try:
+                        clip_strength = float(entry.get("clip_strength", model_strength))
+                    except Exception:
+                        clip_strength = model_strength
+                    normalized.append([name, model_strength, clip_strength])
+
+            return normalized
+
         raw_multi_loras = multi_loras if isinstance(multi_loras, dict) else None
         multi_lora_stack_connected = isinstance(multi_lora_stack, dict)
 
@@ -962,6 +1010,13 @@ class WorkflowBuilder:
             }
         else:
             multi_loras = {slot_key: [] for slot_key in _MODEL_KEYS}
+
+        plain_multi_stack = _coerce_plain_lora_stack(multi_lora_stack)
+        if isinstance(plain_multi_stack, list):
+            multi_lora_stack_connected = True
+            multi_loras = {slot_key: list(plain_multi_stack) for slot_key in _MODEL_KEYS}
+            raw_multi_loras = {slot_key: list(plain_multi_stack) for slot_key in _MODEL_KEYS}
+
         if isinstance(multi_lora_stack, dict):
             for slot_key, suffix in {
                 "model_a": "a",
@@ -971,22 +1026,13 @@ class WorkflowBuilder:
             }.items():
                 explicit = False
                 candidate = None
-                source_kind = None
 
                 if slot_key in multi_lora_stack:
                     candidate = multi_lora_stack.get(slot_key)
                     explicit = True
-                    source_kind = "slot_key"
                 elif suffix in multi_lora_stack:
                     candidate = multi_lora_stack.get(suffix)
                     explicit = True
-                    source_kind = "suffix"
-                else:
-                    stacks_obj = multi_lora_stack.get("stacks")
-                    if isinstance(stacks_obj, dict) and suffix in stacks_obj:
-                        candidate = stacks_obj.get(suffix)
-                        explicit = True
-                        source_kind = "stacks"
 
                 if explicit and isinstance(candidate, list):
                     # Preserve empty list as explicit current slot value.
@@ -2601,16 +2647,17 @@ class RecipeBuilder(WorkflowBuilder):
                     "default": "",
                     "multiline": True,
                     "forceInput": True,
-                    "tooltip": "Positive prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
+                    "tooltip": "Positive prompts.\nPlain text applies to all slots,\nUse MultiPrompts for model-specific prompts.",
                 }),
                 "neg_prompts": ("STRING", {
                     "default": "",
                     "multiline": True,
                     "forceInput": True,
-                    "tooltip": "Negative prompts. Plain text applies to all slots, or JSON with model_a/model_b/model_c/model_d.",
+                    "tooltip": "Negative prompts.\nPlain text applies to all slots,\nUse MultiPrompts for model-specific prompts.",
                 }),
-                "multi_lora_stack": ("MULTI_LORA_STACK", {
-                    "tooltip": "Optional A/B/C/D multi LoRA stack payload.",
+                "multi_lora_stack": ("LORA_STACK,MULTI_LORA_STACK", {
+                    "forceInput": True,
+                    "tooltip": "Optional multi LoRA input.\nAccepts LORA_STACK or MULTI_LORA_STACK.",
                 }),
                 "override_data": ("STRING", {"default": "{}", "multiline": True}),
                 "lora_state": ("STRING", {"default": "{}", "multiline": True}),
@@ -2620,6 +2667,15 @@ class RecipeBuilder(WorkflowBuilder):
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
+        t = (input_types or {}).get("multi_lora_stack") if isinstance(input_types, dict) else None
+        if t is None:
+            return True
+        if t not in ("LORA_STACK", "MULTI_LORA_STACK"):
+            return f"Unsupported type for multi_lora_stack: {t}"
+        return True
 
     DESCRIPTION = (
         "Recipe Builder (Multi Model). Single builder UI with 4 model slots "
