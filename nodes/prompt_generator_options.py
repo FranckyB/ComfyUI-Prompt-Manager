@@ -10,6 +10,28 @@ def trigger_model_list_refresh():
     global _last_model_update
     _last_model_update = time.time()
 
+def get_default_context_size():
+    """Return a context size scaled to the GPU's total VRAM.
+
+    Tiers:
+        >= 24 GB  →  8192
+        >= 16 GB  →  4096
+         < 16 GB →   2048
+        No GPU / unknown → 4096 (safe CPU default)
+    """
+    try:
+        if torch.cuda.is_available():
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            if total_vram_gb >= 24:
+                return 8192
+            elif total_vram_gb >= 16:
+                return 4096
+            else:
+                return 2048
+    except Exception:
+        pass
+    return 4096  # CPU or VRAM detection failed
+
 class PromptGenOptions:
     """Node that provides optional configuration for llama.cpp servers"""
 
@@ -54,7 +76,7 @@ class PromptGenOptions:
                     "tooltip": "Custom LLM Instructions (leave empty to use default)\nThe default instructions are designed for generating\ndetailed and imaginative prompts for text-to-image generation."
                 }),
                 "use_model_default_sampling": ("BOOLEAN", {
-                    "default": False,
+                    "default": True,
                     "tooltip": "Use the model's default sampling parameters (overrides temperature, top_p, etc)"
                 }),
                 "temperature": ("FLOAT", {
@@ -93,7 +115,7 @@ class PromptGenOptions:
                     "tooltip": "Penalty for repeating tokens (1.0 = no penalty)"
                 }),
                 "context_size": ("INT", {
-                    "default": 4096,
+                    "default": get_default_context_size(),
                     "min": 512,
                     "max": 32768,
                     "step": 512,

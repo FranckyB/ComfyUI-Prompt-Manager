@@ -213,6 +213,28 @@ def reload_prompts():
     global _prompts_cache
     _prompts_cache = {}
 
+def get_default_context_size():
+    """Return a context size scaled to the GPU's total VRAM.
+
+    Tiers:
+        >= 24 GB  →  8192
+        >= 16 GB  →  4096
+         < 16 GB →   2048
+        No GPU / unknown → 4096 (safe CPU default)
+    """
+    try:
+        if torch.cuda.is_available():
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            if total_vram_gb >= 24:
+                return 8192
+            elif total_vram_gb >= 16:
+                return 4096
+            else:
+                return 2048
+    except Exception:
+        pass
+    return 4096  # CPU or VRAM detection failed
+
 class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
@@ -231,6 +253,11 @@ class PromptGenerator:
     def get_text_video_system_prompt():
         """Load the video system prompt."""
         return load_prompt("text_video_system_prompt.txt")
+
+    @staticmethod
+    def get_text_audio_system_prompt():
+        """Load the audio system prompt."""
+        return load_prompt("text_audio_system_prompt.txt")
 
     @staticmethod
     def get_image_system_prompt():
@@ -315,7 +342,7 @@ class PromptGenerator:
                 }),
             },
             "optional": {
-                "mode": (["Enhance Prompt (Image)", "Enhance Prompt (Video)", "Analyze Image", "Analyze Image with Prompt"], {
+                "mode": (["Enhance Prompt (Image)", "Enhance Prompt (Video)", "Enhance Prompt (Audio)", "Enhance Prompt | Image (Video)", "Analyze Image", "Analyze Image with Prompt"], {
                     "default": "Enhance Prompt (Image)",
                     "tooltip": "Choose mode: Enhance text prompt | Analyze image | Analyze image with custom instructions"
                 }),
@@ -724,13 +751,18 @@ class PromptGenerator:
         if options and "use_model_default_sampling" in options:
             use_model_default_sampling = options["use_model_default_sampling"]
 
-        if mode in ["Analyze Image", "Analyze Image with Prompt"]:
+        if mode in ["Analyze Image", "Analyze Image with Prompt", "Enhance Prompt | Image (Video)"]:
             use_vision_model = True
+
+        if mode == "Enhance Prompt (Audio)" and not prompt.strip():
+            error_msg = "Did you perhaps forget to enter a User Prompt?"
+            print_pg(error_msg, RED)
+            raise RuntimeError(error_msg)
 
         images = None  # Will be set for vision modes
 
         # Validate inputs based on mode
-        if (mode == "Enhance Prompt (Image)" or mode == "Enhance Prompt (Video)") and not prompt.strip():
+        if (mode in ["Enhance Prompt (Image)", "Enhance Prompt (Video)"]) and not prompt.strip():
             error_msg = "Did you perhaps forget to enter a User Prompt?"
             print_pg(error_msg, RED)
             raise RuntimeError(error_msg)
@@ -826,7 +858,7 @@ class PromptGenerator:
 
         # If the current model is not the one we want, or server is not running, restart
         # Also restart if context_size has changed (llama.cpp only)
-        context_size = options.get("context_size", 2048) if options else 2048
+        context_size = options.get("context_size", get_default_context_size()) if options else get_default_context_size()
         if not use_ollama:
             if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
                 self.stop_server()
@@ -848,8 +880,11 @@ class PromptGenerator:
         elif mode == "Analyze Image with Prompt":
             system_prompt = self.get_image_custom_system_prompt()
 
-        elif mode == "Enhance Prompt (Video)":
+        elif mode in ["Enhance Prompt (Video)", "Enhance Prompt | Image (Video)"]:
             system_prompt = self.get_text_video_system_prompt()
+
+        elif mode == "Enhance Prompt (Audio)":
+            system_prompt = self.get_text_audio_system_prompt()
 
         else:
             system_prompt = self.get_text_image_system_prompt()
@@ -928,6 +963,7 @@ class PromptGenerator:
                 images=images,
                 context_size=context_size,
                 prompt=prompt,
+                format_as_json=format_as_json,
             )
 
         # ================================================================
@@ -945,6 +981,9 @@ class PromptGenerator:
                 "enable_thinking": enable_thinking
             }
         }
+
+        if format_as_json:
+            payload["response_format"] = {"type": "json_object"}
 
         model_defaults = self.get_model_defaults()
 
@@ -1125,7 +1164,8 @@ class PromptGenerator:
     def _generate_via_ollama(self, model_to_use, system_prompt, user_message,
                              user_content, seed, enable_thinking,
                              use_model_default_sampling, show_everything_in_console,
-                             stop_server_after, options, images, context_size, prompt):
+                             stop_server_after, options, images, context_size, prompt,
+                             format_as_json):
         """Generate text using Ollama's OpenAI-compatible endpoint with streaming."""
 
         messages = [
@@ -1178,6 +1218,7 @@ class PromptGenerator:
             timeout=120,
             use_model_defaults=use_model_default_sampling,
             enable_thinking=enable_thinking,
+            format_as_json=format_as_json,
         )
 
         # result is (response_obj, error_msg) for streaming

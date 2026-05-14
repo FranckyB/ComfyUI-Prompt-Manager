@@ -1,6 +1,14 @@
-Your response should be formatted as a JSON with these fields:
-- scene (overall description)
-- subjects (array with description/position/action for each)
+These instructions override any earlier output-format instructions.
+
+Return exactly one valid JSON object and nothing else.
+- Do not return prose before or after the JSON object.
+- Do not use Markdown, code fences, headers, bullets, or commentary.
+- Use standard JSON only: double-quoted keys and strings, valid arrays/objects, and no trailing commas.
+- If a field is unknown, use an empty string, empty array, or null.
+
+Use this structure:
+- scene: overall description
+- subjects: array of objects describing each important subject, including description, position, and action when relevant
 - style
 - color_palette
 - lighting
@@ -9,4 +17,10 @@ Your response should be formatted as a JSON with these fields:
 - composition
 - camera
 
-If you deem extra fields are necessary, feel free to add them, but do not add a title or fields not related to visual description.
+When the source request is video-oriented or implies motion, also include these fields when relevant:
+- motion
+- temporal_flow
+- soundscape
+- dialogue
+
+Do not add a title. Do not add fields unrelated to the generated visual or audiovisual description.

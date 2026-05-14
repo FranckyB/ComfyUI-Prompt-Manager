@@ -82,7 +82,8 @@ def is_ollama_available(user_config):
 def generate_chat(user_config, model_name, messages, temperature=0.8,
                   top_k=40, top_p=0.95, min_p=0.05, repeat_penalty=1.0,
                   seed=None, stream=True, timeout=120,
-                  use_model_defaults=True, enable_thinking=False):
+                  use_model_defaults=True, enable_thinking=False,
+                  format_as_json=False):
     """Send a chat completion request to Ollama's OpenAI-compatible endpoint.
 
     Args:
@@ -104,6 +105,10 @@ def generate_chat(user_config, model_name, messages, temperature=0.8,
         "messages": messages,
         "stream": stream,
     }
+
+    if format_as_json:
+        payload["response_format"] = {"type": "json_object"}
+        payload["format"] = "json"
 
     # Set keep_alive to control how long the model stays loaded after this request
     keep_alive = user_config.get("ollama_keep_alive", "5m")
