@@ -1,5 +1,9 @@
 # Changelog
 
+## version 2.5.2
+- **Improved LLM prompts in Prompt Generator**
+  - New System prompts for Video and Audio Generation
+
 ## version 2.5.0
 - **Recipe Builder is now Multi-model Only**
   - Expanded Builder authoring around `recipe_data` with slot-aware model blocks (`model_a`/`model_b`/`model_c`/`model_d`).
