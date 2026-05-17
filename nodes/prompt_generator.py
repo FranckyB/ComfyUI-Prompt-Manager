@@ -342,7 +342,7 @@ class PromptGenerator:
                 }),
             },
             "optional": {
-                "mode": (["Enhance Prompt (Image)", "Enhance Prompt (Video)", "Enhance Prompt (Audio)", "Enhance Prompt | Image (Video)", "Analyze Image", "Analyze Image with Prompt"], {
+                "mode": (["Enhance Prompt (Image)", "Enhance Prompt (Video)", "Enhance Prompt (Audio)", "Analyze Image", "Analyze Image with Prompt"], {
                     "default": "Enhance Prompt (Image)",
                     "tooltip": "Choose mode: Enhance text prompt | Analyze image | Analyze image with custom instructions"
                 }),
@@ -751,10 +751,10 @@ class PromptGenerator:
         if options and "use_model_default_sampling" in options:
             use_model_default_sampling = options["use_model_default_sampling"]
 
-        if mode in ["Analyze Image", "Analyze Image with Prompt", "Enhance Prompt | Image (Video)"]:
+        if mode in ["Analyze Image", "Analyze Image with Prompt"] or (mode in ["Enhance Prompt (Video)", "Enhance Prompt (Audio)"] and image is not None):
             use_vision_model = True
 
-        if mode == "Enhance Prompt (Audio)" and not prompt.strip():
+        if mode == "Enhance Prompt (Audio)" and not prompt.strip() and image is None:
             error_msg = "Did you perhaps forget to enter a User Prompt?"
             print_pg(error_msg, RED)
             raise RuntimeError(error_msg)
@@ -762,7 +762,12 @@ class PromptGenerator:
         images = None  # Will be set for vision modes
 
         # Validate inputs based on mode
-        if (mode in ["Enhance Prompt (Image)", "Enhance Prompt (Video)"]) and not prompt.strip():
+        if mode == "Enhance Prompt (Image)" and not prompt.strip():
+            error_msg = "Did you perhaps forget to enter a User Prompt?"
+            print_pg(error_msg, RED)
+            raise RuntimeError(error_msg)
+
+        if mode == "Enhance Prompt (Video)" and not prompt.strip() and image is None:
             error_msg = "Did you perhaps forget to enter a User Prompt?"
             print_pg(error_msg, RED)
             raise RuntimeError(error_msg)
@@ -893,7 +898,23 @@ class PromptGenerator:
 
         # Prepare the system prompt
         if options and "system_prompt" in options:
-            system_prompt = options["system_prompt"]
+            custom_sp = options["system_prompt"]
+            sp_mode = options.get("system_prompt_mode", "replace")
+            if sp_mode == "append":
+                # Determine the default system prompt for this mode first
+                if mode == "Analyze Image":
+                    default_sp = self.get_image_system_prompt()
+                elif mode == "Analyze Image with Prompt":
+                    default_sp = self.get_image_custom_system_prompt()
+                elif mode == "Enhance Prompt (Video)":
+                    default_sp = self.get_text_video_system_prompt()
+                elif mode == "Enhance Prompt (Audio)":
+                    default_sp = self.get_text_audio_system_prompt()
+                else:
+                    default_sp = self.get_text_image_system_prompt()
+                system_prompt = default_sp + "\n\n" + custom_sp
+            else:
+                system_prompt = custom_sp
 
         elif mode == "Analyze Image":
             system_prompt = self.get_image_system_prompt()
@@ -901,7 +922,7 @@ class PromptGenerator:
         elif mode == "Analyze Image with Prompt":
             system_prompt = self.get_image_custom_system_prompt()
 
-        elif mode in ["Enhance Prompt (Video)", "Enhance Prompt | Image (Video)"]:
+        elif mode == "Enhance Prompt (Video)":
             system_prompt = self.get_text_video_system_prompt()
 
         elif mode == "Enhance Prompt (Audio)":

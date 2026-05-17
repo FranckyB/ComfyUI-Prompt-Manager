@@ -69,6 +69,10 @@ class PromptGenOptions:
                 "image5": ("IMAGE", {
                     "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
                 }),
+                "system_prompt_mode": (["replace", "append"], {
+                    "default": "replace",
+                    "tooltip": "replace: the text below fully replaces the default LLM instructions\nappend: the text below is added after the default LLM instructions"
+                }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
@@ -140,7 +144,8 @@ class PromptGenOptions:
         return _last_model_update
 
     def create_options(self, model: str = None, image2=None, image3=None, image4=None, image5=None,
-                       system_prompt: str = None, use_model_default_sampling: bool = None, temperature: float = None,
+                       system_prompt: str = None, system_prompt_mode: str = "replace",
+                       use_model_default_sampling: bool = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
                        repeat_penalty: float = None, context_size: int = None,
                        show_everything_in_console: bool = None) -> dict:
@@ -196,6 +201,7 @@ class PromptGenOptions:
         # Only include LLM parameters that are provided
         if system_prompt and system_prompt.strip():
             options["system_prompt"] = system_prompt
+            options["system_prompt_mode"] = system_prompt_mode
 
         options["use_model_default_sampling"] = use_model_default_sampling
         options["temperature"] = temperature
