@@ -6,36 +6,19 @@ app.registerExtension({
     name: "PromptManager",
     settings: [
         {
-            id: "PromptManager.PreferredBaseModel",
-            category: ["Prompt Manager", "1. Model Preferences", "Base Model (text enhancement)"],
-            name: "Preferred Base Model",
-            tooltip: "Filename of default model for 'Enhance User Prompt' mode (leave empty to auto-select model)",
+            id: "PromptManager.PreferredModel",
+            category: ["Prompt Manager", "1. Model Preferences", "Preferred Model"],
+            name: "Preferred Model",
+            tooltip: "Filename of the preferred model for all modes (text and vision). Leave empty to auto-select. e.g. Qwen3.5-9B-UD-Q4_K_XL.gguf",
             type: "text",
             defaultValue: "",
             onChange(value) {
                 fetch("/prompt-manager/save-preference", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ key: "preferred_base_model", value: value })
+                    body: JSON.stringify({ key: "preferred_model", value: value })
                 }).catch(error => {
-                    console.error("[PromptManager] Error saving base model preference:", error);
-                });
-            }
-        },
-        {
-            id: "PromptManager.PreferredVisionModel",
-            category: ["Prompt Manager", "1. Model Preferences", "Vision Model (image analysis)"],
-            name: "Preferred Vision Model",
-            tooltip: "Filename of default model for 'Analyze Image' modes (leave empty to auto-select model)",
-            type: "text",
-            defaultValue: "",
-            onChange(value) {
-                fetch("/prompt-manager/save-preference", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ key: "preferred_vision_model", value: value })
-                }).catch(error => {
-                    console.error("[PromptManager] Error saving vision model preference:", error);
+                    console.error("[PromptManager] Error saving preferred model preference:", error);
                 });
             }
         },
@@ -205,8 +188,7 @@ app.registerExtension({
         // Load settings from ComfyUI and sync to Python cache
         try {
             // Sync current values to Python cache first
-            const baseModel = app.ui.settings.getSettingValue("PromptManager.PreferredBaseModel");
-            const visionModel = app.ui.settings.getSettingValue("PromptManager.PreferredVisionModel");
+            const preferredModel = app.ui.settings.getSettingValue("PromptManager.PreferredModel");
             const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath");
             const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath");
             const port = app.ui.settings.getSettingValue("PromptManager.Port");
@@ -215,16 +197,11 @@ app.registerExtension({
             const ollamaUrl = app.ui.settings.getSettingValue("PromptManager.OllamaUrl");
             const ollamaKeepAlive = app.ui.settings.getSettingValue("PromptManager.OllamaKeepAlive");
             
-            console.log("[PromptManager] Syncing preferences:", { baseModel, visionModel, llamaPath, modelPath, port, CloseLlama, llmBackend, ollamaUrl, ollamaKeepAlive });
+            console.log("[PromptManager] Syncing preferences:", { preferredModel, llamaPath, modelPath, port, CloseLlama, llmBackend, ollamaUrl, ollamaKeepAlive });
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ key: "preferred_base_model", value: baseModel })
-            });
-            await fetch("/prompt-manager/save-preference", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ key: "preferred_vision_model", value: visionModel })
+                body: JSON.stringify({ key: "preferred_model", value: preferredModel })
             });
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",

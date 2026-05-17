@@ -12,8 +12,7 @@ import requests
 
 # Add preference cache and API endpoints for preferences
 _preferences_cache = {
-    "preferred_base_model": "",
-    "preferred_vision_model": "",
+    "preferred_model": "",
     "custom_llama_path": "",
     "custom_llama_model_path": "",
     "close_llama_on_exit": True,
@@ -59,8 +58,7 @@ async def save_preference(request):
         key = data.get("key")
         value = data.get("value", "")
 
-        if key not in ["preferred_base_model",
-                       "preferred_vision_model",
+        if key not in ["preferred_model",
                        "custom_llama_path",
                        "custom_llama_model_path",
                        "close_llama_on_exit",
