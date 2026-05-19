@@ -214,17 +214,25 @@ def reload_prompts():
     _prompts_cache = {}
 
 def get_default_context_size():
-    """Return a context size scaled to the GPU's total VRAM.
+    """Return a context size scaled to the active GPU's total VRAM.
 
     Tiers:
         >= 24 GB  →  8192
         >= 16 GB  →  4096
          < 16 GB →   2048
         No GPU / unknown → 4096 (safe CPU default)
+
+    Note:
+        This uses GPU capacity (total VRAM), not current free/available VRAM.
     """
     try:
         if torch.cuda.is_available():
-            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            try:
+                device_index = torch.cuda.current_device()
+            except Exception:
+                device_index = 0
+
+            total_vram_gb = torch.cuda.get_device_properties(device_index).total_memory / (1024 ** 3)
             if total_vram_gb >= 24:
                 return 8192
             elif total_vram_gb >= 16:

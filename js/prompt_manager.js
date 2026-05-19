@@ -2,6 +2,63 @@ import { app } from "../../scripts/app.js";
 import { ComfyWidgets } from "../../scripts/widgets.js";
 import { api } from "../../scripts/api.js";
 
+function migrateLegacyPromptGenOptionsWidgets(node) {
+    if (!node?.widgets || node.widgets.length === 0) {
+        return false;
+    }
+
+    const byName = (name) => node.widgets.find(w => w.name === name);
+    const modeWidget = byName("system_prompt_mode");
+    const systemPromptWidget = byName("system_prompt");
+    const useDefaultWidget = byName("use_model_default_sampling");
+    const temperatureWidget = byName("temperature");
+    const topKWidget = byName("top_k");
+    const topPWidget = byName("top_p");
+    const minPWidget = byName("min_p");
+    const repeatPenaltyWidget = byName("repeat_penalty");
+    const contextSizeWidget = byName("context_size");
+    const showConsoleWidget = byName("show_everything_in_console");
+
+    if (!modeWidget || !systemPromptWidget || !useDefaultWidget || !temperatureWidget ||
+        !topKWidget || !topPWidget || !minPWidget || !repeatPenaltyWidget ||
+        !contextSizeWidget || !showConsoleWidget) {
+        return false;
+    }
+
+    const modeIsValid = modeWidget.value === "replace" || modeWidget.value === "append";
+    const looksLegacyShape = typeof systemPromptWidget.value === "boolean" && typeof useDefaultWidget.value === "number";
+
+    if (modeIsValid && !looksLegacyShape) {
+        return false;
+    }
+
+    const oldSystemPrompt = modeWidget.value;
+    const oldUseDefaultSampling = systemPromptWidget.value;
+    const oldTemperature = useDefaultWidget.value;
+    const oldTopK = temperatureWidget.value;
+    const oldTopP = topKWidget.value;
+    const oldMinP = topPWidget.value;
+    const oldRepeatPenalty = minPWidget.value;
+    const oldContextSize = repeatPenaltyWidget.value;
+    const oldShowInConsole = contextSizeWidget.value;
+
+    modeWidget.value = "replace";
+    systemPromptWidget.value = typeof oldSystemPrompt === "string" ? oldSystemPrompt : "";
+    useDefaultWidget.value = Boolean(oldUseDefaultSampling);
+    temperatureWidget.value = Number(oldTemperature);
+    topKWidget.value = Number.isFinite(Number(oldTopK)) ? Math.round(Number(oldTopK)) : oldTopK;
+    topPWidget.value = Number(oldTopP);
+    minPWidget.value = Number(oldMinP);
+    repeatPenaltyWidget.value = Number(oldRepeatPenalty);
+    contextSizeWidget.value = Number.isFinite(Number(oldContextSize)) ? Math.round(Number(oldContextSize)) : oldContextSize;
+    showConsoleWidget.value = Boolean(oldShowInConsole);
+
+    node.serialize_widgets = true;
+    app.graph.setDirtyCanvas(true, true);
+    console.log("[PromptManager] Migrated legacy PromptGenOptions widget order for workflow compatibility.");
+    return true;
+}
+
 app.registerExtension({
     name: "PromptManager",
     settings: [
@@ -424,12 +481,19 @@ app.registerExtension({
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated?.apply(this, arguments);
+                migrateLegacyPromptGenOptionsWidgets(this);
                 // Set a default size (width x height)
                 try {
                     this.setSize([400, 420]);
                 } catch (e) {
                     // ignore if method unavailable
                 }
+                return result;
+            };
+            const onConfigureOpt = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function(info) {
+                const result = onConfigureOpt?.apply(this, arguments);
+                migrateLegacyPromptGenOptionsWidgets(this);
                 return result;
             };
             // Enforce sensible minimums when the user resizes the options node

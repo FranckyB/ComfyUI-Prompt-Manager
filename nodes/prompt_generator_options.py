@@ -11,17 +11,27 @@ def trigger_model_list_refresh():
     _last_model_update = time.time()
 
 def get_default_context_size():
-    """Return a context size scaled to the GPU's total VRAM.
+    """Return a context size scaled to the active GPU's total VRAM.
 
     Tiers:
         >= 24 GB  →  8192
         >= 16 GB  →  4096
          < 16 GB →   2048
         No GPU / unknown → 4096 (safe CPU default)
+
+    Note:
+        This uses GPU capacity (total VRAM), not current free/available VRAM.
     """
     try:
+        import importlib
+        torch = importlib.import_module("torch")
         if torch.cuda.is_available():
-            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            try:
+                device_index = torch.cuda.current_device()
+            except Exception:
+                device_index = 0
+
+            total_vram_gb = torch.cuda.get_device_properties(device_index).total_memory / (1024 ** 3)
             if total_vram_gb >= 24:
                 return 8192
             elif total_vram_gb >= 16:
@@ -38,6 +48,7 @@ class PromptGenOptions:
     @classmethod
     def INPUT_TYPES(cls):
         backend = _preferences_cache.get("llm_backend", "llama.cpp")
+        preferred_model = str(_preferences_cache.get("preferred_model", "") or "").strip()
 
         if backend == "ollama":
             # Discover models from Ollama
@@ -51,10 +62,14 @@ class PromptGenOptions:
             if not available_models:
                 available_models = ["No models found - check HuggingFace"]
 
+        default_model = available_models[0] if available_models else ""
+        if preferred_model and preferred_model in available_models:
+            default_model = preferred_model
+
         return {
             "optional": {
                 "model": (available_models, {
-                    "default": available_models[0] if available_models else "",
+                    "default": default_model,
                     "tooltip": "Select model to use (local models listed first, then HuggingFace models)\nDownload sizes: UD-Q4_K_XL ~6GB | Q8_0 ~9.5GB | UD-Q8_K_XL ~13GB"
                 }),
                 "image2": ("IMAGE", {
@@ -70,7 +85,7 @@ class PromptGenOptions:
                     "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
                 }),
                 "system_prompt_mode": (["replace", "append"], {
-                    "default": "replace",
+                    "default": "append",
                     "tooltip": "replace: the text below fully replaces the default LLM instructions\nappend: the text below is added after the default LLM instructions"
                 }),
                 "system_prompt": ("STRING", {
@@ -150,6 +165,34 @@ class PromptGenOptions:
                        repeat_penalty: float = None, context_size: int = None,
                        show_everything_in_console: bool = None) -> dict:
         """Create options dictionary with model, LLM parameters, and extra images"""
+
+        # Backward compatibility for workflows saved before `system_prompt_mode` existed.
+        # Old widget arrays can shift values by one slot when loaded by newer node definitions.
+        mode_valid = system_prompt_mode in ("replace", "append")
+        legacy_shape = isinstance(system_prompt, bool) and (
+            not mode_valid or isinstance(use_model_default_sampling, (int, float))
+        )
+        if legacy_shape:
+            old_system_prompt = system_prompt_mode
+            old_use_default_sampling = system_prompt
+            old_temperature = use_model_default_sampling
+            old_top_k = temperature
+            old_top_p = top_k
+            old_min_p = top_p
+            old_repeat_penalty = min_p
+            old_context_size = repeat_penalty
+            old_show_console = context_size
+
+            system_prompt_mode = "replace"
+            system_prompt = old_system_prompt if isinstance(old_system_prompt, str) else ""
+            use_model_default_sampling = bool(old_use_default_sampling) if old_use_default_sampling is not None else None
+            temperature = old_temperature
+            top_k = old_top_k
+            top_p = old_top_p
+            min_p = old_min_p
+            repeat_penalty = old_repeat_penalty
+            context_size = old_context_size
+            show_everything_in_console = bool(old_show_console) if old_show_console is not None else None
 
         options = {}
 
