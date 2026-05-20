@@ -783,17 +783,18 @@ class PromptGenerator:
         # Always determine a valid model filename before running server
         model_to_use = None
 
-        # ── Preferred model from ComfyUI settings (overrides Options node widget) ──
+        # ── Preferred model from ComfyUI settings (fallback when Options node model is not set) ──
         _preferred = _preferences_cache.get("preferred_model", "").strip()
 
         if use_ollama:
             # ── Ollama model selection ──
-            # Priority: preferences > Options node > auto-discover from Ollama
-            if _preferred:
+            # Priority: Options node > preferences > auto-discover from Ollama
+            if options and "model" in options:
+                model_to_use = options["model"]
+                print_pg(f"Using model from options node: {model_to_use}")
+            elif _preferred:
                 model_to_use = _preferred
                 print_pg(f"Using preferred model from settings: {model_to_use}")
-            elif options and "model" in options:
-                model_to_use = options["model"]
             else:
                 # Auto-discover available models from Ollama
                 from ..py.ollama_wrapper import discover_ollama_models
@@ -815,8 +816,19 @@ class PromptGenerator:
             available_models = get_local_models()
 
             if use_vision_model:
-                # Priority: preferences > Options node > auto-discover
-                if _preferred and is_model_local(_preferred):
+                # Priority: Options node > preferences > auto-discover
+                if options and "model" in options and has_vision_support(options["model"]) and is_model_local(options["model"]):
+                    model_to_use = options["model"]
+                    print_pg(f"Using vision model from options node: {model_to_use}")
+                elif options and "model" in options and is_model_local(options["model"]):
+                    # Selected model doesn't support vision
+                    print_pg(f"Warning: Model '{options['model']}' has no mmproj (no vision support) but '{mode}' mode is active.\nIgnoring model selection and searching for a vision-capable model.")
+                    model_to_use = self.find_vision_model(available_models)
+                    if model_to_use is None:
+                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                        print_pg(error_msg, RED)
+                        raise RuntimeError(error_msg)
+                elif _preferred and is_model_local(_preferred):
                     if has_vision_support(_preferred):
                         model_to_use = _preferred
                         print_pg(f"Using preferred model from settings: {model_to_use}")
@@ -827,16 +839,6 @@ class PromptGenerator:
                             error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                             print_pg(error_msg, RED)
                             raise RuntimeError(error_msg)
-                elif options and "model" in options and has_vision_support(options["model"]) and is_model_local(options["model"]):
-                    model_to_use = options["model"]
-                elif options and "model" in options and is_model_local(options["model"]):
-                    # Selected model doesn't support vision
-                    print_pg(f"Warning: Model '{options['model']}' has no mmproj (no vision support) but '{mode}' mode is active.\nIgnoring model selection and searching for a vision-capable model.")
-                    model_to_use = self.find_vision_model(available_models)
-                    if model_to_use is None:
-                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
-                        print_pg(error_msg, RED)
-                        raise RuntimeError(error_msg)
                 else:
                     # Try to find a vision model automatically
                     model_to_use = self.find_vision_model(available_models)
@@ -846,12 +848,13 @@ class PromptGenerator:
                         raise RuntimeError(error_msg)
             else:
                 # Enhance Prompt mode - any model works, prefer text-only for efficiency
-                # Priority: preferences > Options node > auto-select
-                if _preferred and is_model_local(_preferred):
+                # Priority: Options node > preferences > auto-select
+                if options and "model" in options and is_model_local(options["model"]):
+                    model_to_use = options["model"]
+                    print_pg(f"Using model from options node: {model_to_use}")
+                elif _preferred and is_model_local(_preferred):
                     model_to_use = _preferred
                     print_pg(f"Using preferred model from settings: {model_to_use}")
-                elif options and "model" in options and is_model_local(options["model"]):
-                    model_to_use = options["model"]
                 else:
                     if not available_models:
                         error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
