@@ -6987,8 +6987,29 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
                     background: #222; border: 2px solid #4CAF50; border-radius: 8px;
                     padding: 20px 30px; z-index: 10000; color: #fff; font-size: 14px;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 280px;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 280px; position: fixed;
                 `;
+                let cancelled = false;
+
+                const cancelBtn = document.createElement("button");
+                cancelBtn.textContent = "✕";
+                cancelBtn.title = "Cancel remaining thumbnails";
+                cancelBtn.style.cssText = `
+                    position: absolute; top: 8px; right: 8px;
+                    width: 24px; height: 24px; line-height: 22px;
+                    border-radius: 6px; border: 1px solid #666;
+                    background: #2f2f2f; color: #eee;
+                    cursor: pointer; font-size: 14px; padding: 0;
+                `;
+                cancelBtn.onclick = () => {
+                    cancelled = true;
+                    cancelBtn.disabled = true;
+                    cancelBtn.style.opacity = "0.6";
+                    cancelBtn.style.cursor = "default";
+                    cancelBtn.title = "Cancelling...";
+                };
+                progress.appendChild(cancelBtn);
+
                 const progressText = document.createElement("div");
                 progressText.style.cssText = `display: flex; align-items: center; gap: 12px;`;
                 progressText.innerHTML = `
@@ -7004,6 +7025,9 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 let generated = 0;
                 let failed = 0;
                 for (let i = 0; i < missing.length; i++) {
+                    if (cancelled) {
+                        break;
+                    }
                     const pName = missing[i];
                     progressText.querySelector("span").textContent = `Generating ${i + 1} / ${missing.length}: ${pName}`;
                     try {
@@ -7022,7 +7046,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 }
 
                 if (progress.parentNode) progress.remove();
-                await showInfo("Batch Complete", `Generated: ${generated}, Failed: ${failed}`);
+                if (cancelled) {
+                    await showInfo("Batch Cancelled", `Generated: ${generated}, Failed: ${failed}, Skipped: ${Math.max(0, missing.length - generated - failed)}`);
+                } else {
+                    await showInfo("Batch Complete", `Generated: ${generated}, Failed: ${failed}`);
+                }
             };
             menu.appendChild(thumbItem);
 
@@ -8090,6 +8118,8 @@ const THUMB_DEFAULT_NEGATIVE = "blurry, bad quality, worst quality, low resoluti
 
 let _thumbnailRenderFamily = null;
 let _thumbnailRenderModel = null;
+let _thumbnailRenderLora1 = null;
+let _thumbnailRenderLora2 = null;
 let _thumbnailLegacyModel = null;
 let _thumbnailShowAllModels = false;
 
@@ -8131,6 +8161,226 @@ function _thumbnailDisplayName(modelPath, maxLength = 68) {
     const leaf = _thumbnailLeafName(modelPath);
     if (leaf.length <= maxLength) return leaf;
     return `${leaf.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+async function fetchAvailableThumbnailLoras() {
+    try {
+        const resp = await fetch("/prompt-manager-advanced/available-loras");
+        const data = await resp.json();
+        if (!resp.ok || !data?.success) return [];
+
+        const rawNames = Array.isArray(data?.loras)
+            ? [...new Set(data.loras.map((x) => String(x || "").trim()).filter(Boolean))]
+            : [];
+
+        const stripKnownLoraExt = (value) => String(value || "").replace(/\.(safetensors|ckpt|pt|bin|pth)$/i, "");
+        const splitRelPath = (relativePath) => {
+            const normalized = String(relativePath || "").replace(/\\/g, "/").trim();
+            if (!normalized) return { subfolder: "", name: "" };
+            const idx = normalized.lastIndexOf("/");
+            const filename = idx >= 0 ? normalized.substring(idx + 1) : normalized;
+            const subfolder = idx >= 0 ? normalized.substring(0, idx) : "";
+            return {
+                subfolder,
+                name: stripKnownLoraExt(filename),
+            };
+        };
+
+        let resolvedPaths = [];
+        if (rawNames.length) {
+            try {
+                const resolveResp = await fetch("/prompt-manager-advanced/resolve-loras", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        lora_names: rawNames.map((name) => ({ name, strength: 1.0, clip_strength: 1.0 })),
+                    }),
+                });
+                const resolveData = await resolveResp.json();
+                if (resolveResp.ok && resolveData?.success && Array.isArray(resolveData?.loras)) {
+                    resolvedPaths = resolveData.loras
+                        .map((item) => String(item?.path || "").trim())
+                        .filter(Boolean);
+                }
+            } catch (e) {
+                console.warn("[ThumbnailGen] Failed resolving LoRA paths for folder grouping:", e);
+            }
+        }
+
+        const entriesRaw = [];
+
+        // Prefer resolved relative paths (contains subfolder when available).
+        for (const relPath of resolvedPaths) {
+            const meta = splitRelPath(relPath);
+            if (!meta.name) continue;
+            entriesRaw.push({
+                path: relPath,
+                name: meta.name,
+                subfolder: meta.subfolder,
+            });
+        }
+
+        // Keep any unresolved names so users can still select them.
+        if (rawNames.length) {
+            const knownNames = new Set(entriesRaw.map((x) => String(x.name || "").toLowerCase()));
+            for (const name of rawNames) {
+                if (knownNames.has(name.toLowerCase())) continue;
+                entriesRaw.push({
+                    path: name,
+                    name,
+                    subfolder: "",
+                });
+            }
+        }
+
+        const out = [];
+        const seen = new Set();
+        for (const item of entriesRaw) {
+            const path = String(item?.path || item?.value || item?.name || "").trim();
+            if (!path) continue;
+            const key = path.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const subfolder = String(item?.subfolder || "").replace(/\\/g, "/").trim();
+            const name = String(item?.name || _thumbnailLeafName(path) || path).trim();
+            out.push({
+                value: path,
+                name,
+                subfolder,
+                label: subfolder ? `${subfolder}/${name}` : name,
+            });
+        }
+
+        out.sort((a, b) => (a.subfolder + "/" + a.name).localeCompare(b.subfolder + "/" + b.name));
+        return out;
+    } catch (e) {
+        console.warn("[ThumbnailGen] Failed to load available LoRAs:", e);
+        return [];
+    }
+}
+
+function _normalizeThumbnailLoraEntry(name, strength = 1.0) {
+    const clean = String(name || "").trim();
+    const s = Number.isFinite(Number(strength)) ? Number(strength) : 1.0;
+    return {
+        name: clean,
+        path: clean,
+        model_strength: s,
+        clip_strength: s,
+        active: true,
+        available: true,
+    };
+}
+
+function _getThumbnailSelectedLoras(renderSelection) {
+    if (!renderSelection || typeof renderSelection !== "object") return [];
+
+    let raw = [];
+    if (Array.isArray(renderSelection.loras)) {
+        raw = renderSelection.loras;
+    } else if (renderSelection.lora) {
+        // Backward compatibility with prior single-LoRA shape
+        raw = [renderSelection.lora];
+    }
+
+    const out = [];
+    const seen = new Set();
+    for (const item of raw) {
+        const name = String(item || "").trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(name);
+    }
+    return out.slice(0, 2);
+}
+
+function applyThumbnailSelectedLoras(workflowData, renderSelection, selectedSlot) {
+    const loraNames = _getThumbnailSelectedLoras(renderSelection);
+    if (!loraNames.length || !workflowData || typeof workflowData !== "object") {
+        return workflowData;
+    }
+
+    const wf = workflowData;
+    const slot = String(selectedSlot || "model_a").trim().toLowerCase();
+
+    if (Number(wf.version || 0) >= 2 && wf.models && typeof wf.models === "object") {
+        const block = (wf.models[slot] && typeof wf.models[slot] === "object")
+            ? wf.models[slot]
+            : (wf.models[slot] = {});
+        const list = Array.isArray(block.loras) ? block.loras : (block.loras = []);
+        for (const loraName of loraNames) {
+            const hasAlready = list.some((item) => {
+                const candidate = String(item?.name || item?.path || "").trim().toLowerCase();
+                return candidate === loraName.toLowerCase();
+            });
+            if (!hasAlready) {
+                list.push(_normalizeThumbnailLoraEntry(loraName));
+            }
+        }
+        return wf;
+    }
+
+    const legacyKey = (slot === "model_b" || slot === "model_d") ? "loras_b" : "loras_a";
+    const list = Array.isArray(wf[legacyKey]) ? wf[legacyKey] : (wf[legacyKey] = []);
+    for (const loraName of loraNames) {
+        const hasAlready = list.some((item) => {
+            const candidate = String(item?.name || item?.path || "").trim().toLowerCase();
+            return candidate === loraName.toLowerCase();
+        });
+        if (!hasAlready) {
+            list.push(_normalizeThumbnailLoraEntry(loraName));
+        }
+    }
+    return wf;
+}
+
+function applyThumbnailRandomSeeds(workflowData, selectedSlot = "model_a") {
+    if (!workflowData || typeof workflowData !== "object") {
+        return workflowData;
+    }
+
+    const wf = workflowData;
+    const slot = String(selectedSlot || "model_a").trim().toLowerCase();
+    const seedA = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+    const seedB = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+
+    // Top-level sampler compatibility (legacy + v2 helpers reading these fields).
+    if (!wf.sampler || typeof wf.sampler !== "object") {
+        wf.sampler = {};
+    }
+    wf.sampler.seed_a = seedA;
+    wf.sampler.seed = seedA;
+    wf.sampler.seed_b = seedB;
+
+    if (Number(wf.version || 0) >= 2 && wf.models && typeof wf.models === "object") {
+        const primaryBlock = wf.models[slot];
+        if (primaryBlock && typeof primaryBlock === "object") {
+            if (!primaryBlock.sampler || typeof primaryBlock.sampler !== "object") {
+                primaryBlock.sampler = {};
+            }
+            primaryBlock.sampler.seed = seedA;
+        }
+
+        const pairMap = {
+            model_a: "model_b",
+            model_b: "model_a",
+            model_c: "model_d",
+            model_d: "model_c",
+        };
+        const secondarySlot = pairMap[slot];
+        const secondaryBlock = secondarySlot ? wf.models[secondarySlot] : null;
+        if (secondaryBlock && typeof secondaryBlock === "object") {
+            if (!secondaryBlock.sampler || typeof secondaryBlock.sampler !== "object") {
+                secondaryBlock.sampler = {};
+            }
+            secondaryBlock.sampler.seed = seedB;
+        }
+    }
+
+    return wf;
 }
 
 function applyThumbnailResolution(workflowData) {
@@ -8355,6 +8605,9 @@ function saveThumbnailRenderSelection(selection) {
     if (!selection?.family || !selection?.model) return;
     _thumbnailRenderFamily = selection.family;
     _thumbnailRenderModel = selection.model;
+    const selectedLoras = _getThumbnailSelectedLoras(selection);
+    _thumbnailRenderLora1 = selectedLoras[0] || null;
+    _thumbnailRenderLora2 = selectedLoras[1] || null;
     _thumbnailLegacyModel = null;
     try {
         app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderFamily", selection.family);
@@ -8364,7 +8617,7 @@ function saveThumbnailRenderSelection(selection) {
     }
 }
 
-async function showThumbnailRenderPicker(preselectedFamily = null, preselectedModel = null) {
+async function showThumbnailRenderPicker(preselectedFamily = null, preselectedModel = null, preselectedLora1 = null, preselectedLora2 = null) {
     let families = [];
     try {
         families = await fetchRendererFamilies();
@@ -8405,6 +8658,19 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
                 <label style="color: #c4ccd6; font-size: 13px;">Model</label>
                 <select class="model-select" size="13" style="width: 100%; min-width: 0; padding: 4px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
             </div>
+            <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px;">Filter</label>
+                <input class="lora-filter-input" type="text" placeholder="Filter LoRAs by name or path..." style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;" />
+            </div>
+            <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px;">LoRA 1</label>
+                <select class="lora1-select" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
+            </div>
+            <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px;">LoRA 2</label>
+                <select class="lora2-select" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
+            </div>
+            <div class="lora-hint" style="min-height: 16px; margin-bottom: 8px; color: #9aa5b4; font-size: 12px;"></div>
             <div class="model-hint" style="min-height: 16px; margin-bottom: 12px; color: #9aa5b4; font-size: 12px;"></div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="cancel-btn" style="padding: 8px 16px; background: ${UI.buttonBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;">Cancel</button>
@@ -8415,11 +8681,17 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         const familySel = dialog.querySelector(".family-select");
         const filterToggle = dialog.querySelector(".filter-toggle");
         const modelSel = dialog.querySelector(".model-select");
+        const loraFilterInput = dialog.querySelector(".lora-filter-input");
+        const lora1Sel = dialog.querySelector(".lora1-select");
+        const lora2Sel = dialog.querySelector(".lora2-select");
+        const loraHint = dialog.querySelector(".lora-hint");
         const modelHint = dialog.querySelector(".model-hint");
         const okBtn = dialog.querySelector('.ok-btn');
         const cancelBtn = dialog.querySelector('.cancel-btn');
 
         let familyModels = [];
+        let availableLoras = [];
+        let filteredLoras = [];
         let showAllModels = _thumbnailShowAllModels === true;
 
         const updateFilterToggleUi = () => {
@@ -8435,6 +8707,114 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         const setHint = (text, color = "#888") => {
             modelHint.textContent = text;
             modelHint.style.color = color;
+        };
+
+        const setLoraHint = (text, color = "#888") => {
+            loraHint.textContent = text;
+            loraHint.style.color = color;
+        };
+
+        const groupLoraOptions = (entries) => {
+            const groups = new Map();
+            const ungrouped = [];
+            for (const entry of entries || []) {
+                const subfolder = String(entry?.subfolder || "").trim();
+                if (!subfolder) {
+                    ungrouped.push(entry);
+                    continue;
+                }
+                const groupLabel = subfolder.replace(/\//g, " - ");
+                if (!groups.has(groupLabel)) groups.set(groupLabel, []);
+                groups.get(groupLabel).push(entry);
+            }
+
+            const sortedUngrouped = [...ungrouped].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+            const sortedGroups = new Map(
+                [...groups.entries()]
+                    .sort((a, b) => a[0].localeCompare(b[0]))
+                    .map(([label, items]) => [
+                        label,
+                        [...items].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
+                    ])
+            );
+
+            return { sortedUngrouped, sortedGroups };
+        };
+
+        const renderLoraOptions = (preferredValues = []) => {
+            const query = String(loraFilterInput?.value || "").trim().toLowerCase();
+            const tokens = query ? query.split(/\s+/).filter(Boolean) : [];
+            filteredLoras = availableLoras.filter((entry) => {
+                if (!tokens.length) return true;
+                const label = String(entry.label || "").toLowerCase();
+                const name = String(entry.name || "").toLowerCase();
+                const subfolder = String(entry.subfolder || "").replace(/\\/g, "/").toLowerCase();
+                const path = String(entry.value || "").replace(/\\/g, "/").toLowerCase();
+                const haystack = `${label} ${name} ${subfolder} ${path}`;
+
+                // Match all terms so folder+name searches work naturally.
+                return tokens.every((t) => haystack.includes(t));
+            });
+
+            const sels = [lora1Sel, lora2Sel];
+            const { sortedUngrouped, sortedGroups } = groupLoraOptions(filteredLoras);
+            for (const sel of sels) {
+                sel.innerHTML = "";
+                const noneOpt = document.createElement("option");
+                noneOpt.value = "";
+                noneOpt.textContent = "(None)";
+                sel.appendChild(noneOpt);
+
+                sortedUngrouped.forEach((entry) => {
+                    const opt = document.createElement("option");
+                    opt.value = entry.value;
+                    opt.textContent = entry.name;
+                    opt.title = entry.label;
+                    opt.style.color = "#e5e7eb";
+                    sel.appendChild(opt);
+                });
+
+                for (const [groupLabel, items] of sortedGroups) {
+                    const og = document.createElement("optgroup");
+                    og.label = groupLabel;
+                    og.style.color = "#e06060";
+                    sel.appendChild(og);
+                    for (const entry of items) {
+                        const opt = document.createElement("option");
+                        opt.value = entry.value;
+                        opt.textContent = entry.name;
+                        opt.title = entry.label;
+                        opt.style.color = "#e5e7eb";
+                        og.appendChild(opt);
+                    }
+                }
+            }
+
+            const filteredValues = new Set(filteredLoras.map((entry) => entry.value));
+            const pick1 = filteredValues.has(preferredValues[0]) ? preferredValues[0] : "";
+            const pick2 = filteredValues.has(preferredValues[1]) ? preferredValues[1] : "";
+            lora1Sel.value = pick1;
+            lora2Sel.value = pick2;
+
+            const enforceDistinct = () => {
+                if (lora1Sel.value && lora1Sel.value === lora2Sel.value) {
+                    lora2Sel.value = "";
+                }
+            };
+            lora1Sel.onchange = enforceDistinct;
+            lora2Sel.onchange = enforceDistinct;
+
+            setLoraHint(`${filteredLoras.length} / ${availableLoras.length} LoRA(s) shown.`);
+        };
+
+        const loadLoras = async (preferredValues = []) => {
+            setLoraHint("Loading LoRAs...");
+            availableLoras = await fetchAvailableThumbnailLoras();
+            renderLoraOptions(preferredValues);
+        };
+
+        loraFilterInput.oninput = () => {
+            renderLoraOptions([lora1Sel.value, lora2Sel.value]);
         };
 
         const renderModelOptions = (preferredValue = "") => {
@@ -8507,11 +8887,14 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         okBtn.onclick = () => {
             const family = familySel.value;
             const model = modelSel.value;
+            const lora1 = String(lora1Sel.value || "").trim();
+            const lora2 = String(lora2Sel.value || "").trim();
+            const loras = [lora1, lora2].filter(Boolean);
             if (!family || !model) {
                 setHint("Please select a model before continuing.", "#c66");
                 return;
             }
-            resolve({ family, model });
+            resolve({ family, model, loras });
             cleanup();
         };
         cancelBtn.onclick = () => { resolve(null); cleanup(); };
@@ -8529,6 +8912,10 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         modelSel.ondblclick = () => okBtn.click();
 
         document.body.appendChild(dialog);
+        loadLoras([
+            preselectedLora1 || _thumbnailRenderLora1 || "",
+            preselectedLora2 || _thumbnailRenderLora2 || "",
+        ]);
         loadFamilyModels(validFamily, preselectedModel || "");
         modelSel.focus();
     });
@@ -8536,15 +8923,48 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
 
 async function ensureThumbnailRenderSelection({ force = false } = {}) {
     if (!force && _thumbnailRenderFamily && _thumbnailRenderModel) {
-        return { family: _thumbnailRenderFamily, model: _thumbnailRenderModel };
+        return {
+            family: _thumbnailRenderFamily,
+            model: _thumbnailRenderModel,
+            loras: [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean),
+        };
     }
     const picked = await showThumbnailRenderPicker(
         _thumbnailRenderFamily,
-        _thumbnailRenderModel || _thumbnailLegacyModel || null
+        _thumbnailRenderModel || _thumbnailLegacyModel || null,
+        _thumbnailRenderLora1 || null,
+        _thumbnailRenderLora2 || null,
     );
     if (!picked) return null;
     saveThumbnailRenderSelection(picked);
     return picked;
+}
+
+function resolveThumbnailModelSlot(workflowData) {
+    const MODEL_KEYS = ["model_a", "model_b", "model_c", "model_d"];
+    const normalizeSlot = (value) => {
+        const key = String(value || "").trim().toLowerCase();
+        return MODEL_KEYS.includes(key) ? key : null;
+    };
+
+    const explicitSlot = normalizeSlot(workflowData?.model_slot);
+    if (explicitSlot) {
+        return explicitSlot;
+    }
+
+    const models = workflowData?.models;
+    if (models && typeof models === "object") {
+        for (const slot of MODEL_KEYS) {
+            const block = models[slot];
+            if (!block || typeof block !== "object") continue;
+            const modelName = String(block.model || "").trim();
+            if (modelName) {
+                return slot;
+            }
+        }
+    }
+
+    return "model_a";
 }
 
 /**
@@ -8553,13 +8973,16 @@ async function ensureThumbnailRenderSelection({ force = false } = {}) {
  * @param {Object} workflowData - Saved workflow_data payload
  * @returns {Promise<string|null>} Base64 thumbnail data URL or null
  */
-async function generateThumbnailWorkflowFromWorkflowData(workflowData) {
+async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSelection = null) {
     if (!workflowData || typeof workflowData !== "object") {
         return null;
     }
 
     // Enforce thumbnail-safe render sizing before queueing.
     const wfForThumb = applyThumbnailResolution(workflowData);
+    const modelSlot = resolveThumbnailModelSlot(wfForThumb);
+    applyThumbnailRandomSeeds(wfForThumb, modelSlot);
+    applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);
 
     const workflow = {};
     let nodeId = 1;
@@ -8569,6 +8992,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData) {
         class_type: "RecipeRenderer",
         inputs: {
             recipe_data: wfForThumb,
+            model_slot: modelSlot,
             clear_cache_after_render: false,
         }
     };
@@ -8724,6 +9148,15 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
     }
 
     const promptText = promptData.prompt || promptName;
+    const activeRenderSelection = providedRenderSelection || (
+        (_thumbnailRenderFamily && _thumbnailRenderModel)
+            ? {
+                family: _thumbnailRenderFamily,
+                model: _thumbnailRenderModel,
+                loras: [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean),
+            }
+            : null
+    );
 
     // Show generating indicator (only in non-silent/single mode)
     let indicator = null;
@@ -8766,7 +9199,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
 
         if (parsedWorkflowData) {
             try {
-                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData);
+                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection);
             } catch (e) {
                 console.warn("[ThumbnailGen] RecipeRenderer thumbnail path failed, falling back:", e);
                 thumbnail = null;
@@ -8784,7 +9217,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
                 renderSelection,
                 fallbackBase
             );
-            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData);
+            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection);
         }
 
         if (thumbnail) {
@@ -8899,11 +9332,17 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
     }));
 
     // Change Thumbnail Family/Model
+    const selectedLorasForLabel = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
     const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
-        ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}`
+        ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}${selectedLorasForLabel.length ? ` + ${selectedLorasForLabel.length} LoRA` + (selectedLorasForLabel.length > 1 ? "s" : "") : ""}`
         : "🔧 Select Thumbnail Family + Model";
     menu.appendChild(createMenuItem(modelLabel, async () => {
-        const picked = await showThumbnailRenderPicker(_thumbnailRenderFamily, _thumbnailRenderModel);
+        const picked = await showThumbnailRenderPicker(
+            _thumbnailRenderFamily,
+            _thumbnailRenderModel,
+            _thumbnailRenderLora1,
+            _thumbnailRenderLora2,
+        );
         if (picked) {
             saveThumbnailRenderSelection(picked);
         }

@@ -40,7 +40,7 @@ from ..py.workflow_extraction_utils import (
     resolve_vae_name,
     resolve_clip_names,
 )
-from ..py.workflow_data_utils import strip_runtime_objects
+from ..py.workflow_data_utils import ensure_v2_recipe_data, strip_runtime_objects
 from ..py.lora_utils import resolve_lora_path
 
 # Reuse the robust GGUF loading helper used by RecipeModelLoader when available.
@@ -129,6 +129,11 @@ def _resolve_wan_family_hint(models, selected_slot, fallback_family=""):
 
     return str(fallback_family or "")
 
+
+def _legacy_recipe_to_v2(workflow_data):
+    """Normalize recipe_data via shared canonical converter used across Prompt Manager."""
+    return ensure_v2_recipe_data(workflow_data, source="RecipeRenderer")
+
 class WorkflowRenderer:
     """
     Render-only generation node.
@@ -148,16 +153,18 @@ class WorkflowRenderer:
                     "forceInput": True,
                     "tooltip": "Connect recipe_data from Recipe Builder or PromptExtractor",
                 }),
-                "model_slot": (_MODEL_KEYS, {
-                    "default": "model_a",
-                    "tooltip": "Select which model slot to render from in recipe_data.",
-                }),
                 "clear_cache_after_render": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Clear Renderer model cache and request memory cleanup after rendering completes.",
                 }),
             },
             "optional": {
+                # Compatibility: allow API callers/workflows that omit model_slot.
+                # execute() already defaults to model_a when not provided.
+                "model_slot": (_MODEL_KEYS, {
+                    "default": "model_a",
+                    "tooltip": "Select which model slot to render from in recipe_data.",
+                }),
                 "source_image": ("IMAGE", {
                     "tooltip": "Input image for WAN Video i2v (image-to-video) generation.",
                 }),
@@ -217,6 +224,7 @@ class WorkflowRenderer:
             h.update(str(type(recipe_data)).encode())
 
         if isinstance(wf, dict):
+            wf = _legacy_recipe_to_v2(wf)
             wf_sampler = wf.get("sampler", {}) if isinstance(wf.get("sampler"), dict) else {}
             wf_res = wf.get("resolution", {}) if isinstance(wf.get("resolution"), dict) else {}
             primary_sampler = {}
@@ -365,6 +373,7 @@ class WorkflowRenderer:
         else:
             raise ValueError(f"[RecipeRenderer] Invalid workflow_data type: {type(workflow_data)}")
 
+        wf = _legacy_recipe_to_v2(wf)
         wf_out = dict(wf)
 
         if not (int(wf.get("version", 0) or 0) >= 2 and isinstance(wf.get("models"), dict)):
