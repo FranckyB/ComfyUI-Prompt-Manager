@@ -3580,7 +3580,7 @@ class PromptExtractor:
     """
 
     def __init__(self):
-        pass
+        self._workflow_data = None
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -4322,11 +4322,12 @@ class PromptExtractor:
                     wf_node['extracted_data'] = extracted_data
                     break
 
+        self._workflow_data = workflow_data
         return {
             # Do not publish extractor preview images to Comfy history/tasks.
             # This prevents extractor frames from becoming the queue thumbnail.
             "ui": {},
-            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, workflow_data, image_tensor)
+            "result": (positive_prompt, negative_prompt, final_lora_stack_a, final_lora_stack_b, image_tensor)
         }
 
     def save_preview_images(self, images):
@@ -4444,10 +4445,11 @@ class WorkflowExtractor:
             use_lora_input_only=True, lora_stack_a=None, lora_stack_b=None,
             unique_id=unique_id, extra_pnginfo=extra_pnginfo, prompt=prompt,
         )
-        # Parent returns {"ui": ..., "result": (pos, neg, loras_a, loras_b, workflow_data, image)}
+        # Parent returns {"ui": ..., "result": (pos, neg, loras_a, loras_b, image)}
+        # workflow_data is stored on self._pe._workflow_data
         full = result["result"]
-        workflow_data = full[4]
-        image_tensor = full[5]
+        workflow_data = self._pe._workflow_data
+        image_tensor = full[4]
         return {
             # Keep RecipeExtractor silent in UI previews for the same reason
             # as PromptExtractor: avoid replacing final generation thumbnails.
