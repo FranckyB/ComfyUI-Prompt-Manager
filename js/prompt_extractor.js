@@ -1441,7 +1441,6 @@ app.registerExtension({
                             { name: "negative_prompt", type: "STRING" },
                             { name: "lora_stack_a",    type: "LORA_STACK" },
                             { name: "lora_stack_b",    type: "LORA_STACK" },
-                            { name: "recipe_data",     type: "RECIPE_DATA" },
                             { name: "image",           type: "IMAGE" },
                         ];
                     if (this.outputs) {

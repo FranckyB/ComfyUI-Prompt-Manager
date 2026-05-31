@@ -7,6 +7,7 @@ serialization.
 
 import json
 import math
+import re
 
 # Keys that hold runtime (non-JSON-serializable) objects/conditioning payloads.
 # These should never be persisted in saved prompt/workflow metadata.
@@ -51,6 +52,69 @@ def _as_clip_list(raw_clip):
     if raw_clip:
         return [raw_clip]
     return []
+
+
+def _unwrap_scalar(value):
+    """Unwrap one-item list/tuple wrappers commonly found in legacy metadata."""
+    while isinstance(value, (list, tuple)) and len(value) > 0:
+        value = value[0]
+    return value
+
+
+def _safe_int(value, default):
+    """Coerce value to int with tolerant parsing for legacy string formats."""
+    value = _unwrap_scalar(value)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return default
+        return int(value)
+
+    text = str(value).strip()
+    if not text:
+        return default
+    try:
+        return int(text)
+    except Exception:
+        # Accept values like "117:598", "steps=30", "20.0" by taking first number token.
+        m = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+        if not m:
+            return default
+        try:
+            return int(float(m.group(0)))
+        except Exception:
+            return default
+
+
+def _safe_float(value, default):
+    """Coerce value to float with tolerant parsing for legacy string formats."""
+    value = _unwrap_scalar(value)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        out = float(value)
+        return out if math.isfinite(out) else default
+
+    text = str(value).strip()
+    if not text:
+        return default
+    try:
+        out = float(text)
+        return out if math.isfinite(out) else default
+    except Exception:
+        m = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+        if not m:
+            return default
+        try:
+            out = float(m.group(0))
+            return out if math.isfinite(out) else default
+        except Exception:
+            return default
 
 
 def _has_meaningful_legacy_slot(recipe_data, slot_key, sampler):
@@ -100,17 +164,17 @@ def _legacy_to_v2_recipe_data(recipe_data, source):
             "vae": str(recipe_data.get("vae", "") or ""),
             "clip": _as_clip_list(recipe_data.get("clip", [])),
             "sampler": {
-                "steps": int(steps if steps is not None else 20),
-                "cfg": float(sampler.get("cfg", 5.0)),
-                "denoise": float(sampler.get("denoise", 1.0)),
-                "seed": int(seed if seed is not None else 0),
+                "steps": _safe_int(steps, 20),
+                "cfg": _safe_float(sampler.get("cfg", 5.0), 5.0),
+                "denoise": _safe_float(sampler.get("denoise", 1.0), 1.0),
+                "seed": _safe_int(seed, 0),
                 "sampler_name": str(sampler.get("sampler_name", "euler") or "euler"),
                 "scheduler": str(sampler.get("scheduler", "simple") or "simple"),
             },
             "resolution": {
-                "width": int(resolution.get("width", 768)),
-                "height": int(resolution.get("height", 1280)),
-                "batch_size": int(resolution.get("batch_size", 1)),
+                "width": _safe_int(resolution.get("width", 768), 768),
+                "height": _safe_int(resolution.get("height", 1280), 1280),
+                "batch_size": _safe_int(resolution.get("batch_size", 1), 1),
                 "length": resolution.get("length", None),
             },
         }
