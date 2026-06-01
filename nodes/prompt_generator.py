@@ -375,6 +375,10 @@ class PromptGenerator:
                     "default": True,
                     "tooltip": "Stop the llama.cpp server after each prompt (for resource saving, but slower)."
                 }),
+                "clear_vram_on_run": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Run aggressive VRAM cleanup before and after generation. Disable on high-VRAM GPUs if you want less aggressive cleanup."
+                }),
                 "options": ("OPTIONS", {
                     "tooltip": "Optional: Connect options node to control model and parameters"
                 })
@@ -736,12 +740,15 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, options=None, **kwargs) -> str:
+    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 
         print_pg_header()  # Print header for this execution
-        self.cleanup_vram_before_run()
+        if clear_vram_on_run:
+            self.cleanup_vram_before_run()
+        else:
+            print_pg("Skipping aggressive VRAM cleanup before run (clear_vram_on_run=False).")
 
         # Determine LLM backend: "ollama" or "llama.cpp"
         use_ollama = (
@@ -1012,6 +1019,7 @@ class PromptGenerator:
                 use_model_default_sampling=use_model_default_sampling,
                 show_everything_in_console=show_everything_in_console,
                 stop_server_after=stop_server_after,
+                clear_vram_on_run=clear_vram_on_run,
                 options=options,
                 images=images,
                 context_size=context_size,
@@ -1209,7 +1217,8 @@ class PromptGenerator:
             raise RuntimeError(error_msg)
         finally:
             # Aggressive post-run cleanup to release VRAM pressure for Comfy pipelines.
-            self.flush_vram(unload_models=True)
+            if clear_vram_on_run:
+                self.flush_vram(unload_models=True)
 
     # ================================================================
     # Ollama generation helper
@@ -1217,7 +1226,7 @@ class PromptGenerator:
     def _generate_via_ollama(self, model_to_use, system_prompt, user_message,
                              user_content, seed, enable_thinking,
                              use_model_default_sampling, show_everything_in_console,
-                             stop_server_after, options, images, context_size, prompt,
+                             stop_server_after, clear_vram_on_run, options, images, context_size, prompt,
                              format_as_json):
         """Generate text using Ollama's OpenAI-compatible endpoint with streaming."""
 
@@ -1382,7 +1391,8 @@ class PromptGenerator:
             raise RuntimeError(error_msg)
         finally:
             # Aggressive post-run cleanup to release VRAM pressure for Comfy pipelines.
-            self.flush_vram(unload_models=True)
+            if clear_vram_on_run:
+                self.flush_vram(unload_models=True)
 
     def print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):
         """Print token statistics using pre-cached counts"""
