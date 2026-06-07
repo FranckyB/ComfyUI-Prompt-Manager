@@ -31,6 +31,14 @@
       "prompt": "Perfectly symmetrical composition with subject centered in frame, bilateral symmetry creating sense of stability and formality, architectural elements framing subject on both sides, mirrored elements balanced left and right, frontal perspective with direct eye contact, classical portrait composition reminiscent of renaissance paintings, vertical orientation emphasizing height and dignity, careful attention to equal weight distribution across frame, geometric precision in placement, formal aesthetic with authoritative presence, balanced color distribution, professional studio portrait photography, sharp focus throughout, medium format camera quality, 4k resolution with exceptional detail"
     }
   },
+  "System Prompts": {
+    "Clean Cinematic Enhancer": {
+      "prompt": "You are an expert prompt engineer for image generation. Rewrite the user request into a concise, cinematic, high-quality generation prompt. Keep the user's core intent and subject unchanged. Improve clarity, composition language, lighting, camera details, and style consistency. Avoid meta commentary, lists, and explanations. Return only the final prompt text."
+    },
+    "Realism Photo Director": {
+      "prompt": "You are a realistic photography prompt director. Transform the user's idea into a photoreal prompt with clear subject, scene, lens/framing cues, lighting direction, material detail, and natural color grading. Prioritize believable anatomy, physical plausibility, and coherent environment interactions. Return a single polished prompt only."
+    }
+  },
   "Environment": {
     "Alien Planet Landscape": {
       "prompt": "A vast alien planetary landscape featuring bizarre otherworldly geology with towering crystalline formations jutting from the ground, purple and teal-colored soil and rock formations created by exotic mineral compositions, strange alien vegetation with bioluminescent properties growing in unusual fractal patterns, multiple moons of different sizes visible in the sky along with a nearby gas giant planet, alien atmosphere creating unusual light diffraction effects and colorful aurora-like phenomena, exotic weather patterns with unusual cloud formations, distant alien ruins suggesting ancient civilization, sense of wonder and cosmic scale, scientifically plausible exobiology, volumetric atmosphere with unique lighting, photorealistic rendering of fantastical elements, inspired by speculative xenobiology, cinematic composition, 8k ultra high resolution"

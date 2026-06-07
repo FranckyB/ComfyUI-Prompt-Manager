@@ -478,7 +478,38 @@ class PromptGenerator:
                     print_pg(error_msg, RED)
 
             # Build command arguments
-            cmd_args = [server_cmd, "-m", model_path, "--port", str(PromptGenerator.SERVER_PORT), "--no-warmup", "-ngl", "100", "-c", str(context_size)]
+            cmd_args = [
+                server_cmd,
+                "-m", model_path,
+                "--port", str(PromptGenerator.SERVER_PORT),
+                "--no-warmup",
+                "--ctx-size", str(context_size),
+                "--batch-size", "1024",
+                "--ubatch-size", "1024",
+                "--cache-type-k", "q4_0",
+                "--cache-type-v", "q4_0",
+                "--parallel", "1",
+            ]
+
+            # GPU-specific tuning flags
+            if torch.cuda.is_available():
+                cmd_args.extend([
+                    "--n-gpu-layers", "999",
+                    "--flash-attn", "on",
+                ])
+            else:
+                cmd_args.extend(["--n-gpu-layers", "0"])
+
+            # Compatibility fallback for older llama-server builds that don't
+            # support newer tuning flags.
+            cmd_args_fallback = [
+                server_cmd,
+                "-m", model_path,
+                "--port", str(PromptGenerator.SERVER_PORT),
+                "--no-warmup",
+                "-ngl", "100",
+                "-c", str(context_size),
+            ]
 
             # Add vision flags for models with mmproj
             if use_vision_model:
@@ -486,6 +517,7 @@ class PromptGenerator:
                 if mmproj_path:
                     print_pg(f"Vision model: using mmproj: {os.path.basename(mmproj_path)}")
                     cmd_args.extend(["--mmproj", mmproj_path])
+                    cmd_args_fallback.extend(["--mmproj", mmproj_path])
                 else:
                     error_msg = f"Error: Vision mode requires an mmproj file for '{model_name}' but none was found.\nPlease ensure an mmproj file exists, or use the Generator Options node to download a vision-capable model."
                     print_pg(error_msg, RED)
@@ -520,53 +552,82 @@ class PromptGenerator:
 
                     popen_kwargs["preexec_fn"] = _set_pdeathsig
 
-            # Start server process
-            _server_process = subprocess.Popen(
-                cmd_args,
-                **popen_kwargs
-            )
+            def _launch_and_wait(args):
+                global _server_process, _current_model, _current_context_size
 
-            # On Windows attach process to Job Object so children die if parent exits
-            if os.name == 'nt' and _close_llama_on_exit:
-                try:
-                    setup_windows_job_object()
-                    assign_process_to_job(_server_process.pid)
-                except Exception as e:
-                    print_pg(f"Warning: Failed to assign process to Job Object: {e}")
+                _server_process = subprocess.Popen(args, **popen_kwargs)
 
-            _current_model = model_name
-            _current_context_size = context_size
-
-            # Wait for server to be ready
-            for i in range(60):  # Wait up to 60 seconds
-                time.sleep(1)
-                try:
-                    comfy.model_management.throw_exception_if_processing_interrupted()
-                except Exception:
-                    # Propagate interrupt up to caller
-                    raise
-                # Check if process has crashed
-                if _server_process.poll() is not None:
-                    stderr_output = ""
+                # On Windows attach process to Job Object so children die if parent exits
+                if os.name == 'nt' and _close_llama_on_exit:
                     try:
-                        stderr_output = _server_process.stderr.read().decode("utf-8", errors="replace").strip()
-                    except Exception:
-                        pass
-                    error_msg = f"Error: llama-server exited with code {_server_process.returncode}"
-                    if stderr_output:
-                        # Show last 5 lines of stderr for context
-                        last_lines = "\n".join(stderr_output.splitlines()[-5:])
-                        error_msg += f"\n{last_lines}"
-                    print_pg(error_msg, RED)
-                    _server_process = None
-                    _current_model = None
-                    return (False, error_msg)
-                if PromptGenerator.is_server_alive():
-                    return (True, None)
+                        setup_windows_job_object()
+                        assign_process_to_job(_server_process.pid)
+                    except Exception as e:
+                        print_pg(f"Warning: Failed to assign process to Job Object: {e}")
 
-            error_msg = "Error: Server did not start in time (60s)"
+                _current_model = model_name
+                _current_context_size = context_size
+
+                # Wait for server to be ready
+                for _ in range(60):  # Wait up to 60 seconds
+                    time.sleep(1)
+                    try:
+                        comfy.model_management.throw_exception_if_processing_interrupted()
+                    except Exception:
+                        # Propagate interrupt up to caller
+                        raise
+
+                    # Check if process has crashed
+                    if _server_process.poll() is not None:
+                        stderr_output = ""
+                        try:
+                            stderr_output = _server_process.stderr.read().decode("utf-8", errors="replace").strip()
+                        except Exception:
+                            pass
+                        error = f"Error: llama-server exited with code {_server_process.returncode}"
+                        if stderr_output:
+                            last_lines = "\n".join(stderr_output.splitlines()[-5:])
+                            error += f"\n{last_lines}"
+                        _server_process = None
+                        _current_model = None
+                        _current_context_size = None
+                        return (False, error, stderr_output)
+
+                    if PromptGenerator.is_server_alive():
+                        return (True, None, "")
+
+                error = "Error: Server did not start in time (60s)"
+                PromptGenerator.stop_server()
+                return (False, error, "")
+
+            def _is_unsupported_flag_error(stderr_output):
+                text = (stderr_output or "").lower()
+                if not text:
+                    return False
+                markers = [
+                    "unknown argument",
+                    "unknown option",
+                    "unrecognized option",
+                    "unrecognized arguments",
+                    "invalid argument",
+                    "invalid option",
+                ]
+                return any(m in text for m in markers)
+
+            success, error_msg, stderr_output = _launch_and_wait(cmd_args)
+            if success:
+                return (True, None)
+
+            # Retry with conservative args if this looks like a flag-compatibility issue.
+            if _is_unsupported_flag_error(stderr_output):
+                print_pg("Warning: llama-server rejected one or more advanced launch flags. Retrying with compatibility mode.", YELLOW)
+                success, fallback_error, _ = _launch_and_wait(cmd_args_fallback)
+                if success:
+                    return (True, None)
+                print_pg(fallback_error, RED)
+                return (False, fallback_error)
+
             print_pg(error_msg, RED)
-            PromptGenerator.stop_server()
             return (False, error_msg)
 
         except FileNotFoundError:
@@ -915,39 +976,31 @@ class PromptGenerator:
         full_url = f"http://localhost:{self.SERVER_PORT}/v1/chat/completions"
 
         # Prepare the system prompt
+        if mode == "Analyze Image":
+            base_system_prompt = self.get_image_system_prompt()
+        elif mode == "Analyze Image with Prompt":
+            base_system_prompt = self.get_image_custom_system_prompt()
+        elif mode == "Enhance Prompt (Video)":
+            base_system_prompt = self.get_text_video_system_prompt()
+        elif mode == "Enhance Prompt (Audio)":
+            base_system_prompt = self.get_text_audio_system_prompt()
+        else:
+            base_system_prompt = self.get_text_image_system_prompt()
+
+        # Optional override from Prompt Generator Options node (already resolved there).
+        override_prompt = str(options.get("override_system_prompt_text", "") or "").strip() if options else ""
+        if override_prompt:
+            base_system_prompt = override_prompt
+
         if options and "system_prompt" in options:
             custom_sp = options["system_prompt"]
             sp_mode = options.get("system_prompt_mode", "replace")
             if sp_mode == "append":
-                # Determine the default system prompt for this mode first
-                if mode == "Analyze Image":
-                    default_sp = self.get_image_system_prompt()
-                elif mode == "Analyze Image with Prompt":
-                    default_sp = self.get_image_custom_system_prompt()
-                elif mode == "Enhance Prompt (Video)":
-                    default_sp = self.get_text_video_system_prompt()
-                elif mode == "Enhance Prompt (Audio)":
-                    default_sp = self.get_text_audio_system_prompt()
-                else:
-                    default_sp = self.get_text_image_system_prompt()
-                system_prompt = default_sp + "\n\n" + custom_sp
+                system_prompt = base_system_prompt + "\n\n" + custom_sp
             else:
                 system_prompt = custom_sp
-
-        elif mode == "Analyze Image":
-            system_prompt = self.get_image_system_prompt()
-
-        elif mode == "Analyze Image with Prompt":
-            system_prompt = self.get_image_custom_system_prompt()
-
-        elif mode == "Enhance Prompt (Video)":
-            system_prompt = self.get_text_video_system_prompt()
-
-        elif mode == "Enhance Prompt (Audio)":
-            system_prompt = self.get_text_audio_system_prompt()
-
         else:
-            system_prompt = self.get_text_image_system_prompt()
+            system_prompt = base_system_prompt
 
         # Add JSON formatting instructions only when `format_as_json` is True
         if format_as_json:
