@@ -9,6 +9,9 @@ const MIN_NODE_WIDTH = 1080;
 const MIN_NODE_HEIGHT = 320;
 const DEFAULT_NODE_WIDTH = 1080;
 const DEFAULT_NODE_HEIGHT = 430;
+const MIN_STACK_COUNT = 1;
+const MAX_STACK_COUNT = 4;
+const DEFAULT_STACK_COUNT = 2;
 // Height constants mirroring LM's loras_widget_utils.js
 const LM_LORA_ENTRY_H = 40;
 const LM_HEADER_H = 32;
@@ -55,9 +58,10 @@ function ensureStyles() {
     height: 100%;
     box-sizing: border-box;
     padding: 6px 6px 6px 6px;
-    overflow: hidden;
+    overflow: visible;
     display: flex;
     flex-direction: column;
+    position: relative;
 }
 .pm-multi-lm-root,
 .pm-multi-lm-root * {
@@ -72,11 +76,74 @@ function ensureStyles() {
 }
 .pm-multi-lm-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(200px, 1fr));
+    grid-template-columns: repeat(2, minmax(200px, 1fr));
     gap: 8px;
     flex: 1;
     min-height: 0;
     align-items: stretch;
+    margin-top: 0;
+}
+.pm-multi-lm-topbar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    position: absolute;
+    left: 8px;
+    top: -48px;
+    z-index: 2;
+    margin-top: 0;
+    margin-bottom: 0;
+    flex-shrink: 0;
+}
+.pm-multi-lm-stack-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid ${panelBorder};
+    border-radius: 8px;
+    background: ${panel};
+    padding: 5px 8px;
+}
+.pm-multi-lm-stack-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: ${textHeading};
+    user-select: none;
+}
+.pm-multi-lm-stepper {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.pm-multi-lm-step-btn {
+    width: 24px;
+    height: 24px;
+    border: 1px solid ${inputBorder};
+    border-radius: 5px;
+    background: ${inputBg};
+    color: ${textPrimary};
+    font-size: 12px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+}
+.pm-multi-lm-step-btn:hover {
+    border-color: ${textHeading};
+}
+.pm-multi-lm-step-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+.pm-multi-lm-step-value {
+    min-width: 16px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: hsl(0 0% 100%);
+    font-variant-numeric: tabular-nums;
+    user-select: none;
 }
 .pm-multi-lm-col {
     border: 1px solid ${panelBorder};
@@ -239,6 +306,66 @@ function getSlotByKey(node, slotKey) {
     return node.__pmMultiLmSlots.find((s) => s && s.key === slotKey) ?? null;
 }
 
+function clampStackCount(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return DEFAULT_STACK_COUNT;
+    return Math.max(MIN_STACK_COUNT, Math.min(MAX_STACK_COUNT, Math.round(n)));
+}
+
+function getStackCount(node) {
+    const raw = node?.properties?.pmLoraStackCount;
+    return clampStackCount(raw ?? DEFAULT_STACK_COUNT);
+}
+
+function getVisibleSlotKeys(node) {
+    const count = getStackCount(node);
+    return SLOT_DEFS.slice(0, count).map((s) => s.key);
+}
+
+function ensureActiveSlotVisible(node) {
+    if (!node || !node.properties) return;
+    const visible = getVisibleSlotKeys(node);
+    if (visible.length === 0) return;
+    if (!visible.includes(node.properties.pmActiveSlot)) {
+        node.properties.pmActiveSlot = visible[0];
+    }
+}
+
+function updateStackControlUi(node) {
+    const refs = node?.__pmStackControl;
+    if (!refs) return;
+    const count = getStackCount(node);
+    refs.value.textContent = String(count);
+    refs.dec.disabled = count <= MIN_STACK_COUNT;
+    refs.inc.disabled = count >= MAX_STACK_COUNT;
+}
+
+function applyVisibleStackCount(node) {
+    const slots = node?.__pmMultiLmSlots;
+    const grid = node?.__pmMultiLmGrid;
+    if (!Array.isArray(slots) || !grid) return;
+
+    const visible = new Set(getVisibleSlotKeys(node));
+    const visibleCount = visible.size || DEFAULT_STACK_COUNT;
+    grid.style.gridTemplateColumns = `repeat(${visibleCount}, minmax(200px, 1fr))`;
+
+    for (const slot of slots) {
+        if (!slot?.col) continue;
+        slot.col.style.display = visible.has(slot.key) ? "flex" : "none";
+    }
+}
+
+function setStackCount(node, value) {
+    if (!node) return;
+    if (!node.properties) node.properties = {};
+    node.properties.pmLoraStackCount = clampStackCount(value);
+    ensureActiveSlotVisible(node);
+    applyVisibleStackCount(node);
+    updateStackControlUi(node);
+    updateActiveColumnHighlight(node);
+    notifyHeightChange(node);
+}
+
 // ---------------------------------------------------------------------------
 // Apply incoming lora code to a slot
 // ---------------------------------------------------------------------------
@@ -331,9 +458,14 @@ function setActiveSlot(node, slotKey) {
 
 function updateActiveColumnHighlight(node) {
     if (!Array.isArray(node.__pmMultiLmSlots)) return;
+    ensureActiveSlotVisible(node);
     const activeSlot = node.properties?.pmActiveSlot ?? "model_a";
+    const visible = new Set(getVisibleSlotKeys(node));
     for (const slot of node.__pmMultiLmSlots) {
-        if (slot?.col) slot.col.classList.toggle("active-slot", slot.key === activeSlot);
+        if (slot?.col) {
+            const isActive = slot.key === activeSlot && visible.has(slot.key);
+            slot.col.classList.toggle("active-slot", isActive);
+        }
     }
 }
 
@@ -380,8 +512,10 @@ function createEmbeddedLorasWidget(node, lm, widgetName, initialValue, onChange)
 
 function computeContentHeight(node) {
     let maxListH = LM_EMPTY_H;
+    const visible = new Set(getVisibleSlotKeys(node));
     if (Array.isArray(node.__pmMultiLmSlots)) {
         for (const slot of node.__pmMultiLmSlots) {
+            if (!visible.has(slot.key)) continue;
             const count = Array.isArray(slot.lorasWidget?.value) ? slot.lorasWidget.value.length : 0;
             const h = count === 0
                 ? LM_EMPTY_H
@@ -389,7 +523,7 @@ function computeContentHeight(node) {
             if (h > maxListH) maxListH = h;
         }
     }
-    return COL_CHROME_H + maxListH + 20;
+    return COL_CHROME_H + maxListH + 56;
 }
 
 function notifyHeightChange(node) {
@@ -534,6 +668,45 @@ async function setupNodeUi(node) {
     const root = document.createElement("div");
     root.className = "pm-multi-lm-root";
 
+    // Top-left custom stack count control (1..4)
+    const topbar = document.createElement("div");
+    topbar.className = "pm-multi-lm-topbar";
+
+    const stackControl = document.createElement("div");
+    stackControl.className = "pm-multi-lm-stack-control";
+
+    const stackLabel = document.createElement("div");
+    stackLabel.className = "pm-multi-lm-stack-label";
+    stackLabel.textContent = "Lora Stack";
+
+    const stepper = document.createElement("div");
+    stepper.className = "pm-multi-lm-stepper";
+
+    const decBtn = document.createElement("button");
+    decBtn.className = "pm-multi-lm-step-btn";
+    decBtn.type = "button";
+    decBtn.textContent = "<";
+
+    const valueEl = document.createElement("div");
+    valueEl.className = "pm-multi-lm-step-value";
+    valueEl.textContent = String(getStackCount(node));
+
+    const incBtn = document.createElement("button");
+    incBtn.className = "pm-multi-lm-step-btn";
+    incBtn.type = "button";
+    incBtn.textContent = ">";
+
+    decBtn.addEventListener("click", () => setStackCount(node, getStackCount(node) - 1));
+    incBtn.addEventListener("click", () => setStackCount(node, getStackCount(node) + 1));
+
+    stepper.appendChild(decBtn);
+    stepper.appendChild(valueEl);
+    stepper.appendChild(incBtn);
+    stackControl.appendChild(stackLabel);
+    stackControl.appendChild(stepper);
+    topbar.appendChild(stackControl);
+    root.appendChild(topbar);
+
     // 4-column LoRA grid
     const grid = document.createElement("div");
     grid.className = "pm-multi-lm-grid";
@@ -554,10 +727,14 @@ async function setupNodeUi(node) {
 
     node.__pmMultiLmBridge = lm;
     node.__pmMultiLmSlots = slots;
+    node.__pmMultiLmGrid = grid;
+    node.__pmStackControl = { dec: decBtn, inc: incBtn, value: valueEl };
     node.__pmMultiLmRoot = root;
     node.__pmMultiLmReady = true;
     node.__pmMultiLmRefresh = () => {
         refreshFromStoredValues(node);
+        applyVisibleStackCount(node);
+        updateStackControlUi(node);
         updateActiveColumnHighlight(node);
     };
 
@@ -565,6 +742,8 @@ async function setupNodeUi(node) {
     // Restore any lora data that onConfigure may have written before async completed
     refreshFromStoredValues(node);
     hideStateWidgets(node);
+    applyVisibleStackCount(node);
+    updateStackControlUi(node);
     updateActiveColumnHighlight(node);
     notifyHeightChange(node);
     applyNodeSizeConstraints(node);
@@ -598,6 +777,12 @@ app.registerExtension({
 
             if (!this.properties) this.properties = {};
             if (!this.properties.pmActiveSlot) this.properties.pmActiveSlot = "model_a";
+            if (!Number.isFinite(Number(this.properties.pmLoraStackCount))) {
+                this.properties.pmLoraStackCount = DEFAULT_STACK_COUNT;
+            } else {
+                this.properties.pmLoraStackCount = clampStackCount(this.properties.pmLoraStackCount);
+            }
+            ensureActiveSlotVisible(this);
 
             applyNodeSizeConstraints(this, true);
 
@@ -614,6 +799,13 @@ app.registerExtension({
             this.comfyClass = LM_PROVIDER_CLASS;
 
             hideStateWidgets(this);
+            if (!Number.isFinite(Number(this.properties?.pmLoraStackCount))) {
+                if (!this.properties) this.properties = {};
+                this.properties.pmLoraStackCount = DEFAULT_STACK_COUNT;
+            } else {
+                this.properties.pmLoraStackCount = clampStackCount(this.properties.pmLoraStackCount);
+            }
+            ensureActiveSlotVisible(this);
 
             if (typeof this.__pmMultiLmRefresh === "function") {
                 this.__pmMultiLmRefresh();
@@ -648,6 +840,8 @@ app.registerExtension({
             this.__pmMultiLmSlots = null;
             this.__pmMultiLmRoot = null;
             this.__pmMultiLmBridge = null;
+            this.__pmMultiLmGrid = null;
+            this.__pmStackControl = null;
             this.__pmMultiLmReady = false;
             this.__pmMultiLmRefresh = null;
             return onRemoved ? onRemoved.apply(this, arguments) : undefined;

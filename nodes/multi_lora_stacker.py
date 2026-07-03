@@ -14,7 +14,10 @@ except Exception:
 
 def _try_get_lm_get_lora_info():
     """Return LM's get_lora_info function if it is already loaded in sys.modules."""
-    for mod in sys.modules.values():
+    # Iterate over a snapshot because sys.modules can change during runtime.
+    for mod in list(sys.modules.values()):
+        if mod is None:
+            continue
         fn = getattr(mod, "get_lora_info", None)
         if callable(fn):
             module_name = getattr(fn, "__module__", "") or ""
@@ -111,7 +114,7 @@ def _build_lora_stack(loras_json):
 
 
 class MultiLoraStackerLM:
-    """Multi-slot LoRA stacker with four independent stacks (A / B / C / D)."""
+    """Multi-slot LoRA stacker with per-slot and combined stack outputs."""
 
     NAME = "Multi Lora Stacker (LoraManager)"
     CATEGORY = "Prompt Manager"
@@ -128,12 +131,13 @@ class MultiLoraStackerLM:
             },
         }
 
-    RETURN_TYPES = ("MULTI_LORA_STACK",)
-    RETURN_NAMES = ("multi_lora_stack",)
+    RETURN_TYPES = ("MULTI_LORA_STACK", "LORA_STACK")
+    RETURN_NAMES = ("multi_lora_stack", "lora_stack")
     FUNCTION = "stack_multi"
     DESCRIPTION = (
         "Multi-slot LoRA stacker with a visual 4-panel UI (A / B / C / D). "
-        "Outputs one MULTI_LORA_STACK payload containing all four stacks."
+        "Outputs one MULTI_LORA_STACK payload plus one combined LORA_STACK "
+        "containing A+B+C+D in order."
     )
 
     def stack_multi(
@@ -154,7 +158,8 @@ class MultiLoraStackerLM:
             "c": stack_c,
             "d": stack_d,
         }
-        return (multi_lora_stack,)
+        combined_lora_stack = [*stack_a, *stack_b, *stack_c, *stack_d]
+        return (multi_lora_stack, combined_lora_stack)
 
 
 def _coerce_lora_stack(raw_stack):
