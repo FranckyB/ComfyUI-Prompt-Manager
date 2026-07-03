@@ -6,7 +6,6 @@ __version__ = "2.5.2"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
-from .nodes.apply_lora import ApplyLoraPlusPlus
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.prompt_generator import PromptGenerator
@@ -21,10 +20,9 @@ from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
 from .nodes.multi_prompt import RecipeBuilderMultiPrompts
-from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine
+from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter
 
 NODE_CLASS_MAPPINGS = {
-    "PromptApplyLora":           ApplyLoraPlusPlus,
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
     "PromptGenerator":           PromptGenerator,
@@ -41,10 +39,10 @@ NODE_CLASS_MAPPINGS = {
     "RecipeBuilderMultiPrompts": RecipeBuilderMultiPrompts,
     "MultiLoraStackerLM":        MultiLoraStackerLM,
     "MultiLoraCombine":          MultiLoraCombine,
+    "MultiLoraSplitter":         MultiLoraSplitter,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptApplyLora":            "Apply LoRA++",
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
     "PromptGenerator":            "Prompt Generator",
@@ -61,8 +59,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeBuilderMultiPrompts":  "Multi Prompts",
     "MultiLoraStackerLM":         "Multi LoRA Stack",
     "MultiLoraCombine":           "Multi LoRA Combine",
+    "MultiLoraSplitter":          "Multi LoRA Splitter",
 }
 
 WEB_DIRECTORY = "./js"
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
-print("[PromptManager] Nodes registered: Apply LoRA++, Prompt Manager, Prompt Generator, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")
+print("[PromptManager] Nodes registered: Prompt Manager, Prompt Generator, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")

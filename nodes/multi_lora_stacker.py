@@ -278,3 +278,35 @@ class MultiLoraCombine:
             "d": out_d,
         }
         return (merged,)
+
+
+class MultiLoraSplitter:
+    """Split one MULTI_LORA_STACK payload into A/B/C/D LORA_STACK outputs."""
+
+    NAME = "Multi LoRA Splitter"
+    CATEGORY = "Prompt Manager"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "multi_lora_stack": ("MULTI_LORA_STACK", {
+                    "tooltip": "Input MULTI_LORA_STACK payload to split into A/B/C/D stacks.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("LORA_STACK", "LORA_STACK", "LORA_STACK", "LORA_STACK")
+    RETURN_NAMES = ("lora_stack_a", "lora_stack_b", "lora_stack_c", "lora_stack_d")
+    FUNCTION = "split_multi"
+    DESCRIPTION = "Split a MULTI_LORA_STACK payload into LORA_STACK outputs A/B/C/D."
+
+    def split_multi(self, multi_lora_stack, **kwargs):
+        if not isinstance(multi_lora_stack, dict):
+            return ([], [], [], [])
+
+        out_a = _coerce_lora_stack(multi_lora_stack.get("a"))
+        out_b = _coerce_lora_stack(multi_lora_stack.get("b"))
+        out_c = _coerce_lora_stack(multi_lora_stack.get("c"))
+        out_d = _coerce_lora_stack(multi_lora_stack.get("d"))
+        return (out_a, out_b, out_c, out_d)
