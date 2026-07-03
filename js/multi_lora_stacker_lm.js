@@ -81,7 +81,7 @@ function ensureStyles() {
     flex: 1;
     min-height: 0;
     align-items: stretch;
-    margin-top: 0;
+    margin-top: -16px;
 }
 .pm-multi-lm-topbar {
     display: inline-flex;
