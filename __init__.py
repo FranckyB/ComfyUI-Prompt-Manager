@@ -20,7 +20,7 @@ from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
 from .nodes.multi_prompt import RecipeBuilderMultiPrompts
-from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter
+from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter, LoraStackCombine
 
 NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
@@ -40,6 +40,7 @@ NODE_CLASS_MAPPINGS = {
     "MultiLoraStackerLM":        MultiLoraStackerLM,
     "MultiLoraCombine":          MultiLoraCombine,
     "MultiLoraSplitter":         MultiLoraSplitter,
+    "LoraStackCombine":          LoraStackCombine,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -60,6 +61,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MultiLoraStackerLM":         "Multi LoRA Stack",
     "MultiLoraCombine":           "Multi LoRA Combine",
     "MultiLoraSplitter":          "Multi LoRA Splitter",
+    "LoraStackCombine":           "LoRA Stack Combine",
 }
 
 WEB_DIRECTORY = "./js"

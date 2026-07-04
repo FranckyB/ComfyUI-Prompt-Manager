@@ -310,3 +310,50 @@ class MultiLoraSplitter:
         out_c = _coerce_lora_stack(multi_lora_stack.get("c"))
         out_d = _coerce_lora_stack(multi_lora_stack.get("d"))
         return (out_a, out_b, out_c, out_d)
+
+
+class LoraStackCombine:
+    """Combine up to four LORA_STACK inputs into one merged LORA_STACK output."""
+
+    NAME = "LoRA Stack Combine"
+    CATEGORY = "Prompt Manager"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": {
+                "lora_stack_a": ("LORA_STACK", {
+                    "tooltip": "Optional LORA_STACK to append first.",
+                }),
+                "lora_stack_b": ("LORA_STACK", {
+                    "tooltip": "Optional LORA_STACK to append second.",
+                }),
+                "lora_stack_c": ("LORA_STACK", {
+                    "tooltip": "Optional LORA_STACK to append third.",
+                }),
+                "lora_stack_d": ("LORA_STACK", {
+                    "tooltip": "Optional LORA_STACK to append fourth.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("LORA_STACK",)
+    RETURN_NAMES = ("lora_stack",)
+    FUNCTION = "combine_lora_stacks"
+    DESCRIPTION = "Combine up to four LORA_STACK inputs into one LORA_STACK output."
+
+    def combine_lora_stacks(
+        self,
+        lora_stack_a=None,
+        lora_stack_b=None,
+        lora_stack_c=None,
+        lora_stack_d=None,
+        **kwargs,
+    ):
+        merged = []
+        merged.extend(_coerce_lora_stack(lora_stack_a))
+        merged.extend(_coerce_lora_stack(lora_stack_b))
+        merged.extend(_coerce_lora_stack(lora_stack_c))
+        merged.extend(_coerce_lora_stack(lora_stack_d))
+        return (merged,)
