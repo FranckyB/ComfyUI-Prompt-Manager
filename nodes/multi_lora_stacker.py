@@ -15,10 +15,20 @@ except Exception:
 def _try_get_lm_get_lora_info():
     """Return LM's get_lora_info function if it is already loaded in sys.modules."""
     # Iterate over a snapshot because sys.modules can change during runtime.
-    for mod in list(sys.modules.values()):
+    for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
-        fn = getattr(mod, "get_lora_info", None)
+        # Restrict probing to likely LoRA-Manager modules to avoid triggering
+        # unrelated lazy module __getattr__ hooks (e.g. transformers warnings).
+        if "lora_manager" not in str(mod_name or "").lower():
+            continue
+
+        mod_dict = getattr(mod, "__dict__", None)
+        if not isinstance(mod_dict, dict):
+            continue
+
+        # Use module __dict__ lookup to avoid invoking module-level __getattr__.
+        fn = mod_dict.get("get_lora_info")
         if callable(fn):
             module_name = getattr(fn, "__module__", "") or ""
             if "lora_manager" in module_name.lower():

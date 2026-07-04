@@ -5,9 +5,9 @@ import { PM_UI_PALETTE } from "./ui_palette.js";
 const NODE_CLASS = "MultiLoraStackerLM";
 const LM_PROVIDER_CLASS = "Lora Stacker (LoraManager)";
 const STYLE_ID = "pm-multi-lm-style";
-const MIN_NODE_WIDTH = 1080;
+const MIN_NODE_WIDTH = 600;
 const MIN_NODE_HEIGHT = 320;
-const DEFAULT_NODE_WIDTH = 1080;
+const DEFAULT_NODE_WIDTH = 600;
 const DEFAULT_NODE_HEIGHT = 430;
 const MIN_STACK_COUNT = 1;
 const MAX_STACK_COUNT = 4;
@@ -17,6 +17,7 @@ const LM_LORA_ENTRY_H = 40;
 const LM_HEADER_H = 32;
 const LM_CONTAINER_PAD = 12;
 const LM_EMPTY_H = 100;
+const FAST_PREVIEW_DELAY_MS = 20;
 // Per-column chrome: title(22) + search textarea(50) + col padding(16)
 const COL_CHROME_H = 88;
 
@@ -225,11 +226,13 @@ async function loadLmBridge() {
         import("/extensions/ComfyUI-Lora-Manager/loras_widget.js"),
         import("/extensions/ComfyUI-Lora-Manager/utils.js"),
         import("/extensions/ComfyUI-Lora-Manager/lora_syntax_utils.js"),
-    ]).then(([autocompleteMod, lorasWidgetMod, utilsMod, syntaxMod]) => ({
+        import("/extensions/ComfyUI-Lora-Manager/preview_tooltip.js"),
+    ]).then(([autocompleteMod, lorasWidgetMod, utilsMod, syntaxMod, previewTooltipMod]) => ({
         AutoComplete: autocompleteMod.AutoComplete,
         addLorasWidget: lorasWidgetMod.addLorasWidget,
         mergeLoras: utilsMod.mergeLoras,
         applyLoraValuesToText: syntaxMod.applyLoraValuesToText,
+        PreviewTooltip: previewTooltipMod.PreviewTooltip,
     })).catch((err) => {
         console.warn("[PromptManager] Failed to load Lora-Manager bridge modules", err);
         lmBridgePromise = null;
@@ -501,7 +504,75 @@ function createEmbeddedLorasWidget(node, lm, widgetName, initialValue, onChange)
         out.widget.value = initialValue;
     }
 
-    return { host, widget: out?.widget ?? null };
+    const fastPreviewCleanup = attachFastPreviewHandlers(host, lm);
+
+    return { host, widget: out?.widget ?? null, fastPreviewCleanup };
+}
+
+function attachFastPreviewHandlers(host, lm) {
+    if (!host || typeof lm?.PreviewTooltip !== "function") {
+        return () => {};
+    }
+
+    const tooltip = new lm.PreviewTooltip({ modelType: "loras" });
+    const processed = new WeakSet();
+
+    const bindNameEl = (nameEl) => {
+        if (!nameEl || processed.has(nameEl)) return;
+        processed.add(nameEl);
+
+        // Replace LM's delayed listeners on this element with a faster local one.
+        const replacement = nameEl.cloneNode(true);
+        const triggerEl = nameEl.closest(".lm-lora-entry") || nameEl.parentElement || replacement;
+        let previewTimer = null;
+
+        const clearPreviewTimer = () => {
+            if (previewTimer) {
+                clearTimeout(previewTimer);
+                previewTimer = null;
+            }
+        };
+
+        triggerEl.addEventListener("mouseenter", () => {
+            clearPreviewTimer();
+            previewTimer = setTimeout(async () => {
+                previewTimer = null;
+                const name = String(replacement.textContent || "").trim();
+                if (!name) return;
+                const rect = triggerEl.getBoundingClientRect();
+                try {
+                    await tooltip.show(name, rect.right, rect.top);
+                } catch (_e) {
+                }
+            }, FAST_PREVIEW_DELAY_MS);
+        });
+
+        triggerEl.addEventListener("mouseleave", () => {
+            clearPreviewTimer();
+            tooltip.hide();
+        });
+
+        nameEl.replaceWith(replacement);
+        processed.add(replacement);
+    };
+
+    const bindAll = () => {
+        const nameEls = host.querySelectorAll(".lm-lora-name");
+        for (const nameEl of nameEls) bindNameEl(nameEl);
+    };
+
+    bindAll();
+
+    const observer = new MutationObserver(() => {
+        bindAll();
+    });
+    observer.observe(host, { childList: true, subtree: true });
+
+    return () => {
+        observer.disconnect();
+        tooltip.hide();
+        tooltip.cleanup();
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -627,7 +698,14 @@ function buildSlotColumn(node, lm, slotDef) {
     col.appendChild(embedded.host);
     embedded.host.addEventListener("pointerdown", () => setActiveSlot(node, slotDef.key));
 
-    return { key: slotDef.key, stateWidget, searchInput, lorasWidget: embedded.widget, col };
+    return {
+        key: slotDef.key,
+        stateWidget,
+        searchInput,
+        lorasWidget: embedded.widget,
+        fastPreviewCleanup: embedded.fastPreviewCleanup,
+        col,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -837,6 +915,14 @@ app.registerExtension({
         // ── onRemoved ──────────────────────────────────────────────────────
         const onRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
+            if (Array.isArray(this.__pmMultiLmSlots)) {
+                for (const slot of this.__pmMultiLmSlots) {
+                    try {
+                        slot?.fastPreviewCleanup?.();
+                    } catch (_e) {
+                    }
+                }
+            }
             this.__pmMultiLmSlots = null;
             this.__pmMultiLmRoot = null;
             this.__pmMultiLmBridge = null;
