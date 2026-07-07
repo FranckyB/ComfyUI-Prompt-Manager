@@ -1,5 +1,9 @@
 # Changelog
 
+## version 2.5.3
+- **Improved Prompt Extractor to better match FBNodes image loader+**
+  - Can now browse any folder and can view in detail, normal and large Thumbnails.
+
 ## version 2.5.2
 - **Improved LLM prompts in Prompt Generator**
   - New System prompts for Video and Audio Generation
