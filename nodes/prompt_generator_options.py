@@ -1,9 +1,6 @@
 from ..py.model_manager import get_all_models, is_model_local, download_model, get_mmproj_for_model, get_mmproj_path, _preferences_cache
 from ..py.ollama_wrapper import discover_ollama_models, is_ollama_available
 import time
-import os
-import json
-import folder_paths
 
 # Global timestamp to track when models were last updated
 _last_model_update = time.time()
@@ -45,42 +42,6 @@ def get_default_context_size():
         pass
     return 4096  # CPU or VRAM detection failed
 
-
-def _get_prompt_manager_data_path():
-    return os.path.join(folder_paths.get_user_directory(), "default", "prompt_manager_data.json")
-
-
-def _load_system_prompts_from_prompt_manager():
-    prompts = {}
-    data_path = _get_prompt_manager_data_path()
-    if not os.path.exists(data_path):
-        return prompts
-
-    try:
-        with open(data_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception:
-        return prompts
-
-    bucket = data.get("System Prompts", {}) if isinstance(data, dict) else {}
-    if not isinstance(bucket, dict):
-        return prompts
-
-    for name, entry in bucket.items():
-        if name == "__meta__":
-            continue
-        text = entry.get("prompt", "") if isinstance(entry, dict) else entry
-        text = str(text or "").strip()
-        if text:
-            prompts[str(name)] = text
-
-    return prompts
-
-
-def _system_prompt_override_choices():
-    base = ["(Use Generator's Prompt)"]
-    saved = sorted(_load_system_prompts_from_prompt_manager().keys(), key=lambda s: s.lower())
-    return base + saved
 
 class PromptGenOptions:
     """Node that provides optional configuration for llama.cpp servers"""
@@ -183,10 +144,6 @@ class PromptGenOptions:
                 "show_everything_in_console": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Print system prompt, user prompt, thinking process, and raw model response to console"
-                }),
-                "override_system_prompt": (_system_prompt_override_choices(), {
-                    "default": "(Use Generator's Prompt)",
-                    "tooltip": "Override Prompt Generator's built-in system prompt with a saved prompt from category 'System Prompts' in prompt_manager_data.json. '(Use Generator's Prompt)' keeps the normal mode prompt."
                 })
             }
         }
@@ -207,8 +164,7 @@ class PromptGenOptions:
                        use_model_default_sampling: bool = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
                        repeat_penalty: float = None, context_size: int = None,
-                       show_everything_in_console: bool = None,
-                       override_system_prompt: str = "(Use Generator's Prompt)") -> dict:
+                       show_everything_in_console: bool = None) -> dict:
         """Create options dictionary with model, LLM parameters, and extra images"""
 
         # Backward compatibility for workflows saved before `system_prompt_mode` existed.
@@ -299,15 +255,6 @@ class PromptGenOptions:
         options["repeat_penalty"] = repeat_penalty
         options["context_size"] = context_size
         options["show_everything_in_console"] = show_everything_in_console
-        options["override_system_prompt"] = override_system_prompt
-
-        if override_system_prompt and override_system_prompt != "(Use Generator's Prompt)":
-            saved_prompts = _load_system_prompts_from_prompt_manager()
-            resolved = str(saved_prompts.get(override_system_prompt, "") or "").strip()
-            if resolved:
-                options["override_system_prompt_text"] = resolved
-            else:
-                print(f"[Prompt Generator Options] Warning: Selected override system prompt '{override_system_prompt}' was not found or is empty. Using generator mode prompt.")
 
         return (options,)
 

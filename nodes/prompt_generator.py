@@ -12,6 +12,7 @@ import base64
 import ctypes
 import numpy as np
 import torch
+import folder_paths
 from colorama import Fore, Style
 from PIL import Image
 from io import BytesIO
@@ -213,6 +214,43 @@ def reload_prompts():
     global _prompts_cache
     _prompts_cache = {}
 
+
+def _get_prompt_manager_data_path():
+    return os.path.join(folder_paths.get_user_directory(), "default", "prompt_manager_data.json")
+
+
+def _load_system_prompts_from_prompt_manager():
+    prompts = {}
+    data_path = _get_prompt_manager_data_path()
+    if not os.path.exists(data_path):
+        return prompts
+
+    try:
+        with open(data_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return prompts
+
+    bucket = data.get("System Prompts", {}) if isinstance(data, dict) else {}
+    if not isinstance(bucket, dict):
+        return prompts
+
+    for name, entry in bucket.items():
+        if name == "__meta__":
+            continue
+        text = entry.get("prompt", "") if isinstance(entry, dict) else entry
+        text = str(text or "").strip()
+        if text:
+            prompts[str(name)] = text
+
+    return prompts
+
+
+def _system_prompt_override_choices():
+    base = ["(Use Generator's Prompt)"]
+    saved = sorted(_load_system_prompts_from_prompt_manager().keys(), key=lambda s: s.lower())
+    return base + saved
+
 def get_default_context_size():
     """Return a context size scaled to the active GPU's total VRAM.
 
@@ -381,6 +419,10 @@ class PromptGenerator:
                 }),
                 "options": ("OPTIONS", {
                     "tooltip": "Optional: Connect options node to control model and parameters"
+                }),
+                "override_system_prompt": (_system_prompt_override_choices(), {
+                    "default": "(Use Generator's Prompt)",
+                    "tooltip": "Override Prompt Generator's built-in system prompt with a saved prompt from category 'System Prompts' in prompt_manager_data.json. '(Use Generator's Prompt)' keeps the normal mode prompt."
                 })
             }
         }
@@ -801,7 +843,7 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, **kwargs) -> str:
+    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, override_system_prompt="(Use Generator's Prompt)", **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 
@@ -987,8 +1029,18 @@ class PromptGenerator:
         else:
             base_system_prompt = self.get_text_image_system_prompt()
 
-        # Optional override from Prompt Generator Options node (already resolved there).
-        override_prompt = str(options.get("override_system_prompt_text", "") or "").strip() if options else ""
+        # Optional override from Prompt Generator main node.
+        override_prompt = ""
+        if override_system_prompt and override_system_prompt != "(Use Generator's Prompt)":
+            saved_prompts = _load_system_prompts_from_prompt_manager()
+            override_prompt = str(saved_prompts.get(override_system_prompt, "") or "").strip()
+            if not override_prompt:
+                print_pg(f"Warning: Selected override system prompt '{override_system_prompt}' was not found or is empty. Using generator mode prompt.", RED)
+
+        # Backward compatibility: allow old Options-node override payloads to continue working.
+        if not override_prompt and options:
+            override_prompt = str(options.get("override_system_prompt_text", "") or "").strip()
+
         if override_prompt:
             base_system_prompt = override_prompt
 
