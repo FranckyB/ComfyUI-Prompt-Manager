@@ -10,7 +10,7 @@ from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
-from .nodes.prompt_generator_kill_relay import PromptGeneratorKillRelay
+from .nodes.prompt_generator_kill_switch import PromptGeneratorKillSwitch
 from .nodes.prompt_extractor import PromptExtractor
 from .nodes.prompt_extractor import WorkflowExtractor as RecipeExtractor
 from .nodes.recipe_builder import RecipeBuilder
@@ -27,7 +27,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptManager":             PromptManager,
     "PromptGenerator":           PromptGenerator,
     "PromptGenOptions":          PromptGenOptions,
-    "PromptGeneratorKillRelay":  PromptGeneratorKillRelay,
+    "PromptGeneratorKillSwitch": PromptGeneratorKillSwitch,
     "PromptExtractor":           PromptExtractor,
     "RecipeExtractor":           RecipeExtractor,
     "RecipeBuilder":             RecipeBuilder,
@@ -48,7 +48,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManager":              "Prompt Manager (Basic)",
     "PromptGenerator":            "Prompt Generator",
     "PromptGenOptions":           "Prompt Generator Options",
-    "PromptGeneratorKillRelay":   "Prompt Generator Kill Relay",
+    "PromptGeneratorKillSwitch":  "Prompt Generator Kill Switch",
     "PromptExtractor":            "Prompt Extractor",
     "RecipeExtractor":            "Recipe Extractor",
     "RecipeBuilder":              "Recipe Builder",
@@ -66,4 +66,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
 WEB_DIRECTORY = "./js"
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
-print("[PromptManager] Nodes registered: Prompt Manager, Prompt Generator, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")
+print("[PromptManager] Nodes registered: Prompt Manager, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")

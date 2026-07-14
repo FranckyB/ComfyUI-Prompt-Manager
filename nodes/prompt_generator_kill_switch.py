@@ -1,7 +1,7 @@
 from .prompt_generator import PromptGenerator, _preferences_cache, ollama_unload_model
 
 
-class PromptGeneratorKillRelay:
+class PromptGeneratorKillSwitch:
     """Pass-through node that also stops the local llm server."""
 
     @classmethod
@@ -29,24 +29,15 @@ class PromptGeneratorKillRelay:
             model_name = str(_preferences_cache.get("preferred_model", "") or "").strip()
 
         if not model_name:
-            print("Prompt Generator Kill Relay: No Ollama model provided/preferred; skipping Ollama unload.")
+            print("Prompt Generator Kill Switch: No Ollama model provided/preferred; skipping Ollama unload.")
             return
 
         ok, msg = ollama_unload_model(_preferences_cache, model_name)
-        print(f"Prompt Generator Kill Relay: {msg}")
+        print(f"Prompt Generator Kill Switch: {msg}")
         if not ok:
-            print("Prompt Generator Kill Relay: Ollama unload did not succeed.")
+            print("Prompt Generator Kill Switch: Ollama unload did not succeed.")
 
     def pass_and_kill(self, value, ollama_model=""):
         PromptGenerator.stop_server()
         self._unload_ollama(ollama_model)
         return (value,)
-
-
-NODE_CLASS_MAPPINGS = {
-    "PromptGeneratorKillRelay": PromptGeneratorKillRelay
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptGeneratorKillRelay": "Prompt Generator Kill Relay"
-}

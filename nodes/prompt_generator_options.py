@@ -257,12 +257,3 @@ class PromptGenOptions:
         options["show_everything_in_console"] = show_everything_in_console
 
         return (options,)
-
-
-NODE_CLASS_MAPPINGS = {
-    "PromptGenOptions": PromptGenOptions
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptGenOptions": "Prompt Generator Options"
-}

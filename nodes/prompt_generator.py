@@ -1552,12 +1552,3 @@ class PromptGenerator:
         print_pg(" -----------------------------------------", GREEN)
         print_pg(f" TOTAL:         {total_input + total_output:>5} tokens", GREEN)
         print_pg(f"{'=' * 60}\n", GREEN)
-
-
-NODE_CLASS_MAPPINGS = {
-    "PromptGenerator": PromptGenerator
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptGenerator": "Prompt Generator"
-}
