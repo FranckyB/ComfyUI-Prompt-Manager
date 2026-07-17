@@ -5,7 +5,7 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, gener
 
 ## What This Provides
 
-- **Prompt authoring and management**: Prompt Manager (Advanced + Basic) for prompt save/load workflows, LoRA stacks, trigger words, and reusable prompt libraries.
+- **Prompt authoring and management**: Prompt Manager (Advanced + Basic) for prompt save/load workflows, LoRA stacks or Multi Lora Stacks, trigger words, and reusable prompt libraries.
 - **Prompt generation (local LLM)**: Prompt Generator + Prompt Generator Options using llama.cpp or Ollama, with support for text enhancement and image-based analysis (Qwen3.5 vision models).
 - **Prompt and metadata extraction**: Prompt Extractor reads metadata from images/videos/JSON and can output prompt, LoRA, and recipe context.
 - **Prompt browsing utilities**: Browser tools to quickly find and load saved prompts or recipes.

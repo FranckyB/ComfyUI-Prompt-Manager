@@ -336,6 +336,8 @@ def build_v2_recipe_data_from_prompt(
     negative_prompt="",
     loras_a=None,
     loras_b=None,
+    loras_c=None,
+    loras_d=None,
     source="RecipeData",
     base_recipe_data=None,
 ):
@@ -343,7 +345,7 @@ def build_v2_recipe_data_from_prompt(
 
     - Preserves existing non-legacy root metadata from base_recipe_data.
     - Preserves existing model names when available.
-    - Writes prompt + negative_prompt + loras into model_a/model_b.
+    - Writes prompt + negative_prompt + loras into model_a/model_b/model_c/model_d.
     """
     out = ensure_v2_recipe_data(
         dict(base_recipe_data) if isinstance(base_recipe_data, dict) else {},
@@ -357,21 +359,31 @@ def build_v2_recipe_data_from_prompt(
 
     model_a = _merge_model_block_with_template(models.get("model_a"))
     model_b = _merge_model_block_with_template(models.get("model_b"))
+    model_c = _merge_model_block_with_template(models.get("model_c"))
+    model_d = _merge_model_block_with_template(models.get("model_d"))
 
     prompt_text = str(prompt_text or "")
     negative_prompt = str(negative_prompt or "")
 
     model_a["positive_prompt"] = prompt_text
     model_b["positive_prompt"] = prompt_text
+    model_c["positive_prompt"] = prompt_text
+    model_d["positive_prompt"] = prompt_text
 
     model_a["negative_prompt"] = negative_prompt
     model_b["negative_prompt"] = negative_prompt
+    model_c["negative_prompt"] = negative_prompt
+    model_d["negative_prompt"] = negative_prompt
 
     model_a["loras"] = _coerce_prompt_loras(loras_a)
     model_b["loras"] = _coerce_prompt_loras(loras_b)
+    model_c["loras"] = _coerce_prompt_loras(loras_c)
+    model_d["loras"] = _coerce_prompt_loras(loras_d)
 
     models["model_a"] = model_a
     models["model_b"] = model_b
+    models["model_c"] = model_c
+    models["model_d"] = model_d
 
     out["_source"] = source
     return ensure_v2_recipe_data(out, source=source)

@@ -6,6 +6,64 @@ import folder_paths
 import server
 
 
+def _get_workflow_node(extra_pnginfo, node_id: str):
+    """Find workflow node by id, including nested subgraphs (id chains like a:b:c)."""
+    if not isinstance(extra_pnginfo, dict):
+        return None
+
+    workflow = extra_pnginfo.get("workflow")
+    if not isinstance(workflow, dict):
+        return None
+
+    nodes_list = workflow.get("nodes", []) if isinstance(workflow.get("nodes"), list) else []
+    subgraphs = []
+    definitions = workflow.get("definitions")
+    if isinstance(definitions, dict):
+        maybe_subgraphs = definitions.get("subgraphs")
+        if isinstance(maybe_subgraphs, list):
+            subgraphs = maybe_subgraphs
+
+    found = None
+    for part in str(node_id).split(":"):
+        found = next((n for n in nodes_list if isinstance(n, dict) and str(n.get("id")) == part), None)
+        if not isinstance(found, dict):
+            return None
+
+        subgraph = next((sg for sg in subgraphs if isinstance(sg, dict) and str(sg.get("id")) == str(found.get("type"))), None)
+        if isinstance(subgraph, dict) and isinstance(subgraph.get("nodes"), list):
+            nodes_list = subgraph.get("nodes", [])
+
+    return found
+
+
+def _patch_runtime_prompt_metadata(unique_id, output_text, extra_pnginfo=None, api_prompt=None):
+    """Persist resolved prompt into workflow/api metadata for downstream save nodes."""
+    node_id = str(unique_id) if unique_id is not None else ""
+    if not node_id:
+        return
+
+    # Patch workflow metadata (EXTRA_PNGINFO).
+    workflow_node = _get_workflow_node(extra_pnginfo, node_id)
+    if isinstance(workflow_node, dict):
+        widgets = workflow_node.get("widgets_values")
+        if isinstance(widgets, list):
+            # PromptManager widgets order:
+            # [category, name, use_external, text]
+            if len(widgets) > 2:
+                widgets[2] = False
+            if len(widgets) > 3:
+                widgets[3] = output_text
+
+    # Patch API prompt metadata (PROMPT).
+    if isinstance(api_prompt, dict):
+        prompt_node = api_prompt.get(node_id)
+        if isinstance(prompt_node, dict):
+            inputs = prompt_node.get("inputs")
+            if isinstance(inputs, dict):
+                inputs["use_external"] = False
+                inputs["text"] = output_text
+
+
 class PromptManager:
 
     @staticmethod
@@ -65,6 +123,8 @@ class PromptManager:
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "api_prompt": "PROMPT",
             }
         }
 
@@ -179,7 +239,7 @@ class PromptManager:
             except Exception:
                 pass
 
-    def get_prompt(self, category, name, use_external, text="", llm_input="", unique_id=None):
+    def get_prompt(self, category, name, use_external, text="", llm_input="", unique_id=None, extra_pnginfo=None, api_prompt=None):
         """Return the appropriate text based on use_external toggle and broadcast update"""
 
         # Choose which text to use based on the toggle
@@ -196,9 +256,19 @@ class PromptManager:
                 "use_external": use_external,
                 "llm_input": llm_input if use_external else ""
             })
+
+        # Save resolved runtime prompt into execution metadata so saver nodes
+        # embed the final prompt value, not the unresolved linked input state.
+        _patch_runtime_prompt_metadata(
+            unique_id=unique_id,
+            output_text=output_text,
+            extra_pnginfo=extra_pnginfo,
+            api_prompt=api_prompt,
+        )
         return (output_text,)
 
-    def check_lazy_status(self, category, name, use_external, text, llm_input=None, unique_id=None):
+    def check_lazy_status(self, category, name, use_external, text, llm_input=None, unique_id=None,
+                          extra_pnginfo=None, api_prompt=None, **kwargs):
         needed = []
         if use_external:
             needed.append("llm_input")

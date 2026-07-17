@@ -18,6 +18,49 @@ const PMA_THEME = {
     accentBorder: UI.accentBorder || "hsl(208 73% 57% / 0.65)",
 };
 
+const LORA_MODE_PROMPT_ONLY = "Prompt LoRAs Only";
+const LORA_MODE_COMBINE = "Combine LoRAs";
+const LORA_MODE_INPUT_ONLY = "Input LoRAs Only";
+
+function normalizeLoraInputModeValue(value) {
+    // Backward compatibility: old workflows store boolean.
+    if (value === false) return LORA_MODE_PROMPT_ONLY;
+    if (value === true) return LORA_MODE_COMBINE;
+
+    const raw = String(value ?? "").trim();
+    if (raw === LORA_MODE_PROMPT_ONLY || raw === LORA_MODE_COMBINE || raw === LORA_MODE_INPUT_ONLY) return raw;
+
+    const lowered = raw.toLowerCase();
+    if (["off", "false", "0", "prompt", "prompt only", "prompt loras only"].includes(lowered)) {
+        return LORA_MODE_PROMPT_ONLY;
+    }
+    if (["on", "true", "1", "combine", "combine loras"].includes(lowered)) {
+        return LORA_MODE_COMBINE;
+    }
+    if (["2", "input", "input only", "input loras", "input loras only"].includes(lowered)) {
+        return LORA_MODE_INPUT_ONLY;
+    }
+    return LORA_MODE_PROMPT_ONLY;
+}
+
+function normalizeUseLoraInputWidget(node) {
+    const widget = node?.widgets?.find((w) => w.name === "use_lora_input");
+    if (!widget) return LORA_MODE_PROMPT_ONLY;
+    const normalized = normalizeLoraInputModeValue(widget.value);
+    if (widget.value !== normalized) {
+        widget.value = normalized;
+    }
+    return normalized;
+}
+
+function shouldCombineLoras(node) {
+    return normalizeUseLoraInputWidget(node) === LORA_MODE_COMBINE;
+}
+
+function shouldUseInputOnlyLoras(node) {
+    return normalizeUseLoraInputWidget(node) === LORA_MODE_INPUT_ONLY;
+}
+
 /**
  * PromptManagerAdvanced Extension for ComfyUI
  * Extends prompt management with LoRA stack support and toggleable LoRA displays
@@ -150,23 +193,34 @@ app.registerExtension({
 
                 const node = this;
                 node._isWorkflowManager = isWorkflowManagerNode;
+                ensurePmaMultiOutputSocket(node);
                 enforceWorkflowManagerCompactMode(node);
+                normalizeUseLoraInputWidget(node);
                 node.prompts = {};
                 node.currentLorasA = [];
                 node.currentLorasB = [];
+                node.currentLorasC = [];
+                node.currentLorasD = [];
                 node.savedLorasA = [];
                 node.savedLorasB = [];
+                node.savedLorasC = [];
+                node.savedLorasD = [];
                 node.originalStrengthsA = {};  // Map of lora_name -> original_strength (from Python)
                 node.originalStrengthsB = {};  // Map of lora_name -> original_strength (from Python)
+                node.originalStrengthsC = {};
+                node.originalStrengthsD = {};
                 node.currentTriggerWords = [];  // From connected input
                 node.savedTriggerWords = [];    // From saved prompt
                 node.connectedThumbnail = null; // Thumbnail from connected image (set during execution)
+                node.hasMultiLoraInput = false;
 
                 // Track last saved state for unsaved changes detection
                 node.lastSavedState = {
                     text: "",
                     lorasA: "[]",
                     lorasB: "[]",
+                    lorasC: "[]",
+                    lorasD: "[]",
                     triggerWords: "[]"
                 };
 
@@ -229,9 +283,13 @@ app.registerExtension({
 
                         let newLorasA = event.detail.loras_a || [];
                         let newLorasB = event.detail.loras_b || [];
+                        let newLorasC = event.detail.loras_c || [];
+                        let newLorasD = event.detail.loras_d || [];
                         const newTriggerWords = event.detail.trigger_words || [];
                         const inputLorasA = event.detail.input_loras_a || [];
                         const inputLorasB = event.detail.input_loras_b || [];
+                        const inputLorasC = event.detail.input_loras_c || [];
+                        const inputLorasD = event.detail.input_loras_d || [];
                         const wfDataEvent = event.detail.workflow_data || null;
                         const useWorkflowEvent = event.detail.use_workflow_data === true;
                         const workflowInput = this.inputs?.find((inp) => inp.name === "recipe_data");
@@ -241,6 +299,8 @@ app.registerExtension({
                         if (shouldIngestWorkflowExecution) {
                             newLorasA = await applyLoraFoundState(newLorasA);
                             newLorasB = await applyLoraFoundState(newLorasB);
+                            newLorasC = await applyLoraFoundState(newLorasC);
+                            newLorasD = await applyLoraFoundState(newLorasD);
                         }
 
                         // Skip expensive state churn and canvas dirtying when payload is unchanged.
@@ -248,7 +308,7 @@ app.registerExtension({
                         const incomingSig = JSON.stringify({
                             use_prompt_input: event.detail.use_prompt_input === true,
                             use_workflow_data: shouldIngestWorkflowExecution,
-                            use_lora_input: (this.widgets?.find(w => w.name === "use_lora_input")?.value !== false),
+                            lora_input_mode: normalizeUseLoraInputWidget(this),
                             prompt_input: String(event.detail.prompt_input || ""),
                             workflow_prompt: getWorkflowPromptText(wfDataEvent || null),
                             connected_thumbnail_sig: (() => {
@@ -259,14 +319,22 @@ app.registerExtension({
                                 positive_prompt: getWorkflowPromptText(wfDataEvent),
                                 loras_a: getWorkflowLorasBySlot(wfDataEvent, "model_a").map(normalizeLoraForSig),
                                 loras_b: getWorkflowLorasBySlot(wfDataEvent, "model_b").map(normalizeLoraForSig),
+                                loras_c: getWorkflowLorasBySlot(wfDataEvent, "model_c").map(normalizeLoraForSig),
+                                loras_d: getWorkflowLorasBySlot(wfDataEvent, "model_d").map(normalizeLoraForSig),
                             }) : null,
                             loras_a_sig: normalizedLoraListSig(newLorasA),
                             loras_b_sig: normalizedLoraListSig(newLorasB),
+                            loras_c_sig: normalizedLoraListSig(newLorasC),
+                            loras_d_sig: normalizedLoraListSig(newLorasD),
                             input_loras_a_sig: normalizedLoraListSig(inputLorasA),
                             input_loras_b_sig: normalizedLoraListSig(inputLorasB),
+                            input_loras_c_sig: normalizedLoraListSig(inputLorasC),
+                            input_loras_d_sig: normalizedLoraListSig(inputLorasD),
                             trigger_words_sig: JSON.stringify(newTriggerWords || []),
                             unavailable_a_sig: JSON.stringify((event.detail.unavailable_loras_a || []).slice().sort()),
                             unavailable_b_sig: JSON.stringify((event.detail.unavailable_loras_b || []).slice().sort()),
+                            unavailable_c_sig: JSON.stringify((event.detail.unavailable_loras_c || []).slice().sort()),
+                            unavailable_d_sig: JSON.stringify((event.detail.unavailable_loras_d || []).slice().sort()),
                         });
 
                         if (this._lastExecutionUpdateSig === incomingSig) {
@@ -276,9 +344,13 @@ app.registerExtension({
 
                         const effectiveInputLorasA = shouldIngestWorkflowExecution ? newLorasA : inputLorasA;
                         const effectiveInputLorasB = shouldIngestWorkflowExecution ? newLorasB : inputLorasB;
+                        const effectiveInputLorasC = shouldIngestWorkflowExecution ? newLorasC : inputLorasC;
+                        const effectiveInputLorasD = shouldIngestWorkflowExecution ? newLorasD : inputLorasD;
                         // Explicit list of unavailable lora names from Python
                         const unavailableLorasA = new Set((event.detail.unavailable_loras_a || []).map(n => n.toLowerCase()));
                         const unavailableLorasB = new Set((event.detail.unavailable_loras_b || []).map(n => n.toLowerCase()));
+                        const unavailableLorasC = new Set((event.detail.unavailable_loras_c || []).map(n => n.toLowerCase()));
+                        const unavailableLorasD = new Set((event.detail.unavailable_loras_d || []).map(n => n.toLowerCase()));
                         
                         // Python decides if we should reset - JavaScript just obeys
                         let shouldReset = event.detail.should_reset || false;
@@ -286,31 +358,14 @@ app.registerExtension({
                         // CRITICAL: Verify JavaScript state matches Python's truth
                         // If what we're displaying doesn't match what Python sent, force a reset
                         if (!shouldReset) {
-                            // Check if use_lora_input is enabled to know what should be displayed
-                            const useLoraInputWidget = this.widgets?.find(w => w.name === "use_lora_input");
-                            const useLoraInput = useLoraInputWidget?.value !== false;
-                            const currentSigA = useLoraInput
-                                ? normalizedLoraListSig(mergeLoraLists(this.currentLorasA, this.savedLorasA))
-                                : normalizedLoraListSig(this.savedLorasA || []);
-                            const currentSigB = useLoraInput
-                                ? normalizedLoraListSig(mergeLoraLists(this.currentLorasB, this.savedLorasB))
-                                : normalizedLoraListSig(this.savedLorasB || []);
+                            const currentDisplaySigA = normalizedLoraListSig(getDisplayedLorasForStack(this, "a"));
+                            const currentDisplaySigB = normalizedLoraListSig(getDisplayedLorasForStack(this, "b"));
                             const pythonSigA = normalizedLoraListSig(newLorasA || []);
                             const pythonSigB = normalizedLoraListSig(newLorasB || []);
                             
                             // Get what JavaScript would currently display
-                            let currentDisplayA, currentDisplayB;
-                            if (!useLoraInput) {
-                                // Only saved loras
-                                currentDisplayA = (this.savedLorasA || []).map(l => l.name.toLowerCase()).sort();
-                                currentDisplayB = (this.savedLorasB || []).map(l => l.name.toLowerCase()).sort();
-                            } else {
-                                // Merge of current + saved
-                                const mergedA = mergeLoraLists(this.currentLorasA, this.savedLorasA);
-                                const mergedB = mergeLoraLists(this.currentLorasB, this.savedLorasB);
-                                currentDisplayA = mergedA.map(l => l.name.toLowerCase()).sort();
-                                currentDisplayB = mergedB.map(l => l.name.toLowerCase()).sort();
-                            }
+                            const currentDisplayA = getDisplayedLorasForStack(this, "a").map(l => l.name.toLowerCase()).sort();
+                            const currentDisplayB = getDisplayedLorasForStack(this, "b").map(l => l.name.toLowerCase()).sort();
                             
                             // Get what Python says should be displayed
                             const pythonLorasA = newLorasA.map(l => l.name.toLowerCase()).sort();
@@ -319,8 +374,8 @@ app.registerExtension({
                             // If they don't match, we're out of sync - force reset
                             const lorasOutOfSyncA = JSON.stringify(currentDisplayA) !== JSON.stringify(pythonLorasA);
                             const lorasOutOfSyncB = JSON.stringify(currentDisplayB) !== JSON.stringify(pythonLorasB);
-                            const lorasStateOutOfSyncA = currentSigA !== pythonSigA;
-                            const lorasStateOutOfSyncB = currentSigB !== pythonSigB;
+                            const lorasStateOutOfSyncA = currentDisplaySigA !== pythonSigA;
+                            const lorasStateOutOfSyncB = currentDisplaySigB !== pythonSigB;
                             
                             if (lorasOutOfSyncA || lorasOutOfSyncB || lorasStateOutOfSyncA || lorasStateOutOfSyncB) {
                                 console.log("[PromptManagerAdvanced] JavaScript state out of sync with Python - forcing reset");
@@ -335,6 +390,9 @@ app.registerExtension({
                         // Store original strengths from Python (for Reset Strength button)
                         this.originalStrengthsA = event.detail.original_strengths_a || {};
                         this.originalStrengthsB = event.detail.original_strengths_b || {};
+                        this.originalStrengthsC = event.detail.original_strengths_c || {};
+                        this.originalStrengthsD = event.detail.original_strengths_d || {};
+                        this.hasMultiLoraInput = event.detail.has_multi_lora_input === true;
 
                         // Store connected thumbnail for use when saving
                         this.connectedThumbnail = event.detail.connected_thumbnail || null;
@@ -348,7 +406,7 @@ app.registerExtension({
 
                         // Workflow mode: execution payload is authoritative (single ingest path).
                         if (shouldIngestWorkflowExecution) {
-                            syncWorkflowLorasForDisplay(this, wfDataEvent, newLorasA, newLorasB, { preserveUserState: false });
+                            syncWorkflowLorasForDisplay(this, wfDataEvent, newLorasA, newLorasB, newLorasC, newLorasD, { preserveUserState: false });
                             this.currentTriggerWords = [];
                             updateLoraDisplays(this);
                             updateTriggerWordsDisplay(this);
@@ -360,8 +418,12 @@ app.registerExtension({
                             // Clear ALL loras and trigger words - we'll reload fresh
                             this.currentLorasA = [];
                             this.currentLorasB = [];
+                            this.currentLorasC = [];
+                            this.currentLorasD = [];
                             this.savedLorasA = [];
                             this.savedLorasB = [];
+                            this.savedLorasC = [];
+                            this.savedLorasD = [];
                             this.currentTriggerWords = [];
                             this.savedTriggerWords = [];
 
@@ -369,17 +431,27 @@ app.registerExtension({
                             // These are updated immediately when the user toggles items.
                             this.savedLorasA = getSerializedSavedLoras(this, "a", unavailableLorasA);
                             this.savedLorasB = getSerializedSavedLoras(this, "b", unavailableLorasB);
+                            this.savedLorasC = getSerializedSavedLoras(this, "c", unavailableLorasC);
+                            this.savedLorasD = getSerializedSavedLoras(this, "d", unavailableLorasD);
                             this.savedTriggerWords = getSerializedSavedTriggerWords(this);
 
                             // Filter out saved LoRAs that came from input but are no longer in the input.
                             // This prevents LoRAs removed from connected stacker from lingering in saved state.
                             const inputLoraSetA = new Set(effectiveInputLorasA.map(l => l.name.toLowerCase()));
                             const inputLoraSetB = new Set(effectiveInputLorasB.map(l => l.name.toLowerCase()));
+                            const inputLoraSetC = new Set(effectiveInputLorasC.map(l => l.name.toLowerCase()));
+                            const inputLoraSetD = new Set(effectiveInputLorasD.map(l => l.name.toLowerCase()));
                             this.savedLorasA = this.savedLorasA.filter(lora => 
                                 !lora.fromInput || inputLoraSetA.has(lora.name.toLowerCase())
                             );
                             this.savedLorasB = this.savedLorasB.filter(lora => 
                                 !lora.fromInput || inputLoraSetB.has(lora.name.toLowerCase())
+                            );
+                            this.savedLorasC = this.savedLorasC.filter(lora => 
+                                !lora.fromInput || inputLoraSetC.has(lora.name.toLowerCase())
+                            );
+                            this.savedLorasD = this.savedLorasD.filter(lora => 
+                                !lora.fromInput || inputLoraSetD.has(lora.name.toLowerCase())
                             );
 
                             // Fall back to cached prompt data only when there is no serialized state.
@@ -387,6 +459,8 @@ app.registerExtension({
                             if (
                                 this.savedLorasA.length === 0 &&
                                 this.savedLorasB.length === 0 &&
+                                this.savedLorasC.length === 0 &&
+                                this.savedLorasD.length === 0 &&
                                 this.savedTriggerWords.length === 0 &&
                                 this.prompts &&
                                 categoryWidget &&
@@ -406,6 +480,18 @@ app.registerExtension({
                                         strength: lora.strength ?? lora.model_strength ?? 1.0,
                                         available: !unavailableLorasB.has(lora.name.toLowerCase())
                                     }));
+                                    this.savedLorasC = (promptData.loras_c || []).map(lora => ({
+                                        ...lora,
+                                        active: lora.active !== false,
+                                        strength: lora.strength ?? lora.model_strength ?? 1.0,
+                                        available: !unavailableLorasC.has(lora.name.toLowerCase())
+                                    }));
+                                    this.savedLorasD = (promptData.loras_d || []).map(lora => ({
+                                        ...lora,
+                                        active: lora.active !== false,
+                                        strength: lora.strength ?? lora.model_strength ?? 1.0,
+                                        available: !unavailableLorasD.has(lora.name.toLowerCase())
+                                    }));
                                     // Reload saved trigger words with their saved active states
                                     this.savedTriggerWords = (promptData.trigger_words || []).map(word => ({
                                         text: word.text,
@@ -418,6 +504,8 @@ app.registerExtension({
                             // Set current loras from input (these are the loras from connected nodes)
                             this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
                             this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                            this.currentLorasC = effectiveInputLorasC.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                            this.currentLorasD = effectiveInputLorasD.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
 
                             // Set current trigger words from connected input
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
@@ -430,22 +518,34 @@ app.registerExtension({
                             // No major change - just update current loras if they differ
                             const lorasAChanged = normalizedLoraListSig(effectiveInputLorasA) !== normalizedLoraListSig(this.currentLorasA || []);
                             const lorasBChanged = normalizedLoraListSig(effectiveInputLorasB) !== normalizedLoraListSig(this.currentLorasB || []);
+                            const lorasCChanged = normalizedLoraListSig(effectiveInputLorasC) !== normalizedLoraListSig(this.currentLorasC || []);
+                            const lorasDChanged = normalizedLoraListSig(effectiveInputLorasD) !== normalizedLoraListSig(this.currentLorasD || []);
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
 
-                            if (lorasAChanged || lorasBChanged || triggerWordsChanged) {
+                            if (lorasAChanged || lorasBChanged || lorasCChanged || lorasDChanged || triggerWordsChanged) {
                                 this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
                                 this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                                this.currentLorasC = effectiveInputLorasC.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
+                                this.currentLorasD = effectiveInputLorasD.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
                                 this.currentTriggerWords = newConnectedTriggers;
 
                                 // Filter out saved LoRAs that came from input but are no longer present
                                 const inputLoraSetA = new Set(inputLorasA.map(l => l.name.toLowerCase()));
                                 const inputLoraSetB = new Set(inputLorasB.map(l => l.name.toLowerCase()));
+                                const inputLoraSetC = new Set(inputLorasC.map(l => l.name.toLowerCase()));
+                                const inputLoraSetD = new Set(inputLorasD.map(l => l.name.toLowerCase()));
                                 this.savedLorasA = (this.savedLorasA || []).filter(lora => 
                                     !lora.fromInput || inputLoraSetA.has(lora.name.toLowerCase())
                                 );
                                 this.savedLorasB = (this.savedLorasB || []).filter(lora => 
                                     !lora.fromInput || inputLoraSetB.has(lora.name.toLowerCase())
+                                );
+                                this.savedLorasC = (this.savedLorasC || []).filter(lora => 
+                                    !lora.fromInput || inputLoraSetC.has(lora.name.toLowerCase())
+                                );
+                                this.savedLorasD = (this.savedLorasD || []).filter(lora => 
+                                    !lora.fromInput || inputLoraSetD.has(lora.name.toLowerCase())
                                 );
 
                                 updateLoraDisplays(this);
@@ -577,6 +677,8 @@ app.registerExtension({
 
                 const node = this;
                 enforceWorkflowManagerCompactMode(node);
+                ensurePmaMultiOutputSocket(node);
+                normalizeUseLoraInputWidget(node);
 
                 // Flag that this node is being restored from a workflow,
                 // so onNodeCreated's async loadPromptData won't overwrite state
@@ -591,9 +693,13 @@ app.registerExtension({
                     // Find the lora toggle widget indices and restore their values
                     const lorasAIndex = node.widgets?.findIndex(w => w.name === "loras_a_toggle");
                     const lorasBIndex = node.widgets?.findIndex(w => w.name === "loras_b_toggle");
+                    const lorasCIndex = node.widgets?.findIndex(w => w.name === "loras_c_toggle");
+                    const lorasDIndex = node.widgets?.findIndex(w => w.name === "loras_d_toggle");
                     const triggerWordsIndex = node.widgets?.findIndex(w => w.name === "trigger_words_toggle");
                     const currentLorasAIndex = node.widgets?.findIndex(w => w.name === "current_loras_a");
                     const currentLorasBIndex = node.widgets?.findIndex(w => w.name === "current_loras_b");
+                    const currentLorasCIndex = node.widgets?.findIndex(w => w.name === "current_loras_c");
+                    const currentLorasDIndex = node.widgets?.findIndex(w => w.name === "current_loras_d");
 
                     if (lorasAIndex >= 0 && info.widgets_values[lorasAIndex]) {
                         try {
@@ -607,6 +713,20 @@ app.registerExtension({
                             node.savedLorasB = JSON.parse(info.widgets_values[lorasBIndex]);
                         } catch (e) {
                             node.savedLorasB = [];
+                        }
+                    }
+                    if (lorasCIndex >= 0 && info.widgets_values[lorasCIndex]) {
+                        try {
+                            node.savedLorasC = JSON.parse(info.widgets_values[lorasCIndex]);
+                        } catch (e) {
+                            node.savedLorasC = [];
+                        }
+                    }
+                    if (lorasDIndex >= 0 && info.widgets_values[lorasDIndex]) {
+                        try {
+                            node.savedLorasD = JSON.parse(info.widgets_values[lorasDIndex]);
+                        } catch (e) {
+                            node.savedLorasD = [];
                         }
                     }
                     if (triggerWordsIndex >= 0 && info.widgets_values[triggerWordsIndex]) {
@@ -633,10 +753,26 @@ app.registerExtension({
                                 node.currentLorasB = [];
                             }
                         }
+                        if (currentLorasCIndex >= 0 && info.widgets_values[currentLorasCIndex]) {
+                            try {
+                                node.currentLorasC = JSON.parse(info.widgets_values[currentLorasCIndex]);
+                            } catch (e) {
+                                node.currentLorasC = [];
+                            }
+                        }
+                        if (currentLorasDIndex >= 0 && info.widgets_values[currentLorasDIndex]) {
+                            try {
+                                node.currentLorasD = JSON.parse(info.widgets_values[currentLorasDIndex]);
+                            } catch (e) {
+                                node.currentLorasD = [];
+                            }
+                        }
                     } else {
                         // Fresh load - clear current loras and reset tracking
                         node.currentLorasA = [];
                         node.currentLorasB = [];
+                        node.currentLorasC = [];
+                        node.currentLorasD = [];
                         node.lastKnownPromptKey = "";
                         node.lastKnownInputLorasA = "";
                         node.lastKnownInputLorasB = "";
@@ -728,6 +864,41 @@ app.registerExtension({
     }
 });
 
+function ensurePmaMultiOutputSocket(node) {
+    if (!node || node._isWorkflowManager) return;
+
+    if (!Array.isArray(node.outputs)) {
+        node.outputs = [];
+    }
+
+    const matches = node.outputs
+        .map((out, idx) => ({ out, idx }))
+        .filter((x) => String(x.out?.name || "") === "multi_lora_stack");
+
+    if (matches.length === 0) {
+        // Legacy serialized PMA nodes may keep old output list (without multi output).
+        // Add the new output explicitly so users don't have to recreate the node.
+        if (typeof node.addOutput === "function") {
+            node.addOutput("multi_lora_stack", "MULTI_LORA_STACK");
+        } else {
+            node.outputs.push({ name: "multi_lora_stack", type: "MULTI_LORA_STACK", links: [] });
+        }
+        return;
+    }
+
+    // Keep one canonical socket and ensure type correctness.
+    const keep = matches[0].idx;
+    node.outputs[keep].type = "MULTI_LORA_STACK";
+    for (let i = matches.length - 1; i >= 1; i--) {
+        const removeIdx = matches[i].idx;
+        if (typeof node.removeOutput === "function") {
+            node.removeOutput(removeIdx);
+        } else {
+            node.outputs.splice(removeIdx, 1);
+        }
+    }
+}
+
 // ========================
 // Data Loading Functions
 // ========================
@@ -753,8 +924,12 @@ async function recheckLoraAvailability(node) {
     const allLoras = [
         ...(node.savedLorasA || []),
         ...(node.savedLorasB || []),
+        ...(node.savedLorasC || []),
+        ...(node.savedLorasD || []),
         ...(node.currentLorasA || []),
-        ...(node.currentLorasB || [])
+        ...(node.currentLorasB || []),
+        ...(node.currentLorasC || []),
+        ...(node.currentLorasD || [])
     ];
     const allNames = [...new Set(allLoras.map(l => l.name).filter(Boolean))];
     if (allNames.length === 0) return;
@@ -778,8 +953,12 @@ async function recheckLoraAvailability(node) {
             };
             updateList(node.savedLorasA);
             updateList(node.savedLorasB);
+            updateList(node.savedLorasC);
+            updateList(node.savedLorasD);
             updateList(node.currentLorasA);
             updateList(node.currentLorasB);
+            updateList(node.currentLorasC);
+            updateList(node.currentLorasD);
         }
     } catch (error) {
         console.error("[PromptManagerAdvanced] Error re-checking LoRA availability:", error);
@@ -805,7 +984,13 @@ function parseSerializedWidgetValue(widget, fallback = []) {
 }
 
 function getSerializedSavedLoras(node, stackId, unavailableLoras = new Set()) {
-    const widget = stackId === "a" ? node.lorasAToggleWidget : node.lorasBToggleWidget;
+    const widgetByStack = {
+        a: node.lorasAToggleWidget,
+        b: node.lorasBToggleWidget,
+        c: node.lorasCToggleWidget,
+        d: node.lorasDToggleWidget,
+    };
+    const widget = widgetByStack[stackId] || null;
     return parseSerializedWidgetValue(widget, []).map(lora => ({
         ...lora,
         active: lora.active !== false,
@@ -1020,7 +1205,9 @@ function hasPromptPresetPayload(promptData) {
     const negativeText = String(promptData.negative_prompt || "").trim();
     const hasLorasA = Array.isArray(promptData.loras_a) && promptData.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
     const hasLorasB = Array.isArray(promptData.loras_b) && promptData.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
-    return promptText.length > 0 || negativeText.length > 0 || hasLorasA || hasLorasB;
+    const hasLorasC = Array.isArray(promptData.loras_c) && promptData.loras_c.some((lora) => String(lora?.name || "").trim().length > 0);
+    const hasLorasD = Array.isArray(promptData.loras_d) && promptData.loras_d.some((lora) => String(lora?.name || "").trim().length > 0);
+    return promptText.length > 0 || negativeText.length > 0 || hasLorasA || hasLorasB || hasLorasC || hasLorasD;
 }
 
 function hasMeaningfulWorkflowData(rawWorkflowData) {
@@ -1072,8 +1259,10 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
     const modelB = String(wf.model_b || "").trim();
     const hasLorasA = Array.isArray(wf.loras_a) && wf.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
     const hasLorasB = Array.isArray(wf.loras_b) && wf.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
+    const hasLorasC = Array.isArray(wf.loras_c) && wf.loras_c.some((lora) => String(lora?.name || "").trim().length > 0);
+    const hasLorasD = Array.isArray(wf.loras_d) && wf.loras_d.some((lora) => String(lora?.name || "").trim().length > 0);
 
-    return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB || hasSubstantiveRootField;
+    return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB || hasLorasC || hasLorasD || hasSubstantiveRootField;
 }
 
 function hasConnectedWorkflowInput(node) {
@@ -1860,77 +2049,129 @@ function attachWorkflowCornerInfoHandlers(node) {
 // LoRA Display Functions
 // ========================
 
+function getSavedLorasByStack(node, stackId) {
+    if (stackId === "a") return node.savedLorasA || [];
+    if (stackId === "b") return node.savedLorasB || [];
+    if (stackId === "c") return node.savedLorasC || [];
+    if (stackId === "d") return node.savedLorasD || [];
+    return [];
+}
+
+function getCurrentLorasByStack(node, stackId) {
+    if (stackId === "a") return node.currentLorasA || [];
+    if (stackId === "b") return node.currentLorasB || [];
+    if (stackId === "c") return node.currentLorasC || [];
+    if (stackId === "d") return node.currentLorasD || [];
+    return [];
+}
+
+function setSavedLorasByStack(node, stackId, list) {
+    if (stackId === "a") node.savedLorasA = list;
+    else if (stackId === "b") node.savedLorasB = list;
+    else if (stackId === "c") node.savedLorasC = list;
+    else if (stackId === "d") node.savedLorasD = list;
+}
+
+function setCurrentLorasByStack(node, stackId, list) {
+    if (stackId === "a") node.currentLorasA = list;
+    else if (stackId === "b") node.currentLorasB = list;
+    else if (stackId === "c") node.currentLorasC = list;
+    else if (stackId === "d") node.currentLorasD = list;
+}
+
+function getDisplayedLorasForStack(node, stackId) {
+    if (shouldUseInputOnlyLoras(node)) {
+        return getCurrentLorasByStack(node, stackId).map((l) => ({ ...l, source: "current" }));
+    }
+    if (!shouldCombineLoras(node)) {
+        return getSavedLorasByStack(node, stackId).map((l) => ({ ...l, source: "saved" }));
+    }
+    return applyPreferredOrder(
+        mergeLoraLists(getCurrentLorasByStack(node, stackId), getSavedLorasByStack(node, stackId)),
+        getPreferredLoraOrder(node, stackId)
+    );
+}
+
+function persistDisplayedLorasForStack(node, stackId, loraList) {
+    if (shouldUseInputOnlyLoras(node)) {
+        setCurrentLorasByStack(node, stackId, loraList);
+        return;
+    }
+    if (!shouldCombineLoras(node)) {
+        setSavedLorasByStack(node, stackId, loraList);
+        return;
+    }
+    updateLoraListFromMerged(node, stackId, loraList);
+}
+
+function getPreferredLoraOrder(node, stackId) {
+    if (!node.properties) return null;
+    if (stackId === "a") return node.properties.preferredLoraOrderA;
+    if (stackId === "b") return node.properties.preferredLoraOrderB;
+    if (stackId === "c") return node.properties.preferredLoraOrderC;
+    if (stackId === "d") return node.properties.preferredLoraOrderD;
+    return null;
+}
+
+function setPreferredLoraOrder(node, stackId, orderNames) {
+    if (!node.properties) node.properties = {};
+    if (stackId === "a") node.properties.preferredLoraOrderA = orderNames;
+    else if (stackId === "b") node.properties.preferredLoraOrderB = orderNames;
+    else if (stackId === "c") node.properties.preferredLoraOrderC = orderNames;
+    else if (stackId === "d") node.properties.preferredLoraOrderD = orderNames;
+}
+
+function shouldShowExtraLoraStacks(node) {
+    const hasSaved = (node.savedLorasC || []).length > 0 || (node.savedLorasD || []).length > 0;
+    const hasCurrent = (node.currentLorasC || []).length > 0 || (node.currentLorasD || []).length > 0;
+    return node.hasMultiLoraInput === true || hasSaved || hasCurrent;
+}
+
 function addLoraDisplays(node) {
     if (node.loraDisplaysAttached) {
         return;
     }
 
-    // Create LoRA A display section
-    const loraAContainer = createLoraDisplayContainer("LoRAs Stack A", "a", node);
-    const loraAWidget = node.addDOMWidget("loras_a_display", "div", loraAContainer, {
-        hideOnZoom: true,
-        serialize: false
-    });
-    loraAWidget.computeSize = function(width) {
-        // Check if use_lora_input is disabled (use only saved loras)
-        const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-        const useLoraInput = useLoraInputWidget?.value !== false;
+    const stacks = [
+        { id: "a", title: "LoRAs Stack A", domName: "loras_a_display" },
+        { id: "b", title: "LoRAs Stack B", domName: "loras_b_display" },
+        { id: "c", title: "LoRAs Stack C", domName: "loras_c_display" },
+        { id: "d", title: "LoRAs Stack D", domName: "loras_d_display" },
+    ];
 
-        // Count loras based on mode
-        let tagCount;
-        if (!useLoraInput) {
-            // use_lora_input OFF: only saved loras
-            tagCount = (node.savedLorasA || []).length;
-        } else {
-            // use_lora_input ON: unique loras from merged list
-            const seen = new Set();
-            (node.currentLorasA || []).forEach(l => seen.add(l.name));
-            (node.savedLorasA || []).forEach(l => seen.add(l.name));
-            tagCount = seen.size;
+    for (const stack of stacks) {
+        const container = createLoraDisplayContainer(stack.title, stack.id, node);
+        const widget = node.addDOMWidget(stack.domName, "div", container, {
+            hideOnZoom: true,
+            serialize: false,
+        });
+        widget.computeSize = function(width) {
+            if ((stack.id === "c" || stack.id === "d") && !shouldShowExtraLoraStacks(node)) {
+                return [width, -4];
+            }
+            const tagCount = getDisplayedLorasForStack(node, stack.id).length;
+
+            const actualWidth = node.size?.[0] || width || 400;
+            const tagsPerRow = Math.max(1, Math.floor((actualWidth - 32) / 204));
+            const rows = Math.max(1, Math.ceil(tagCount / tagsPerRow));
+            const height = 58 + rows * 28;
+            return [width, height];
+        };
+
+        if (stack.id === "a") {
+            node.loraAWidget = widget;
+            node.loraAContainer = container;
+        } else if (stack.id === "b") {
+            node.loraBWidget = widget;
+            node.loraBContainer = container;
+        } else if (stack.id === "c") {
+            node.loraCWidget = widget;
+            node.loraCContainer = container;
+        } else if (stack.id === "d") {
+            node.loraDWidget = widget;
+            node.loraDContainer = container;
         }
-
-        // Use node's actual width, not the passed width which may be stale
-        // Subtract ~32px for container padding (8px) + widget margins (~24px)
-        const actualWidth = node.size?.[0] || width || 400;
-        const tagsPerRow = Math.max(1, Math.floor((actualWidth - 32) / 204));
-        const rows = Math.max(1, Math.ceil(tagCount / tagsPerRow));
-        const height = 58 + rows * 28;
-        return [width, height];
-    };
-    node.loraAWidget = loraAWidget;
-    node.loraAContainer = loraAContainer;
-
-    // Create LoRA B display section
-    const loraBContainer = createLoraDisplayContainer("LoRAs Stack B", "b", node);
-    const loraBWidget = node.addDOMWidget("loras_b_display", "div", loraBContainer);
-    loraBWidget.computeSize = function(width) {
-        // Check if use_lora_input is disabled
-        const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-        const useLoraInput = useLoraInputWidget?.value !== false;
-
-        // Count loras based on mode
-        let tagCount;
-        if (!useLoraInput) {
-            // use_lora_input OFF: only saved loras
-            tagCount = (node.savedLorasB || []).length;
-        } else {
-            // use_lora_input ON: unique loras from merged list
-            const seen = new Set();
-            (node.currentLorasB || []).forEach(l => seen.add(l.name));
-            (node.savedLorasB || []).forEach(l => seen.add(l.name));
-            tagCount = seen.size;
-        }
-
-        // Use node's actual width, not the passed width which may be stale
-        // Subtract ~32px for container padding (8px) + widget margins (~24px)
-        const actualWidth = node.size?.[0] || width || 400;
-        const tagsPerRow = Math.max(1, Math.floor((actualWidth - 32) / 204));
-        const rows = Math.max(1, Math.ceil(tagCount / tagsPerRow));
-        const height = 58 + rows * 28;
-        return [width, height];
-    };
-    node.loraBWidget = loraBWidget;
-    node.loraBContainer = loraBContainer;
+    }
 
     // Add hidden widgets to store toggle states for serialization
     const lorasAToggleWidget = node.addWidget('text', 'loras_a_toggle', '[]');
@@ -1945,6 +2186,18 @@ function addLoraDisplays(node) {
     lorasBToggleWidget.computeSize = () => [0, -4];
     node.lorasBToggleWidget = lorasBToggleWidget;
 
+    const lorasCToggleWidget = node.addWidget('text', 'loras_c_toggle', '[]');
+    lorasCToggleWidget.type = "converted-widget";
+    lorasCToggleWidget.hidden = true;
+    lorasCToggleWidget.computeSize = () => [0, -4];
+    node.lorasCToggleWidget = lorasCToggleWidget;
+
+    const lorasDToggleWidget = node.addWidget('text', 'loras_d_toggle', '[]');
+    lorasDToggleWidget.type = "converted-widget";
+    lorasDToggleWidget.hidden = true;
+    lorasDToggleWidget.computeSize = () => [0, -4];
+    node.lorasDToggleWidget = lorasDToggleWidget;
+
     // Add hidden widgets to store current (connected) loras for tab-switch persistence
     const currentLorasAWidget = node.addWidget('text', 'current_loras_a', '[]');
     currentLorasAWidget.type = "converted-widget";
@@ -1957,6 +2210,18 @@ function addLoraDisplays(node) {
     currentLorasBWidget.hidden = true;
     currentLorasBWidget.computeSize = () => [0, -4];
     node.currentLorasBWidget = currentLorasBWidget;
+
+    const currentLorasCWidget = node.addWidget('text', 'current_loras_c', '[]');
+    currentLorasCWidget.type = "converted-widget";
+    currentLorasCWidget.hidden = true;
+    currentLorasCWidget.computeSize = () => [0, -4];
+    node.currentLorasCWidget = currentLorasCWidget;
+
+    const currentLorasDWidget = node.addWidget('text', 'current_loras_d', '[]');
+    currentLorasDWidget.type = "converted-widget";
+    currentLorasDWidget.hidden = true;
+    currentLorasDWidget.computeSize = () => [0, -4];
+    node.currentLorasDWidget = currentLorasDWidget;
 
     node.loraDisplaysAttached = true;
 }
@@ -2061,38 +2326,30 @@ function createLoraDisplayContainer(title, stackId, node) {
 function updateLoraDisplays(node) {
     if (!node.loraAContainer || !node.loraBContainer) return;
 
-    // Check if use_lora_input is disabled
-    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
-
-    let lorasA, lorasB;
-    if (!useLoraInput) {
-        // use_lora_input OFF: Only show saved loras from the prompt
-        lorasA = (node.savedLorasA || []).map(l => ({ ...l, source: 'saved' }));
-        lorasB = (node.savedLorasB || []).map(l => ({ ...l, source: 'saved' }));
-    } else {
-        // Override OFF: Merge current (from input) and saved (from prompt) loras
-        lorasA = applyPreferredOrder(
-            mergeLoraLists(node.currentLorasA, node.savedLorasA),
-            node.properties?.preferredLoraOrderA
-        );
-        lorasB = applyPreferredOrder(
-            mergeLoraLists(node.currentLorasB, node.savedLorasB),
-            node.properties?.preferredLoraOrderB
-        );
+    const displayBySlot = {};
+    for (const slot of ["a", "b", "c", "d"]) {
+        displayBySlot[slot] = getDisplayedLorasForStack(node, slot);
     }
 
-    // Update display A
     const tagsContainerA = node.loraAContainer.querySelector(".lora-tags-container");
-    if (tagsContainerA) {
-        renderLoraTags(tagsContainerA, lorasA, "a", node);
+    if (tagsContainerA) renderLoraTags(tagsContainerA, displayBySlot.a, "a", node);
+
+    const tagsContainerB = node.loraBContainer.querySelector(".lora-tags-container");
+    if (tagsContainerB) renderLoraTags(tagsContainerB, displayBySlot.b, "b", node);
+
+    const showExtra = shouldShowExtraLoraStacks(node);
+    if (node.loraCContainer) {
+        node.loraCContainer.style.display = showExtra ? "flex" : "none";
+    }
+    if (node.loraDContainer) {
+        node.loraDContainer.style.display = showExtra ? "flex" : "none";
     }
 
-    // Update display B
-    const tagsContainerB = node.loraBContainer.querySelector(".lora-tags-container");
-    if (tagsContainerB) {
-        renderLoraTags(tagsContainerB, lorasB, "b", node);
-    }
+    const tagsContainerC = node.loraCContainer?.querySelector(".lora-tags-container");
+    if (tagsContainerC) renderLoraTags(tagsContainerC, displayBySlot.c, "c", node);
+
+    const tagsContainerD = node.loraDContainer?.querySelector(".lora-tags-container");
+    if (tagsContainerD) renderLoraTags(tagsContainerD, displayBySlot.d, "d", node);
 
     // Update hidden widgets for serialization
     updateToggleWidgets(node);
@@ -2419,21 +2676,7 @@ function createLoraTag(lora, index, stackId, node) {
 }
 
 function toggleLoraActive(node, stackId, index) {
-    // Check if use_lora_input is disabled
-    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
-
-    // Get the list that matches what's currently displayed
-    let loraList;
-    if (!useLoraInput) {
-        // use_lora_input OFF: only saved loras are displayed
-        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
-    } else {
-        // use_lora_input ON: merged list is displayed
-        loraList = stackId === "a" ?
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
-            mergeLoraLists(node.currentLorasB, node.savedLorasB);
-    }
+    const loraList = getDisplayedLorasForStack(node, stackId);
 
     if (loraList[index]) {
         const lora = loraList[index];
@@ -2443,26 +2686,12 @@ function toggleLoraActive(node, stackId, index) {
 
         // If this was a connected lora (source: 'current'), move it to saved
         // so that the toggle state persists across workflow executions
-        if (lora.source === 'current') {
+        if (lora.source === 'current' && shouldCombineLoras(node)) {
             loraList[index].source = 'saved';
             loraList[index].fromInput = true;  // Preserve visual indicator that it came from input
         }
 
-        // Update the appropriate list
-        if (!useLoraInput) {
-            // Only update saved loras when use_lora_input is off
-            if (stackId === "a") {
-                node.savedLorasA = loraList;
-            } else {
-                node.savedLorasB = loraList;
-            }
-        } else {
-            if (stackId === "a") {
-                updateLoraListFromMerged(node, "a", loraList);
-            } else {
-                updateLoraListFromMerged(node, "b", loraList);
-            }
-        }
+        persistDisplayedLorasForStack(node, stackId, loraList);
 
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
@@ -2561,45 +2790,22 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
 }
 
 function removeLora(node, stackId, index) {
-    // Check if use_lora_input is disabled
-    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
-
-    // Get the list that matches what's currently displayed
-    let loraList;
-    if (!useLoraInput) {
-        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
-    } else {
-        loraList = stackId === "a" ?
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
-            mergeLoraLists(node.currentLorasB, node.savedLorasB);
-    }
+    const loraList = getDisplayedLorasForStack(node, stackId);
 
     if (loraList[index]) {
         const lora = loraList[index];
         const loraNameLower = lora.name.toLowerCase();
 
-        // Remove from saved loras
-        if (stackId === "a") {
-            node.savedLorasA = (node.savedLorasA || []).filter(
-                l => l.name.toLowerCase() !== loraNameLower
-            );
-        } else {
-            node.savedLorasB = (node.savedLorasB || []).filter(
-                l => l.name.toLowerCase() !== loraNameLower
-            );
-        }
-
-        // Also remove from current loras if present
-        if (stackId === "a") {
-            node.currentLorasA = (node.currentLorasA || []).filter(
-                l => l.name.toLowerCase() !== loraNameLower
-            );
-        } else {
-            node.currentLorasB = (node.currentLorasB || []).filter(
-                l => l.name.toLowerCase() !== loraNameLower
-            );
-        }
+        setSavedLorasByStack(
+            node,
+            stackId,
+            getSavedLorasByStack(node, stackId).filter(l => l.name.toLowerCase() !== loraNameLower)
+        );
+        setCurrentLorasByStack(
+            node,
+            stackId,
+            getCurrentLorasByStack(node, stackId).filter(l => l.name.toLowerCase() !== loraNameLower)
+        );
 
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
@@ -2607,20 +2813,10 @@ function removeLora(node, stackId, index) {
 }
 
 function moveLora(node, stackId, index, delta) {
-    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
+    const useLoraInput = shouldCombineLoras(node);
+    const useInputOnly = shouldUseInputOnlyLoras(node);
 
-    let loraList;
-    if (!useLoraInput) {
-        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
-    } else {
-        loraList = applyPreferredOrder(
-            stackId === "a"
-                ? mergeLoraLists(node.currentLorasA, node.savedLorasA)
-                : mergeLoraLists(node.currentLorasB, node.savedLorasB),
-            stackId === "a" ? node.properties?.preferredLoraOrderA : node.properties?.preferredLoraOrderB
-        );
-    }
+    const loraList = getDisplayedLorasForStack(node, stackId);
 
     if (!Array.isArray(loraList) || loraList.length === 0) {
         return;
@@ -2634,22 +2830,13 @@ function moveLora(node, stackId, index, delta) {
 
     loraList.splice(to, 0, loraList.splice(from, 1)[0]);
 
-    if (!useLoraInput) {
-        // When lora input is disabled, directly update savedLoras order
-        if (stackId === "a") {
-            node.savedLorasA = loraList;
-        } else {
-            node.savedLorasB = loraList;
-        }
+    if (useInputOnly) {
+        setCurrentLorasByStack(node, stackId, loraList);
+    } else if (!useLoraInput) {
+        setSavedLorasByStack(node, stackId, loraList);
     } else {
-        // Store preferred order as names — does NOT change source/color
-        if (!node.properties) node.properties = {};
         const orderNames = loraList.map(l => l.name);
-        if (stackId === "a") {
-            node.properties.preferredLoraOrderA = orderNames;
-        } else {
-            node.properties.preferredLoraOrderB = orderNames;
-        }
+        setPreferredLoraOrder(node, stackId, orderNames);
     }
 
     updateLoraDisplays(node);
@@ -2660,43 +2847,16 @@ function moveLora(node, stackId, index, delta) {
  * Set LoRA strength to a specific value
  */
 function setLoraStrength(node, stackId, index, newStrength) {
-    // Check if use_lora_input is disabled
-    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
-
-    // Get the list that matches what's currently displayed
-    let loraList;
-    if (!useLoraInput) {
-        // use_lora_input OFF: only saved loras are displayed
-        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
-    } else {
-        // use_lora_input ON: merged list is displayed
-        loraList = stackId === "a" ?
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
-            mergeLoraLists(node.currentLorasB, node.savedLorasB);
-    }
+    const loraList = getDisplayedLorasForStack(node, stackId);
 
     if (loraList[index]) {
         loraList[index].strength = newStrength;
         // Move to saved so the strength persists (connected loras need to become saved to persist changes)
-        if (loraList[index].source === 'current') {
+        if (loraList[index].source === 'current' && shouldCombineLoras(node)) {
             loraList[index].source = 'saved';
         }
 
-        if (!useLoraInput) {
-            // Only update saved loras when use_lora_input is off
-            if (stackId === "a") {
-                node.savedLorasA = loraList;
-            } else {
-                node.savedLorasB = loraList;
-            }
-        } else {
-            if (stackId === "a") {
-                updateLoraListFromMerged(node, "a", loraList);
-            } else {
-                updateLoraListFromMerged(node, "b", loraList);
-            }
-        }
+        persistDisplayedLorasForStack(node, stackId, loraList);
 
         updateLoraDisplays(node);
         app.graph.setDirtyCanvas(true, true);
@@ -2704,21 +2864,7 @@ function setLoraStrength(node, stackId, index, newStrength) {
 }
 
 function toggleAllLoras(node, stackId) {
-    // Check if use_lora_input is disabled
-    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
-
-    // Get the list that matches what's currently displayed
-    let loraList;
-    if (!useLoraInput) {
-        // use_lora_input OFF: only saved loras are displayed
-        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
-    } else {
-        // use_lora_input ON: merged list is displayed
-        loraList = stackId === "a" ?
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
-            mergeLoraLists(node.currentLorasB, node.savedLorasB);
-    }
+    const loraList = getDisplayedLorasForStack(node, stackId);
 
     // Determine if we should turn all on or all off
     const allActive = loraList.every(lora => lora.active !== false);
@@ -2727,47 +2873,26 @@ function toggleAllLoras(node, stackId) {
     loraList.forEach(lora => {
         lora.active = newState;
         // Move connected loras to saved so toggle state persists
-        if (lora.source === 'current') {
+        if (lora.source === 'current' && shouldCombineLoras(node)) {
             lora.source = 'saved';
         }
     });
 
-    if (!useLoraInput) {
-        // Only update saved loras when use_lora_input is off
-        if (stackId === "a") {
-            node.savedLorasA = loraList;
-        } else {
-            node.savedLorasB = loraList;
-        }
-    } else {
-        if (stackId === "a") {
-            updateLoraListFromMerged(node, "a", loraList);
-        } else {
-            updateLoraListFromMerged(node, "b", loraList);
-        }
-    }
+    persistDisplayedLorasForStack(node, stackId, loraList);
 
     updateLoraDisplays(node);
     app.graph.setDirtyCanvas(true, true);
 }
 
 function resetLoraStrengths(node, stackId) {
-    // Reset all lora strengths to their original values (from Python)
-    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
-
     // Get original strengths from Python (simple map of name -> strength)
-    const originalStrengths = stackId === "a" ? (node.originalStrengthsA || {}) : (node.originalStrengthsB || {});
+    const originalStrengths =
+        stackId === "a" ? (node.originalStrengthsA || {}) :
+        stackId === "b" ? (node.originalStrengthsB || {}) :
+        stackId === "c" ? (node.originalStrengthsC || {}) :
+        (node.originalStrengthsD || {});
 
-    // Get the list that matches what's currently displayed
-    let loraList;
-    if (!useLoraInput) {
-        loraList = stackId === "a" ? [...(node.savedLorasA || [])] : [...(node.savedLorasB || [])];
-    } else {
-        loraList = stackId === "a" ?
-            mergeLoraLists(node.currentLorasA, node.savedLorasA) :
-            mergeLoraLists(node.currentLorasB, node.savedLorasB);
-    }
+    const loraList = getDisplayedLorasForStack(node, stackId);
 
     // Reset strengths to original values
     loraList.forEach(lora => {
@@ -2777,20 +2902,7 @@ function resetLoraStrengths(node, stackId) {
         }
     });
 
-    // Update the lists
-    if (!useLoraInput) {
-        if (stackId === "a") {
-            node.savedLorasA = loraList;
-        } else {
-            node.savedLorasB = loraList;
-        }
-    } else {
-        if (stackId === "a") {
-            updateLoraListFromMerged(node, "a", loraList);
-        } else {
-            updateLoraListFromMerged(node, "b", loraList);
-        }
-    }
+    persistDisplayedLorasForStack(node, stackId, loraList);
 
     updateLoraDisplays(node);
     app.graph.setDirtyCanvas(true, true);
@@ -2809,13 +2921,8 @@ function updateLoraListFromMerged(node, stackId, mergedList) {
         }
     });
 
-    if (stackId === "a") {
-        node.currentLorasA = currentLoras;
-        node.savedLorasA = savedLoras;
-    } else {
-        node.currentLorasB = currentLoras;
-        node.savedLorasB = savedLoras;
-    }
+    setCurrentLorasByStack(node, stackId, currentLoras);
+    setSavedLorasByStack(node, stackId, savedLoras);
 }
 
 function updateToggleWidgets(node) {
@@ -2834,12 +2941,20 @@ function updateToggleWidgets(node) {
     // Only serialize saved loras (not current/connected ones)
     const lorasA = node.savedLorasA || [];
     const lorasB = node.savedLorasB || [];
+    const lorasC = node.savedLorasC || [];
+    const lorasD = node.savedLorasD || [];
 
     if (node.lorasAToggleWidget) {
         node.lorasAToggleWidget.value = JSON.stringify(formatForBackend(lorasA));
     }
     if (node.lorasBToggleWidget) {
         node.lorasBToggleWidget.value = JSON.stringify(formatForBackend(lorasB));
+    }
+    if (node.lorasCToggleWidget) {
+        node.lorasCToggleWidget.value = JSON.stringify(formatForBackend(lorasC));
+    }
+    if (node.lorasDToggleWidget) {
+        node.lorasDToggleWidget.value = JSON.stringify(formatForBackend(lorasD));
     }
 
     // Store current loras for tab-switch persistence
@@ -2848,6 +2963,12 @@ function updateToggleWidgets(node) {
     }
     if (node.currentLorasBWidget) {
         node.currentLorasBWidget.value = JSON.stringify(node.currentLorasB || []);
+    }
+    if (node.currentLorasCWidget) {
+        node.currentLorasCWidget.value = JSON.stringify(node.currentLorasC || []);
+    }
+    if (node.currentLorasDWidget) {
+        node.currentLorasDWidget.value = JSON.stringify(node.currentLorasD || []);
     }
 
     // Format and store trigger words
@@ -3465,14 +3586,23 @@ function addButtonBar(node) {
                     // so it already reflects only what actually ran.
                     const connectedLorasA = node.currentLorasA || [];
                     const connectedLorasB = node.currentLorasB || [];
+                    const connectedLorasC = node.currentLorasC || [];
+                    const connectedLorasD = node.currentLorasD || [];
 
-                    const useLoraInputWidget = node.widgets?.find(w => w.name === "use_lora_input");
-                    const useLoraInput = useLoraInputWidget?.value !== false;
+                    const useLoraInput = shouldCombineLoras(node);
+                    const useInputOnlyLoras = shouldUseInputOnlyLoras(node);
 
-                    let allLorasA, allLorasB;
-                    if (!useLoraInput) {
+                    let allLorasA, allLorasB, allLorasC, allLorasD;
+                    if (useInputOnlyLoras) {
+                        allLorasA = [...connectedLorasA.map(l => ({ ...l, source: "current", fromInput: true }))];
+                        allLorasB = [...connectedLorasB.map(l => ({ ...l, source: "current", fromInput: true }))];
+                        allLorasC = [...connectedLorasC.map(l => ({ ...l, source: "current", fromInput: true }))];
+                        allLorasD = [...connectedLorasD.map(l => ({ ...l, source: "current", fromInput: true }))];
+                    } else if (!useLoraInput) {
                         allLorasA = [...(node.savedLorasA || [])];
                         allLorasB = [...(node.savedLorasB || [])];
+                        allLorasC = [...(node.savedLorasC || [])];
+                        allLorasD = [...(node.savedLorasD || [])];
                     } else {
                         const mergedA = mergeLoraLists(
                             connectedLorasA.map(l => ({ ...l, source: "current" })),
@@ -3482,8 +3612,18 @@ function addButtonBar(node) {
                             connectedLorasB.map(l => ({ ...l, source: "current" })),
                             node.savedLorasB || []
                         );
+                        const mergedC = mergeLoraLists(
+                            connectedLorasC.map(l => ({ ...l, source: "current" })),
+                            node.savedLorasC || []
+                        );
+                        const mergedD = mergeLoraLists(
+                            connectedLorasD.map(l => ({ ...l, source: "current" })),
+                            node.savedLorasD || []
+                        );
                         allLorasA = [...mergedA];
                         allLorasB = [...mergedB];
+                        allLorasC = [...mergedC];
+                        allLorasD = [...mergedD];
                     }
 
                     const allTriggerWords = mergeTriggerWordLists(
@@ -3505,7 +3645,7 @@ function addButtonBar(node) {
                         }
                     }
 
-                    await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allTriggerWords, thumbnail, preservedNsfw);
+                    await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allLorasC, allLorasD, allTriggerWords, thumbnail, preservedNsfw);
 
                     const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
                     if (useWorkflowWidget?.value === true) {
@@ -3521,8 +3661,12 @@ function addButtonBar(node) {
                             text: promptText || "",
                             savedLorasA: clone(allLorasA, []),
                             savedLorasB: clone(allLorasB, []),
+                            savedLorasC: clone(allLorasC, []),
+                            savedLorasD: clone(allLorasD, []),
                             currentLorasA: [],
                             currentLorasB: [],
+                            currentLorasC: [],
+                            currentLorasD: [],
                             savedTriggerWords: clone(allTriggerWords, []),
                             currentTriggerWords: [],
                             lastWorkflowData: clone(node.lastWorkflowData, null),
@@ -3546,6 +3690,8 @@ function addButtonBar(node) {
 
                     node.savedLorasA = allLorasA;
                     node.savedLorasB = allLorasB;
+                    node.savedLorasC = allLorasC;
+                    node.savedLorasD = allLorasD;
                     node.savedTriggerWords = allTriggerWords;
                     updateLoraDisplays(node);
                     updateTriggerWordsDisplay(node);
@@ -4027,15 +4173,25 @@ function getWorkflowLorasBySlot(workflowData, slot = "model_a") {
     if (slot === "model_b") {
         return Array.isArray(workflowData?.loras_b) ? workflowData.loras_b : [];
     }
+    if (slot === "model_c") {
+        return Array.isArray(workflowData?.loras_c) ? workflowData.loras_c : [];
+    }
+    if (slot === "model_d") {
+        return Array.isArray(workflowData?.loras_d) ? workflowData.loras_d : [];
+    }
     return Array.isArray(workflowData?.loras_a) ? workflowData.loras_a : [];
 }
 
-function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, fallbackLorasB = null, options = null) {
+function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, fallbackLorasB = null, fallbackLorasC = null, fallbackLorasD = null, options = null) {
     const preserveLocal = options?.preserveUserState !== false;
     const mappedPrimaryA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_a"));
     const mappedPrimaryB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_b"));
+    const mappedPrimaryC = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_c"));
+    const mappedPrimaryD = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowData, "model_d"));
     const mappedFallbackA = mapWorkflowLorasToUi(fallbackLorasA || []);
     const mappedFallbackB = mapWorkflowLorasToUi(fallbackLorasB || []);
+    const mappedFallbackC = mapWorkflowLorasToUi(fallbackLorasC || []);
+    const mappedFallbackD = mapWorkflowLorasToUi(fallbackLorasD || []);
 
     const mergeFlagsFromFallback = (primary, fallback) => {
         const fallbackMap = new Map((fallback || []).map((l) => [String(l.name || "").toLowerCase(), l]));
@@ -4062,6 +4218,12 @@ function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, 
     const wfLorasB = mappedPrimaryB.length > 0
         ? mergeFlagsFromFallback(mappedPrimaryB, mappedFallbackB)
         : mappedFallbackB;
+    const wfLorasC = mappedPrimaryC.length > 0
+        ? mergeFlagsFromFallback(mappedPrimaryC, mappedFallbackC)
+        : mappedFallbackC;
+    const wfLorasD = mappedPrimaryD.length > 0
+        ? mergeFlagsFromFallback(mappedPrimaryD, mappedFallbackD)
+        : mappedFallbackD;
 
     const preserveUserState = (incoming, existing) => {
         const existingMap = new Map((existing || []).map((l) => [String(l.name || "").toLowerCase(), l]));
@@ -4097,11 +4259,15 @@ function syncWorkflowLorasForDisplay(node, workflowData, fallbackLorasA = null, 
 
     node.savedLorasA = preserveLocal ? preserveUserState(wfLorasA, node.savedLorasA) : toSavedWorkflow(wfLorasA);
     node.savedLorasB = preserveLocal ? preserveUserState(wfLorasB, node.savedLorasB) : toSavedWorkflow(wfLorasB);
+    node.savedLorasC = preserveLocal ? preserveUserState(wfLorasC, node.savedLorasC) : toSavedWorkflow(wfLorasC);
+    node.savedLorasD = preserveLocal ? preserveUserState(wfLorasD, node.savedLorasD) : toSavedWorkflow(wfLorasD);
     node.currentLorasA = wfLorasA.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
     node.currentLorasB = wfLorasB.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
+    node.currentLorasC = wfLorasC.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
+    node.currentLorasD = wfLorasD.map((l) => ({ ...l, source: "current", fromWorkflow: true }));
 }
 
-function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
+function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB, lorasC, lorasD) {
     const base = (baseWorkflowData && typeof baseWorkflowData === "object" && !Array.isArray(baseWorkflowData))
         ? JSON.parse(JSON.stringify(baseWorkflowData))
         : {};
@@ -4117,6 +4283,24 @@ function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
         found: l.found !== false,
     }));
     const normalizedB = (lorasB || []).map((l) => ({
+        name: l.name,
+        path: String(l.path || l.name || ""),
+        model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        active: l.active !== false,
+        available: l.available !== false,
+        found: l.found !== false,
+    }));
+    const normalizedC = (lorasC || []).map((l) => ({
+        name: l.name,
+        path: String(l.path || l.name || ""),
+        model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        clip_strength: Number(l.clip_strength ?? l.strength ?? l.model_strength ?? 1.0) || 1.0,
+        active: l.active !== false,
+        available: l.available !== false,
+        found: l.found !== false,
+    }));
+    const normalizedD = (lorasD || []).map((l) => ({
         name: l.name,
         path: String(l.path || l.name || ""),
         model_strength: Number(l.strength ?? l.model_strength ?? 1.0) || 1.0,
@@ -4152,6 +4336,21 @@ function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
                 : (base.models.model_b = {});
             modelB.loras = normalizedB;
         }
+
+        if (normalizedC.length > 0 || (base.models.model_c && typeof base.models.model_c === "object")) {
+            const modelC = (base.models.model_c && typeof base.models.model_c === "object")
+                ? base.models.model_c
+                : (base.models.model_c = {});
+            modelC.positive_prompt = normalizedPrompt;
+            modelC.loras = normalizedC;
+        }
+        if (normalizedD.length > 0 || (base.models.model_d && typeof base.models.model_d === "object")) {
+            const modelD = (base.models.model_d && typeof base.models.model_d === "object")
+                ? base.models.model_d
+                : (base.models.model_d = {});
+            modelD.positive_prompt = normalizedPrompt;
+            modelD.loras = normalizedD;
+        }
     } else {
         // Always emit v2 shape so backend normalization doesn't drop legacy
         // top-level fields into an empty { version:2, models:{} } payload.
@@ -4181,10 +4380,29 @@ function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB) {
             modelB.loras = normalizedB;
         }
 
+        if (normalizedC.length > 0 || (base.models.model_c && typeof base.models.model_c === "object")) {
+            const modelC = (base.models.model_c && typeof base.models.model_c === "object")
+                ? base.models.model_c
+                : (base.models.model_c = {});
+            modelC.positive_prompt = normalizedPrompt;
+            modelC.negative_prompt = String(modelC.negative_prompt ?? legacyNegative);
+            modelC.loras = normalizedC;
+        }
+        if (normalizedD.length > 0 || (base.models.model_d && typeof base.models.model_d === "object")) {
+            const modelD = (base.models.model_d && typeof base.models.model_d === "object")
+                ? base.models.model_d
+                : (base.models.model_d = {});
+            modelD.positive_prompt = normalizedPrompt;
+            modelD.negative_prompt = String(modelD.negative_prompt ?? legacyNegative);
+            modelD.loras = normalizedD;
+        }
+
         delete base.positive_prompt;
         delete base.negative_prompt;
         delete base.loras_a;
         delete base.loras_b;
+        delete base.loras_c;
+        delete base.loras_d;
     }
     base._source = "PromptManagerAdvanced";
     return base;
@@ -4254,12 +4472,11 @@ async function pullWorkflowIntoNode(node) {
     node.lastWorkflowData = wfData;
     syncSavedWorkflowDataWidget(node);
 
-    const useLoraInputWidget = node.widgets?.find((w) => w.name === "use_lora_input");
-    const useLoraInput = useLoraInputWidget?.value !== false;
+    const useLoraInput = shouldCombineLoras(node);
 
     // Pull Workflow should only replace fields that are NOT controlled by live inputs.
     // If use_lora_input is ON, connected stacks control LoRAs at execution; keep PMA stacks unchanged.
-    if (!useLoraInput) {
+    if (!useLoraInput && !useInputOnlyLoras) {
         let pulledA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_a")).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
         let pulledB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_b")).map((l) => ({ ...l, source: "saved", fromWorkflowPulled: true }));
         pulledA = await applyLoraFoundState(pulledA);
@@ -4352,6 +4569,10 @@ function getWorkflowDataLiveSig(workflowData) {
             .map(normalize),
         loras_b: getWorkflowLorasBySlot(workflowData, "model_b")
             .map(normalize),
+        loras_c: getWorkflowLorasBySlot(workflowData, "model_c")
+            .map(normalize),
+        loras_d: getWorkflowLorasBySlot(workflowData, "model_d")
+            .map(normalize),
     });
 }
 
@@ -4370,10 +4591,14 @@ async function tryLiveWorkflowPickup(node, { force = false } = {}) {
 
     let liveA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_a"));
     let liveB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_b"));
+    let liveC = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_c"));
+    let liveD = mapWorkflowLorasToUi(getWorkflowLorasBySlot(wfData, "model_d"));
     liveA = await applyLoraFoundState(liveA);
     liveB = await applyLoraFoundState(liveB);
+    liveC = await applyLoraFoundState(liveC);
+    liveD = await applyLoraFoundState(liveD);
 
-    syncWorkflowLorasForDisplay(node, wfData, liveA, liveB, { preserveUserState: false });
+    syncWorkflowLorasForDisplay(node, wfData, liveA, liveB, liveC, liveD, { preserveUserState: false });
     node.lastWorkflowData = wfData;
     syncSavedWorkflowDataWidget(node);
 
@@ -4466,22 +4691,30 @@ function setupUseExternalToggleHandler(node) {
     if (useLoraInputWidget) {
         const originalLoraInputCallback = useLoraInputWidget.callback;
         useLoraInputWidget.callback = function(value) {
+            const normalizedMode = normalizeLoraInputModeValue(value);
+            this.value = normalizedMode;
             if (originalLoraInputCallback) {
                 originalLoraInputCallback.apply(this, arguments);
             }
 
-            if (!value) {
+            const usePromptOnly = normalizedMode === LORA_MODE_PROMPT_ONLY;
+
+            if (usePromptOnly) {
                 // Switching OFF: clear current (connected) loras AND 
                 // remove any saved loras that came from input (fromInput: true)
                 node.currentLorasA = [];
                 node.currentLorasB = [];
+                node.currentLorasC = [];
+                node.currentLorasD = [];
                 node.currentTriggerWords = [];
                 
                 // Keep only saved loras that are from presets (not from input)
                 node.savedLorasA = (node.savedLorasA || []).filter(lora => !lora.fromInput);
                 node.savedLorasB = (node.savedLorasB || []).filter(lora => !lora.fromInput);
+                node.savedLorasC = (node.savedLorasC || []).filter(lora => !lora.fromInput);
+                node.savedLorasD = (node.savedLorasD || []).filter(lora => !lora.fromInput);
             }
-            // When switching ON, keep everything - the update event will sync with input
+            // Combine/Input-only keep state; execution updates will sync input-connected stacks.
 
             // Update display to reflect the new state
             updateLoraDisplays(node);
@@ -4667,9 +4900,9 @@ function setupUseWorkflowToggleHandler(node) {
             syncSavedWorkflowDataWidget(node);
 
             const useExternalWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
-            const useLoraInputWidget = node.widgets?.find((w) => w.name === "use_lora_input");
             const usePromptInput = useExternalWidget?.value === true;
-            const useLoraInput = useLoraInputWidget?.value !== false;
+            const useLoraInput = shouldCombineLoras(node);
+            const useInputOnlyLoras = shouldUseInputOnlyLoras(node);
 
             const pre = node._preWorkflowModeState;
             if (pre) {
@@ -4677,7 +4910,7 @@ function setupUseWorkflowToggleHandler(node) {
                 node.savedLorasB = cloneJson(pre.savedLorasB, []);
                 node.savedTriggerWords = cloneJson(pre.savedTriggerWords, []);
 
-                if (useLoraInput) {
+                if (useLoraInput || useInputOnlyLoras) {
                     // Restore prompt stacks + connected input stacks when lora input is enabled.
                     node.currentLorasA = cloneJson(pre.currentLorasA, []);
                     node.currentLorasB = cloneJson(pre.currentLorasB, []);
@@ -4728,10 +4961,16 @@ async function loadPromptData(node, category, promptName) {
     // This ensures clean state - current items will be repopulated on next execution
     node.savedLorasA = [];
     node.savedLorasB = [];
+    node.savedLorasC = [];
+    node.savedLorasD = [];
     node.currentLorasA = [];
     node.currentLorasB = [];
+    node.currentLorasC = [];
+    node.currentLorasD = [];
     node.originalLorasA = [];  // Clear original strengths too
     node.originalLorasB = [];
+    node.originalLorasC = [];
+    node.originalLorasD = [];
     node.savedTriggerWords = [];
     node.currentTriggerWords = [];
 
@@ -4773,6 +5012,18 @@ async function loadPromptData(node, category, promptName) {
         strength: lora.strength ?? lora.model_strength ?? 1.0,
         available: true
     }));
+    const lorasC = (promptData.loras_c || []).map(lora => ({
+        ...lora,
+        active: lora.active !== false,
+        strength: lora.strength ?? lora.model_strength ?? 1.0,
+        available: true
+    }));
+    const lorasD = (promptData.loras_d || []).map(lora => ({
+        ...lora,
+        active: lora.active !== false,
+        strength: lora.strength ?? lora.model_strength ?? 1.0,
+        available: true
+    }));
 
     // Load saved trigger words - preserve their active state
     const triggerWords = (promptData.trigger_words || []).map(word => ({
@@ -4784,7 +5035,9 @@ async function loadPromptData(node, category, promptName) {
     // Check availability of all loras
     const allLoraNames = [
         ...lorasA.map(l => l.name),
-        ...lorasB.map(l => l.name)
+        ...lorasB.map(l => l.name),
+        ...lorasC.map(l => l.name),
+        ...lorasD.map(l => l.name)
     ].filter(name => name);
 
     if (allLoraNames.length > 0) {
@@ -4805,6 +5058,12 @@ async function loadPromptData(node, category, promptName) {
                 lorasB.forEach(lora => {
                     lora.available = data.results[lora.name] === true;
                 });
+                lorasC.forEach(lora => {
+                    lora.available = data.results[lora.name] === true;
+                });
+                lorasD.forEach(lora => {
+                    lora.available = data.results[lora.name] === true;
+                });
             }
         } catch (error) {
             console.error("[PromptManagerAdvanced] Error checking LoRA availability:", error);
@@ -4813,6 +5072,8 @@ async function loadPromptData(node, category, promptName) {
 
     node.savedLorasA = lorasA;
     node.savedLorasB = lorasB;
+    node.savedLorasC = lorasC;
+    node.savedLorasD = lorasD;
     node.savedTriggerWords = triggerWords;
 
     // Store original strengths for reset functionality
@@ -4821,6 +5082,14 @@ async function loadPromptData(node, category, promptName) {
         strength: lora.strength ?? lora.model_strength ?? 1.0
     }));
     node.originalLorasB = lorasB.map(lora => ({
+        name: lora.name,
+        strength: lora.strength ?? lora.model_strength ?? 1.0
+    }));
+    node.originalLorasC = lorasC.map(lora => ({
+        name: lora.name,
+        strength: lora.strength ?? lora.model_strength ?? 1.0
+    }));
+    node.originalLorasD = lorasD.map(lora => ({
         name: lora.name,
         strength: lora.strength ?? lora.model_strength ?? 1.0
     }));
@@ -4849,6 +5118,10 @@ function getCurrentStateSnapshot(node) {
 
     const lorasB = (node.savedLorasB || [])
         .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }));
+    const lorasC = (node.savedLorasC || [])
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }));
+    const lorasD = (node.savedLorasD || [])
+        .map(l => ({ name: l.name, strength: l.strength, active: l.active !== false }));
 
     // Get all trigger words with their states
     const triggerWords = (node.savedTriggerWords || [])
@@ -4859,6 +5132,8 @@ function getCurrentStateSnapshot(node) {
         text: text,
         lorasA: JSON.stringify(lorasA),
         lorasB: JSON.stringify(lorasB),
+        lorasC: JSON.stringify(lorasC),
+        lorasD: JSON.stringify(lorasD),
         triggerWords: JSON.stringify(triggerWords)
     };
 }
@@ -5268,7 +5543,7 @@ async function resolveWorkflowDataForLive(node) {
     return null;
 }
 
-async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWords, thumbnail = null, nsfw = false) {
+async function savePrompt(node, category, name, text, lorasA, lorasB, lorasC, lorasD, triggerWords, thumbnail = null, nsfw = false) {
     try {
         // Include workflow_data when available.
         // If use_workflow_data is enabled and workflow_data comes from a connected
@@ -5284,11 +5559,17 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
         // workflow_data as the save source of truth.
         let lorasForSaveA = Array.isArray(lorasA) ? [...lorasA] : [];
         let lorasForSaveB = Array.isArray(lorasB) ? [...lorasB] : [];
+        let lorasForSaveC = Array.isArray(lorasC) ? [...lorasC] : [];
+        let lorasForSaveD = Array.isArray(lorasD) ? [...lorasD] : [];
         if (node?._isWorkflowManager && hasWorkflowInput && hasMeaningfulWorkflowData(workflowDataForSave)) {
             const wfLorasA = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_a"));
             const wfLorasB = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_b"));
+            const wfLorasC = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_c"));
+            const wfLorasD = mapWorkflowLorasToUi(getWorkflowLorasBySlot(workflowDataForSave, "model_d"));
             if (wfLorasA.length > 0 || lorasForSaveA.length === 0) lorasForSaveA = wfLorasA;
             if (wfLorasB.length > 0 || lorasForSaveB.length === 0) lorasForSaveB = wfLorasB;
+            if (wfLorasC.length > 0 || lorasForSaveC.length === 0) lorasForSaveC = wfLorasC;
+            if (wfLorasD.length > 0 || lorasForSaveD.length === 0) lorasForSaveD = wfLorasD;
         }
 
         const requestBody = {
@@ -5304,6 +5585,18 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
                 active: l.active
             })),
             loras_b: lorasForSaveB.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0,
+                clip_strength: l.clip_strength ?? l.strength ?? 1.0,
+                active: l.active
+            })),
+            loras_c: lorasForSaveC.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0,
+                clip_strength: l.clip_strength ?? l.strength ?? 1.0,
+                active: l.active
+            })),
+            loras_d: lorasForSaveD.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0,
                 clip_strength: l.clip_strength ?? l.strength ?? 1.0,
@@ -5335,7 +5628,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
                 ? wfPrompt
                 : text;
 
-            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB);
+            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB, lorasForSaveC, lorasForSaveD);
             if (node?._isWorkflowManager) {
                 liveWorkflowData._source = "RecipeManager";
             }
@@ -5364,6 +5657,8 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
             // Update saved loras with what was just saved
             node.savedLorasA = lorasForSaveA;
             node.savedLorasB = lorasForSaveB;
+            node.savedLorasC = lorasForSaveC;
+            node.savedLorasD = lorasForSaveD;
             node.savedTriggerWords = triggerWords || [];
 
             // Update original strengths to match saved values (Reset now resets to saved state)
@@ -5372,6 +5667,14 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, triggerWor
                 strength: l.strength ?? l.model_strength ?? 1.0
             }));
             node.originalLorasB = lorasForSaveB.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0
+            }));
+            node.originalLorasC = lorasForSaveC.map(l => ({
+                name: l.name,
+                strength: l.strength ?? l.model_strength ?? 1.0
+            }));
+            node.originalLorasD = lorasForSaveD.map(l => ({
                 name: l.name,
                 strength: l.strength ?? l.model_strength ?? 1.0
             }));

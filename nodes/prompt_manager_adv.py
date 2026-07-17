@@ -23,6 +23,64 @@ except ImportError:
     print("[PromptManagerAdvanced] Warning: PIL/numpy not available, thumbnail from image input disabled")
 
 
+def _get_workflow_node(extra_pnginfo, node_id: str):
+    """Find workflow node by id, including nested subgraphs (id chains like a:b:c)."""
+    if not isinstance(extra_pnginfo, dict):
+        return None
+
+    workflow = extra_pnginfo.get("workflow")
+    if not isinstance(workflow, dict):
+        return None
+
+    nodes_list = workflow.get("nodes", []) if isinstance(workflow.get("nodes"), list) else []
+    subgraphs = []
+    definitions = workflow.get("definitions")
+    if isinstance(definitions, dict):
+        maybe_subgraphs = definitions.get("subgraphs")
+        if isinstance(maybe_subgraphs, list):
+            subgraphs = maybe_subgraphs
+
+    found = None
+    for part in str(node_id).split(":"):
+        found = next((n for n in nodes_list if isinstance(n, dict) and str(n.get("id")) == part), None)
+        if not isinstance(found, dict):
+            return None
+
+        subgraph = next((sg for sg in subgraphs if isinstance(sg, dict) and str(sg.get("id")) == str(found.get("type"))), None)
+        if isinstance(subgraph, dict) and isinstance(subgraph.get("nodes"), list):
+            nodes_list = subgraph.get("nodes", [])
+
+    return found
+
+
+def _patch_runtime_prompt_metadata(unique_id, output_text, extra_pnginfo=None, api_prompt=None):
+    """Persist resolved prompt into workflow/api metadata for downstream save nodes."""
+    node_id = str(unique_id) if unique_id is not None else ""
+    if not node_id:
+        return
+
+    # Patch workflow metadata (EXTRA_PNGINFO).
+    workflow_node = _get_workflow_node(extra_pnginfo, node_id)
+    if isinstance(workflow_node, dict):
+        widgets = workflow_node.get("widgets_values")
+        if isinstance(widgets, list):
+            # PromptManagerAdvanced widgets order:
+            # [category, name, use_prompt_input, use_lora_input, text, swap_lora_outputs]
+            if len(widgets) > 2:
+                widgets[2] = False
+            if len(widgets) > 4:
+                widgets[4] = output_text
+
+    # Patch API prompt metadata (PROMPT).
+    if isinstance(api_prompt, dict):
+        prompt_node = api_prompt.get(node_id)
+        if isinstance(prompt_node, dict):
+            inputs = prompt_node.get("inputs")
+            if isinstance(inputs, dict):
+                inputs["use_prompt_input"] = False
+                inputs["text"] = output_text
+
+
 def image_to_base64_thumbnail(image_tensor, max_size=200):
     """
     Convert a ComfyUI image tensor to a base64 thumbnail string.
@@ -145,22 +203,32 @@ def _derive_prompt_fields_from_workflow_data(workflow_data):
             "negative_prompt": "",
             "loras_a": [],
             "loras_b": [],
+            "loras_c": [],
+            "loras_d": [],
             "model_a": "",
             "model_b": "",
+            "model_c": "",
+            "model_d": "",
         }
 
     wf_v2 = ensure_v2_recipe_data(workflow_data, source="PromptManagerAdvanced")
     wf_models = wf_v2.get("models", {}) if isinstance(wf_v2.get("models"), dict) else {}
     model_a_block = wf_models.get("model_a") if isinstance(wf_models.get("model_a"), dict) else {}
     model_b_block = wf_models.get("model_b") if isinstance(wf_models.get("model_b"), dict) else {}
+    model_c_block = wf_models.get("model_c") if isinstance(wf_models.get("model_c"), dict) else {}
+    model_d_block = wf_models.get("model_d") if isinstance(wf_models.get("model_d"), dict) else {}
 
     return {
         "prompt": str(model_a_block.get("positive_prompt", "") or ""),
         "negative_prompt": str(model_a_block.get("negative_prompt", "") or ""),
         "loras_a": _normalize_workflow_loras_for_prompt(model_a_block.get("loras", [])),
         "loras_b": _normalize_workflow_loras_for_prompt(model_b_block.get("loras", [])),
+        "loras_c": _normalize_workflow_loras_for_prompt(model_c_block.get("loras", [])),
+        "loras_d": _normalize_workflow_loras_for_prompt(model_d_block.get("loras", [])),
         "model_a": str(model_a_block.get("model", "") or ""),
         "model_b": str(model_b_block.get("model", "") or ""),
+        "model_c": str(model_c_block.get("model", "") or ""),
+        "model_d": str(model_d_block.get("model", "") or ""),
     }
 
 
@@ -172,6 +240,96 @@ from ..py.lora_utils import (
     fuzzy_match_lora,
     get_lora_relative_path,
 )
+
+
+_MODEL_SLOT_KEYS = ("a", "b", "c", "d")
+_LORA_INPUT_MODE_PROMPT_ONLY = "Prompt LoRAs Only"
+_LORA_INPUT_MODE_COMBINE = "Combine LoRAs"
+_LORA_INPUT_MODE_INPUT_ONLY = "Input LoRAs Only"
+_LORA_INPUT_MODES = (
+    _LORA_INPUT_MODE_PROMPT_ONLY,
+    _LORA_INPUT_MODE_COMBINE,
+    _LORA_INPUT_MODE_INPUT_ONLY,
+)
+
+
+def _coerce_lora_stack(raw_stack):
+    """Normalize a LORA_STACK-like payload into list[(path, model, clip)]."""
+    if raw_stack is None:
+        return []
+
+    if isinstance(raw_stack, dict) and "__value__" in raw_stack:
+        raw_stack = raw_stack.get("__value__")
+
+    if not isinstance(raw_stack, list):
+        return []
+
+    out = []
+    for item in raw_stack:
+        if isinstance(item, (list, tuple)) and len(item) >= 1:
+            path = str(item[0] or "").strip()
+            if not path:
+                continue
+            try:
+                model_strength = float(item[1]) if len(item) >= 2 else 1.0
+            except Exception:
+                model_strength = 1.0
+            try:
+                clip_strength = float(item[2]) if len(item) >= 3 else model_strength
+            except Exception:
+                clip_strength = model_strength
+            out.append((path, model_strength, clip_strength))
+            continue
+
+        if isinstance(item, dict):
+            path = str(item.get("path") or item.get("name") or "").strip()
+            if not path:
+                continue
+            try:
+                model_strength = float(item.get("model_strength", item.get("strength", 1.0)))
+            except Exception:
+                model_strength = 1.0
+            try:
+                clip_strength = float(item.get("clip_strength", model_strength))
+            except Exception:
+                clip_strength = model_strength
+            out.append((path, model_strength, clip_strength))
+
+    return out
+
+
+def _normalize_input_multi_lora_payload(raw_input, primary_slot):
+    """Normalize one PMA input socket into 4 slots (A/B/C/D)."""
+    slots = {k: [] for k in _MODEL_SLOT_KEYS}
+
+    plain = _coerce_lora_stack(raw_input)
+    if plain:
+        slots[primary_slot] = plain
+        return slots
+
+    if not isinstance(raw_input, dict):
+        return slots
+
+    for slot_key, suffix in (("model_a", "a"), ("model_b", "b"), ("model_c", "c"), ("model_d", "d")):
+        candidate = None
+        if slot_key in raw_input:
+            candidate = raw_input.get(slot_key)
+        elif suffix in raw_input:
+            candidate = raw_input.get(suffix)
+        slots[suffix] = _coerce_lora_stack(candidate)
+
+    return slots
+
+
+def _combine_multi_lora_inputs(input_a, input_b):
+    """Combine PMA A/B sockets into a single multi-slot payload."""
+    normalized_a = _normalize_input_multi_lora_payload(input_a, "a")
+    normalized_b = _normalize_input_multi_lora_payload(input_b, "b")
+
+    out = {}
+    for slot in _MODEL_SLOT_KEYS:
+        out[slot] = [*(normalized_a.get(slot) or []), *(normalized_b.get(slot) or [])]
+    return out
 
 
 class PromptManagerAdvanced:
@@ -231,11 +389,13 @@ class PromptManagerAdvanced:
                     "label_on": "on",
                     "label_off": "off",
                     "tooltip": "Toggle to use connected prompt input instead of internal text"}),
-                "use_lora_input": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
-                    "tooltip": "When enabled, use LoRAs from connected inputs. When off, use only prompt LoRAs."
+                "use_lora_input": (_LORA_INPUT_MODES, {
+                    "default": _LORA_INPUT_MODE_PROMPT_ONLY,
+                    "tooltip": (
+                        "LoRA mode. Prompt LoRAs Only = use saved prompt stacks only. "
+                        "Combine LoRAs = merge connected stacks with prompt stacks. "
+                        "Input LoRAs Only = use only connected input stacks."
+                    ),
                 }),
                 "text": ("STRING", {
                     "multiline": True,
@@ -253,8 +413,8 @@ class PromptManagerAdvanced:
             },
             "optional": {
                 "prompt": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
-                "lora_stack_a": ("LORA_STACK", {"tooltip": "First LoRA stack input (e.g., for base model)"}),
-                "lora_stack_b": ("LORA_STACK", {"tooltip": "Second LoRA stack input (e.g., for video model)"}),
+                "lora_stack_a": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "First LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
+                "lora_stack_b": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "Second LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
                 "thumbnail_image": ("IMAGE", {"tooltip": "Connect an image to use as thumbnail when saving the prompt"}),
             },
@@ -262,19 +422,53 @@ class PromptManagerAdvanced:
                 "unique_id": "UNIQUE_ID",
                 "loras_a_toggle": "STRING",
                 "loras_b_toggle": "STRING",
+                "loras_c_toggle": "STRING",
+                "loras_d_toggle": "STRING",
                 "trigger_words_toggle": "STRING",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "api_prompt": "PROMPT",
             }
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Full-featured prompt manager with dual LoRA stack support, trigger words, and thumbnail browser."
-    RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA")
-    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "recipe_data")
+    DESCRIPTION = "Full-featured prompt manager with multi-slot LoRA stack support, trigger words, and thumbnail browser."
+    RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA", "MULTI_LORA_STACK")
+    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "recipe_data", "multi_lora_stack")
     FUNCTION = "get_prompt"
     OUTPUT_NODE = True
 
+    @staticmethod
+    def _normalize_lora_input_mode(mode_value):
+        """Normalize legacy bool/new string modes to canonical dropdown values."""
+        if mode_value is False:
+            return _LORA_INPUT_MODE_PROMPT_ONLY
+        if mode_value is True:
+            return _LORA_INPUT_MODE_COMBINE
+
+        value = str(mode_value or "").strip()
+        if value in _LORA_INPUT_MODES:
+            return value
+
+        lowered = value.lower()
+        if lowered in ("off", "false", "0", "prompt", "prompt only", "prompt loras", "prompt loras only"):
+            return _LORA_INPUT_MODE_PROMPT_ONLY
+        if lowered in ("on", "true", "1", "combine", "combine loras"):
+            return _LORA_INPUT_MODE_COMBINE
+        if lowered in ("2", "input", "input only", "input loras", "input loras only"):
+            return _LORA_INPUT_MODE_INPUT_ONLY
+
+        return _LORA_INPUT_MODE_PROMPT_ONLY
+
+    @staticmethod
+    def _should_use_combined_loras(mode_value):
+        return PromptManagerAdvanced._normalize_lora_input_mode(mode_value) == _LORA_INPUT_MODE_COMBINE
+
+    @staticmethod
+    def _should_use_input_only_loras(mode_value):
+        return PromptManagerAdvanced._normalize_lora_input_mode(mode_value) == _LORA_INPUT_MODE_INPUT_ONLY
+
     @classmethod
-    def IS_CHANGED(cls, category, name, use_prompt_input, use_lora_input=True, text="", swap_lora_outputs=False,
+    def IS_CHANGED(cls, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", swap_lora_outputs=False,
                    **kwargs):
         """
         Track changes to the node's inputs to determine if re-execution is needed.
@@ -291,7 +485,7 @@ class PromptManagerAdvanced:
             category,
             name,
             use_prompt_input,
-            use_lora_input,
+            cls._normalize_lora_input_mode(use_lora_input),
             text,
             swap_lora_outputs,
             str(prompt_input) if prompt_input else None,
@@ -301,9 +495,14 @@ class PromptManagerAdvanced:
         )
 
     @classmethod
-    def VALIDATE_INPUTS(cls, name, **kwargs):
-        """Allow any name value, including temporary unsaved prompts"""
-        # Return True to accept any value - this allows new prompts to be tested before saving
+    def VALIDATE_INPUTS(cls, name, input_types=None, **kwargs):
+        """Allow any name and validate optional LoRA input socket types."""
+        for key in ("lora_stack_a", "lora_stack_b"):
+            t = (input_types or {}).get(key) if isinstance(input_types, dict) else None
+            if t is None:
+                continue
+            if t not in ("LORA_STACK", "MULTI_LORA_STACK"):
+                return f"Unsupported type for {key}: {t}"
         return True
 
     @staticmethod
@@ -544,10 +743,11 @@ class PromptManagerAdvanced:
         # Not found
         return lora_path, False
 
-    def get_prompt(self, category, name, use_prompt_input, use_lora_input=True, text="", swap_lora_outputs=False,
+    def get_prompt(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", swap_lora_outputs=False,
                    prompt=None, lora_stack_a=None, lora_stack_b=None,
                    trigger_words=None, thumbnail_image=None,
-                   unique_id=None, loras_a_toggle=None, loras_b_toggle=None, trigger_words_toggle=None,
+                   unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None, trigger_words_toggle=None,
+                   extra_pnginfo=None, api_prompt=None,
                    **kwargs):
         """Return the prompt text and filtered lora stacks based on toggle states"""
 
@@ -564,30 +764,49 @@ class PromptManagerAdvanced:
                 'prompt_key': '',
                 'input_loras_a': [],
                 'input_loras_b': [],
+                'input_loras_c': [],
+                'input_loras_d': [],
                 'prompt_input_text': '',
                 'toggle_data_a': '',
-                'toggle_data_b': ''
+                'toggle_data_b': '',
+                'toggle_data_c': '',
+                'toggle_data_d': '',
             }
 
         last_state = self._last_known_state[node_state_key]
 
         # Current state signatures (using LoRA file paths directly - NO splitext)
         current_prompt_key = f"{category}|{name}"
-        current_input_loras_a = [lora_path for lora_path, _, _ in lora_stack_a] if lora_stack_a else []
-        current_input_loras_b = [lora_path for lora_path, _, _ in lora_stack_b] if lora_stack_b else []
+        combined_input_multi = _combine_multi_lora_inputs(lora_stack_a, lora_stack_b)
+        current_input_loras_a = [lora_path for lora_path, _, _ in combined_input_multi.get('a', [])]
+        current_input_loras_b = [lora_path for lora_path, _, _ in combined_input_multi.get('b', [])]
+        current_input_loras_c = [lora_path for lora_path, _, _ in combined_input_multi.get('c', [])]
+        current_input_loras_d = [lora_path for lora_path, _, _ in combined_input_multi.get('d', [])]
         current_prompt_input_text = prompt if prompt else ""
         current_toggle_data_a = loras_a_toggle if loras_a_toggle else ""
         current_toggle_data_b = loras_b_toggle if loras_b_toggle else ""
+        current_toggle_data_c = loras_c_toggle if loras_c_toggle else ""
+        current_toggle_data_d = loras_d_toggle if loras_d_toggle else ""
 
         # Determine if reset is needed
         prompt_changed = current_prompt_key != last_state['prompt_key']
-        input_loras_changed = (current_input_loras_a != last_state['input_loras_a'] or current_input_loras_b != last_state['input_loras_b'])
+        input_loras_changed = (
+            current_input_loras_a != last_state['input_loras_a'] or
+            current_input_loras_b != last_state['input_loras_b'] or
+            current_input_loras_c != last_state['input_loras_c'] or
+            current_input_loras_d != last_state['input_loras_d']
+        )
         prompt_input_changed = current_prompt_input_text != last_state['prompt_input_text']
-        toggle_data_changed = (current_toggle_data_a != last_state['toggle_data_a'] or current_toggle_data_b != last_state['toggle_data_b'])
+        toggle_data_changed = (
+            current_toggle_data_a != last_state['toggle_data_a'] or
+            current_toggle_data_b != last_state['toggle_data_b'] or
+            current_toggle_data_c != last_state['toggle_data_c'] or
+            current_toggle_data_d != last_state['toggle_data_d']
+        )
 
         # Check if input loras were cleared (had loras before, now empty)
-        had_loras = last_state['input_loras_a'] or last_state['input_loras_b']
-        now_has_no_loras = not current_input_loras_a and not current_input_loras_b
+        had_loras = last_state['input_loras_a'] or last_state['input_loras_b'] or last_state['input_loras_c'] or last_state['input_loras_d']
+        now_has_no_loras = not current_input_loras_a and not current_input_loras_b and not current_input_loras_c and not current_input_loras_d
         loras_were_cleared = had_loras and now_has_no_loras
 
         # Reset conditions:
@@ -603,10 +822,18 @@ class PromptManagerAdvanced:
             'prompt_key': current_prompt_key,
             'input_loras_a': current_input_loras_a,
             'input_loras_b': current_input_loras_b,
+            'input_loras_c': current_input_loras_c,
+            'input_loras_d': current_input_loras_d,
             'prompt_input_text': current_prompt_input_text,
             'toggle_data_a': current_toggle_data_a,
-            'toggle_data_b': current_toggle_data_b
+            'toggle_data_b': current_toggle_data_b,
+            'toggle_data_c': current_toggle_data_c,
+            'toggle_data_d': current_toggle_data_d,
         }
+
+        lora_input_mode = self._normalize_lora_input_mode(use_lora_input)
+        use_combined_loras = self._should_use_combined_loras(lora_input_mode)
+        use_input_only_loras = self._should_use_input_only_loras(lora_input_mode)
 
         # ========================================
         # CONTINUE WITH NORMAL PROCESSING
@@ -631,13 +858,17 @@ class PromptManagerAdvanced:
         # Capture the original input loras BEFORE any processing
         # These are used by the frontend to detect when inputs change
         # and clear toggle states accordingly
-        input_loras_a = self._format_loras_for_display(lora_stack_a) if lora_stack_a else []
-        input_loras_b = self._format_loras_for_display(lora_stack_b) if lora_stack_b else []
+        input_loras_a = self._format_loras_for_display(combined_input_multi.get('a')) if combined_input_multi.get('a') else []
+        input_loras_b = self._format_loras_for_display(combined_input_multi.get('b')) if combined_input_multi.get('b') else []
+        input_loras_c = self._format_loras_for_display(combined_input_multi.get('c')) if combined_input_multi.get('c') else []
+        input_loras_d = self._format_loras_for_display(combined_input_multi.get('d')) if combined_input_multi.get('d') else []
 
         # Build map of ORIGINAL strengths (before any user adjustments via toggles)
         # This is used for "Reset Strength" functionality
         original_strengths_a = {}
         original_strengths_b = {}
+        original_strengths_c = {}
+        original_strengths_d = {}
 
         # Get original strengths from saved prompt dict
         prompts = self.load_prompts()
@@ -652,6 +883,14 @@ class PromptManagerAdvanced:
                     lora_name = lora.get('name', '')
                     if lora_name:
                         original_strengths_b[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
+                for lora in prompt_data.get('loras_c', []):
+                    lora_name = lora.get('name', '')
+                    if lora_name:
+                        original_strengths_c[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
+                for lora in prompt_data.get('loras_d', []):
+                    lora_name = lora.get('name', '')
+                    if lora_name:
+                        original_strengths_d[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
 
         # Add original strengths from connected input loras
         for lora in input_loras_a:
@@ -662,6 +901,14 @@ class PromptManagerAdvanced:
             lora_name = lora.get('name', '')
             if lora_name and lora_name not in original_strengths_b:
                 original_strengths_b[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
+        for lora in input_loras_c:
+            lora_name = lora.get('name', '')
+            if lora_name and lora_name not in original_strengths_c:
+                original_strengths_c[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
+        for lora in input_loras_d:
+            lora_name = lora.get('name', '')
+            if lora_name and lora_name not in original_strengths_d:
+                original_strengths_d[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
 
         # Process trigger words
         trigger_words_display = self._process_trigger_words(
@@ -672,6 +919,8 @@ class PromptManagerAdvanced:
         # Build preset stacks from saved toggle data (these are what we display/manage)
         preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
         preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if loras_b_toggle else []
+        preset_stack_c = self._build_stack_from_toggle(loras_c_toggle) if loras_c_toggle else []
+        preset_stack_d = self._build_stack_from_toggle(loras_d_toggle) if loras_d_toggle else []
 
         # Compatibility fallback: when no saved toggle payload exists, seed
         # PMA stack defaults from v2 model_a/model_b LoRA blocks.
@@ -695,10 +944,32 @@ class PromptManagerAdvanced:
                 for lora in workflow_fields.get("loras_b", [])
                 if isinstance(lora, dict) and lora.get("name")
             ]
+        if not preset_stack_c and not loras_c_toggle:
+            preset_stack_c = [
+                (
+                    lora.get("name", ""),
+                    lora.get("strength", lora.get("model_strength", 1.0)),
+                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
+                )
+                for lora in workflow_fields.get("loras_c", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
+        if not preset_stack_d and not loras_d_toggle:
+            preset_stack_d = [
+                (
+                    lora.get("name", ""),
+                    lora.get("strength", lora.get("model_strength", 1.0)),
+                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
+                )
+                for lora in workflow_fields.get("loras_d", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
 
         # Get ALL preset loras including unavailable ones (for display purposes)
         all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
         all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if loras_b_toggle else []
+        all_preset_loras_c = self._get_all_loras_from_toggle(loras_c_toggle) if loras_c_toggle else []
+        all_preset_loras_d = self._get_all_loras_from_toggle(loras_d_toggle) if loras_d_toggle else []
 
         # If no saved toggle payload exists yet, preserve active flags from
         # incoming workflow_data loras as the initial authoritative state.
@@ -726,36 +997,92 @@ class PromptManagerAdvanced:
                 for lora in workflow_fields.get("loras_b", [])
                 if isinstance(lora, dict) and lora.get("name")
             ]
+        if not all_preset_loras_c and not loras_c_toggle:
+            all_preset_loras_c = [
+                {
+                    "name": lora.get("name", ""),
+                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
+                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
+                    "active": lora.get("active", True),
+                    "available": bool(lora.get("available", True)),
+                }
+                for lora in workflow_fields.get("loras_c", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
+        if not all_preset_loras_d and not loras_d_toggle:
+            all_preset_loras_d = [
+                {
+                    "name": lora.get("name", ""),
+                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
+                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
+                    "active": lora.get("active", True),
+                    "available": bool(lora.get("available", True)),
+                }
+                for lora in workflow_fields.get("loras_d", [])
+                if isinstance(lora, dict) and lora.get("name")
+            ]
 
         # When use_lora_input is disabled, ignore connected stacks and use only saved loras
-        if not use_lora_input:
+        if use_input_only_loras:
+            lora_stack_a = combined_input_multi.get('a') or []
+            lora_stack_b = combined_input_multi.get('b') or []
+            lora_stack_c = combined_input_multi.get('c') or []
+            lora_stack_d = combined_input_multi.get('d') or []
+        elif not use_combined_loras:
             lora_stack_a = preset_stack_a
             lora_stack_b = preset_stack_b
+            lora_stack_c = preset_stack_c
+            lora_stack_d = preset_stack_d
         else:
             # Merge: preset loras + connected loras (avoiding duplicates by lora name)
             # Handle case where connected stack might be None or empty
-            if lora_stack_a:
-                lora_stack_a = self._merge_lora_stacks(preset_stack_a, lora_stack_a)
+            input_stack_a = combined_input_multi.get('a')
+            if input_stack_a:
+                lora_stack_a = self._merge_lora_stacks(preset_stack_a, input_stack_a)
             else:
                 lora_stack_a = preset_stack_a if preset_stack_a else []
 
-            if lora_stack_b:
-                lora_stack_b = self._merge_lora_stacks(preset_stack_b, lora_stack_b)
+            input_stack_b = combined_input_multi.get('b')
+            if input_stack_b:
+                lora_stack_b = self._merge_lora_stacks(preset_stack_b, input_stack_b)
             else:
                 lora_stack_b = preset_stack_b if preset_stack_b else []
 
+            input_stack_c = combined_input_multi.get('c')
+            if input_stack_c:
+                lora_stack_c = self._merge_lora_stacks(preset_stack_c, input_stack_c)
+            else:
+                lora_stack_c = preset_stack_c if preset_stack_c else []
+
+            input_stack_d = combined_input_multi.get('d')
+            if input_stack_d:
+                lora_stack_d = self._merge_lora_stacks(preset_stack_d, input_stack_d)
+            else:
+                lora_stack_d = preset_stack_d if preset_stack_d else []
+
         # Process lora stacks with toggle data (filter inactive, apply strength)
-        processed_stack_a = self._process_lora_toggle(lora_stack_a, loras_a_toggle)
-        processed_stack_b = self._process_lora_toggle(lora_stack_b, loras_b_toggle)
+        processed_stack_a = self._process_lora_toggle(lora_stack_a, None if use_input_only_loras else loras_a_toggle)
+        processed_stack_b = self._process_lora_toggle(lora_stack_b, None if use_input_only_loras else loras_b_toggle)
+        processed_stack_c = self._process_lora_toggle(lora_stack_c, None if use_input_only_loras else loras_c_toggle)
+        processed_stack_d = self._process_lora_toggle(lora_stack_d, None if use_input_only_loras else loras_d_toggle)
 
         # Display logic: Include ALL loras (available + unavailable) so UI shows complete picture
         # Build display from available loras first, then add unavailable ones
-        if not use_lora_input:
+        if use_input_only_loras:
+            loras_a_display = self._format_loras_for_display(lora_stack_a)
+            loras_b_display = self._format_loras_for_display(lora_stack_b)
+            loras_c_display = self._format_loras_for_display(lora_stack_c)
+            loras_d_display = self._format_loras_for_display(lora_stack_d)
+        elif not use_combined_loras:
             loras_a_display = self._format_loras_for_display_with_unavailable(preset_stack_a, all_preset_loras_a)
             loras_b_display = self._format_loras_for_display_with_unavailable(preset_stack_b, all_preset_loras_b)
+            loras_c_display = self._format_loras_for_display_with_unavailable(preset_stack_c, all_preset_loras_c)
+            loras_d_display = self._format_loras_for_display_with_unavailable(preset_stack_d, all_preset_loras_d)
         else:
             loras_a_display = self._format_loras_for_display_with_unavailable(lora_stack_a, all_preset_loras_a)
             loras_b_display = self._format_loras_for_display_with_unavailable(lora_stack_b, all_preset_loras_b)
+            loras_c_display = self._format_loras_for_display_with_unavailable(lora_stack_c, all_preset_loras_c)
+            loras_d_display = self._format_loras_for_display_with_unavailable(lora_stack_d, all_preset_loras_d)
 
         # Convert thumbnail image to base64 if provided
         thumbnail_base64 = None
@@ -766,8 +1093,16 @@ class PromptManagerAdvanced:
                 print(f"[PromptManagerAdvanced] Failed to convert thumbnail image: {e}")
 
         # Build explicit list of unavailable lora names for frontend
-        unavailable_loras_a = [lora['name'] for lora in all_preset_loras_a if not lora.get('available', False)]
-        unavailable_loras_b = [lora['name'] for lora in all_preset_loras_b if not lora.get('available', False)]
+        if use_input_only_loras:
+            unavailable_loras_a = [l.get('name') for l in loras_a_display if l.get('available') is False]
+            unavailable_loras_b = [l.get('name') for l in loras_b_display if l.get('available') is False]
+            unavailable_loras_c = [l.get('name') for l in loras_c_display if l.get('available') is False]
+            unavailable_loras_d = [l.get('name') for l in loras_d_display if l.get('available') is False]
+        else:
+            unavailable_loras_a = [lora['name'] for lora in all_preset_loras_a if not lora.get('available', False)]
+            unavailable_loras_b = [lora['name'] for lora in all_preset_loras_b if not lora.get('available', False)]
+            unavailable_loras_c = [lora['name'] for lora in all_preset_loras_c if not lora.get('available', False)]
+            unavailable_loras_d = [lora['name'] for lora in all_preset_loras_d if not lora.get('available', False)]
 
         # Broadcast update to frontend
         if unique_id is not None:
@@ -778,23 +1113,46 @@ class PromptManagerAdvanced:
                 "prompt_input": prompt,
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
+                "loras_c": loras_c_display,
+                "loras_d": loras_d_display,
                 "input_loras_a": input_loras_a,  # Original input loras for change detection
                 "input_loras_b": input_loras_b,  # Original input loras for change detection
+                "input_loras_c": input_loras_c,
+                "input_loras_d": input_loras_d,
                 "unavailable_loras_a": unavailable_loras_a,  # Explicit list of unavailable lora names
                 "unavailable_loras_b": unavailable_loras_b,  # Explicit list of unavailable lora names
+                "unavailable_loras_c": unavailable_loras_c,
+                "unavailable_loras_d": unavailable_loras_d,
                 "trigger_words": trigger_words_display,
                 "connected_thumbnail": thumbnail_base64,
                 "should_reset": should_reset,  # Python tells JavaScript when to reset toggles
+                "lora_input_mode": lora_input_mode,
+                "use_lora_input": use_combined_loras,
+                "use_input_only_loras": use_input_only_loras,
                 "original_strengths_a": original_strengths_a,  # For "Reset Strength" button
-                "original_strengths_b": original_strengths_b   # For "Reset Strength" button
+                "original_strengths_b": original_strengths_b,  # For "Reset Strength" button
+                "original_strengths_c": original_strengths_c,
+                "original_strengths_d": original_strengths_d,
+                "has_multi_lora_input": bool(combined_input_multi.get('c') or combined_input_multi.get('d')),
             })
 
         # Append active trigger words to output
         final_output = self._append_trigger_words_to_prompt(output_text, active_trigger_words)
 
+        # Save resolved runtime prompt into execution metadata so saver nodes
+        # embed the final prompt value, not the unresolved linked input state.
+        _patch_runtime_prompt_metadata(
+            unique_id=unique_id,
+            output_text=final_output,
+            extra_pnginfo=extra_pnginfo,
+            api_prompt=api_prompt,
+        )
+
         # Swap outputs if requested
         out_stack_a = processed_stack_a if processed_stack_a else []
         out_stack_b = processed_stack_b if processed_stack_b else []
+        out_stack_c = processed_stack_c if processed_stack_c else []
+        out_stack_d = processed_stack_d if processed_stack_d else []
         if swap_lora_outputs:
             out_stack_a, out_stack_b = out_stack_b, out_stack_a
 
@@ -804,17 +1162,27 @@ class PromptManagerAdvanced:
             negative_prompt=neg_prompt,
             loras_a=loras_a_display,
             loras_b=loras_b_display,
+            loras_c=loras_c_display,
+            loras_d=loras_d_display,
             source='PromptManagerAdvanced',
             base_recipe_data=resolved_workflow_data,
         )
 
-        return (final_output, out_stack_a, out_stack_b, out_workflow_data)
+        out_multi_stack = {
+            "a": out_stack_a,
+            "b": out_stack_b,
+            "c": out_stack_c,
+            "d": out_stack_d,
+        }
 
-    def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=True, text="", swap_lora_outputs=False,
+        return (final_output, out_stack_a, out_stack_b, out_workflow_data, out_multi_stack)
+
+    def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", swap_lora_outputs=False,
                           prompt=None, lora_stack_a=None, lora_stack_b=None,
                           trigger_words=None, thumbnail_image=None,
-                          unique_id=None, loras_a_toggle=None, loras_b_toggle=None,
-                          trigger_words_toggle=None):
+                          unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None,
+                          trigger_words_toggle=None, extra_pnginfo=None, api_prompt=None,
+                          **kwargs):
         """Tell ComfyUI which lazy inputs are needed based on current settings.
 
         When use_prompt_input is enabled, we need to request the prompt_input
@@ -1208,6 +1576,8 @@ async def save_prompt_advanced(request):
         text = data.get("text", "").strip()
         loras_a = data.get("loras_a", [])
         loras_b = data.get("loras_b", [])
+        loras_c = data.get("loras_c", [])
+        loras_d = data.get("loras_d", [])
         trigger_words = data.get("trigger_words", [])
 
         if not category or not name:
@@ -1313,6 +1683,8 @@ async def save_prompt_advanced(request):
         # Save prompt with normalized lora data (no paths - they're resolved at runtime)
         normalized_loras_a = normalize_lora_data(loras_a)
         normalized_loras_b = normalize_lora_data(loras_b)
+        normalized_loras_c = normalize_lora_data(loras_c)
+        normalized_loras_d = normalize_lora_data(loras_d)
 
         workflow_has_meaningful_data = _has_meaningful_workflow_data(wf_to_save)
 
@@ -1321,6 +1693,8 @@ async def save_prompt_advanced(request):
         wf_models = (wf_to_save or {}).get("models", {}) if isinstance((wf_to_save or {}).get("models"), dict) else {}
         wf_loras_a = normalize_workflow_lora_data((wf_models.get("model_a") or {}).get("loras", []))
         wf_loras_b = normalize_workflow_lora_data((wf_models.get("model_b") or {}).get("loras", []))
+        wf_loras_c = normalize_workflow_lora_data((wf_models.get("model_c") or {}).get("loras", []))
+        wf_loras_d = normalize_workflow_lora_data((wf_models.get("model_d") or {}).get("loras", []))
         if isinstance(wf_to_save, dict) and workflow_has_meaningful_data:
             if isinstance(wf_models.get("model_a"), dict) and wf_loras_a:
                 normalized_loras_a = wf_loras_a
@@ -1332,6 +1706,16 @@ async def save_prompt_advanced(request):
             elif not normalized_loras_b and wf_loras_b:
                 normalized_loras_b = wf_loras_b
 
+            if isinstance(wf_models.get("model_c"), dict) and wf_loras_c:
+                normalized_loras_c = wf_loras_c
+            elif not normalized_loras_c and wf_loras_c:
+                normalized_loras_c = wf_loras_c
+
+            if isinstance(wf_models.get("model_d"), dict) and wf_loras_d:
+                normalized_loras_d = wf_loras_d
+            elif not normalized_loras_d and wf_loras_d:
+                normalized_loras_d = wf_loras_d
+
         # Guard against accidental empty-stack overwrites from transient UI state.
         # If the incoming payload has no LoRAs for a side, preserve existing saved
         # LoRAs for that side instead of silently erasing them.
@@ -1339,11 +1723,17 @@ async def save_prompt_advanced(request):
             normalized_loras_a = existing_prompt.get("loras_a", [])
         if not normalized_loras_b and isinstance(existing_prompt.get("loras_b"), list):
             normalized_loras_b = existing_prompt.get("loras_b", [])
+        if not normalized_loras_c and isinstance(existing_prompt.get("loras_c"), list):
+            normalized_loras_c = existing_prompt.get("loras_c", [])
+        if not normalized_loras_d and isinstance(existing_prompt.get("loras_d"), list):
+            normalized_loras_d = existing_prompt.get("loras_d", [])
 
         prompt_data = {
             "prompt": text,
             "loras_a": normalized_loras_a,
             "loras_b": normalized_loras_b,
+            "loras_c": normalized_loras_c,
+            "loras_d": normalized_loras_d,
             "trigger_words": normalize_trigger_words(trigger_words)
         }
 
@@ -1379,7 +1769,7 @@ async def save_prompt_advanced(request):
         # Preserve any extra fields from an existing prompt that this node does not manage.
         # This includes workflow_config (added by RecipeManager) and any future extensions.
         # Known managed keys — everything else is preserved verbatim.
-        _MANAGED_KEYS = {"prompt", "negative_prompt", "loras_a", "loras_b", "trigger_words", "thumbnail", "nsfw", "workflow_data", "saved_from", "saved_at"}
+        _MANAGED_KEYS = {"prompt", "negative_prompt", "loras_a", "loras_b", "loras_c", "loras_d", "trigger_words", "thumbnail", "nsfw", "workflow_data", "saved_from", "saved_at"}
         for extra_key, extra_val in existing_prompt.items():
             if extra_key not in _MANAGED_KEYS and extra_key not in prompt_data:
                 prompt_data[extra_key] = extra_val
@@ -1550,6 +1940,10 @@ async def get_prompt_data_advanced(request):
 
         if not isinstance(prompt_response.get("loras_b"), list) or len(prompt_response.get("loras_b") or []) == 0:
             prompt_response["loras_b"] = derived.get("loras_b", [])
+        if not isinstance(prompt_response.get("loras_c"), list) or len(prompt_response.get("loras_c") or []) == 0:
+            prompt_response["loras_c"] = derived.get("loras_c", [])
+        if not isinstance(prompt_response.get("loras_d"), list) or len(prompt_response.get("loras_d") or []) == 0:
+            prompt_response["loras_d"] = derived.get("loras_d", [])
 
         # Add availability info to loras
         def add_availability(loras):
@@ -1567,6 +1961,8 @@ async def get_prompt_data_advanced(request):
                 "prompt": prompt_response.get("prompt", ""),
                 "loras_a": add_availability(prompt_response.get("loras_a", [])),
                 "loras_b": add_availability(prompt_response.get("loras_b", [])),
+                "loras_c": add_availability(prompt_response.get("loras_c", [])),
+                "loras_d": add_availability(prompt_response.get("loras_d", [])),
                 "trigger_words": prompt_response.get("trigger_words", []),
                 "workflow_data": prompt_response.get("workflow_data")
             }
@@ -1616,6 +2012,8 @@ async def import_prompts_advanced(request):
                     "prompt": prompt_data.get("prompt", ""),
                     "loras_a": prompt_data.get("loras_a", []),
                     "loras_b": prompt_data.get("loras_b", []),
+                    "loras_c": prompt_data.get("loras_c", []),
+                    "loras_d": prompt_data.get("loras_d", []),
                     "trigger_words": prompt_data.get("trigger_words", [])
                 }
 
