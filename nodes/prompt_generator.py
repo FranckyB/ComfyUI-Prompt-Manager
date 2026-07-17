@@ -326,6 +326,17 @@ class PromptGenerator:
         return load_prompt("json_system_prompt.txt")
 
     @staticmethod
+    def get_json_system_prompt_for_mode(mode):
+        if "(Image)" in mode:
+            return load_prompt("json_system_prompt_image.txt")
+        elif "(Video)" in mode:
+            return load_prompt("json_system_prompt_video.txt")
+        elif "(Audio)" in mode:
+            return load_prompt("json_system_prompt_audio.txt")
+        else:
+            return load_prompt("json_system_prompt.txt")
+
+    @staticmethod
     def find_vision_model(available_models):
         """Find the preferred or first available vision-capable model.
 
@@ -1056,7 +1067,7 @@ class PromptGenerator:
 
         # Add JSON formatting instructions only when `format_as_json` is True
         if format_as_json:
-            system_prompt = system_prompt + self.get_json_system_prompt()
+            system_prompt = system_prompt + self.get_json_system_prompt_for_mode(mode)
 
         # Determine user content based on mode
         if mode == "Analyze Image":

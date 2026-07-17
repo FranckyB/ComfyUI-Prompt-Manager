@@ -16,8 +16,6 @@ Use this structure:
 - background
 - composition
 - camera
-
-When the source request motion, also include these fields when relevant:
 - motion
 - temporal_flow
 - soundscape

@@ -4,21 +4,12 @@ Return exactly one valid JSON object and nothing else.
 - Do not return prose before or after the JSON object.
 - Do not use Markdown, code fences, headers, bullets, or commentary.
 - Use standard JSON only: double-quoted keys and strings, valid arrays/objects, and no trailing commas.
-- If a field is unknown, use an empty string, empty array, or null.
+- If a field is unknown, you may skip field or use an empty string, empty array, or null.
 
 Use this structure:
 - scene: overall description
 - subjects: array of objects describing each important subject, including description, position, and action when relevant
-- style
-- color_palette
-- lighting
 - mood
-- background
-- composition
-- camera
-
-When the source request motion, also include these fields when relevant:
-- motion
 - temporal_flow
 - soundscape
 - dialogue

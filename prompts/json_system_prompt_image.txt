@@ -17,10 +17,5 @@ Use this structure:
 - composition
 - camera
 
-When the source request motion, also include these fields when relevant:
-- motion
-- temporal_flow
-- soundscape
-- dialogue
 
 Do not add a title. Do not add fields unrelated to the generated visual or audiovisual description.
