@@ -6,9 +6,8 @@ Usage:
   python extract_video_workflow.py <video_path> --out workflow.json
 
 Notes:
-- Assumes a standard ComfyUI video with embedded metadata.
-- Tries ffprobe format tags first: "workflow" and "prompt".
-- Falls back to JSON in "comment" tag if needed.
+- Accepts only true workflow payloads (full Comfy workflow JSON).
+- Ignores prompt-only metadata payloads.
 """
 
 import argparse
@@ -52,21 +51,38 @@ def _json_load_maybe(value):
         return value
 
 
+def _is_valid_workflow_dict(data):
+    """Strict workflow check: reject prompt-only/API graph payloads."""
+    if not isinstance(data, dict):
+        return False
+
+    if isinstance(data.get("nodes"), list) and isinstance(data.get("links"), list):
+        return True
+    if isinstance(data.get("nodes"), list) and "last_node_id" in data:
+        return True
+
+    wrapped = data.get("workflow")
+    if isinstance(wrapped, dict):
+        return _is_valid_workflow_dict(wrapped)
+
+    return False
+
+
 def extract_workflow(video_path: Path):
-    """Extract workflow object from a Comfy video metadata payload."""
+    """Extract true workflow object from Comfy video metadata payload."""
     ffprobe_data = _run_ffprobe(video_path)
     tags = ffprobe_data.get("format", {}).get("tags", {})
 
-    # Preferred: direct ComfyUI workflow tag
+    # Preferred: direct workflow tag.
     workflow = _json_load_maybe(tags.get("workflow"))
-    if isinstance(workflow, dict):
+    if _is_valid_workflow_dict(workflow):
         return workflow
 
-    # Fallback: workflow nested in JSON comment payload
+    # Fallback: workflow nested in comment JSON payload.
     comment = _json_load_maybe(tags.get("comment"))
-    if isinstance(comment, dict) and "workflow" in comment:
+    if isinstance(comment, dict):
         workflow = _json_load_maybe(comment.get("workflow"))
-        if isinstance(workflow, dict):
+        if _is_valid_workflow_dict(workflow):
             return workflow
 
     return None
