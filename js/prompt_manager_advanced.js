@@ -649,22 +649,8 @@ app.registerExtension({
                         }
                     }
 
-                    // Ensure height is sufficient after data is loaded
-                    setTimeout(() => {
-                        const computedSize = node.computeSize();
-                        const baseMinHeight = node._isWorkflowManager ? 420 : 600;
-                        const minHeight = Math.max(baseMinHeight, computedSize[1] + 20);
-
-                        if (node._isWorkflowManager) {
-                            // Auto-shrink legacy oversized Workflow Manager nodes created before compact sizing.
-                            if (node.size[1] > 560 || node.size[1] < minHeight) {
-                                node.setSize([Math.max(440, node.size[0]), minHeight]);
-                            }
-                        } else if (node.size[1] < minHeight) {
-                            node.setSize([Math.max(440, node.size[0]), minHeight]);
-                        }
-                        app.graph.setDirtyCanvas(true, true);
-                    }, 100);
+                    // Ensure height is sufficient after data is loaded and DOM widgets render.
+                    requestAnimationFrame(() => resizePmaNodeToContent(node, { shrinkWorkflowManager: true }));
                 });
 
                 return result;
@@ -834,13 +820,7 @@ app.registerExtension({
                             node.updatePromptSelectorDisplay();
                         }
 
-                        if (node._isWorkflowManager) {
-                            const computedSize = node.computeSize();
-                            const minHeight = Math.max(420, computedSize[1] + 20);
-                            if (node.size[1] > 560 || node.size[1] < minHeight) {
-                                node.setSize([Math.max(440, node.size[0]), minHeight]);
-                            }
-                        }
+                        resizePmaNodeToContent(node, { shrinkWorkflowManager: true });
 
                         app.graph.setDirtyCanvas(true, true);
                     } finally {
@@ -863,6 +843,23 @@ app.registerExtension({
         }
     }
 });
+
+function resizePmaNodeToContent(node, options = {}) {
+    if (!node || typeof node.computeSize !== "function") return;
+
+    const computedSize = node.computeSize();
+    const baseMinHeight = node._isWorkflowManager ? 420 : 600;
+    const minHeight = Math.max(baseMinHeight, computedSize[1] + 20);
+    const currentWidth = node.size?.[0] || 440;
+    const currentHeight = node.size?.[1] || 0;
+    const shouldShrinkWorkflowManager = node._isWorkflowManager && options.shrinkWorkflowManager && currentHeight > 560;
+
+    if (shouldShrinkWorkflowManager || currentHeight < minHeight) {
+        node.setSize([Math.max(440, currentWidth), minHeight]);
+    }
+
+    app.graph.setDirtyCanvas(true, true);
+}
 
 function ensurePmaMultiOutputSocket(node) {
     if (!node || node._isWorkflowManager) return;
@@ -2141,6 +2138,9 @@ function addLoraDisplays(node) {
 
     for (const stack of stacks) {
         const container = createLoraDisplayContainer(stack.title, stack.id, node);
+        if ((stack.id === "c" || stack.id === "d") && !shouldShowExtraLoraStacks(node)) {
+            container.style.display = "none";
+        }
         const widget = node.addDOMWidget(stack.domName, "div", container, {
             hideOnZoom: true,
             serialize: false,
@@ -2354,9 +2354,7 @@ function updateLoraDisplays(node) {
     // Update hidden widgets for serialization
     updateToggleWidgets(node);
 
-    // Just redraw canvas - the computeSize functions already handle correct sizing
-    // using node.size[0] for accurate width calculation
-    app.graph.setDirtyCanvas(true, true);
+    requestAnimationFrame(() => resizePmaNodeToContent(node));
 }
 
 /**
@@ -3147,7 +3145,7 @@ function updateTriggerWordsDisplay(node) {
     // Update hidden widget for serialization
     updateToggleWidgets(node);
 
-    app.graph.setDirtyCanvas(true, true);
+    requestAnimationFrame(() => resizePmaNodeToContent(node));
 }
 
 function mergeTriggerWordLists(currentWords, savedWords) {

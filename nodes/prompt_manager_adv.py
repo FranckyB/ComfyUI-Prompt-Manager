@@ -1395,10 +1395,10 @@ class PromptManagerAdvanced:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # Parse connected trigger words (comma-separated)
+        # Parse connected trigger words (LoRA Manager uses double-comma separators)
         connected_words = []
         if connected_trigger_words and isinstance(connected_trigger_words, str):
-            connected_words = [w.strip() for w in connected_trigger_words.split(',') if w.strip()]
+            connected_words = [w.strip() for w in connected_trigger_words.split(',,') if w.strip()]
 
         # Merge: saved words + new connected words (no duplicates)
         result = []
@@ -1453,7 +1453,7 @@ class PromptManagerAdvanced:
         # Also include connected trigger words that aren't already in the saved data
         # This ensures they work on first execution before the UI syncs
         if connected_trigger_words and isinstance(connected_trigger_words, str):
-            for word in connected_trigger_words.split(','):
+            for word in connected_trigger_words.split(',,'):
                 word = word.strip()
                 if word and word.lower() not in seen:
                     active_words.append(word)
@@ -1463,25 +1463,25 @@ class PromptManagerAdvanced:
 
     def _append_trigger_words_to_prompt(self, prompt, trigger_words):
         """
-        Append trigger words to the end of the prompt.
-        Adds a period before trigger words if prompt doesn't end with comma or period.
+        Prepend trigger words before the prompt.
+        Ensures the trigger-word block ends with punctuation; if it doesn't end with
+        period/comma/colon, append a comma.
         """
         if not trigger_words:
             return prompt
 
-        prompt = prompt.rstrip()
+        trigger_block = ', '.join(trigger_words).strip()
+        if not trigger_block:
+            return prompt
+
+        if not trigger_block.endswith(('.', ',', ':')):
+            trigger_block += ','
+
+        prompt = str(prompt or '').strip()
         if not prompt:
-            return ', '.join(trigger_words)
+            return trigger_block
 
-        # Check if prompt ends with punctuation
-        if not prompt.endswith((',', '.')):
-            prompt += '.'
-
-        # Add space if needed
-        if not prompt.endswith(' '):
-            prompt += ' '
-
-        return prompt + ', '.join(trigger_words)
+        return f"{trigger_block} {prompt}"
 
 
 # API Routes for Advanced Prompt Manager

@@ -281,6 +281,46 @@ def get_default_context_size():
         pass
     return 4096  # CPU or VRAM detection failed
 
+
+def resolve_llama_server_command(custom_llama_path=""):
+    """Resolve llama-server with custom-path first and Linux fallbacks."""
+    server_name = "llama-server.exe" if os.name == 'nt' else "llama-server"
+
+    # 1) User-configured path (file or directory).
+    if custom_llama_path:
+        expanded = os.path.expandvars(os.path.expanduser(custom_llama_path))
+        normalized = os.path.normpath(expanded)
+        if os.path.isfile(normalized) and os.access(normalized, os.X_OK):
+            return normalized
+        if os.path.isdir(normalized):
+            candidate = os.path.join(normalized, server_name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+            print_pg(
+                f"Warning: Custom llama path exists but '{server_name}' was not found there. Falling back to default PATH lookup.",
+                YELLOW,
+            )
+        else:
+            print_pg(
+                f"Warning: Custom llama path does not exist: {normalized}. Falling back to default PATH lookup.",
+                YELLOW,
+            )
+
+    # 2) Linux/macOS preset fallback paths.
+    if os.name != 'nt':
+        for candidate in [
+            os.path.expanduser("~/.local/bin/llama-server"),
+            "/home/linuxbrew/.linuxbrew/bin/llama-server",
+            "/usr/local/bin/llama-server",
+            "/usr/bin/llama-server",
+            "/opt/homebrew/bin/llama-server",
+        ]:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+
+    # 3) Fall back to command name (PATH resolution by subprocess).
+    return server_name
+
 class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
@@ -294,7 +334,7 @@ class PromptGenerator:
     def get_text_image_system_prompt():
         """Load the default system prompt for prompt enhancement."""
         return load_prompt("text_image_system_prompt.txt")
-
+    
     @staticmethod
     def get_text_video_system_prompt():
         """Load the video system prompt."""
@@ -349,8 +389,9 @@ class PromptGenerator:
 
         # Check user preference first
         preferred = _preferences_cache.get("preferred_model", "")
-        if preferred and preferred in vision_models:
-            return preferred
+        resolved_preferred = PromptGenerator.resolve_preferred_model(preferred, vision_models)
+        if resolved_preferred:
+            return resolved_preferred
 
         # Fall back to smallest model
         for model in vision_models:
@@ -358,6 +399,27 @@ class PromptGenerator:
                 return model
 
         return vision_models[0]
+
+    @staticmethod
+    def resolve_preferred_model(preferred_model, available_models):
+        """Resolve the configured preferred model against discovered local files."""
+        preferred_model = str(preferred_model or "").strip()
+        if not preferred_model or not available_models:
+            return None
+
+        if preferred_model in available_models:
+            return preferred_model
+
+        preferred_basename = os.path.basename(preferred_model)
+        if preferred_basename in available_models:
+            return preferred_basename
+
+        preferred_fold = preferred_basename.casefold()
+        for model in available_models:
+            if os.path.basename(model).casefold() == preferred_fold:
+                return model
+
+        return None
 
     @staticmethod
     def find_text_model(available_models):
@@ -376,8 +438,9 @@ class PromptGenerator:
 
         # Check user preference first
         preferred = _preferences_cache.get("preferred_model", "")
-        if preferred and preferred in candidates:
-            return preferred
+        resolved_preferred = PromptGenerator.resolve_preferred_model(preferred, candidates)
+        if resolved_preferred:
+            return resolved_preferred
 
         # Fall back to smallest model
         for model in candidates:
@@ -519,16 +582,12 @@ class PromptGenerator:
                 server_cmd = "llama-server"
                 creation_flags = 0
 
-            # If custom llama path is set, use it
             custom_llama_path = _preferences_cache.get("custom_llama_path", "")
+
+            # Resolve executable path without depending on interactive shell PATH.
+            server_cmd = resolve_llama_server_command(custom_llama_path)
             if custom_llama_path:
-                custom_llama_path = os.path.normpath(custom_llama_path)
-                if os.path.isdir(custom_llama_path):
-                    print_pg(f"Using custom llama path: {custom_llama_path}")
-                    server_cmd = os.path.join(custom_llama_path, server_cmd)
-                else:
-                    error_msg = f"Error: Custom llama path is not a valid directory: {custom_llama_path}\nWill use system PATH instead."
-                    print_pg(error_msg, RED)
+                print_pg(f"Resolved llama-server executable: {server_cmd}")
 
             # Build command arguments
             cmd_args = [
@@ -935,6 +994,7 @@ class PromptGenerator:
             # ── llama.cpp model selection ──
             print_pg("Backend       : llama.cpp")
             available_models = get_local_models()
+            preferred_local_model = self.resolve_preferred_model(_preferred, available_models)
 
             if use_vision_model:
                 # Priority: Options node > preferences > auto-discover
@@ -949,12 +1009,12 @@ class PromptGenerator:
                         error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                         print_pg(error_msg, RED)
                         raise RuntimeError(error_msg)
-                elif _preferred and is_model_local(_preferred):
-                    if has_vision_support(_preferred):
-                        model_to_use = _preferred
+                elif preferred_local_model and is_model_local(preferred_local_model):
+                    if has_vision_support(preferred_local_model):
+                        model_to_use = preferred_local_model
                         print_pg(f"Using preferred model from settings: {model_to_use}")
                     else:
-                        print_pg(f"Warning: Preferred model '{_preferred}' has no mmproj (no vision support) for '{mode}' mode.\nSearching for a vision-capable model.")
+                        print_pg(f"Warning: Preferred model '{preferred_local_model}' has no mmproj (no vision support) for '{mode}' mode.\nSearching for a vision-capable model.")
                         model_to_use = self.find_vision_model(available_models)
                         if model_to_use is None:
                             error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
@@ -973,8 +1033,8 @@ class PromptGenerator:
                 if options and "model" in options and is_model_local(options["model"]):
                     model_to_use = options["model"]
                     print_pg(f"Using model from options node: {model_to_use}")
-                elif _preferred and is_model_local(_preferred):
-                    model_to_use = _preferred
+                elif preferred_local_model and is_model_local(preferred_local_model):
+                    model_to_use = preferred_local_model
                     print_pg(f"Using preferred model from settings: {model_to_use}")
                 else:
                     if not available_models:

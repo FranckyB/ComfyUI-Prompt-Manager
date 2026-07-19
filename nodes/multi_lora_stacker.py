@@ -1,6 +1,7 @@
 """Multi-slot LoRA stacker outputting four independent LORA_STACK outputs (A/B/C/D)."""
 
 import json
+import importlib
 import os
 import sys
 
@@ -13,14 +14,10 @@ except Exception:
 
 
 def _try_get_lm_get_lora_info():
-    """Return LM's get_lora_info function if it is already loaded in sys.modules."""
-    # Iterate over a snapshot because sys.modules can change during runtime.
+    """Return LM's get_lora_info function when available."""
+    # First, try already-loaded modules.
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
-            continue
-        # Restrict probing to likely LoRA-Manager modules to avoid triggering
-        # unrelated lazy module __getattr__ hooks (e.g. transformers warnings).
-        if "lora_manager" not in str(mod_name or "").lower():
             continue
 
         mod_dict = getattr(mod, "__dict__", None)
@@ -30,9 +27,25 @@ def _try_get_lm_get_lora_info():
         # Use module __dict__ lookup to avoid invoking module-level __getattr__.
         fn = mod_dict.get("get_lora_info")
         if callable(fn):
-            module_name = getattr(fn, "__module__", "") or ""
-            if "lora_manager" in module_name.lower():
+            file_path = str(mod_dict.get("__file__") or "").lower()
+            has_absolute_variant = callable(mod_dict.get("get_lora_info_absolute"))
+            if "comfyui-lora-manager" in file_path or has_absolute_variant:
                 return fn
+
+    # If not loaded yet, try common module paths directly.
+    candidate_modules = (
+        "custom_nodes.ComfyUI_Lora_Manager.py.utils.utils",
+        "ComfyUI_Lora_Manager.py.utils.utils",
+        "py.utils.utils",
+    )
+    for module_name in candidate_modules:
+        try:
+            mod = importlib.import_module(module_name)
+        except Exception:
+            continue
+        fn = getattr(mod, "get_lora_info", None)
+        if callable(fn):
+            return fn
     return None
 
 
@@ -43,26 +56,29 @@ def _build_lora_stack(loras_json):
     Each entry: {"name": str, "strength": float, "clipStrength": float, "active": bool}
     Returns a list of (lora_path, model_strength, clip_strength) tuples.
     """
+    empty_result = ([], [])
+
     if isinstance(loras_json, str):
         raw = loras_json.strip()
         if not raw or raw == "[]":
-            return []
+            return empty_result
         try:
             loras = json.loads(raw)
         except Exception:
-            return []
+            return empty_result
     elif isinstance(loras_json, dict) and "__value__" in loras_json:
         loras = loras_json["__value__"]
     elif isinstance(loras_json, list):
         loras = loras_json
     else:
-        return []
+        return empty_result
 
     if not isinstance(loras, list):
-        return []
+        return empty_result
 
     get_lora_info = _try_get_lm_get_lora_info()
     stack = []
+    trigger_words = []
 
     def _normalize_to_relative_lora(raw_value, fallback_name):
         candidate = str(raw_value or "").strip()
@@ -109,8 +125,20 @@ def _build_lora_stack(loras_json):
         if get_lora_info is not None:
             try:
                 result = get_lora_info(name)
-                if isinstance(result, tuple) and result[0]:
-                    lora_path = _normalize_to_relative_lora(result[0], name)
+                if isinstance(result, tuple):
+                    if len(result) >= 1 and result[0]:
+                        lora_path = _normalize_to_relative_lora(result[0], name)
+                    if len(result) >= 2:
+                        raw_triggers = result[1]
+                        if isinstance(raw_triggers, str):
+                            token = raw_triggers.strip()
+                            if token:
+                                trigger_words.append(token)
+                        elif isinstance(raw_triggers, (list, tuple, set)):
+                            for trigger in raw_triggers:
+                                token = str(trigger or "").strip()
+                                if token:
+                                    trigger_words.append(token)
             except Exception:
                 pass
 
@@ -120,7 +148,7 @@ def _build_lora_stack(loras_json):
 
         stack.append((lora_path, strength, clip_strength))
 
-    return stack
+    return stack, trigger_words
 
 
 class MultiLoraStackerLM:
@@ -141,8 +169,8 @@ class MultiLoraStackerLM:
             },
         }
 
-    RETURN_TYPES = ("MULTI_LORA_STACK", "LORA_STACK")
-    RETURN_NAMES = ("multi_lora_stack", "lora_stack")
+    RETURN_TYPES = ("MULTI_LORA_STACK", "LORA_STACK", "STRING")
+    RETURN_NAMES = ("multi_lora_stack", "lora_stack", "trigger_words")
     FUNCTION = "stack_multi"
     DESCRIPTION = (
         "Multi-slot LoRA stacker with a visual 4-panel UI (A / B / C / D). "
@@ -158,10 +186,10 @@ class MultiLoraStackerLM:
         loras_state_d="[]",
         **kwargs,
     ):
-        stack_a = _build_lora_stack(loras_state_a)
-        stack_b = _build_lora_stack(loras_state_b)
-        stack_c = _build_lora_stack(loras_state_c)
-        stack_d = _build_lora_stack(loras_state_d)
+        stack_a, triggers_a = _build_lora_stack(loras_state_a)
+        stack_b, triggers_b = _build_lora_stack(loras_state_b)
+        stack_c, triggers_c = _build_lora_stack(loras_state_c)
+        stack_d, triggers_d = _build_lora_stack(loras_state_d)
         multi_lora_stack = {
             "a": stack_a,
             "b": stack_b,
@@ -169,7 +197,9 @@ class MultiLoraStackerLM:
             "d": stack_d,
         }
         combined_lora_stack = [*stack_a, *stack_b, *stack_c, *stack_d]
-        return (multi_lora_stack, combined_lora_stack)
+        trigger_words = [*triggers_a, *triggers_b, *triggers_c, *triggers_d]
+        trigger_words_text = ",, ".join(trigger_words) if trigger_words else ""
+        return (multi_lora_stack, combined_lora_stack, trigger_words_text)
 
 
 def _coerce_lora_stack(raw_stack):
