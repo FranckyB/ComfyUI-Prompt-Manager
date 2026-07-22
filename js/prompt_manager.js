@@ -2,6 +2,50 @@ import { app } from "../../scripts/app.js";
 import { ComfyWidgets } from "../../scripts/widgets.js";
 import { api } from "../../scripts/api.js";
 
+let promptInputMaskPatched = false;
+
+function isTruthyInputFlag(value) {
+    return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function attachPromptInputMaskShim() {
+    if (promptInputMaskPatched) return;
+    if (!app || typeof app.graphToPrompt !== "function") return;
+
+    promptInputMaskPatched = true;
+    const originalGraphToPrompt = app.graphToPrompt.bind(app);
+
+    app.graphToPrompt = async function (...args) {
+        const result = await originalGraphToPrompt(...args);
+
+        const promptData = result && typeof result === "object"
+            ? (result.output && typeof result.output === "object"
+                ? result.output
+                : (result.prompt && typeof result.prompt === "object" ? result.prompt : null))
+            : null;
+
+        if (!promptData) return result;
+
+        for (const nodeId of Object.keys(promptData)) {
+            const nodePayload = promptData[nodeId];
+            if (!nodePayload || typeof nodePayload !== "object") continue;
+
+            const classType = String(nodePayload.class_type || nodePayload.type || "");
+            if (classType !== "PromptManager") continue;
+
+            const inputs = nodePayload.inputs;
+            if (!inputs || typeof inputs !== "object") continue;
+
+            const useExternal = isTruthyInputFlag(inputs.use_external);
+            if (!useExternal && Object.prototype.hasOwnProperty.call(inputs, "llm_input")) {
+                delete inputs.llm_input;
+            }
+        }
+
+        return result;
+    };
+}
+
 function migrateLegacyPromptGenOptionsWidgets(node) {
     if (!node?.widgets || node.widgets.length === 0) {
         return false;
@@ -301,6 +345,7 @@ app.registerExtension({
     },
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "PromptManager") {
+            attachPromptInputMaskShim();
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
