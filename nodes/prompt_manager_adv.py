@@ -1430,34 +1430,46 @@ class PromptManagerAdvanced:
     def _get_active_trigger_words(self, toggle_data, connected_trigger_words=None):
         """
         Get list of active trigger word strings from toggle data and connected input.
-        On first execution, toggle_data may be empty, so we also include connected words.
+        Connected words are auto-added only when toggle_data is truly missing.
+        If toggle_data is present (even an empty list), it is treated as authoritative.
         """
         active_words = []
-        seen = set()
+        active_seen = set()
+        saved_seen = set()
+        has_authoritative_toggle_data = False
 
         # First, get active words from saved toggle data
-        if toggle_data:
+        if toggle_data is not None:
             try:
                 if isinstance(toggle_data, str):
                     toggle_data = json.loads(toggle_data)
                 if isinstance(toggle_data, list):
+                    has_authoritative_toggle_data = True
                     for item in toggle_data:
-                        if isinstance(item, dict) and item.get('active', True):
-                            word = item.get('text', '').strip()
-                            if word:
-                                active_words.append(word)
-                                seen.add(word.lower())
+                        if not isinstance(item, dict):
+                            continue
+                        word = item.get('text', '').strip()
+                        if not word:
+                            continue
+
+                        word_lower = word.lower()
+                        saved_seen.add(word_lower)
+
+                        if item.get('active', True) and word_lower not in active_seen:
+                            active_words.append(word)
+                            active_seen.add(word_lower)
             except (json.JSONDecodeError, TypeError):
                 pass
 
         # Also include connected trigger words that aren't already in the saved data
-        # This ensures they work on first execution before the UI syncs
-        if connected_trigger_words and isinstance(connected_trigger_words, str):
+        # but only when no authoritative toggle payload exists yet.
+        if (not has_authoritative_toggle_data) and connected_trigger_words and isinstance(connected_trigger_words, str):
             for word in connected_trigger_words.split(',,'):
                 word = word.strip()
-                if word and word.lower() not in seen:
+                word_lower = word.lower()
+                if word and word_lower not in saved_seen and word_lower not in active_seen:
                     active_words.append(word)
-                    seen.add(word.lower())
+                    active_seen.add(word_lower)
 
         return active_words
 
