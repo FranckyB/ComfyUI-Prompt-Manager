@@ -7368,43 +7368,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             menu.appendChild(thumbDivider);
 
             const thumbItem = document.createElement("div");
-            thumbItem.textContent = "🎨 Generate Missing Thumbnails";
-            thumbItem.style.cssText = `
-                padding: 8px 16px;
-                color: #ccc;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            thumbItem.onmouseover = () => thumbItem.style.background = '#3a3a3a';
-            thumbItem.onmouseout = () => thumbItem.style.background = 'transparent';
-            thumbItem.onclick = async () => {
-                menu.remove();
-                const catPrompts = node.prompts[cat];
-                if (!catPrompts) return;
-
-                // Collect prompts without thumbnails
-                const missing = Object.keys(catPrompts).filter(name => {
-                    const data = catPrompts[name];
-                    return data && typeof data === "object" && !data.thumbnail;
-                });
-
-                if (missing.length === 0) {
-                    await showInfo("No Missing Thumbnails", `All prompts in "${cat}" already have thumbnails.`);
-                    return;
-                }
-
-                if (!await showConfirm("Generate Missing Thumbnails", `Generate thumbnails for ${missing.length} prompt(s) in "${cat}"?`, "Generate", "#4CAF50")) {
-                    return;
-                }
-
-                // Ensure renderer selection is ready for prompts without saved workflow_data.
-                const renderSelection = await ensureThumbnailRenderSelection();
-                if (!renderSelection) return;
-
-                // Resolve family-compatible defaults once for the batch.
-                const fallbackBase = await resolveThumbnailFallbackBase(renderSelection);
-
-                // Progress indicator
+            const buildProgressUI = () => {
                 const progress = document.createElement("div");
                 progress.style.cssText = `
                     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -7412,7 +7376,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     padding: 14px 16px; z-index: 10000; color: #fff; font-size: 14px;
                     box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 320px;
                 `;
-                let cancelled = false;
 
                 const progressRow = document.createElement("div");
                 progressRow.style.cssText = `
@@ -7433,13 +7396,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     display: flex; align-items: center; justify-content: center;
                     flex-shrink: 0;
                 `;
-                cancelBtn.onclick = () => {
-                    cancelled = true;
-                    cancelBtn.disabled = true;
-                    cancelBtn.style.opacity = "0.6";
-                    cancelBtn.style.cursor = "default";
-                    cancelBtn.title = "Cancelling...";
-                };
 
                 const progressText = document.createElement("div");
                 progressText.style.cssText = `display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;`;
@@ -7454,38 +7410,141 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 styleEl.textContent = `@keyframes thumb-spin { to { transform: rotate(360deg); } }`;
                 progress.appendChild(styleEl);
                 document.body.appendChild(progress);
+                return { progress, progressText, cancelBtn };
+            };
 
-                let generated = 0;
-                let failed = 0;
-                for (let i = 0; i < missing.length; i++) {
-                    if (cancelled) {
-                        break;
-                    }
-                    const pName = missing[i];
-                    progressText.querySelector("span").textContent = `Generating ${i + 1} / ${missing.length}: ${pName}`;
-                    try {
-                        await generateThumbnailForPrompt(node, cat, pName, () => {
-                            renderContent(searchInput.value);
-                        }, {
-                            silent: true,
-                            renderSelection,
-                            fallbackBase,
-                        });
-                        generated++;
-                    } catch (e) {
-                        console.error(`[ThumbnailGen] Failed for "${pName}":`, e);
-                        failed++;
-                    }
+            const runBatchGeneration = async (names, title) => {
+                if (names.length === 0) {
+                    await showInfo("No Thumbnails to Generate", `All prompts in "${cat}" already have thumbnails.`);
+                    return;
                 }
 
-                if (progress.parentNode) progress.remove();
-                if (cancelled) {
-                    await showInfo("Batch Cancelled", `Generated: ${generated}, Failed: ${failed}, Skipped: ${Math.max(0, missing.length - generated - failed)}`);
-                } else {
-                    await showInfo("Batch Complete", `Generated: ${generated}, Failed: ${failed}`);
+                if (!await showConfirm(title, `Generate thumbnails for ${names.length} prompt(s) in "${cat}"?`, "Generate", "#4CAF50")) {
+                    return;
+                }
+
+                // Ensure renderer selection is ready for prompts without saved workflow_data.
+                const renderSelection = await ensureThumbnailRenderSelection();
+                if (!renderSelection) return;
+
+                // Resolve family-compatible defaults once for the batch.
+                const fallbackBase = await resolveThumbnailFallbackBase(renderSelection);
+
+                for (let i = 0; i < names.length; i++) {
+                    const pName = names[i];
+                    _thumbQueueTotal++;
+                    _ensureThumbQueueProgress();
+                    _updateThumbQueueProgress(pName);
+
+                    _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
+                        if (_thumbQueueCancelled) {
+                            _thumbQueueDone++;
+                            if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                                _finishThumbQueueProgress();
+                            }
+                            return;
+                        }
+                        _updateThumbQueueProgress(pName);
+                        try {
+                            await generateThumbnailForPrompt(node, cat, pName, () => {
+                                renderContent(searchInput.value);
+                            }, {
+                                queue: true,
+                                renderSelection,
+                                fallbackBase,
+                            });
+                            _thumbQueueDone++;
+                        } catch (e) {
+                            console.error(`[ThumbnailGen] Failed for "${pName}":`, e);
+                            _thumbQueueFailed++;
+                        } finally {
+                            if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                                _finishThumbQueueProgress();
+                            }
+                        }
+                    });
                 }
             };
-            menu.appendChild(thumbItem);
+
+            // Generate Missing Thumbnails
+            const missingItem = document.createElement("div");
+            missingItem.textContent = "🎨 Generate Missing Thumbnails";
+            missingItem.style.cssText = `
+                padding: 8px 16px;
+                color: #ccc;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            missingItem.onmouseover = () => missingItem.style.background = '#3a3a3a';
+            missingItem.onmouseout = () => missingItem.style.background = 'transparent';
+            missingItem.onclick = async () => {
+                menu.remove();
+                const catPrompts = node.prompts[cat];
+                if (!catPrompts) return;
+
+                // Collect prompts without thumbnails
+                const missing = Object.keys(catPrompts).filter(name => {
+                    const data = catPrompts[name];
+                    return data && typeof data === "object" && !data.thumbnail;
+                });
+
+                await runBatchGeneration(missing, "Generate Missing Thumbnails");
+            };
+            menu.appendChild(missingItem);
+
+            // Regenerate All Thumbnails
+            const regenerateItem = document.createElement("div");
+            regenerateItem.textContent = "🔄 Re-Generate All Thumbnails";
+            regenerateItem.style.cssText = `
+                padding: 8px 16px;
+                color: #ccc;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            regenerateItem.onmouseover = () => regenerateItem.style.background = '#3a3a3a';
+            regenerateItem.onmouseout = () => regenerateItem.style.background = 'transparent';
+            regenerateItem.onclick = async () => {
+                menu.remove();
+                const catPrompts = node.prompts[cat];
+                if (!catPrompts) return;
+
+                const all = Object.keys(catPrompts).filter(name => {
+                    const data = catPrompts[name];
+                    return data && typeof data === "object";
+                });
+
+                await runBatchGeneration(all, "Re-Generate All Thumbnails");
+            };
+            menu.appendChild(regenerateItem);
+
+            // Select Thumbnail Family + Model
+            const modelItem = document.createElement("div");
+            const selectedLorasForLabel = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
+            const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
+                ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}${selectedLorasForLabel.length ? ` + ${selectedLorasForLabel.length} LoRA` + (selectedLorasForLabel.length > 1 ? "s" : "") : ""}`
+                : "🔧 Select Thumbnail Family + Model";
+            modelItem.textContent = modelLabel;
+            modelItem.style.cssText = `
+                padding: 8px 16px;
+                color: #ccc;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            modelItem.onmouseover = () => modelItem.style.background = '#3a3a3a';
+            modelItem.onmouseout = () => modelItem.style.background = 'transparent';
+            modelItem.onclick = async () => {
+                menu.remove();
+                const picked = await showThumbnailRenderPicker(
+                    _thumbnailRenderFamily,
+                    _thumbnailRenderModel,
+                    _thumbnailRenderLora1,
+                    _thumbnailRenderLora2,
+                );
+                if (picked) {
+                    saveThumbnailRenderSelection(picked);
+                }
+            };
+            menu.appendChild(modelItem);
 
             document.body.appendChild(menu);
             const closeMenu = (e) => {
@@ -10220,6 +10279,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
         const queuedName = promptName;
         _thumbQueueTotal++;
         _ensureThumbQueueProgress();
+        _updateThumbQueueProgress(queuedName);
 
         _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
             if (_thumbQueueCancelled) {

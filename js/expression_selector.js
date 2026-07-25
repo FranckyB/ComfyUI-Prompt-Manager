@@ -201,6 +201,18 @@ function addExpressionSelectorBar(node) {
     const getNames = () => getExpressionNames(node);
     const getCurrentIndex = (names) => names.findIndex((n) => n === nameWidget.value);
 
+    const openExpressionBrowser = async () => {
+        const currentName = nameWidget.value || "";
+        const category = getExpressionCategory(node);
+        const selection = await showThumbnailBrowser(node, category, currentName, {
+            allowedCategories: [category],
+            title: "Select Expression",
+        });
+        if (selection && selection.prompt) {
+            await navigateTo(selection.prompt);
+        }
+    };
+
     const navigateTo = async (newName) => {
         if (!newName) return;
         ensureNameInOptions(node, nameWidget, newName);
@@ -455,7 +467,8 @@ app.registerExtension({
             node.prompts = {};
             node._configuredFromWorkflow = false;
 
-            node.setSize([400, 460]);
+            // Default to a small portrait size matching the 3:4 thumbnail ratio.
+            node.setSize([240, 400]);
 
             addExpressionSelectorBar(node);
             addExpressionPreview(node);
@@ -523,8 +536,9 @@ app.registerExtension({
 
         const onResize = nodeType.prototype.onResize;
         nodeType.prototype.onResize = function (size) {
-            size[0] = Math.max(360, size[0]);
-            size[1] = Math.max(360, size[1]);
+            // Allow narrow portrait widths but keep a sane minimum.
+            size[0] = Math.max(240, size[0]);
+            size[1] = Math.max(400, size[1]);
             return onResize ? onResize.apply(this, arguments) : size;
         };
     },

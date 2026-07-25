@@ -9,6 +9,7 @@ No UI, no extraction — purely a render engine.
 import json
 import math
 import os
+import re
 import torch
 import folder_paths
 import comfy.model_management
