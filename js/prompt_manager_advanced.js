@@ -6891,6 +6891,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             z-index: 9999;
         `;
 
+        const compactBrowser = Boolean(app.ui.settings.getSettingValue("PromptManager.CompactPromptBrowser"));
+        const browserLayout = compactBrowser
+            ? { width: 634, height: 680, cols: 4, itemWidth: 140, gap: 12, thumbWidth: 100, thumbHeight: 100 }
+            : { width: 1304, height: 985, cols: 5, itemWidth: 240, gap: 16, thumbWidth: 200, thumbHeight: 264 };
+
         const dialog = document.createElement("div");
         dialog.style.cssText = `
             position: fixed;
@@ -6902,7 +6907,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             border-radius: 12px;
             padding: 16px;
             z-index: 10000;
-            width: 634px;
+            width: ${browserLayout.width}px;
             max-height: 80vh;
             display: flex;
             flex-direction: column;
@@ -7572,7 +7577,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         gridContainer.className = "thumbnail-grid-container";
         gridContainer.style.cssText = `
             overflow-y: auto;
-            height: 680px;
+            height: ${browserLayout.height}px;
             scrollbar-width: none;
             -ms-overflow-style: none;
         `;
@@ -7610,8 +7615,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         const renderGridView = (filter = "") => {
             grid.style.cssText = `
                 display: grid;
-                grid-template-columns: repeat(4, 140px);
-                gap: 12px;
+                grid-template-columns: repeat(${browserLayout.cols}, ${browserLayout.itemWidth}px);
+                gap: ${browserLayout.gap}px;
                 padding: 4px 0;
             `;
             grid.innerHTML = "";
@@ -7750,10 +7755,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 }
 
                 // Thumbnail (using div with background-image to avoid browser extension interference)
+                const thumbWidth = browserLayout.thumbWidth;
+                const thumbHeight = browserLayout.thumbHeight;
                 const thumbDiv = document.createElement("div");
                 thumbDiv.style.cssText = `
-                    width: 100px;
-                    height: 100px;
+                    width: ${thumbWidth}px;
+                    height: ${thumbHeight}px;
                     background-image: url(${thumbnail});
                     background-size: cover;
                     background-position: center;
@@ -7764,7 +7771,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 `;
                 
                 // Add hover preview with proper event handling (if enabled and not placeholder)
-                if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
+                // Hover preview is only useful in compact mode; disabled when thumbnails are already large.
+                if (compactBrowser && previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
                     thumbDiv.addEventListener("mouseenter", (e) => {
                         e.stopPropagation();
                         showPreviewWithDelay(thumbnail, thumbDiv);
@@ -8819,15 +8827,16 @@ function prepareExpressionPromptText(promptText, category = null) {
     return `${characterDesc} ${expressionText}`;
 }
 
-function applyThumbnailResolution(workflowData) {
+function applyThumbnailResolution(workflowData, category = null) {
     const wfForThumb = JSON.parse(JSON.stringify(workflowData || {}));
     const baseResolution = (wfForThumb.resolution && typeof wfForThumb.resolution === "object")
         ? wfForThumb.resolution
         : {};
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
     wfForThumb.resolution = {
         ...baseResolution,
-        width: THUMB_RENDER_WIDTH,
-        height: THUMB_RENDER_HEIGHT,
+        width: isExpression ? 768 : THUMB_RENDER_WIDTH,
+        height: isExpression ? 1024 : THUMB_RENDER_HEIGHT,
         batch_size: THUMB_RENDER_BATCH,
         length: THUMB_RENDER_LENGTH,
     };
@@ -8938,7 +8947,7 @@ async function buildRendererFallbackWorkflowData(promptText, promptData, renderS
             : baseRaw.sampler,
         _source: "PromptManagerAdvancedThumbnail",
     };
-    return applyThumbnailResolution(base);
+    return applyThumbnailResolution(base, promptData?.category);
 }
 
 async function resolveThumbnailFallbackBase(renderSelection) {
@@ -9505,7 +9514,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     }
 
     // Enforce thumbnail-safe render sizing before queueing.
-    const wfForThumb = applyThumbnailResolution(workflowData);
+    const wfForThumb = applyThumbnailResolution(workflowData, category);
     const modelSlot = resolveThumbnailModelSlot(wfForThumb);
     applyThumbnailSeeds(wfForThumb, modelSlot, category);
     applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);

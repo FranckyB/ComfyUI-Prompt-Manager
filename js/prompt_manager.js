@@ -225,6 +225,14 @@ app.registerExtension({
             defaultValue: true
         },
         {
+            id: "PromptManager.CompactPromptBrowser",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Compact Prompt Browser"],
+            name: "Use compact prompt browser",
+            tooltip: "When enabled, the prompt browser dialog uses the smaller legacy size. When disabled (default), it is enlarged to show more thumbnails.",
+            type: "boolean",
+            defaultValue: false
+        },
+        {
             id: "PromptManager.ThumbnailCheckpoint",
             category: ["Prompt Manager", "4. Advanced Preferences", "Thumbnail Generation Checkpoint"],
             name: "Checkpoint for thumbnail generation",
