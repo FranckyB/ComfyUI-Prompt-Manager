@@ -98,6 +98,21 @@ MODEL_FAMILIES = {
         "clip_type": "lumina2",
         "sampler": "zimage",
     },
+    # ── Krea2 (similar pipeline to Z-Image) ─────────────────────────────────
+    "krea2": {
+        "label":   "Krea2",
+        "folders": ["krea/", "krea 2/", "krea2/"],
+        "names":   ["krea2", "krea-2", "krea_2", "krea2_turbo"],
+        # Krea2 uses the Z-Image/AuraFlow sampling path but its own CLIP type.
+        "vae_exact": ["wan2.1_vae_fp32.safetensors"],
+        "vae":     ["wan2.1_vae_fp32", "wan_2.1_vae", "qwen_image_vae"],
+        "clip_exact": ["qwen3vl_4b_fp8_scaled.safetensors"],
+        "clip":         ["qwen3vl_4b"],
+        "clip_exclude": ["qwen_2.5", "qwen_2_5", "qwen_3_4b", "qwen_3_8b",
+                         "t5xxl", "umt5", "clip_l", "clip_g", "gemma"],
+        "clip_type": "krea2",
+        "sampler": "krea2",
+    },
     # ── WAN 2.x Video — Image-to-Video (dual KSampler + i2v latent) ──────────
     "wan_video_i2v": {
         "label":   "WAN Video (i2v)",
@@ -191,6 +206,7 @@ MODEL_COMPAT_GROUPS = [
     {"sdxl"},                                      # SDXL-arch — all merged into one now
     {"flux1"},                                     # Flux1 variants — all merged into one now
     {"zimage"},                                    # Z-Image — all merged
+    {"krea2"},                                     # Krea2 — distinct family
     {"flux2"},                                     # Flux2 — all merged
     {"wan_image", "wan_video_t2v"},                # WAN Image shares T2V model files
 ]
@@ -202,6 +218,7 @@ SAMPLER_STRATEGIES = {
     "flux":      "flux",       # SamplerCustomAdvanced + BasicGuider (Flux1)
     "flux2":     "flux2",      # SamplerCustomAdvanced + CFGGuider (Klein/Flux2/Ernie)
     "zimage":    "zimage",     # ModelSamplingAuraFlow + standard KSampler (Z-Image)
+    "krea2":     "krea2",      # ModelSamplingAuraFlow + standard KSampler (Krea2)
     "wan_image": "wan_image",  # Single KSampler — WAN Image
     "wan_video": "wan_video",  # Dual KSamplerAdvanced high/low (WAN Video i2v + t2v)
 }
@@ -214,6 +231,7 @@ FAMILY_WORKFLOW_STEMS = {
     "flux1":         "flux_1",
     "flux2":         "flux_2",
     "zimage":        "z_image",
+    "krea2":         "krea2",
     "wan_image":     "wan_image",
     "wan_video_i2v": "wan_video_i2v",
     "wan_video_t2v": "wan_video_t2v",

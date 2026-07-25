@@ -8,6 +8,7 @@ __license__ = "MIT"
 
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
+from .nodes.expression_selector import ExpressionSelector
 from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_generator_kill_switch import PromptGeneratorKillSwitch
@@ -25,6 +26,7 @@ from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, Mult
 NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
+    "ExpressionSelector":        ExpressionSelector,
     "PromptGenerator":           PromptGenerator,
     "PromptGenOptions":          PromptGenOptions,
     "PromptGeneratorKillSwitch": PromptGeneratorKillSwitch,
@@ -46,6 +48,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
+    "ExpressionSelector":         "Expression Selector",
     "PromptGenerator":            "Prompt Generator",
     "PromptGenOptions":           "Prompt Generator Options",
     "PromptGeneratorKillSwitch":  "Prompt Generator Kill Switch",
@@ -66,4 +69,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
 WEB_DIRECTORY = "./js"
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
-print("[PromptManager] Nodes registered: Prompt Manager, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")
+print("[PromptManager] Nodes registered: Prompt Manager, Expression Selector, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")

@@ -51,17 +51,74 @@ except Exception:
 
 # Keep renderer fallback sampler defaults aligned with Recipe Builder family defaults.
 _FAMILY_SAMPLER_DEFAULTS = {
-    "ernie": {"steps_a": 4, "cfg": 1.0, "sampler": "euler_ancestral", "scheduler": "beta"},
     "sdxl": {"steps_a": 20, "cfg": 5.0, "sampler": "dpmpp_2m_sde", "scheduler": "karras"},
+    "ernie": {"steps_a": 4, "cfg": 1.0, "sampler": "euler_ancestral", "scheduler": "beta"},
     "flux1": {"steps_a": 20, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "flux2": {"steps_a": 4, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "zimage": {"steps_a": 9, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+    "krea2": {"steps_a": 9, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "ltxv": {"steps_a": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
     "wan_image": {"steps_a": 8, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple"},
     "wan_video_t2v": {"steps_a": 2, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 2},
     "wan_video_i2v": {"steps_a": 2, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 2},
     "qwen_image": {"steps_a": 10, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
 }
+
+def _apply_family_sampler_defaults(primary_sampler, wf_sampler, family_key, log_prefix="[RecipeRenderer]"):
+    """Apply family-specific sampler defaults unconditionally.
+
+    The renderer is the final consumer of RECIPE_DATA; family defaults are the
+    intended sampler configuration and always win over upstream template values
+    or Builder override_data.
+    """
+    family_defaults = _FAMILY_SAMPLER_DEFAULTS.get(family_key, {})
+    if not family_defaults:
+        return primary_sampler, wf_sampler, False
+
+    merged = dict(wf_sampler) if isinstance(wf_sampler, dict) else {}
+    if isinstance(primary_sampler, dict):
+        merged.update(primary_sampler)
+
+    field_map = {
+        "steps_a": ("steps", "steps_a"),
+        "steps_b": ("steps_b",),
+        "cfg": ("cfg",),
+        "sampler": ("sampler_name", "sampler"),
+        "scheduler": ("scheduler",),
+    }
+
+    normalized = False
+    for family_key_default, source_keys in field_map.items():
+        family_val = family_defaults.get(family_key_default)
+        if family_val is None:
+            continue
+        for src_key in source_keys:
+            if src_key not in merged:
+                continue
+            merged[src_key] = family_val
+            normalized = True
+            break
+
+    if normalized:
+        steps_disp = merged.get("steps", merged.get("steps_a"))
+        cfg_disp = merged.get("cfg")
+        sampler_disp = merged.get("sampler_name", merged.get("sampler"))
+        scheduler_disp = merged.get("scheduler")
+        print(
+            f"{log_prefix} Applied family sampler defaults for '{family_key}' "
+            f"to steps={steps_disp}, cfg={cfg_disp}, sampler={sampler_disp}, scheduler={scheduler_disp}"
+        )
+        if isinstance(primary_sampler, dict):
+            for k in list(primary_sampler.keys()):
+                if k in merged:
+                    primary_sampler[k] = merged[k]
+        if isinstance(wf_sampler, dict):
+            for k in list(wf_sampler.keys()):
+                if k in merged:
+                    wf_sampler[k] = merged[k]
+
+    return primary_sampler, wf_sampler, normalized
+
 
 # Runtime caches for non-checkpoint components reused across repeated renders.
 _class_vae_cache = {}
@@ -485,6 +542,18 @@ class WorkflowRenderer:
         _family_spec = MODEL_FAMILIES.get(family_key, {})
         _family_is_ckpt = _family_spec.get('checkpoint', False)
 
+        # ── Family-specific sampler defaults ──────────────────────────────
+        # Always apply the family's intended sampler configuration. The renderer
+        # is the final consumer of RECIPE_DATA, so upstream template or Builder
+        # override_data values are replaced with the family defaults.
+        primary_sampler, wf_sampler, _ = _apply_family_sampler_defaults(
+            primary_sampler, wf_sampler, family_key
+        )
+        if primary is not None:
+            primary["sampler"] = dict(primary_sampler)
+        if isinstance(wf, dict):
+            wf["sampler"] = dict(wf_sampler)
+
         # ── Family defaults for VAE/CLIP when upstream data is incomplete ──
         clip_is_placeholder = bool(clip_names) and all(
             (not n) or str(n).startswith('(') for n in clip_names
@@ -749,6 +818,9 @@ class WorkflowRenderer:
         if family_key == "zimage":
             decoded, out_latent = _render_zimage(**render_args)
 
+        elif family_key == "krea2":
+            decoded, out_latent = _render_krea2(**render_args)
+
         elif family_key == "qwen_image":
             decoded, out_latent = _render_qwen_image(**render_args)
 
@@ -892,6 +964,38 @@ class WorkflowRenderer:
         return (wf_out, decoded, out_latent)
 
 
+def _extract_expression_block(positive_prompt):
+    """
+    Split a prompt into base prompt and an optional trailing expression block.
+    The expression block is everything from the last 'expression:' (case-insensitive,
+    whole-line or standalone) to the end. Returns (base_prompt, expression_text).
+    """
+    text = str(positive_prompt or "")
+    # Match 'expression:' as a whole word at the start of a line or after whitespace,
+    # so it does not catch words like "photo expressionism".
+    match = None
+    for m in re.finditer(r"(?:^|\s)expression\s*:", text, flags=re.IGNORECASE):
+        match = m
+    if not match:
+        return text, ""
+
+    base = text[:match.start()].rstrip()
+    expr = text[match.end():].lstrip()
+    return base, expr
+
+
+def _promote_expression_prompt(positive_prompt):
+    """
+    If the prompt contains a trailing 'expression:' block, move it to the top of
+    the prompt separated by a blank line. This gives the expression the highest
+    attention during CLIP encoding.
+    """
+    base, expr = _extract_expression_block(positive_prompt)
+    if not expr:
+        return positive_prompt
+    return f"expression: {expr}\n\n{base}"
+
+
 def _encode_text_conditioning(clip, positive_prompt, negative_prompt):
     """
     Resolve positive/negative text conditioning from a CLIP encoder.
@@ -901,7 +1005,7 @@ def _encode_text_conditioning(clip, positive_prompt, negative_prompt):
         return None, None
 
     try:
-        tokens_pos = clip.tokenize(str(positive_prompt or ""))
+        tokens_pos = clip.tokenize(_promote_expression_prompt(str(positive_prompt or "")))
         cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
     except Exception as e:
         print(f"[RecipeRenderer] Failed to encode positive conditioning: {e}")
@@ -1044,6 +1148,8 @@ def _load_clip(clip_info, overrides, existing_clip=None):
         clip_type = comfy.sd.CLIPType.QWEN_IMAGE  # Qwen2.5-VL image encoder
     elif t and 'lumina2' in t:
         clip_type = comfy.sd.CLIPType.LUMINA2     # z-image / Lumina2 encoder
+    elif t and 'krea2' in t:
+        clip_type = getattr(comfy.sd.CLIPType, "KREA2", comfy.sd.CLIPType.LUMINA2)
     else:
         clip_type = comfy.sd.CLIPType.STABLE_DIFFUSION
 
@@ -1616,6 +1722,95 @@ def _render_zimage(model, clip, vae, pos_prompt, neg_prompt,
     )
 
     decoded = _decode_latent_output(vae, latent_out, tag="_render_zimage")
+    return decoded, latent_out
+
+
+def _render_krea2(model, clip, vae, pos_prompt, neg_prompt,
+                  width, height, batch, sampler_params,
+                  input_latent=None,
+                  loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    Krea2 render path — mirrors Z-Image/AuraFlow but uses the krea2 CLIP type.
+    Automatically appends a Krea2 uncensor/refusal-reduction LoRA if available.
+    """
+    from comfy_extras.nodes_sd3 import EmptySD3LatentImage
+
+    # ── Auto-apply a Krea2 uncensor/refusal-reduction LoRA if present ─────
+    krea_uncensor_loras = [
+        "Krea2_TextFusion_Refusal_Reduction.safetensors",
+        "krea2filterbypass3.safetensors",
+        "skc3vo.safetensors",
+        "MysticXXX_KREA2_v2_stripped.safetensors",
+        "snofs_krea_v1_nostrip.safetensors",
+    ]
+    resolved_uncensor = None
+    for candidate in krea_uncensor_loras:
+        lora_path, available = resolve_lora_path(candidate)
+        if available:
+            resolved_uncensor = candidate
+            break
+
+    effective_loras = list(loras_a) if loras_a else []
+    effective_overrides = dict(lora_overrides) if lora_overrides else {}
+    if resolved_uncensor:
+        # Determine special strengths for specific LoRAs.
+        uncensor_model_strength = 1.0
+        uncensor_clip_strength = 1.0
+        basename_lower = os.path.basename(resolved_uncensor).lower()
+        if basename_lower == "krea2filterbypass3.safetensors":
+            uncensor_model_strength = 2.0
+            uncensor_clip_strength = 2.0
+        elif basename_lower == "skc3vo.safetensors":
+            uncensor_model_strength = 0.2
+            uncensor_clip_strength = 0.2
+
+        effective_loras.append({
+            "name": resolved_uncensor,
+            "active": True,
+            "model_strength": uncensor_model_strength,
+            "clip_strength": uncensor_clip_strength,
+        })
+        stack_prefix = f"{lora_stack_key}:" if lora_stack_key else ""
+        effective_overrides[f"{stack_prefix}{resolved_uncensor}"] = {
+            "active": True,
+            "model_strength": uncensor_model_strength,
+            "clip_strength": uncensor_clip_strength,
+        }
+        print(f"[RecipeRenderer] Auto-applying Krea2 uncensor LoRA: {resolved_uncensor} "
+              f"(model={uncensor_model_strength:.2f}, clip={uncensor_clip_strength:.2f})")
+
+    if effective_loras:
+        model, clip = _apply_loras(
+            model, clip, effective_loras, effective_overrides, stack_key=lora_stack_key
+        )
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    model = _patch_model_sampling_auraflow(
+        model, shift=float(sampler_params.get("shift", 3.0))
+    )
+
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    if use_input_latent:
+        latent = input_latent
+    else:
+        latent_node = EmptySD3LatentImage()
+        if hasattr(latent_node, "generate"):
+            latent = latent_node.generate(width=width, height=height, batch_size=batch)[0]
+        else:
+            latent = _extract_node_outputs(
+                EmptySD3LatentImage.execute(width=width, height=height, batch_size=batch)
+            )[0]
+
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
+    latent_out = _run_standard_ksampler(
+        model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise
+    )
+
+    decoded = _decode_latent_output(vae, latent_out, tag="_render_krea2")
     return decoded, latent_out
 
 

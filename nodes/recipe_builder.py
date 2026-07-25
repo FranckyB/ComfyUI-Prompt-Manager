@@ -35,6 +35,7 @@ from ..py.workflow_families import (
     list_compatible_vaes,
     list_compatible_clips,
 )
+from .recipe_renderer import _FAMILY_SAMPLER_DEFAULTS
 from ..py.workflow_extraction_utils import (
     extract_sampler_params,
     extract_vae_info,
@@ -1592,6 +1593,32 @@ class WorkflowBuilder:
             family_key = "" if not str(model_name_a or "").strip() else "sdxl"
 
         strategy = get_family_sampler_strategy(family_key)
+
+        # Apply family-specific sampler defaults when the user has not
+        # explicitly overridden the value in the UI. This prevents e.g. Krea2
+        # from inheriting 20 steps / CFG 5.0 from an upstream SDXL workflow.
+        family_defaults = _FAMILY_SAMPLER_DEFAULTS.get(family_key, {})
+        sampler_override_keys = set()
+        if _allow_override('sampler'):
+            sampler_override_keys = {k for k in ['steps_a', 'steps_b', 'cfg', 'denoise',
+                                                  'seed_a', 'seed_b', 'sampler_name', 'scheduler']
+                                     if k in overrides}
+
+        # Generic fallback values that indicate "unset / came from blank template".
+        _GENERIC_SAMPLER_DEFAULTS = {
+            'steps_a': 20,
+            'steps_b': None,
+            'cfg': 5.0,
+            'sampler_name': 'dpmpp_2m_sde',
+            'scheduler': 'karras',
+        }
+        for key, val in family_defaults.items():
+            if key in sampler_override_keys:
+                continue
+            current = sampler_params.get(key)
+            generic = _GENERIC_SAMPLER_DEFAULTS.get(key)
+            if current is None or current == generic:
+                sampler_params[key] = val
 
         print(f"[RecipeBuilder] Family: {get_family_label(family_key)} "
               f"(strategy={strategy}), model_a={model_name_a}, "

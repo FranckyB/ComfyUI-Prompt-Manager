@@ -875,12 +875,13 @@ app.registerExtension({
                 return result;
             };
 
-            // Enforce minimum node size
+            // Enforce minimum node size (preserve user resize)
             const onResize = nodeType.prototype.onResize;
             nodeType.prototype.onResize = function(size) {
                 size[0] = Math.max(440, size[0]);
                 size[1] = Math.max(this?._isWorkflowManager ? 420 : 600, size[1]);
-                return onResize ? onResize.apply(this, arguments) : size;
+                if (onResize) onResize.apply(this, arguments);
+                return size;
             };
 
 
@@ -1513,20 +1514,12 @@ function addWorkflowManagerPreview(node) {
         overflow: hidden;
     `;
 
-    const title = document.createElement("div");
-    title.textContent = "Workflow Preview";
-    title.style.cssText = `
-        font-size: 11px;
-        color: ${PMA_THEME.textHint};
-        font-weight: 600;
-        letter-spacing: 0.2px;
-    `;
-
     const previewBox = document.createElement("div");
     previewBox.style.cssText = `
         position: relative;
         width: 100%;
-        aspect-ratio: 1 / 1;
+        flex: 1;
+        min-height: 80px;
         border-radius: 6px;
         background: ${PMA_THEME.inputBg};
         border: 1px solid ${PMA_THEME.inputBorder};
@@ -1599,7 +1592,6 @@ function addWorkflowManagerPreview(node) {
         await showWorkflowDiscoverySummary(node);
     };
 
-    container.appendChild(title);
     previewBox.appendChild(image);
     previewBox.appendChild(emptyLabel);
     previewBox.appendChild(infoBtn);
@@ -1608,8 +1600,20 @@ function addWorkflowManagerPreview(node) {
     const widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
         hideOnZoom: false,
     });
-    // Keep width behavior unchanged; make preview area ~20% taller.
-    widget.computeSize = (width) => [Math.max(width || 260, 260), 320];
+    // Let the DOM widget fill the remaining node height; do NOT override
+    // computeSize with a fixed height or vertical resize will be locked.
+    widget.getHeight = () => "100%";
+    const origDraw = widget.draw;
+    widget.draw = function (ctx, n, widgetWidth, y, H) {
+        if (typeof origDraw === "function") origDraw.apply(this, arguments);
+        if (!this.element || n.flags?.collapsed) return;
+        this.element.style.setProperty("width", (n.size[0] - 18) + "px", "important");
+        this.element.style.setProperty("left", "0px", "important");
+        this.element.style.setProperty("margin", "0px", "important");
+        this.element.style.setProperty("padding", "0px", "important");
+        this.element.style.setProperty("box-sizing", "border-box", "important");
+        this.element.style.setProperty("overflow", "hidden", "important");
+    };
 
     node._workflowManagerPreview = { container, image, emptyLabel, infoBtn, widget };
     node.workflowManagerPreviewAttached = true;
@@ -4205,6 +4209,33 @@ function getWorkflowPromptText(workflowData) {
         return String(modelA.positive_prompt || "");
     }
     return String(workflowData?.positive_prompt || "");
+}
+
+/**
+ * Patch an existing saved workflow_data so Expression thumbnails prepend the
+ * configured character description to the prompt text.
+ */
+function patchExpressionPromptInWorkflowData(workflowData, category) {
+    if (!workflowData || typeof workflowData !== "object") {
+        return workflowData;
+    }
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
+    if (!isExpression) {
+        return workflowData;
+    }
+
+    const newText = prepareExpressionPromptText(getWorkflowPromptText(workflowData), category);
+
+    if (Number(workflowData.version || 0) >= 2 && workflowData.models && typeof workflowData.models === "object") {
+        const modelA = workflowData.models.model_a;
+        if (modelA && typeof modelA === "object") {
+            modelA.positive_prompt = newText;
+        }
+    } else {
+        workflowData.positive_prompt = newText;
+    }
+
+    return workflowData;
 }
 
 function getWorkflowLorasBySlot(workflowData, slot = "model_a") {
@@ -6822,7 +6853,19 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
     const saveNamePlaceholder = options?.namePlaceholder || "Prompt name";
     const initialSaveName = typeof options?.initialName === "string" ? options.initialName : "";
     const workflowOnly = options?.workflowOnly === true || node?._isWorkflowManager === true;
-    
+    const allowedCategories = Array.isArray(options?.allowedCategories)
+        ? options.allowedCategories.map((c) => String(c))
+        : null;
+    const allowedCategorySet = allowedCategories
+        ? new Set(allowedCategories.map((c) => c.toLowerCase()))
+        : null;
+    const selectTitle = typeof options?.title === "string" ? options.title : null;
+
+    const filterAllowedCategories = (categories) => {
+        if (!allowedCategorySet || !Array.isArray(categories)) return categories;
+        return categories.filter((cat) => allowedCategorySet.has(String(cat).toLowerCase()));
+    };
+
     // Check if thumbnail preview is enabled from user preferences
     const previewEnabled = getThumbnailPreviewEnabled();
     
@@ -6883,7 +6926,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         const title = document.createElement("div");
         title.textContent = mode === "save"
             ? saveTitle
-            : (workflowOnly ? "Select Recipe" : "Select Prompt");
+            : (selectTitle || (workflowOnly ? "Select Recipe" : "Select Prompt"));
         title.style.cssText = `
             font-size: 18px;
             font-weight: bold;
@@ -7050,7 +7093,9 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         updateViewModeBtn();
 
         controlsBar.appendChild(searchWrapper);
-        controlsBar.appendChild(contentFilterBtn);
+        if (!allowedCategories) {
+            controlsBar.appendChild(contentFilterBtn);
+        }
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
 
@@ -7065,13 +7110,13 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             flex-wrap: wrap;
         `;
 
-        let categories = getVisibleCategories(node, {
+        let categories = filterAllowedCategories(getVisibleCategories(node, {
             hideNSFW: hideNSFWState,
             workflowOnly,
             contentFilter: contentFilterState,
             filterEmptyCategories: true,
             keepCategory: mode === "save" ? selectedCategory : "",
-        });
+        }));
         let selectedSaveName = initialSaveName;
         let categoryButtons = [];
 
@@ -7080,13 +7125,13 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         const ensureSelectedCategory = () => {
-            categories = getVisibleCategories(node, {
+            categories = filterAllowedCategories(getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
                 filterEmptyCategories: true,
                 keepCategory: mode === "save" ? selectedCategory : "",
-            });
+            }));
 
             if (!Array.isArray(categories) || categories.length === 0) {
                 selectedCategory = "";
@@ -7424,13 +7469,13 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         const rebuildCategoryList = () => {
-            categories = getVisibleCategories(node, {
+            categories = filterAllowedCategories(getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
                 filterEmptyCategories: true,
                 keepCategory: mode === "save" ? selectedCategory : "",
-            });
+            }));
             ensureSelectedCategory();
             categoryButtons = [];
             categoryContainer.innerHTML = "";
@@ -7516,6 +7561,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             updateCategoryButtons();
         };
         rebuildCategoryList();
+
+        // When the caller locks the browser to a single category, hide the tabs.
+        if (allowedCategories && allowedCategories.length === 1) {
+            categoryContainer.style.display = "none";
+        }
 
         // Content container - fixed size
         const gridContainer = document.createElement("div");
@@ -8675,15 +8725,26 @@ function applyThumbnailSelectedLoras(workflowData, renderSelection, selectedSlot
     return wf;
 }
 
-function applyThumbnailRandomSeeds(workflowData, selectedSlot = "model_a") {
+function applyThumbnailSeeds(workflowData, selectedSlot = "model_a", category = null) {
     if (!workflowData || typeof workflowData !== "object") {
         return workflowData;
     }
 
     const wf = workflowData;
     const slot = String(selectedSlot || "model_a").trim().toLowerCase();
-    const seedA = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
-    const seedB = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
+    let seedA;
+    let seedB;
+    if (isExpression) {
+        const rawSeed = app.ui.settings.getSettingValue("PromptManager.ExpressionSeed");
+        const parsed = Number(rawSeed);
+        seedA = Number.isFinite(parsed) ? parsed : 42;
+        seedB = seedA;
+    } else {
+        seedA = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+        seedB = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+    }
 
     // Top-level sampler compatibility (legacy + v2 helpers reading these fields).
     if (!wf.sampler || typeof wf.sampler !== "object") {
@@ -8719,6 +8780,43 @@ function applyThumbnailRandomSeeds(workflowData, selectedSlot = "model_a") {
     }
 
     return wf;
+}
+
+function applyThumbnailRandomSeeds(workflowData, selectedSlot = "model_a") {
+    return applyThumbnailSeeds(workflowData, selectedSlot, null);
+}
+
+/**
+ * For Expression-category thumbnails, append the expression prompt after the
+ * configured character description. If the expression does not already start
+ * with "expression:" (case-insensitive), prefix it with that label.
+ * @param {string} promptText - Original prompt text (the expression)
+ * @param {string|null} category - Prompt category
+ * @returns {string} Character description + labeled expression
+ */
+function prepareExpressionPromptText(promptText, category = null) {
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
+    if (!isExpression) {
+        return String(promptText || "");
+    }
+
+    const rawDesc = app.ui.settings.getSettingValue("PromptManager.ExpressionCharacterDescription");
+    const characterDesc = String(rawDesc || "").trim();
+    let expressionText = String(promptText || "").trim();
+
+    if (!expressionText) {
+        return characterDesc;
+    }
+
+    if (!expressionText.toLowerCase().startsWith("expression:")) {
+        expressionText = `expression: ${expressionText}`;
+    }
+
+    if (!characterDesc) {
+        return expressionText;
+    }
+
+    return `${characterDesc} ${expressionText}`;
 }
 
 function applyThumbnailResolution(workflowData) {
@@ -8780,11 +8878,12 @@ function getThumbnailFamilySamplerDefaults(familyKey) {
 
 async function buildRendererFallbackWorkflowData(promptText, promptData, renderSelection) {
     const familySamplerDefaults = getThumbnailFamilySamplerDefaults(renderSelection.family);
+    const finalPromptText = prepareExpressionPromptText(promptText, promptData?.category);
     const baseRaw = {
         model_family: renderSelection.family,
         model_a: renderSelection.model,
         model_b: "",
-        positive_prompt: String(promptText || ""),
+        positive_prompt: String(finalPromptText || ""),
         negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
         loras_a: normalizeLorasForRenderer(promptData?.loras_a),
         loras_b: normalizeLorasForRenderer(promptData?.loras_b),
@@ -8891,6 +8990,7 @@ async function buildRendererFallbackWorkflowDataWithBase(promptText, promptData,
     }
 
     const normalized = fallbackBase.normalized;
+    const finalPromptText = prepareExpressionPromptText(promptText, promptData?.category);
     const clipNames = Array.isArray(normalized?.clip?.names)
         ? normalized.clip.names.filter((x) => !!x)
         : [];
@@ -8899,7 +8999,7 @@ async function buildRendererFallbackWorkflowDataWithBase(promptText, promptData,
         family: normalized?.model_family || renderSelection.family,
         model_a: normalized?.model_a || renderSelection.model,
         model_b: normalized?.model_b || "",
-        positive_prompt: String(promptText || ""),
+        positive_prompt: String(finalPromptText || ""),
         negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
         loras_a: normalizeLorasForRenderer(promptData?.loras_a),
         loras_b: normalizeLorasForRenderer(promptData?.loras_b),
@@ -9395,9 +9495,11 @@ function resolveThumbnailModelSlot(workflowData) {
  * Build and queue a thumbnail generation workflow using RecipeRenderer.
  * Falls back to the basic thumbnail workflow when this path cannot run.
  * @param {Object} workflowData - Saved workflow_data payload
+ * @param {Object|null} renderSelection - Selected family/model/loras
+ * @param {string|null} category - Prompt category (e.g. "Expression") for category-specific seed handling
  * @returns {Promise<string|null>} Base64 thumbnail data URL or null
  */
-async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSelection = null) {
+async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSelection = null, category = null) {
     if (!workflowData || typeof workflowData !== "object") {
         return null;
     }
@@ -9405,7 +9507,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     // Enforce thumbnail-safe render sizing before queueing.
     const wfForThumb = applyThumbnailResolution(workflowData);
     const modelSlot = resolveThumbnailModelSlot(wfForThumb);
-    applyThumbnailRandomSeeds(wfForThumb, modelSlot);
+    applyThumbnailSeeds(wfForThumb, modelSlot, category);
     applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);
 
     const workflow = {};
@@ -9571,6 +9673,11 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
         return;
     }
 
+    // Pass category through so expression character description and seed are applied.
+    if (promptData && typeof promptData === "object" && !promptData.category) {
+        promptData.category = category;
+    }
+
     const promptText = promptData.prompt || promptName;
     const activeRenderSelection = providedRenderSelection || (
         (_thumbnailRenderFamily && _thumbnailRenderModel)
@@ -9623,7 +9730,8 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
 
         if (parsedWorkflowData) {
             try {
-                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection);
+                patchExpressionPromptInWorkflowData(parsedWorkflowData, category);
+                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection, category);
             } catch (e) {
                 console.warn("[ThumbnailGen] RecipeRenderer thumbnail path failed, falling back:", e);
                 thumbnail = null;
@@ -9641,7 +9749,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
                 renderSelection,
                 fallbackBase
             );
-            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection);
+            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection, category);
         }
 
         if (thumbnail) {
@@ -10406,3 +10514,16 @@ function createPromptSelectorWidget(node) {
 
     return widget;
 }
+
+// Shared helpers for companion nodes (e.g. ExpressionSelector)
+export {
+    PMA_THEME,
+    DEFAULT_THUMBNAIL,
+    loadPrompts,
+    getPromptNamesForCategory,
+    getVisibleCategories,
+    showThumbnailBrowser,
+    forwardWheelToCanvas,
+    showInfo,
+    showConfirm,
+};

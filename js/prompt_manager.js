@@ -233,6 +233,40 @@ app.registerExtension({
             defaultValue: ""
         },
         {
+            id: "PromptManager.ExpressionSeed",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Expression Seed"],
+            name: "Static seed for expression thumbnail generation",
+            tooltip: "Seed used when generating thumbnails for Expression-category prompts. Set to 0 to use random seeds instead.",
+            type: "number",
+            defaultValue: 42,
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "expression_seed", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving expression seed preference:", error);
+                });
+            }
+        },
+        {
+            id: "PromptManager.ExpressionCharacterDescription",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Expression Character Description"],
+            name: "Character description for expression thumbnails",
+            tooltip: "The character description used when generating Expression thumbnails. The expression prompt is appended after this description.",
+            type: "text",
+            defaultValue: "A close portrait of a young woman with sun-kissed skin and wavy, chestnut-brown hair that falls just past her shoulders, her face and bare shoulders bathed in warm, direct sunlight against a smooth, neutral cream-colored background. She is bare-shouldered, her skin glowing with a natural sheen, captured in a tight, intimate close-up that keeps her face as the dominant 70% of the frame while the background remains softly out of focus. The lighting is bright and directional, casting distinct highlights on her hair and skin.",
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "expression_character_description", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving expression character description preference:", error);
+                });
+            }
+        },
+        {
             id: "PromptManager.LLMBackend",
             category: ["Prompt Manager", "5. Ollama Settings", "LLM Backend"],
             name: "LLM Backend",
