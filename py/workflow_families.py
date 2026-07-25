@@ -100,7 +100,7 @@ MODEL_FAMILIES = {
     },
     # ── Krea2 (similar pipeline to Z-Image) ─────────────────────────────────
     "krea2": {
-        "label":   "Krea2",
+        "label":   "Krea 2",
         "folders": ["krea/", "krea 2/", "krea2/"],
         "names":   ["krea2", "krea-2", "krea_2", "krea2_turbo"],
         # Krea2 uses the Z-Image/AuraFlow sampling path but its own CLIP type.

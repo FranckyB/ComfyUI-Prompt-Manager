@@ -10,7 +10,7 @@ import {
     forwardWheelToCanvas,
 } from "./prompt_manager_advanced.js";
 
-const EXPRESSION_CATEGORY = "Expression";
+const EXPRESSION_CATEGORY = "Expressions";
 
 function getExpressionCategory(node) {
     if (!node.prompts) return EXPRESSION_CATEGORY;

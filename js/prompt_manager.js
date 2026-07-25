@@ -207,15 +207,7 @@ app.registerExtension({
             type: "boolean",
             defaultValue: true
         },
-        {
-            id: "PromptManager.DefaultViewMode",
-            category: ["Prompt Manager", "4. Advanced Preferences", "Prompt Browser View Mode"],
-            name: "Default prompt browser view mode",
-            tooltip: "Choose the default display mode for the prompt browser: thumbnails grid or compact list view.",
-            type: "combo",
-            options: ["thumbnails", "list"],
-            defaultValue: "thumbnails"
-        },
+
         {
             id: "PromptManager.EnableThumbnailPreview",
             category: ["Prompt Manager", "4. Advanced Preferences", "Enable Thumbnail Hover Preview"],

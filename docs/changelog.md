@@ -1,5 +1,19 @@
 # Changelog
 
+## version 2.5.4
+- **Prompt Manager Advanced browser overhaul**
+  - Larger non-compact prompt browser with bigger 3:4 thumbnails.
+  - New browser view modes: Grid, Icon (small grid), and List.
+  - View mode is persisted in the browser and no longer controlled by a preference default.
+  - Compact browser size can still be restored via Preferences.
+- **Krea2 thumbnail generation support**
+  - Recipe Renderer now supports the Krea2 family for thumbnail renders.
+- **New Expression Selector node**
+  - Appends a saved Expression-category prompt to an input prompt.
+  - Supports gender-aware pronoun substitution.
+  - Add new expressions directly through Prompt Manager Advanced.
+  - Select `(none)` to pass the input prompt through unchanged.
+
 ## version 2.5.3
 - **Improved Prompt Extractor to better match FBNodes image loader+**
   - Can now browse any folder and can view in detail, normal and large Thumbnails.

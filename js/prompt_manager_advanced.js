@@ -159,18 +159,32 @@ function attachPromptInputMaskShim() {
 // ========================
 // These persist during a working session but reset to preferences on ComfyUI restart
 let sessionHideNSFW = null;   // null = use preference default
-let sessionViewMode = null;   // null = use preference default
+let sessionViewMode = null;   // null = use localStorage default
 let sessionEnableThumbnailPreview = null;  // null = use localStorage default
 let sessionBrowserContentFilter = null; // null = use preference default
+
+// Shared thumbnail queue state for right-click single generations.
+let _thumbQueueTotal = 0;
+let _thumbQueueDone = 0;
+let _thumbQueueFailed = 0;
+let _thumbQueueCancelled = false;
+let _thumbQueueProgress = null;
+let _thumbQueuePromiseChain = Promise.resolve();
 
 function getHideNSFW() {
     if (sessionHideNSFW !== null) return sessionHideNSFW;
     return app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
 }
 
-function getViewMode() {
-    if (sessionViewMode !== null) return sessionViewMode;
-    return app.ui.settings.getSettingValue("PromptManager.DefaultViewMode");
+function getViewMode(compactBrowser = false) {
+    if (sessionViewMode !== null) {
+        if (compactBrowser && sessionViewMode === "icon") return "grid";
+        return sessionViewMode;
+    }
+    const stored = localStorage.getItem("PromptManager.BrowserViewMode");
+    const mode = stored === "list" || stored === "icon" ? stored : "grid";
+    if (compactBrowser && mode === "icon") return "grid";
+    return mode;
 }
 
 function getThumbnailPreviewEnabled() {
@@ -4219,7 +4233,7 @@ function patchExpressionPromptInWorkflowData(workflowData, category) {
     if (!workflowData || typeof workflowData !== "object") {
         return workflowData;
     }
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
     if (!isExpression) {
         return workflowData;
     }
@@ -6894,7 +6908,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         const compactBrowser = Boolean(app.ui.settings.getSettingValue("PromptManager.CompactPromptBrowser"));
         const browserLayout = compactBrowser
             ? { width: 654, height: 680, cols: 5, itemWidth: 120, gap: 4, thumbWidth: 100, thumbHeight: 132 }
-            : { width: 1304, height: 985, cols: 5, itemWidth: 240, gap: 16, thumbWidth: 200, thumbHeight: 264 };
+            : {
+                width: 1304, height: 985, iconHeight: 1185,
+                cols: 5, itemWidth: 240, gap: 16, thumbWidth: 200, thumbHeight: 264,
+                iconCols: 10, iconItemWidth: 120, iconGap: 7, iconThumbWidth: 100, iconThumbHeight: 132,
+            };
 
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -7086,11 +7104,21 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#313843'; nsfwBtn.style.color = '#aaa'; } };
 
         // View mode toggle button
-        let currentViewMode = getViewMode();
+        let currentViewMode = getViewMode(compactBrowser);
         const viewModeBtn = document.createElement("button");
         const updateViewModeBtn = () => {
-            viewModeBtn.textContent = currentViewMode === "thumbnails" ? "⊞ Grid" : "☰ List";
-            viewModeBtn.title = currentViewMode === "thumbnails" ? "Switch to list view" : "Switch to grid view";
+            const labels = {
+                grid: "⊞ Grid",
+                icon: "⊞ Icon",
+                list: "☰ List",
+            };
+            viewModeBtn.textContent = labels[currentViewMode] || labels.grid;
+            const titles = {
+                grid: "Large thumbnail grid",
+                icon: "Small icon grid",
+                list: "Compact list view",
+            };
+            viewModeBtn.title = titles[currentViewMode] || titles.grid;
         };
         viewModeBtn.style.cssText = btnStyle;
         viewModeBtn.onmouseover = () => { viewModeBtn.style.background = '#38414c'; viewModeBtn.style.color = '#fff'; };
@@ -7577,7 +7605,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         gridContainer.className = "thumbnail-grid-container";
         gridContainer.style.cssText = `
             overflow-y: auto;
-            height: ${browserLayout.height}px;
+            height: ${currentViewMode === "icon" ? browserLayout.iconHeight : browserLayout.height}px;
             scrollbar-width: none;
             -ms-overflow-style: none;
         `;
@@ -7611,7 +7639,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             });
         };
 
-        // ---- Grid (Thumbnail) View ----
+        // ---- Grid (Large Thumbnail) View ----
         const renderGridView = (filter = "") => {
             grid.style.cssText = `
                 display: grid;
@@ -7773,6 +7801,242 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 // Add hover preview with proper event handling (if enabled and not placeholder)
                 // Hover preview is only useful in compact mode; disabled when thumbnails are already large.
                 if (compactBrowser && previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
+                    thumbDiv.addEventListener("mouseenter", (e) => {
+                        e.stopPropagation();
+                        showPreviewWithDelay(thumbnail, thumbDiv);
+                    });
+                    thumbDiv.addEventListener("mouseleave", (e) => {
+                        e.stopPropagation();
+                        scheduleHidePreview();
+                    });
+                }
+
+                // Prompt name
+                const nameLabel = document.createElement("div");
+                nameLabel.textContent = promptName;
+                nameLabel.title = promptName;
+                nameLabel.style.cssText = `
+                    margin-top: 8px;
+                    font-size: 12px;
+                    color: #ccc;
+                    text-align: center;
+                    width: 100%;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                `;
+
+                card.appendChild(thumbDiv);
+                card.appendChild(nameLabel);
+
+                card.onclick = async () => {
+                    if (mode === "save") {
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
+                            saveNameInput.focus();
+                            saveNameInput.select();
+                        }
+                        currentPrompt = promptName;
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
+                    resolve({ category: selectedCategory, prompt: promptName });
+                    cleanup();
+                };
+
+                if (mode === "save") {
+                    card.ondblclick = async () => {
+                        if (!onSave) return;
+                        const overwriteOk = await showConfirm(
+                            "Overwrite Prompt",
+                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
+                            "Replace",
+                            "#c44"
+                        );
+                        if (!overwriteOk) return;
+
+                        const saveResult = await onSave({
+                            category: selectedCategory,
+                            name: promptName,
+                            overwrite: true,
+                        });
+
+                        if (saveResult?.success) {
+                            resolve(saveResult);
+                            cleanup();
+                        } else {
+                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        }
+                    };
+                }
+
+                card.oncontextmenu = (e) => promptContextMenu(e, promptName);
+
+                grid.appendChild(card);
+            });
+        };
+
+        // ---- Icon (Small Thumbnail) Grid View ----
+        const renderCompactGridView = (filter = "") => {
+            grid.style.cssText = `
+                display: grid;
+                grid-template-columns: repeat(${browserLayout.iconCols}, ${browserLayout.iconItemWidth}px);
+                gap: ${browserLayout.iconGap}px;
+                padding: 4px 0;
+            `;
+            grid.innerHTML = "";
+
+            const categoryPrompts = node.prompts[selectedCategory] || {};
+            const filteredPrompts = getFilteredPrompts(filter);
+
+            if (filteredPrompts.length === 0) {
+                const emptyMsg = document.createElement("div");
+                emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
+                emptyMsg.style.cssText = `
+                    grid-column: 1 / -1;
+                    text-align: center;
+                    color: #666;
+                    padding: 40px;
+                    font-style: italic;
+                `;
+                grid.appendChild(emptyMsg);
+                return;
+            }
+
+            filteredPrompts.forEach(promptName => {
+                const promptData = categoryPrompts[promptName];
+                const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
+                const isSelected = promptName === currentPrompt;
+                const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
+                const rawWorkflowData = promptData?.workflow_data;
+                const hasWorkflowData = (
+                    (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
+                    (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
+                );
+                const hasPromptPayload = hasPromptPresetPayload(promptData);
+
+                const card = document.createElement("div");
+                if (isSelected) {
+                    card.dataset.selectedPrompt = "true";
+                }
+                card.style.cssText = `
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    padding: 8px;
+                    background: ${isSelected ? UI.accentSoft : UI.cardBg};
+                    border: 2px solid ${isSelected ? UI.accentBorder : UI.cardBorder};
+                    border-radius: 8px;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                    position: relative;
+                `;
+
+                card.onmouseenter = () => {
+                    if (!isSelected) {
+                        card.style.background = UI.accentSoft;
+                        card.style.borderColor = UI.accentBorder;
+                    }
+                };
+                card.onmouseleave = () => {
+                    if (!isSelected) {
+                        card.style.background = UI.cardBg;
+                        card.style.borderColor = UI.cardBorder;
+                    }
+                };
+
+                // Top-right badge stack: NSFW first, workflow badge under it.
+                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
+                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
+                if (isNSFW || showWorkflowBadge || showPromptBadge) {
+                    const badgeStack = document.createElement("div");
+                    badgeStack.style.cssText = `
+                        position: absolute;
+                        top: 4px;
+                        right: 4px;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: flex-end;
+                        gap: 2px;
+                        z-index: 1;
+                    `;
+
+                    if (isNSFW) {
+                        const badge = document.createElement("div");
+                        badge.textContent = "NSFW";
+                        badge.style.cssText = `
+                            background: rgba(204, 0, 0, 0.85);
+                            color: #fff;
+                            font-size: 8px;
+                            font-weight: bold;
+                            padding: 1px 4px;
+                            border-radius: 3px;
+                            line-height: 1.2;
+                        `;
+                        badgeStack.appendChild(badge);
+                    }
+
+                    if (showWorkflowBadge) {
+                        const workflowBadge = document.createElement("div");
+                        workflowBadge.textContent = "R";
+                        workflowBadge.title = "Has Recipe Data";
+                        workflowBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(235, 140, 35, 0.95);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(workflowBadge);
+                    }
+
+                    if (showPromptBadge) {
+                        const promptBadge = document.createElement("div");
+                        promptBadge.textContent = "P";
+                        promptBadge.title = "Prompt Data (Converted to Recipe)";
+                        promptBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(56, 130, 246, 0.96);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(promptBadge);
+                    }
+
+                    card.appendChild(badgeStack);
+                }
+
+                // Thumbnail (using div with background-image to avoid browser extension interference)
+                const thumbDiv = document.createElement("div");
+                thumbDiv.style.cssText = `
+                    width: ${browserLayout.iconThumbWidth}px;
+                    height: ${browserLayout.iconThumbHeight}px;
+                    background-image: url(${thumbnail});
+                    background-size: cover;
+                    background-position: center;
+                    border-radius: 6px;
+                    background-color: #1a1a1a;
+                    flex-shrink: 0;
+                    cursor: pointer;
+                `;
+
+                // Hover preview enabled for compact grid thumbnails.
+                if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
                     thumbDiv.addEventListener("mouseenter", (e) => {
                         e.stopPropagation();
                         showPreviewWithDelay(thumbnail, thumbDiv);
@@ -8250,6 +8514,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         const renderContent = (filter = "") => {
             if (currentViewMode === "list") {
                 renderListView(filter);
+            } else if (currentViewMode === "icon") {
+                renderCompactGridView(filter);
             } else {
                 renderGridView(filter);
             }
@@ -8281,8 +8547,15 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         viewModeBtn.onclick = () => {
-            currentViewMode = currentViewMode === "thumbnails" ? "list" : "thumbnails";
+            if (currentViewMode === "grid") {
+                currentViewMode = "icon";
+            } else if (currentViewMode === "icon") {
+                currentViewMode = "list";
+            } else {
+                currentViewMode = "grid";
+            }
             sessionViewMode = currentViewMode;
+            localStorage.setItem("PromptManager.BrowserViewMode", currentViewMode);
             updateViewModeBtn();
             renderContent(searchInput.value);
         };
@@ -8741,7 +9014,7 @@ function applyThumbnailSeeds(workflowData, selectedSlot = "model_a", category = 
     const wf = workflowData;
     const slot = String(selectedSlot || "model_a").trim().toLowerCase();
 
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
     let seedA;
     let seedB;
     if (isExpression) {
@@ -8803,7 +9076,7 @@ function applyThumbnailRandomSeeds(workflowData, selectedSlot = "model_a") {
  * @returns {string} Character description + labeled expression
  */
 function prepareExpressionPromptText(promptText, category = null) {
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
     if (!isExpression) {
         return String(promptText || "");
     }
@@ -8832,7 +9105,7 @@ function applyThumbnailResolution(workflowData, category = null) {
     const baseResolution = (wfForThumb.resolution && typeof wfForThumb.resolution === "object")
         ? wfForThumb.resolution
         : {};
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expression";
+    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
     wfForThumb.resolution = {
         ...baseResolution,
         width: isExpression ? 768 : THUMB_RENDER_WIDTH,
@@ -9674,11 +9947,86 @@ async function fetchThumbnailImage(filename, subfolder, type) {
  * Uses RecipeRenderer from saved workflow_data when available, otherwise
  * builds a renderer-compatible workflow_data payload from prompt + selected model.
  */
+function _ensureThumbQueueProgress() {
+    if (_thumbQueueProgress) return;
+
+    _thumbQueueCancelled = false;
+    const progress = document.createElement("div");
+    progress.style.cssText = `
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        background: #222; border: 2px solid #4CAF50; border-radius: 8px;
+        padding: 14px 16px; z-index: 10000; color: #fff; font-size: 14px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 320px;
+    `;
+
+    const progressRow = document.createElement("div");
+    progressRow.style.cssText = `
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+    `;
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "✕";
+    cancelBtn.title = "Cancel remaining thumbnails";
+    cancelBtn.style.cssText = `
+        width: 24px; height: 24px; line-height: 22px;
+        border-radius: 6px; border: 1px solid #666;
+        background: #2f2f2f; color: #eee;
+        cursor: pointer; font-size: 14px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+    `;
+    cancelBtn.onclick = () => {
+        _thumbQueueCancelled = true;
+        cancelBtn.disabled = true;
+        cancelBtn.style.opacity = "0.6";
+        cancelBtn.style.cursor = "default";
+        cancelBtn.title = "Cancelling...";
+    };
+
+    const progressText = document.createElement("div");
+    progressText.style.cssText = `display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;`;
+    progressText.innerHTML = `
+        <div style="width: 18px; height: 18px; border: 3px solid #4CAF50; border-top-color: transparent; border-radius: 50%; animation: thumb-spin 1s linear infinite; flex-shrink: 0;"></div>
+        <span style="line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+    `;
+    progressRow.appendChild(progressText);
+    progressRow.appendChild(cancelBtn);
+    progress.appendChild(progressRow);
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `@keyframes thumb-spin { to { transform: rotate(360deg); } }`;
+    progress.appendChild(styleEl);
+    document.body.appendChild(progress);
+
+    _thumbQueueProgress = { root: progress, text: progressText.querySelector("span"), cancelBtn };
+}
+
+function _updateThumbQueueProgress(currentName) {
+    if (!_thumbQueueProgress) return;
+    const done = _thumbQueueDone + _thumbQueueFailed;
+    const remaining = Math.max(0, _thumbQueueTotal - done);
+    _thumbQueueProgress.text.textContent = `Generating ${Math.min(done + 1, _thumbQueueTotal)} / ${_thumbQueueTotal}: ${currentName} (${remaining} remaining)`;
+}
+
+function _finishThumbQueueProgress() {
+    if (!_thumbQueueProgress) return;
+    if (_thumbQueueProgress.root.parentNode) {
+        _thumbQueueProgress.root.parentNode.removeChild(_thumbQueueProgress.root);
+    }
+    _thumbQueueProgress = null;
+    _thumbQueueTotal = 0;
+    _thumbQueueDone = 0;
+    _thumbQueueFailed = 0;
+    _thumbQueueCancelled = false;
+}
+
 async function generateThumbnailForPrompt(node, category, promptName, onUpdate, options = {}) {
-    const { silent = false, renderSelection: providedRenderSelection = null, fallbackBase = null } = options || {};
+    const { silent = false, renderSelection: providedRenderSelection = null, fallbackBase = null, queue = false } = options || {};
     const promptData = node.prompts[category]?.[promptName];
     if (!promptData) {
-        if (!silent) await showInfo("Error", "Prompt data not found.");
+        if (!silent && !queue) await showInfo("Error", "Prompt data not found.");
         return;
     }
 
@@ -9698,9 +10046,9 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
             : null
     );
 
-    // Show generating indicator (only in non-silent/single mode)
+    // Show generating indicator (only in non-silent/non-queued single mode)
     let indicator = null;
-    if (!silent) {
+    if (!silent && !queue) {
         indicator = document.createElement("div");
         indicator.style.cssText = `
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -9765,11 +10113,11 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
             await saveThumbnail(node, category, promptName, thumbnail);
             onUpdate();
         } else {
-            if (!silent) await showInfo("Generation Failed", "Could not generate thumbnail. The model may be incompatible or an error occurred.");
+            if (!silent && !queue) await showInfo("Generation Failed", "Could not generate thumbnail. The model may be incompatible or an error occurred.");
         }
     } catch (e) {
         console.error("[ThumbnailGen] Error:", e);
-        if (!silent) await showInfo("Error", `Thumbnail generation failed: ${e.message}`);
+        if (!silent && !queue) await showInfo("Error", `Thumbnail generation failed: ${e.message}`);
         else throw e;
     } finally {
         if (indicator?.parentNode) {
@@ -9869,7 +10217,31 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
 
     // Generate Thumbnail
     menu.appendChild(createMenuItem("🎨 Generate Thumbnail", async () => {
-        await generateThumbnailForPrompt(node, category, promptName, onUpdate);
+        const queuedName = promptName;
+        _thumbQueueTotal++;
+        _ensureThumbQueueProgress();
+
+        _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
+            if (_thumbQueueCancelled) {
+                _thumbQueueDone++;
+                if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                    _finishThumbQueueProgress();
+                }
+                return;
+            }
+            _updateThumbQueueProgress(queuedName);
+            try {
+                await generateThumbnailForPrompt(node, category, queuedName, onUpdate, { queue: true });
+                _thumbQueueDone++;
+            } catch (e) {
+                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
+                _thumbQueueFailed++;
+            } finally {
+                if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                    _finishThumbQueueProgress();
+                }
+            }
+        });
     }));
 
     // Change Thumbnail Family/Model

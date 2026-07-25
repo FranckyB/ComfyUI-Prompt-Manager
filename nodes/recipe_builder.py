@@ -1595,7 +1595,7 @@ class WorkflowBuilder:
         strategy = get_family_sampler_strategy(family_key)
 
         # Apply family-specific sampler defaults when the user has not
-        # explicitly overridden the value in the UI. This prevents e.g. Krea2
+        # explicitly overridden the value in the UI. This prevents e.g. Krea 2
         # from inheriting 20 steps / CFG 5.0 from an upstream SDXL workflow.
         family_defaults = _FAMILY_SAMPLER_DEFAULTS.get(family_key, {})
         sampler_override_keys = set()

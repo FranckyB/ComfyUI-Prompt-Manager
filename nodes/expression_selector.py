@@ -11,7 +11,7 @@ import server
 from .prompt_manager_basic import PromptManager, _get_workflow_node
 
 
-_EXPRESSION_CATEGORY = "Expression"
+_EXPRESSION_CATEGORY = "Expressions"
 
 
 def _find_expression_case_insensitive(prompts_data, name):
@@ -163,6 +163,11 @@ class ExpressionSelector:
     def _substitute_expression(prompt, expression_text, subject_gender="female"):
         expr = expression_text if isinstance(expression_text, str) else str(expression_text)
         expr = ExpressionSelector._apply_gender_substitutions(expr.strip(), subject_gender)
+
+        # If the selected expression is the special "(none)" sentinel, return the
+        # original prompt unchanged so no expression block is appended.
+        if expr.lower() == "(none)":
+            return prompt if isinstance(prompt, str) else ""
 
         # Label the expression if it does not already start with "expression:".
         if expr and not expr.lower().startswith("expression:"):

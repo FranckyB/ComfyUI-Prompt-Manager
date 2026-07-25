@@ -3,15 +3,20 @@
 
 ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, generating, extracting, organizing, and reusing prompts with LoRA-aware workflows. It includes local LLM-powered prompt generation (llama.cpp or Ollama) with automatic download of Qwen3.5 models, metadata extraction from images/videos/JSON, prompt browser tooling, and advanced prompt save/load flows. For users who want full pipeline reuse, it also includes an optional Recipe toolset to build, edit, render, load, relay, and save complete generation configs from extracted or hand-authored data. Metadata extraction supports media generated in ComfyUI, A1111, and Forge, including Wan workflows with dual model/stack support.
 
+## Latest update
+- Larger Prompt Manager Advanced browser with Grid/Icon/List views and persisted view mode.
+- Krea2 support added to Recipe Renderer thumbnail generation.
+- New Expression Selector node for appending saved expressions.
+
 ## What This Provides
 
-- **Prompt authoring and management**: Prompt Manager (Advanced + Basic) for prompt save/load workflows, LoRA stacks or Multi Lora Stacks, trigger words, and reusable prompt libraries.
+- **Prompt authoring and management**: Prompt Manager (Advanced + Basic) for prompt save/load workflows, LoRA stacks or Multi Lora Stacks, trigger words, expressions, and reusable prompt libraries.
 - **Prompt generation (local LLM)**: Prompt Generator + Prompt Generator Options using llama.cpp or Ollama, with support for text enhancement and image-based analysis (Qwen3.5 vision models).
 - **Prompt and metadata extraction**: Prompt Extractor reads metadata from images/videos/JSON and can output prompt, LoRA, and recipe context.
-- **Prompt browsing utilities**: Browser tools to quickly find and load saved prompts or recipes.
+- **Prompt browsing utilities**: Browser tools to quickly find and load saved prompts or recipes, with Grid, Icon, and List views.
 - **LoRA workflow support**: Multi-LoRA stack tooling and editable LoRA data when reusing saved entries.
 - **Optional full Recipe toolkit**: Recipe Builder, Recipe Extractor, Recipe Relay, Recipe Renderer, Recipe Model Loader/Picker, and Recipe Manager for complete generation pipelines.
-- **Model-aware recipe rendering**: Recipe Renderer supports Flux 1/2, Ernie, SDXL, Wan, Qwen, Z-Image, Wan Image, and Wan Video (I2V/T2V).
+- **Model-aware recipe rendering**: Recipe Renderer supports Flux 1/2, Ernie, SDXL, Wan, Qwen, Z-Image, Krea2, Wan Image, and Wan Video (I2V/T2V).
 - **Lora Preview integration**: When [Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager) is installed, LoRAs can be previewed on hover.
 - **Advanced media loading**: Extractor nodes can also act as advanced image loaders from Input and Output folders.
 ---
@@ -67,9 +72,10 @@ Version 2.x introduces an optional Recipe toolset that can be used on its own, o
 ### Prompt Toolset
 
 - Prompt Manager: dual LoRA stacks, trigger words, thumbnail workflows, and advanced save flows.
+- Prompt Manager (Basic): category-based prompt save/load. A no-frills basic version (The OG).
+- Expression Selector: appends a saved Expression prompt to an input prompt with optional gender substitution; select `(none)` to pass the prompt through unchanged.
 - Prompt Extractor: reads metadata from images/videos/JSON and outputs prompt + LoRA + recipe context.
 - Prompt Generator + Options: local LLM prompt creation and enhancement using llama.cpp or Ollama.
-- Prompt Manager (Basic): category-based prompt save/load. A no-frills basic version (The OG).
 
 ### Recipe Toolset
 
