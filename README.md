@@ -8,6 +8,16 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, gener
 - Krea2 support added to Recipe Renderer thumbnail generation.
 - New Expression Selector node for appending saved expressions.
 
+<div align="center">
+  <figcaption>Expression Selector appends expression to prompts</figcaption>
+  <img src="docs/images/Expression_Selector_example.png" alt="Expression Selector Example">
+</div>
+
+<div align="center">
+  <figcaption>Example of the Expression Browser</figcaption>
+  <img src="docs/images/Expression_Selector_Browser.png" alt="Expression Selector Browser">
+</div>
+
 ## What This Provides
 
 - **Prompt authoring and management**: Prompt Manager (Advanced + Basic) for prompt save/load workflows, LoRA stacks or Multi Lora Stacks, trigger words, expressions, and reusable prompt libraries.
