@@ -6893,7 +6893,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
         const compactBrowser = Boolean(app.ui.settings.getSettingValue("PromptManager.CompactPromptBrowser"));
         const browserLayout = compactBrowser
-            ? { width: 634, height: 680, cols: 4, itemWidth: 140, gap: 12, thumbWidth: 100, thumbHeight: 100 }
+            ? { width: 654, height: 680, cols: 5, itemWidth: 120, gap: 4, thumbWidth: 100, thumbHeight: 132 }
             : { width: 1304, height: 985, cols: 5, itemWidth: 240, gap: 16, thumbWidth: 200, thumbHeight: 264 };
 
         const dialog = document.createElement("div");
