@@ -7856,7 +7856,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     flex-shrink: 0;
                     cursor: pointer;
                 `;
-                
+                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value));
+
                 // Add hover preview with proper event handling (if enabled and not placeholder)
                 // Hover preview is only useful in compact mode; disabled when thumbnails are already large.
                 if (compactBrowser && previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
@@ -8093,6 +8094,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     flex-shrink: 0;
                     cursor: pointer;
                 `;
+                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value));
 
                 // Hover preview enabled for compact grid thumbnails.
                 if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
@@ -8278,7 +8280,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     background-color: #1a1a1a;
                     cursor: pointer;
                 `;
-                
+                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value));
+
                 // Add hover preview with proper event handling (if enabled and not placeholder)
                 if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
                     thumbDiv.addEventListener("mouseenter", (e) => {
@@ -8910,6 +8913,57 @@ function _thumbnailDisplayName(modelPath, maxLength = 68) {
     const leaf = _thumbnailLeafName(modelPath);
     if (leaf.length <= maxLength) return leaf;
     return `${leaf.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+/**
+ * Attach drag-and-drop handlers so users can drop an image onto a thumbnail
+ * to set it as that prompt's thumbnail.
+ */
+function _attachThumbnailDropHandlers(element, node, category, promptName, onUpdate) {
+    element.addEventListener("dragover", (e) => {
+        const hasFiles = Array.from(e.dataTransfer?.types || []).includes("Files");
+        if (!hasFiles) return;
+        e.preventDefault();
+        e.stopPropagation();
+        element.style.outline = "2px dashed #4CAF50";
+        element.style.outlineOffset = "2px";
+    });
+    element.addEventListener("dragleave", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        element.style.outline = "";
+        element.style.outlineOffset = "";
+    });
+    element.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        element.style.outline = "";
+        element.style.outlineOffset = "";
+
+        const files = Array.from(e.dataTransfer?.files || []);
+        const imageFile = files.find((f) => f.type?.startsWith("image/"));
+        if (!imageFile) return;
+
+        const existing = node.prompts?.[category]?.[promptName]?.thumbnail;
+        if (existing) {
+            const confirmed = await showConfirm(
+                "Replace Thumbnail",
+                `"${promptName}" already has a thumbnail. Do you want to replace it with the dropped image?`,
+                "Replace",
+                "#c00"
+            );
+            if (!confirmed) return;
+        }
+
+        try {
+            const thumbnail = await resizeImageToThumbnail(imageFile, 200);
+            await saveThumbnail(node, category, promptName, thumbnail);
+            onUpdate();
+        } catch (error) {
+            console.error("[PromptManagerAdvanced] Error setting thumbnail from drop:", error);
+            await showInfo("Error", "Failed to set thumbnail from dropped image.");
+        }
+    });
 }
 
 async function fetchAvailableThumbnailLoras() {
