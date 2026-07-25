@@ -22,6 +22,34 @@ function getExpressionCategory(node) {
     return EXPRESSION_CATEGORY;
 }
 
+function hasExpressionCategory(node) {
+    if (!node.prompts || typeof node.prompts !== "object") return false;
+    return Object.keys(node.prompts).some(
+        (cat) => cat.toLowerCase() === EXPRESSION_CATEGORY.toLowerCase()
+    );
+}
+
+async function ensureExpressionsCategory(node) {
+    if (hasExpressionCategory(node)) return false;
+
+    try {
+        const response = await fetch("/prompt-manager/merge-default-expressions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        });
+        const data = await response.json();
+        if (data.success && data.merged && data.prompts) {
+            node.prompts = data.prompts;
+            console.log("[ExpressionSelector] Merged default Expressions into prompt library.");
+            return true;
+        }
+    } catch (err) {
+        console.error("[ExpressionSelector] Error ensuring Expressions category:", err);
+    }
+    return false;
+}
+
 function getExpressionNames(node) {
     const category = getExpressionCategory(node);
     return getPromptNamesForCategory(node, category, { hideNSFW: false, workflowOnly: false });
@@ -155,6 +183,21 @@ function addExpressionSelectorBar(node) {
         nameDisplay.title = nameDisplay.textContent;
     };
 
+    const formatPromptTooltip = (text) => {
+        if (!text) return "No prompt available";
+        const words = String(text).trim().split(/\s+/);
+        const lines = [];
+        for (let i = 0; i < words.length; i += 10) {
+            lines.push(words.slice(i, i + 10).join(" "));
+        }
+        return lines.join("\n");
+    };
+
+    const updateTooltip = () => {
+        const entry = getExpressionData(node, nameWidget.value || "");
+        nameDisplay.title = formatPromptTooltip(entry?.prompt || "");
+    };
+
     const getNames = () => getExpressionNames(node);
     const getCurrentIndex = (names) => names.findIndex((n) => n === nameWidget.value);
 
@@ -166,6 +209,7 @@ function addExpressionSelectorBar(node) {
             await nameWidget.callback(newName);
         }
         updateDisplay();
+        updateTooltip();
         updateExpressionPreview(node);
         app.graph.setDirtyCanvas(true, true);
     };
@@ -191,18 +235,14 @@ function addExpressionSelectorBar(node) {
     nameDisplay.onclick = async (e) => {
         e.stopPropagation();
         try {
-            const currentName = nameWidget.value || "";
-            const category = getExpressionCategory(node);
-            const selection = await showThumbnailBrowser(node, category, currentName, {
-                allowedCategories: [category],
-                title: "Select Expression",
-            });
-            if (selection && selection.prompt) {
-                await navigateTo(selection.prompt);
-            }
+            await openExpressionBrowser();
         } catch (err) {
             console.error("[ExpressionSelector] Error opening browser:", err);
         }
+    };
+    nameDisplay.onmouseenter = updateTooltip;
+    nameDisplay.onmouseleave = () => {
+        updateDisplay();
     };
 
     const widget = node.addDOMWidget("expression_selector", "div", container, {
@@ -252,6 +292,7 @@ function addExpressionPreview(node) {
     `;
 
     const image = document.createElement("img");
+    image.draggable = false;
     image.style.cssText = `
         position: absolute;
         inset: 0;
@@ -260,6 +301,10 @@ function addExpressionPreview(node) {
         object-fit: contain;
         object-position: center center;
         display: none;
+        cursor: pointer;
+        user-select: none;
+        pointer-events: none;
+        -webkit-user-drag: none;
     `;
 
     const emptyLabel = document.createElement("div");
@@ -282,6 +327,72 @@ function addExpressionPreview(node) {
 
     previewBox.appendChild(image);
     previewBox.appendChild(emptyLabel);
+
+    // Click catcher overlay: transparent, captures clicks to open the browser.
+    // It does not capture wheel events so ComfyUI canvas zoom continues to work.
+    const clickCatcher = document.createElement("div");
+    clickCatcher.style.cssText = `
+        position: absolute;
+        inset: 0;
+        cursor: pointer;
+        background: transparent;
+    `;
+
+    const openImageExpressionBrowser = async () => {
+        const currentName = node.widgets.find((w) => w.name === "name")?.value || "";
+        const category = getExpressionCategory(node);
+        const selection = await showThumbnailBrowser(node, category, currentName, {
+            allowedCategories: [category],
+            title: "Select Expression",
+        });
+        if (selection && selection.prompt) {
+            const nameWidget = node.widgets.find((w) => w.name === "name");
+            if (nameWidget) {
+                ensureNameInOptions(node, nameWidget, selection.prompt);
+                nameWidget.value = selection.prompt;
+                if (typeof nameWidget.callback === "function") {
+                    await nameWidget.callback(selection.prompt);
+                }
+                if (node._updateExpressionSelectorDisplay) {
+                    node._updateExpressionSelectorDisplay();
+                }
+                updateExpressionPreview(node);
+                app.graph.setDirtyCanvas(true, true);
+            }
+        }
+    };
+
+    clickCatcher.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+            await openImageExpressionBrowser();
+        } catch (err) {
+            console.error("[ExpressionSelector] Error opening browser from image:", err);
+        }
+    });
+    previewBox.appendChild(clickCatcher);
+
+    // Forward middle-mouse wheel events from the preview area to the canvas.
+    previewBox.addEventListener("wheel", (e) => {
+        const canvas = app.canvas?.canvas || document.querySelector("canvas.lgraphcanvas");
+        if (!canvas) return;
+        const newEvent = new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            clientX: e.clientX,
+            clientY: e.clientY,
+            deltaX: e.deltaX,
+            deltaY: e.deltaY,
+            deltaZ: e.deltaZ,
+            deltaMode: e.deltaMode,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+            metaKey: e.metaKey,
+        });
+        canvas.dispatchEvent(newEvent);
+    }, { passive: true });
+
     container.appendChild(previewBox);
 
     const widget = node.addDOMWidget("expression_preview", "div", container, {
@@ -349,7 +460,8 @@ app.registerExtension({
             addExpressionSelectorBar(node);
             addExpressionPreview(node);
 
-            loadPrompts(node).then(() => {
+            loadPrompts(node).then(async () => {
+                await ensureExpressionsCategory(node);
                 const names = getExpressionNames(node);
                 const nameWidget = node.widgets.find((w) => w.name === "name");
                 if (nameWidget) {
@@ -392,7 +504,8 @@ app.registerExtension({
                 addExpressionPreview(node);
             }
 
-            loadPrompts(node).then(() => {
+            loadPrompts(node).then(async () => {
+                await ensureExpressionsCategory(node);
                 const nameWidget = node.widgets.find((w) => w.name === "name");
                 if (nameWidget && nameWidget.value) {
                     ensureNameInOptions(node, nameWidget, nameWidget.value);

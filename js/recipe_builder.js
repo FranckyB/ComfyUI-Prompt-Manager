@@ -2040,8 +2040,9 @@ function _showInfo(node, infoMsg) {
     const text = makeEl("span", {}, infoMsg);
     banner.append(text);
     root.insertBefore(banner, root.firstChild);
-}
+
     requestAnimationFrame(() => reflowNode(node));
+}
 
 // --- Sync hidden widgets ---
 function syncHidden(node) {

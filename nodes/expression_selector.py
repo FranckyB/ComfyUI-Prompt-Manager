@@ -1,10 +1,12 @@
 """
 Expression Selector - substitutes [expression] in a prompt with a saved expression.
 
-Expressions are stored as normal Prompt Manager prompts under the "Expression"
+Expressions are stored as normal Prompt Manager prompts under the "Expressions"
 category, so the existing prompt browser, thumbnail generation, and save flow can
 be reused.
 """
+import json
+import os
 import re
 import server
 
@@ -226,3 +228,43 @@ class ExpressionSelector:
 
     def check_lazy_status(self, name, subject_gender="female", prompt=None, **kwargs):
         return ["prompt"] if prompt is None else []
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/merge-default-expressions")
+async def merge_default_expressions(request):
+    """Merge bundled expressions.json into the user's prompt data if no Expressions category exists."""
+    try:
+        default_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "expressions.json")
+        default_expressions = {}
+        if os.path.exists(default_path):
+            with open(default_path, "r", encoding="utf-8") as f:
+                default_expressions = json.load(f)
+
+        prompts = PromptManager.load_prompts()
+
+        # Case-insensitive check for an existing Expressions category.
+        existing_category = None
+        for cat in prompts.keys():
+            if cat.lower() == _EXPRESSION_CATEGORY.lower():
+                existing_category = cat
+                break
+
+        if existing_category is not None:
+            return server.web.json_response({"success": True, "merged": False, "prompts": prompts})
+
+        # Merge default expressions into user data, preserving the bundled structure.
+        for category, entries in default_expressions.items():
+            if category not in prompts:
+                prompts[category] = {}
+            if not isinstance(entries, dict):
+                continue
+            for prompt_name, prompt_data in entries.items():
+                if prompt_name == "__meta__":
+                    continue
+                prompts[category][prompt_name] = prompt_data if isinstance(prompt_data, dict) else {"prompt": prompt_data}
+
+        PromptManager.save_prompts(prompts)
+        return server.web.json_response({"success": True, "merged": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[ExpressionSelector] Error merging default expressions: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
