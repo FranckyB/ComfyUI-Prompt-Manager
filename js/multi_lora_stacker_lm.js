@@ -5,7 +5,7 @@ import { PM_UI_PALETTE } from "./ui_palette.js";
 const NODE_CLASS = "MultiLoraStackerLM";
 const LM_PROVIDER_CLASS = "Lora Stacker (LoraManager)";
 const STYLE_ID = "pm-multi-lm-style";
-const MIN_NODE_WIDTH = 600;
+const MIN_NODE_WIDTH = 320;
 const MIN_NODE_HEIGHT = 320;
 const DEFAULT_NODE_WIDTH = 600;
 const DEFAULT_NODE_HEIGHT = 430;
