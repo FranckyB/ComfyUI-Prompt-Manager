@@ -73,6 +73,75 @@ function ensureNameInOptions(node, nameWidget, name) {
     }
 }
 
+function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = String(target.tagName || "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!target.isContentEditable;
+}
+
+let _fbExpressionHoveredNode = null;
+let _expressionArrowListenerInstalled = false;
+
+function getActiveExpressionSelectorNode() {
+    // Prefer the node currently under the cursor, then fall back to a single selected node.
+    if (_fbExpressionHoveredNode && !_fbExpressionHoveredNode.flags?.collapsed) {
+        return _fbExpressionHoveredNode;
+    }
+
+    const selected = app.canvas?.selected_nodes;
+    if (!selected) return null;
+
+    const nodes = Object.values(selected).filter((n) => {
+        const cls = n?.comfyClass || n?.type;
+        return cls === "ExpressionSelector" && !n.flags?.collapsed;
+    });
+
+    return nodes.length === 1 ? nodes[0] : null;
+}
+
+function installExpressionArrowNavigation() {
+    if (_expressionArrowListenerInstalled) return;
+    _expressionArrowListenerInstalled = true;
+
+    window.addEventListener("keydown", async (event) => {
+        if (event.defaultPrevented) return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+        if (isTypingTarget(event.target)) return;
+
+        const node = getActiveExpressionSelectorNode();
+        if (!node) return;
+
+        const nameWidget = node.widgets.find((w) => w.name === "name");
+        if (!nameWidget) return;
+
+        const names = getExpressionNames(node);
+        if (names.length === 0) return;
+
+        const currentIdx = names.indexOf(nameWidget.value);
+        const dir = event.key === "ArrowRight" ? 1 : -1;
+        const nextIdx = currentIdx < 0
+            ? (dir > 0 ? 0 : names.length - 1)
+            : (currentIdx + dir + names.length) % names.length;
+        const nextName = names[nextIdx];
+        if (!nextName) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        ensureNameInOptions(node, nameWidget, nextName);
+        nameWidget.value = nextName;
+        if (typeof nameWidget.callback === "function") {
+            await nameWidget.callback(nextName);
+        }
+        if (node._updateExpressionSelectorDisplay) {
+            node._updateExpressionSelectorDisplay();
+        }
+        updateExpressionPreview(node);
+        app.graph.setDirtyCanvas(true, true);
+    }, true);
+}
+
 function resizeExpressionNodeToContent(node, options = {}) {
     if (!node || typeof node.computeSize !== "function") return;
     const computed = node.computeSize();
@@ -471,7 +540,35 @@ app.registerExtension({
             node.setSize([240, 400]);
 
             addExpressionSelectorBar(node);
-            addExpressionPreview(node);
+            const previewWidget = addExpressionPreview(node);
+            installExpressionArrowNavigation();
+
+            const onMouseEnter = node.onMouseEnter;
+            node.onMouseEnter = function () {
+                _fbExpressionHoveredNode = this;
+                return onMouseEnter?.apply(this, arguments);
+            };
+
+            const onMouseLeave = node.onMouseLeave;
+            node.onMouseLeave = function () {
+                if (_fbExpressionHoveredNode === this) {
+                    _fbExpressionHoveredNode = null;
+                }
+                return onMouseLeave?.apply(this, arguments);
+            };
+
+            // Also wire the DOM preview overlay so it reports hover reliably.
+            const previewBox = previewWidget?.element?.querySelector("div");
+            if (previewBox) {
+                previewBox.addEventListener("mouseenter", () => {
+                    _fbExpressionHoveredNode = node;
+                });
+                previewBox.addEventListener("mouseleave", () => {
+                    if (_fbExpressionHoveredNode === node) {
+                        _fbExpressionHoveredNode = null;
+                    }
+                });
+            }
 
             loadPrompts(node).then(async () => {
                 await ensureExpressionsCategory(node);
