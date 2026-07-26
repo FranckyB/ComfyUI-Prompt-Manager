@@ -238,7 +238,7 @@ app.registerExtension({
             name: "Static seed for expression thumbnail generation",
             tooltip: "Seed used when generating thumbnails for Expression-category prompts. Set to 0 to use random seeds instead.",
             type: "number",
-            defaultValue: 42,
+            defaultValue: 21,
             onChange(value) {
                 fetch("/prompt-manager/save-preference", {
                     method: "POST",
