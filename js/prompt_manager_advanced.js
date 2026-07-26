@@ -7147,8 +7147,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             hideNSFW: hideNSFWState,
             workflowOnly,
             contentFilter: contentFilterState,
-            filterEmptyCategories: true,
-            keepCategory: mode === "save" ? selectedCategory : "",
         }));
         let selectedSaveName = initialSaveName;
         let categoryButtons = [];
@@ -7162,8 +7160,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
-                filterEmptyCategories: true,
-                keepCategory: mode === "save" ? selectedCategory : "",
             }));
 
             if (!Array.isArray(categories) || categories.length === 0) {
@@ -7565,8 +7561,6 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
-                filterEmptyCategories: true,
-                keepCategory: mode === "save" ? selectedCategory : "",
             }));
             ensureSelectedCategory();
             categoryButtons = [];
