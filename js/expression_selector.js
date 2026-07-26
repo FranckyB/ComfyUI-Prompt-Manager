@@ -82,21 +82,20 @@ function isTypingTarget(target) {
 let _fbExpressionHoveredNode = null;
 let _expressionArrowListenerInstalled = false;
 
+function isExpressionNodeInGraph(node) {
+    if (!node || !app.graph?._nodes) return false;
+    return app.graph._nodes.includes(node);
+}
+
 function getActiveExpressionSelectorNode() {
-    // Prefer the node currently under the cursor, then fall back to a single selected node.
-    if (_fbExpressionHoveredNode && !_fbExpressionHoveredNode.flags?.collapsed) {
+    // Hover-only: only react when the cursor is actually over a live node.
+    if (_fbExpressionHoveredNode && !_fbExpressionHoveredNode.flags?.collapsed && isExpressionNodeInGraph(_fbExpressionHoveredNode)) {
         return _fbExpressionHoveredNode;
     }
-
-    const selected = app.canvas?.selected_nodes;
-    if (!selected) return null;
-
-    const nodes = Object.values(selected).filter((n) => {
-        const cls = n?.comfyClass || n?.type;
-        return cls === "ExpressionSelector" && !n.flags?.collapsed;
-    });
-
-    return nodes.length === 1 ? nodes[0] : null;
+    if (_fbExpressionHoveredNode && !isExpressionNodeInGraph(_fbExpressionHoveredNode)) {
+        _fbExpressionHoveredNode = null;
+    }
+    return null;
 }
 
 function installExpressionArrowNavigation() {
@@ -126,9 +125,6 @@ function installExpressionArrowNavigation() {
         const nextName = names[nextIdx];
         if (!nextName) return;
 
-        event.preventDefault();
-        event.stopPropagation();
-
         ensureNameInOptions(node, nameWidget, nextName);
         nameWidget.value = nextName;
         if (typeof nameWidget.callback === "function") {
@@ -139,6 +135,9 @@ function installExpressionArrowNavigation() {
         }
         updateExpressionPreview(node);
         app.graph.setDirtyCanvas(true, true);
+
+        event.preventDefault();
+        event.stopPropagation();
     }, true);
 }
 
@@ -542,6 +541,12 @@ app.registerExtension({
             addExpressionSelectorBar(node);
             const previewWidget = addExpressionPreview(node);
             installExpressionArrowNavigation();
+
+            const onMouseMove = node.onMouseMove;
+            node.onMouseMove = function (event, localPos, canvas) {
+                _fbExpressionHoveredNode = this;
+                return onMouseMove?.apply(this, arguments);
+            };
 
             const onMouseEnter = node.onMouseEnter;
             node.onMouseEnter = function () {
