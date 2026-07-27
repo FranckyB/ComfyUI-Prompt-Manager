@@ -167,6 +167,14 @@ class MultiLoraStackerLM:
                 "loras_state_c": ("STRING", {"default": "[]", "multiline": True}),
                 "loras_state_d": ("STRING", {"default": "[]", "multiline": True}),
             },
+            "optional": {
+                "stack_count": ("INT", {
+                    "default": 2,
+                    "min": 1,
+                    "max": 4,
+                    "tooltip": "Number of LoRA stacks to expose and combine.",
+                }),
+            },
         }
 
     RETURN_TYPES = ("MULTI_LORA_STACK", "LORA_STACK", "STRING")
@@ -184,20 +192,30 @@ class MultiLoraStackerLM:
         loras_state_b="[]",
         loras_state_c="[]",
         loras_state_d="[]",
+        stack_count=2,
         **kwargs,
     ):
         stack_a, triggers_a = _build_lora_stack(loras_state_a)
         stack_b, triggers_b = _build_lora_stack(loras_state_b)
         stack_c, triggers_c = _build_lora_stack(loras_state_c)
         stack_d, triggers_d = _build_lora_stack(loras_state_d)
-        multi_lora_stack = {
-            "a": stack_a,
-            "b": stack_b,
-            "c": stack_c,
-            "d": stack_d,
-        }
-        combined_lora_stack = [*stack_a, *stack_b, *stack_c, *stack_d]
-        trigger_words = [*triggers_a, *triggers_b, *triggers_c, *triggers_d]
+
+        count = max(1, min(4, int(stack_count or 2)))
+        slot_stacks = [stack_a, stack_b, stack_c, stack_d]
+        slot_triggers = [triggers_a, triggers_b, triggers_c, triggers_d]
+        slot_keys = ["a", "b", "c", "d"]
+
+        multi_lora_stack = {}
+        combined_lora_stack = []
+        trigger_words = []
+        for i in range(4):
+            if i < count:
+                multi_lora_stack[slot_keys[i]] = slot_stacks[i]
+                combined_lora_stack.extend(slot_stacks[i])
+                trigger_words.extend(slot_triggers[i])
+            else:
+                multi_lora_stack[slot_keys[i]] = []
+
         trigger_words_text = ",, ".join(trigger_words) if trigger_words else ""
         return (multi_lora_stack, combined_lora_stack, trigger_words_text)
 

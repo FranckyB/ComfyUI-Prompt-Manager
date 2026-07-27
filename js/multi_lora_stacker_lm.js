@@ -325,6 +325,11 @@ function getVisibleSlotKeys(node) {
     return SLOT_DEFS.slice(0, count).map((s) => s.key);
 }
 
+function syncStackCountWidget(node, count) {
+    const widget = getWidgetByName(node, "stack_count");
+    if (widget) widget.value = count;
+}
+
 function ensureActiveSlotVisible(node) {
     if (!node || !node.properties) return;
     const visible = getVisibleSlotKeys(node);
@@ -365,8 +370,10 @@ function setStackCount(node, value) {
     ensureActiveSlotVisible(node);
     applyVisibleStackCount(node);
     updateStackControlUi(node);
+    syncStackCountWidget(node, node.properties.pmLoraStackCount);
     updateActiveColumnHighlight(node);
     notifyHeightChange(node);
+    applyNodeSizeConstraints(node, false, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -607,15 +614,19 @@ function notifyHeightChange(node) {
     setTimeout(() => { node?.setDirtyCanvas?.(true, true); }, 10);
 }
 
-function applyNodeSizeConstraints(node, useDefaultSize = false) {
+function applyNodeSizeConstraints(node, useDefaultSize = false, forceWidth = false) {
     if (!node || node.__pmApplyingSizeConstraint) return;
 
     const currentW = Number(node?.size?.[0]) || 0;
     const currentH = Number(node?.size?.[1]) || 0;
 
-    const targetW = useDefaultSize
-        ? Math.max(DEFAULT_NODE_WIDTH, MIN_NODE_WIDTH, currentW)
-        : Math.max(MIN_NODE_WIDTH, currentW);
+    const minW = MIN_NODE_WIDTH * getStackCount(node);
+
+    const targetW = forceWidth
+        ? minW
+        : (useDefaultSize
+            ? Math.max(DEFAULT_NODE_WIDTH, minW, currentW)
+            : Math.max(minW, currentW));
 
     const targetH = useDefaultSize
         ? Math.max(DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, currentH)
@@ -813,6 +824,7 @@ async function setupNodeUi(node) {
         refreshFromStoredValues(node);
         applyVisibleStackCount(node);
         updateStackControlUi(node);
+        syncStackCountWidget(node, getStackCount(node));
         updateActiveColumnHighlight(node);
     };
 
@@ -861,6 +873,7 @@ app.registerExtension({
                 this.properties.pmLoraStackCount = clampStackCount(this.properties.pmLoraStackCount);
             }
             ensureActiveSlotVisible(this);
+            syncStackCountWidget(this, this.properties.pmLoraStackCount);
 
             applyNodeSizeConstraints(this, true);
 
@@ -884,6 +897,7 @@ app.registerExtension({
                 this.properties.pmLoraStackCount = clampStackCount(this.properties.pmLoraStackCount);
             }
             ensureActiveSlotVisible(this);
+            syncStackCountWidget(this, this.properties.pmLoraStackCount);
 
             if (typeof this.__pmMultiLmRefresh === "function") {
                 this.__pmMultiLmRefresh();
