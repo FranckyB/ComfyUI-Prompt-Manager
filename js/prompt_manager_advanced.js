@@ -2220,6 +2220,40 @@ function addLoraDisplays(node) {
             return [width, height];
         };
 
+        // IMPORTANT: When Stack C/D are hidden, computeSize alone is not enough —
+        // the DOM widget's positioned wrapper element (managed outside our container)
+        // can be left with a stale height and active pointer-events, creating an
+        // invisible strip that blocks clicks/scroll/pan for everything below the node.
+        // Force-collapse the wrapper and disable pointer-events whenever hidden.
+        const origDraw = widget.draw;
+        widget.draw = function (ctx, n, widgetWidth, y, H) {
+            if (typeof origDraw === "function") origDraw.apply(this, arguments);
+            if (!this.element) return;
+
+            const hidden = (stack.id === "c" || stack.id === "d") && !shouldShowExtraLoraStacks(n);
+            const wrapper = this.element.parentElement;
+
+            if (hidden) {
+                this.element.style.setProperty("display", "none", "important");
+                if (wrapper) {
+                    wrapper.style.setProperty("pointer-events", "none", "important");
+                    wrapper.style.setProperty("height", "0px", "important");
+                    wrapper.style.setProperty("max-height", "0px", "important");
+                    wrapper.style.setProperty("min-height", "0px", "important");
+                    wrapper.style.setProperty("overflow", "hidden", "important");
+                }
+            } else {
+                this.element.style.removeProperty("display");
+                if (wrapper) {
+                    wrapper.style.removeProperty("pointer-events");
+                    wrapper.style.removeProperty("height");
+                    wrapper.style.removeProperty("max-height");
+                    wrapper.style.removeProperty("min-height");
+                    wrapper.style.removeProperty("overflow");
+                }
+            }
+        };
+
         if (stack.id === "a") {
             node.loraAWidget = widget;
             node.loraAContainer = container;
