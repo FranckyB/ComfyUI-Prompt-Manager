@@ -519,6 +519,9 @@ class PromptManagerAdvanced:
     def load_prompts(cls):
         """Load prompts from user folder or default (shared with standard PromptManager)"""
         user_path = cls.get_prompts_path()
+        user_dir = os.path.realpath(folder_paths.get_user_directory())
+        if not os.path.realpath(user_path).startswith(user_dir + os.sep):
+            raise ValueError("[PromptManagerAdvanced] Unsafe prompts path rejected")
         default_path = cls.get_default_prompts_path()
 
         if os.path.exists(user_path):
@@ -582,6 +585,9 @@ class PromptManagerAdvanced:
     def save_prompts(cls, data):
         """Save prompts to user folder"""
         user_path = cls.get_prompts_path()
+        user_dir = os.path.realpath(folder_paths.get_user_directory())
+        if not os.path.realpath(user_path).startswith(user_dir + os.sep):
+            raise ValueError("[PromptManagerAdvanced] Unsafe prompts path rejected")
         sorted_data = cls.sort_prompts_data(data)
         tmp_path = user_path + ".tmp"
         bak_path = cls.get_weekly_backup_path()
