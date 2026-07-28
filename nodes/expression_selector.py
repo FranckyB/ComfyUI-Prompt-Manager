@@ -6,6 +6,7 @@ category, so the existing prompt browser, thumbnail generation, and save flow ca
 be reused.
 """
 import json
+import math
 import os
 import re
 import server
@@ -84,13 +85,19 @@ class ExpressionSelector:
                     "default": "female",
                     "tooltip": "Adapt gendered pronouns in the expression so it matches the described subject.",
                 }),
-            },
-            "optional": {
                 "prompt": ("STRING", {
                     "multiline": True,
                     "forceInput": True,
                     "lazy": True,
                     "tooltip": "Connect a base prompt. The selected expression will be appended after it, prefixed with 'expression:'.",
+                }),
+                "expression_strength": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "step": 0.1,
+                    "display": "slider",
+                    "tooltip": "Apply Comfy-style prompt strength to the expression. 1 keeps the default behavior.",
                 }),
             },
             "hidden": {
@@ -113,8 +120,8 @@ class ExpressionSelector:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, name, subject_gender="female", prompt="", **kwargs):
-        return (name, subject_gender, prompt)
+    def IS_CHANGED(cls, name, subject_gender="female", prompt="", expression_strength=1.0, **kwargs):
+        return (name, subject_gender, expression_strength, prompt)
 
     _GENDER_SUBSTITUTIONS = {
         # Source expressions are written with male pronouns; adapt to female.
@@ -162,7 +169,17 @@ class ExpressionSelector:
         return result
 
     @staticmethod
-    def _substitute_expression(prompt, expression_text, subject_gender="female"):
+    def _normalize_expression_strength(expression_strength):
+        try:
+            strength = float(expression_strength)
+        except (TypeError, ValueError):
+            strength = 1.0
+        if not math.isfinite(strength):
+            strength = 1.0
+        return max(0.0, min(5.0, strength))
+
+    @staticmethod
+    def _substitute_expression(prompt, expression_text, subject_gender="female", expression_strength=1.0):
         expr = expression_text if isinstance(expression_text, str) else str(expression_text)
         expr = ExpressionSelector._apply_gender_substitutions(expr.strip(), subject_gender)
 
@@ -171,14 +188,23 @@ class ExpressionSelector:
         if expr.lower() == "(none)":
             return prompt if isinstance(prompt, str) else ""
 
-        # Label the expression if it does not already start with "expression:".
-        if expr and not expr.lower().startswith("expression:"):
-            expr = f"expression: {expr}"
+        strength_value = ExpressionSelector._normalize_expression_strength(expression_strength)
+        strength_text = f"{strength_value:.15g}"
+
+        if strength_value == 1.0:
+            if expr and not expr.lower().startswith("expression:"):
+                expr = f"expression: {expr}"
+            if not isinstance(prompt, str) or not prompt.strip():
+                return expr
+            return f"{prompt.strip()}\n{expr}"
+
+        stripped_expr = expr[10:].lstrip() if expr.lower().startswith("expression:") else expr
+        formatted_expr = f"({stripped_expr}:{strength_text})"
 
         if not isinstance(prompt, str) or not prompt.strip():
-            return expr
+            return formatted_expr
 
-        return f"{prompt.strip()}\n{expr}"
+        return f"{prompt.strip()}\n{formatted_expr}"
 
     @staticmethod
     def _patch_runtime_prompt_metadata(unique_id, output_text, extra_pnginfo=None, api_prompt=None):
@@ -202,7 +228,7 @@ class ExpressionSelector:
                 if isinstance(inputs, dict):
                     prompt_node["inputs"] = {**inputs, "prompt": output_text}
 
-    def select_expression(self, name, subject_gender="female", prompt="", unique_id=None, extra_pnginfo=None, api_prompt=None):
+    def select_expression(self, name, subject_gender="female", prompt="", expression_strength=1.0, unique_id=None, extra_pnginfo=None, api_prompt=None):
         prompts_data = PromptManager.load_prompts()
         entry, _ = _find_expression_case_insensitive(prompts_data, name)
         expression_text = ""
@@ -211,7 +237,7 @@ class ExpressionSelector:
             expression_text = entry.get("prompt", "") or ""
             thumbnail = entry.get("thumbnail")
 
-        output_text = self._substitute_expression(prompt, expression_text, subject_gender)
+        output_text = self._substitute_expression(prompt, expression_text, subject_gender, expression_strength)
 
         if unique_id is not None:
             server.PromptServer.instance.send_sync("expression-selector-update", {

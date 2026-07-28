@@ -538,6 +538,16 @@ app.registerExtension({
             // Default to a small portrait size matching the 3:4 thumbnail ratio.
             node.setSize([240, 400]);
 
+            // Backward compat: ensure new or restored nodes without a persisted
+            // expression_strength default to 1, not 0.
+            const strengthWidget = node.widgets.find((w) => w.name === "expression_strength");
+            if (strengthWidget) {
+                const raw = Number(strengthWidget.value);
+                if (!Number.isFinite(raw) || raw === 0) {
+                    strengthWidget.value = 1.0;
+                }
+            }
+
             addExpressionSelectorBar(node);
             const previewWidget = addExpressionPreview(node);
             installExpressionArrowNavigation();
@@ -617,6 +627,17 @@ app.registerExtension({
             }
             if (!node._expressionPreviewAttached) {
                 addExpressionPreview(node);
+            }
+
+            // Backward compat: old workflows only stored [name, subject_gender].
+            // If the persisted value is missing or effectively unset, force 1.0
+            // so ComfyUI's default 0 does not silently change behavior.
+            const strengthWidget = node.widgets.find((w) => w.name === "expression_strength");
+            const storedValues = info?.widgets_values;
+            const strengthIdx = node.widgets.findIndex((w) => w.name === "expression_strength");
+            const hasStoredStrength = Array.isArray(storedValues) && strengthIdx >= 0 && strengthIdx < storedValues.length;
+            if (strengthWidget && (!hasStoredStrength || storedValues[strengthIdx] === undefined || storedValues[strengthIdx] === null || storedValues[strengthIdx] === "")) {
+                strengthWidget.value = 1.0;
             }
 
             loadPrompts(node).then(async () => {
