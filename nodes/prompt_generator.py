@@ -13,9 +13,15 @@ import ctypes
 import numpy as np
 import torch
 import folder_paths
-from colorama import Fore, Style
 from PIL import Image
 from io import BytesIO
+
+# ComfyUI-style ANSI console colors (matches app/logger.py)
+RESET       = "\033[0m"
+YELLOW      = "\033[33m"
+RED         = "\033[31m"
+GREEN       = "\033[32m"
+
 from ..py.model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, has_vision_support
 
 # Ollama integration
@@ -30,15 +36,6 @@ try:
 except ImportError:
     _preferences_cache = {}
 
-# ANSI color codes
-YELLOW     = Fore.YELLOW
-RED        = Fore.RED
-MAGENTA    = Fore.MAGENTA
-GREEN      = Fore.GREEN
-CYAN       = Fore.CYAN
-BLUE       = Fore.BLUE
-RESET      = Style.RESET_ALL
-
 # Global variable to track the server process
 _server_process = None
 _current_model = None
@@ -49,17 +46,16 @@ _model_default_params = None
 
 def print_pg_header():
     """Print the Prompt Generator header"""
-    print(f"{YELLOW}{'=' * 60}{RESET}")
-    print(f"{YELLOW}              Prompt Generator{RESET}")
-    print(f"{YELLOW}{'=' * 60}{RESET}")
+    print(f"{YELLOW}{'=' * 46}{RESET}")
+    print(f"              Prompt Generator")
+    print(f"{YELLOW}{'=' * 46}{RESET}")
 
-def print_pg(message, color=YELLOW):
-    """Print a message with Prompt Generator formatting and YELLOW color"""
-    print(f"{color}{message}{RESET}")
-
-def print_pg_footer():
-    """Print the Prompt Generator footer"""
-    print(f"{YELLOW}{'=' * 60}{RESET}")
+def print_pg(title, message=None, color=YELLOW):
+    """Print a titled message with a colored title and white body."""
+    if message is not None:
+        print(f"{color}{title}{RESET} {message}")
+    else:
+        print(f"{color}{title}{RESET}")
 
 # --- Windows Job Object helpers ---
 def setup_windows_job_object():
@@ -297,12 +293,14 @@ def resolve_llama_server_command(custom_llama_path=""):
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                 return candidate
             print_pg(
-                f"Warning: Custom llama path exists but '{server_name}' was not found there. Falling back to default PATH lookup.",
+                "Warning:",
+                f"Custom llama path exists but '{server_name}' was not found there. Falling back to default PATH lookup.",
                 YELLOW,
             )
         else:
             print_pg(
-                f"Warning: Custom llama path does not exist: {normalized}. Falling back to default PATH lookup.",
+                "Warning:",
+                f"Custom llama path does not exist: {normalized}. Falling back to default PATH lookup.",
                 YELLOW,
             )
 
@@ -497,12 +495,15 @@ class PromptGenerator:
                 "override_system_prompt": (_system_prompt_override_choices(), {
                     "default": "(Use Generator's Prompt)",
                     "tooltip": "Override Prompt Generator's built-in system prompt with a saved prompt from category 'System Prompts' in prompt_manager_data.json. '(Use Generator's Prompt)' keeps the normal mode prompt."
+                }),
+                "clip": ("CLIP", {
+                    "tooltip": "Optional: Connect a CLIP/text encoder to generate prompts directly without starting llama.cpp/Ollama. Requires a model that supports .generate()."
                 })
             }
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Generate or enhance prompts using a local LLM via llama.cpp or Ollama."
+    DESCRIPTION = "Generate or enhance prompts using a local LLM via llama.cpp, Ollama, or a connected CLIP/text encoder."
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("output", "thoughts")
     FUNCTION = "convert_prompt"
@@ -542,7 +543,7 @@ class PromptGenerator:
 
         # If server is already running with the same model, don't restart
         if _server_process and _current_model == model_name and PromptGenerator.is_server_alive():
-            print_pg(f"Server already running with model: {model_name}")
+            print_pg("Server:", f"already running with model: {model_name}")
             return (True, None)
 
         # Stop existing server if running different model
@@ -551,29 +552,24 @@ class PromptGenerator:
 
         # Check if model needs to be downloaded
         if not is_model_local(model_name):
-            print_pg(f"Model '{model_name}' not found locally, downloading from HuggingFace...")
+            print_pg("Download:", f"Model '{model_name}' not found locally, downloading from HuggingFace...")
             try:
                 model_path = download_model(model_name)
                 if not model_path:
-                    error_msg = "Error: Failed to download model"
-                    print_pg(error_msg, RED)
-                    return (False, error_msg)
-                print_pg(f"Download complete: {model_path}")
+                    print_pg("Error:", "Failed to download model", RED)
+                    return (False, "Failed to download model")
+                print_pg("Download:", f"Download complete: {model_path}")
             except Exception as e:
-                error_msg = f"Error downloading model: {e}"
-                print_pg(error_msg, RED)
-                return (False, error_msg)
+                print_pg("Error:", f"Error downloading model: {e}", RED)
+                return (False, f"Error downloading model: {e}")
         else:
             model_path = get_model_path(model_name)
 
         if not os.path.exists(model_path):
-            error_msg = f"Error: Model file not found: {model_path}"
-            print_pg(error_msg, RED)
-            return (False, error_msg)
+            print_pg("Error:", f"Model file not found: {model_path}", RED)
+            return (False, f"Model file not found: {model_path}")
 
         try:
-            print_pg(f"Starting server with model: {model_name}")
-
             # Determine the correct llama-server executable based on OS
             if os.name == 'nt':  # Windows
                 server_cmd = "llama-server.exe"
@@ -587,7 +583,7 @@ class PromptGenerator:
             # Resolve executable path without depending on interactive shell PATH.
             server_cmd = resolve_llama_server_command(custom_llama_path)
             if custom_llama_path:
-                print_pg(f"Resolved llama-server executable: {server_cmd}")
+                print_pg("llama-server:", f"{server_cmd}")
 
             # Build command arguments
             cmd_args = [
@@ -627,7 +623,7 @@ class PromptGenerator:
             if use_vision_model:
                 mmproj_path = get_mmproj_path(model_name)
                 if mmproj_path:
-                    print_pg(f"Vision model: using mmproj: {os.path.basename(mmproj_path)}")
+                    print_pg("Vision model:", f"using mmproj: {os.path.basename(mmproj_path)}")
                     cmd_args.extend(["--mmproj", mmproj_path])
                     cmd_args_fallback.extend(["--mmproj", mmproj_path])
                 else:
@@ -913,17 +909,15 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, override_system_prompt="(Use Generator's Prompt)", **kwargs) -> str:
+    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, override_system_prompt="(Use Generator's Prompt)", clip=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 
         print_pg_header()  # Print header for this execution
         if clear_vram_on_run:
             self.cleanup_vram_before_run()
-        else:
-            print_pg("Skipping aggressive VRAM cleanup before run (clear_vram_on_run=False).")
 
-        # Determine LLM backend: "ollama" or "llama.cpp"
+        # Determine LLM backend: "ollama" or "llama.cpp" (only used when no CLIP is connected)
         use_ollama = (
             (options and options.get("llm_backend") == "ollama") or
             _preferences_cache.get("llm_backend", "llama.cpp") == "ollama"
@@ -947,8 +941,6 @@ class PromptGenerator:
             print_pg(error_msg, RED)
             raise RuntimeError(error_msg)
 
-        images = None  # Will be set for vision modes
-
         # Validate inputs based on mode
         if mode == "Enhance Prompt (Image)" and not prompt.strip():
             error_msg = "Did you perhaps forget to enter a User Prompt?"
@@ -959,134 +951,6 @@ class PromptGenerator:
             error_msg = "Did you perhaps forget to enter a User Prompt?"
             print_pg(error_msg, RED)
             raise RuntimeError(error_msg)
-
-        # Always determine a valid model filename before running server
-        model_to_use = None
-
-        # ── Preferred model from ComfyUI settings (fallback when Options node model is not set) ──
-        _preferred = _preferences_cache.get("preferred_model", "").strip()
-
-        if use_ollama:
-            # ── Ollama model selection ──
-            # Priority: Options node > preferences > auto-discover from Ollama
-            if options and "model" in options:
-                model_to_use = options["model"]
-                print_pg(f"Using model from options node: {model_to_use}")
-            elif _preferred:
-                model_to_use = _preferred
-                print_pg(f"Using preferred model from settings: {model_to_use}")
-            else:
-                # Auto-discover available models from Ollama
-                from ..py.ollama_wrapper import discover_ollama_models
-                discovered, status = discover_ollama_models(_preferences_cache)
-                if discovered:
-                    model_to_use = discovered[0]
-                    print_pg(f"Auto-selected Ollama model: {model_to_use}")
-                else:
-                    error_msg = (f"Error: No Ollama model available. {status}\n"
-                                 "Pull a model first (e.g. `ollama pull llama3.1`).")
-                    print_pg(error_msg, RED)
-                    raise RuntimeError(error_msg)
-
-            print_pg("Backend       : Ollama")
-
-        else:
-            # ── llama.cpp model selection ──
-            print_pg("Backend       : llama.cpp")
-            available_models = get_local_models()
-            preferred_local_model = self.resolve_preferred_model(_preferred, available_models)
-
-            if use_vision_model:
-                # Priority: Options node > preferences > auto-discover
-                if options and "model" in options and has_vision_support(options["model"]) and is_model_local(options["model"]):
-                    model_to_use = options["model"]
-                    print_pg(f"Using vision model from options node: {model_to_use}")
-                elif options and "model" in options and is_model_local(options["model"]):
-                    # Selected model doesn't support vision
-                    print_pg(f"Warning: Model '{options['model']}' has no mmproj (no vision support) but '{mode}' mode is active.\nIgnoring model selection and searching for a vision-capable model.")
-                    model_to_use = self.find_vision_model(available_models)
-                    if model_to_use is None:
-                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
-                        print_pg(error_msg, RED)
-                        raise RuntimeError(error_msg)
-                elif preferred_local_model and is_model_local(preferred_local_model):
-                    if has_vision_support(preferred_local_model):
-                        model_to_use = preferred_local_model
-                        print_pg(f"Using preferred model from settings: {model_to_use}")
-                    else:
-                        print_pg(f"Warning: Preferred model '{preferred_local_model}' has no mmproj (no vision support) for '{mode}' mode.\nSearching for a vision-capable model.")
-                        model_to_use = self.find_vision_model(available_models)
-                        if model_to_use is None:
-                            error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
-                            print_pg(error_msg, RED)
-                            raise RuntimeError(error_msg)
-                else:
-                    # Try to find a vision model automatically
-                    model_to_use = self.find_vision_model(available_models)
-                    if model_to_use is None:
-                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
-                        print_pg(error_msg, RED)
-                        raise RuntimeError(error_msg)
-            else:
-                # Enhance Prompt mode - any model works, prefer text-only for efficiency
-                # Priority: Options node > preferences > auto-select
-                if options and "model" in options and is_model_local(options["model"]):
-                    model_to_use = options["model"]
-                    print_pg(f"Using model from options node: {model_to_use}")
-                elif preferred_local_model and is_model_local(preferred_local_model):
-                    model_to_use = preferred_local_model
-                    print_pg(f"Using preferred model from settings: {model_to_use}")
-                else:
-                    if not available_models:
-                        error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
-                        print_pg(error_msg, RED)
-                        raise RuntimeError(error_msg)
-                    model_to_use = self.find_text_model(available_models)
-                    if not model_to_use:
-                        error_msg = "Error: No suitable model found. Please add a .gguf model or use the Generator Options node to download one."
-                        print_pg(error_msg, RED)
-                        raise RuntimeError(error_msg)
-
-            # Thinking mode is only meaningful if the model explicitly supports it
-            # (no longer tied to Qwen3VL naming — generic check)
-            # Users can always enable thinking; the model will simply ignore it if unsupported.
-
-        print_pg(f"Vision mode   : {'ON' if use_vision_model else 'OFF'}")
-        print_pg(f"Thinking mode : {'ON' if enable_thinking else 'OFF'}")
-        print_pg(f"Using Model   : {model_to_use}")
-
-        # Prepare images for vision modes (needed for cache key)
-        images = None
-        if use_vision_model:
-            # Gather all images: main image plus up to 4 extra from options
-            images = []
-            if image is not None:
-                images.append(image)
-            # Check for extra images in options (image2-5)
-            if options:
-                for key in ["image2", "image3", "image4", "image5"]:
-                    img = options.get(key, None)
-                    if img is not None:
-                        images.append(img)
-
-            if not images:
-                error_msg = f"Error: '{mode}' mode requires at least one image to be connected. Please connect an image or switch to 'Enhance Prompt' mode."
-                print_pg(error_msg, RED)
-                raise RuntimeError(error_msg)
-
-        # If the current model is not the one we want, or server is not running, restart
-        # Also restart if context_size has changed (llama.cpp only)
-        context_size = options.get("context_size", get_default_context_size()) if options else get_default_context_size()
-        if not use_ollama:
-            if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
-                self.stop_server()
-                # Get context_size from options or use default
-                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
-                if not success:
-                    raise RuntimeError(error_msg)
-
-        # Build the endpoint URL
-        full_url = f"http://localhost:{self.SERVER_PORT}/v1/chat/completions"
 
         # Prepare the system prompt
         if mode == "Analyze Image":
@@ -1137,6 +1001,146 @@ class PromptGenerator:
             user_content = prompt.strip() if prompt.strip() else self.get_image_action_prompt()
         else:
             user_content = prompt
+
+        # === CLIP text-encoder generation path ===
+        # If a CLIP/text encoder is connected, bypass llama.cpp/Ollama entirely.
+        if clip is not None:
+            return self._generate_via_clip(
+                clip=clip,
+                system_prompt=system_prompt,
+                user_content=user_content,
+                image=image if use_vision_model else None,
+                seed=seed,
+                enable_thinking=enable_thinking,
+                options=options,
+                show_everything_in_console=show_everything_in_console,
+                clear_vram_on_run=clear_vram_on_run,
+                prompt=prompt,
+            )
+
+        # Always determine a valid model filename before running server
+        model_to_use = None
+
+        # ── Preferred model from ComfyUI settings (fallback when Options node model is not set) ──
+        _preferred = _preferences_cache.get("preferred_model", "").strip()
+
+        if use_ollama:
+            # ── Ollama model selection ──
+            # Priority: Options node > preferences > auto-discover from Ollama
+            if options and "model" in options:
+                model_to_use = options["model"]
+            elif _preferred:
+                model_to_use = _preferred
+            else:
+                # Auto-discover available models from Ollama
+                from ..py.ollama_wrapper import discover_ollama_models
+                discovered, status = discover_ollama_models(_preferences_cache)
+                if discovered:
+                    model_to_use = discovered[0]
+                else:
+                    error_msg = (f"Error: No Ollama model available. {status}\n"
+                                 "Pull a model first (e.g. `ollama pull llama3.1`).")
+                    print_pg(error_msg, RED)
+                    raise RuntimeError(error_msg)
+
+            print_pg("Backend       :", "Ollama")
+
+        else:
+            # ── llama.cpp model selection ──
+            print_pg("Backend       :", "llama.cpp")
+            available_models = get_local_models()
+            preferred_local_model = self.resolve_preferred_model(_preferred, available_models)
+
+            if use_vision_model:
+                # Priority: Options node > preferences > auto-discover
+                if options and "model" in options and has_vision_support(options["model"]) and is_model_local(options["model"]):
+                    model_to_use = options["model"]
+                    print_pg(f"Using vision model from options node: {model_to_use}")
+                elif options and "model" in options and is_model_local(options["model"]):
+                    # Selected model doesn't support vision
+                    print_pg(f"Warning: Model '{options['model']}' has no mmproj (no vision support) but '{mode}' mode is active.\nIgnoring model selection and searching for a vision-capable model.")
+                    model_to_use = self.find_vision_model(available_models)
+                    if model_to_use is None:
+                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                        print_pg(error_msg, RED)
+                        raise RuntimeError(error_msg)
+                elif preferred_local_model and is_model_local(preferred_local_model):
+                    if has_vision_support(preferred_local_model):
+                        model_to_use = preferred_local_model
+                        print_pg(f"Using preferred model from settings: {model_to_use}")
+                    else:
+                        print_pg(f"Warning: Preferred model '{preferred_local_model}' has no mmproj (no vision support) for '{mode}' mode.\nSearching for a vision-capable model.")
+                        model_to_use = self.find_vision_model(available_models)
+                        if model_to_use is None:
+                            error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                            print_pg(error_msg, RED)
+                            raise RuntimeError(error_msg)
+                else:
+                    # Try to find a vision model automatically
+                    model_to_use = self.find_vision_model(available_models)
+                    if model_to_use is None:
+                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                        print_pg(error_msg, RED)
+                        raise RuntimeError(error_msg)
+            else:
+                # Enhance Prompt mode - any model works, prefer text-only for efficiency
+                # Priority: Options node > preferences > auto-select
+                if options and "model" in options and is_model_local(options["model"]):
+                    model_to_use = options["model"]
+                elif preferred_local_model and is_model_local(preferred_local_model):
+                    model_to_use = preferred_local_model
+                else:
+                    if not available_models:
+                        error_msg = "Error: No models found in models/ folder. Please add a .gguf model or use Generator Options node to download one."
+                        print_pg(error_msg, RED)
+                        raise RuntimeError(error_msg)
+                    model_to_use = self.find_text_model(available_models)
+                    if not model_to_use:
+                        error_msg = "Error: No suitable model found. Please add a .gguf model or use the Generator Options node to download one."
+                        print_pg(error_msg, RED)
+                        raise RuntimeError(error_msg)
+
+            # Thinking mode is only meaningful if the model explicitly supports it
+            # (no longer tied to Qwen3VL naming — generic check)
+            # Users can always enable thinking; the model will simply ignore it if unsupported.
+
+        print_pg("Vision mode   :", f"{'ON' if use_vision_model else 'OFF'}")
+        print_pg("Thinking mode :", f"{'ON' if enable_thinking else 'OFF'}")
+        print_pg("Using Model   :", f"{model_to_use}")
+
+        # Prepare images for vision modes (needed for cache key)
+        images = None
+        if use_vision_model:
+            # Gather all images: main image plus up to 4 extra from options
+            images = []
+            if image is not None:
+                images.append(image)
+            # Check for extra images in options (image2-5)
+            if options:
+                for key in ["image2", "image3", "image4", "image5"]:
+                    img = options.get(key, None)
+                    if img is not None:
+                        images.append(img)
+
+            if not images:
+                error_msg = f"Error: '{mode}' mode requires at least one image to be connected. Please connect an image or switch to 'Enhance Prompt' mode."
+                print_pg(error_msg, RED)
+                raise RuntimeError(error_msg)
+
+        # If the current model is not the one we want, or server is not running, restart
+        # Also restart if context_size has changed (llama.cpp only)
+        context_size = options.get("context_size", get_default_context_size()) if options else get_default_context_size()
+
+        if not use_ollama:
+            if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
+                self.stop_server()
+                # Get context_size from options or use default
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
+                if not success:
+                    raise RuntimeError(error_msg)
+
+        # Build the endpoint URL
+        full_url = f"http://localhost:{self.SERVER_PORT}/v1/chat/completions"
 
         # === TOKENIZATION (only for non-cached requests, llama.cpp only) ===
         cached_token_counts = None
@@ -1237,16 +1241,10 @@ class PromptGenerator:
         # Now that payload is ready, print it if requested
         # Debug output if requested
         if show_everything_in_console:
-            print_pg(f"{'=' * 60}", GREEN)
-            print_pg("           DETAILED INFORMATION ENABLED", GREEN)
-            print_pg(f"{'=' * 60}", GREEN)
-            print_pg("------ GENERATION PARAMETERS ------", GREEN)
             for param in ["seed", "temperature", "top_k", "top_p", "min_p", "repeat_penalty"]:
-                print_pg(f"{param} = {payload[param]}", GREEN)
-            print_pg("\n--------- SYSTEM PROMPT ---------", GREEN)
-            print_pg(f"{system_prompt}", GREEN)
-            print_pg("\n--------- USER PROMPT ---------", GREEN)
-            print_pg(f"{user_content}", GREEN)
+                print_pg(f"{param}:", f"{payload[param]}")
+            print_pg("\nSYSTEM PROMPT:\n", f"{system_prompt}")
+            print_pg("\nUSER PROMPT:\n", f"{user_content}")
         try:
             response = requests.post(
                 full_url,
@@ -1257,7 +1255,7 @@ class PromptGenerator:
 
             # Handle 500 server error by restarting server and retrying once
             if response.status_code == 500:
-                print_pg("Server error 500, restarting server and retrying...", RED)
+                print_pg("Error:", "Server error 500, restarting server and retrying...", RED)
                 self.stop_server()
                 success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
                 if success:
@@ -1313,9 +1311,9 @@ class PromptGenerator:
                                         thinking_content += str(reasoning_delta)
                                         if show_everything_in_console:
                                             if first_thinking:
-                                                print_pg("\n--------- THINKING ---------", GREEN)
+                                                print_pg("\nTHINKING:", "", GREEN)
                                                 first_thinking = False
-                                            print(f"{GREEN}{str(reasoning_delta)}{RESET}", end='', flush=True)
+                                            print(f"{str(reasoning_delta)}")
                                 # Stream content (final answer)
                                 if 'content' in delta:
                                     content_delta = delta['content']
@@ -1323,13 +1321,20 @@ class PromptGenerator:
                                         full_response += str(content_delta)
                                         if show_everything_in_console:
                                             if first_content:
-                                                print_pg("\n\n--------- FINAL ANSWER ---------", CYAN)
+                                                print_pg("\nRESULT:", "", GREEN)
                                                 first_content = False
-                                            print(f"{CYAN}{str(content_delta)}{RESET}", end='', flush=True)
+                                            if not format_as_json:
+                                                print(str(content_delta), end="", flush=True)
                         except json.JSONDecodeError:
                             continue
 
             if show_everything_in_console:
+                if format_as_json and full_response:
+                    try:
+                        parsed = json.loads(full_response)
+                        print(json.dumps(parsed, indent=2))
+                    except json.JSONDecodeError:
+                        print(full_response)
                 print('')  # Final newline after streaming
 
             if not show_everything_in_console:
@@ -1339,8 +1344,6 @@ class PromptGenerator:
             if show_everything_in_console:
                 if usage_stats:
                     self.print_token_stats(usage_stats, cached_token_counts, thinking_content, full_response, images)
-            else:
-                print_pg_footer()
 
             if not full_response:
                 # If we received no content, check usage stats to see if we exhausted the context
@@ -1425,21 +1428,15 @@ class PromptGenerator:
             repeat_penalty = options.get("repeat_penalty", repeat_penalty)
 
         if show_everything_in_console:
-            print_pg(f"{'=' * 60}", GREEN)
-            print_pg("           DETAILED INFORMATION ENABLED (Ollama)", GREEN)
-            print_pg(f"{'=' * 60}", GREEN)
             if not use_model_default_sampling:
-                print_pg("------ GENERATION PARAMETERS ------", GREEN)
                 for name, val in [("seed", seed), ("temperature", temperature),
                                   ("top_k", top_k), ("top_p", top_p),
                                   ("min_p", min_p), ("repeat_penalty", repeat_penalty)]:
-                    print_pg(f"{name} = {val}", GREEN)
+                    print_pg(f"{name}:", f"{val}")
             else:
-                print_pg("Using model default sampling parameters", GREEN)
-            print_pg("\n--------- SYSTEM PROMPT ---------", GREEN)
-            print_pg(f"{system_prompt}", GREEN)
-            print_pg("\n--------- USER PROMPT ---------", GREEN)
-            print_pg(f"{user_content}", GREEN)
+                print_pg("Sampling:", "Using model default sampling parameters")
+            print_pg("\nSYSTEM PROMPT:\n", f"{system_prompt}")
+            print_pg("\nUSER PROMPT:\n", f"{user_content}")
 
         # Call Ollama (streaming)
         result = ollama_generate_chat(
@@ -1461,7 +1458,7 @@ class PromptGenerator:
 
         # result is (response_obj, error_msg) for streaming
         if result[1] is not None:
-            print_pg(f"Ollama error: {result[1]}", RED)
+            print_pg("Error:", f"Ollama error: {result[1]}", RED)
             return (result[1],)
 
         response = result[0]
@@ -1504,22 +1501,29 @@ class PromptGenerator:
                                         thinking_content += str(reasoning_delta)
                                         if show_everything_in_console:
                                             if first_thinking:
-                                                print_pg("\n--------- THINKING ---------", GREEN)
+                                                print_pg("\nTHINKING:", "", GREEN)
                                                 first_thinking = False
-                                            print(f"{GREEN}{str(reasoning_delta)}{RESET}", end='', flush=True)
+                                            print(f"{str(reasoning_delta)}")
                                 if 'content' in delta:
                                     content_delta = delta['content']
                                     if content_delta is not None:
                                         full_response += str(content_delta)
                                         if show_everything_in_console:
                                             if first_content:
-                                                print_pg("\n\n--------- FINAL ANSWER ---------", CYAN)
+                                                print_pg("\nRESULT:", "", GREEN)
                                                 first_content = False
-                                            print(f"{CYAN}{str(content_delta)}{RESET}", end='', flush=True)
+                                            if not format_as_json:
+                                                print(str(content_delta), end="", flush=True)
                         except json.JSONDecodeError:
                             continue
 
             if show_everything_in_console:
+                if format_as_json and full_response:
+                    try:
+                        parsed = json.loads(full_response)
+                        print(json.dumps(parsed, indent=2))
+                    except json.JSONDecodeError:
+                        print(full_response)
                 print('')  # Final newline
 
             if not show_everything_in_console:
@@ -1527,8 +1531,6 @@ class PromptGenerator:
 
             if show_everything_in_console and usage_stats:
                 self.print_token_stats(usage_stats, None, thinking_content, full_response, images)
-            else:
-                print_pg_footer()
 
             if not full_response:
                 print_pg("Warning: Empty response from Ollama")
@@ -1572,10 +1574,7 @@ class PromptGenerator:
 
     def print_token_stats(self, usage_stats, cached_token_counts, thinking_content, full_response, images):
         """Print token statistics using pre-cached counts"""
-        print_pg(f"{'=' * 60}", GREEN)
-        print_pg("              TOKEN USAGE STATISTICS", GREEN)
-        print_pg(f"{'=' * 60}", GREEN)
-
+        print_pg("\nTOKEN USAGE STATISTICS:", "", GREEN)
         total_input = usage_stats.get('prompt_tokens', 0) if usage_stats else 0
         total_output = usage_stats.get('completion_tokens', 0) if usage_stats else 0
 
@@ -1605,21 +1604,106 @@ class PromptGenerator:
 
         # Display with "N/A" if tokenization failed
         if sys_tokens is not None:
-            print_pg(f" SYSTEM PROMPT: {sys_tokens:>5} tokens", GREEN)
+            print_pg("SYSTEM PROMPT:", f"{sys_tokens:>5} tokens", GREEN)
         else:
-            print_pg(" SYSTEM PROMPT:   N/A (tokenization failed)", GREEN)
+            print_pg("SYSTEM PROMPT:", "N/A (tokenization failed)", RED)
 
         if usr_tokens is not None:
-            print_pg(f" USER PROMPT:   {usr_tokens:>5} tokens", GREEN)
+            print_pg("USER PROMPT:", f"{usr_tokens:>5} tokens", GREEN)
         else:
-            print_pg(" USER PROMPT:     N/A (tokenization failed)", GREEN)
+            print_pg("USER PROMPT:", "N/A (tokenization failed)", RED)
 
         if images and image_tokens > 0:
             image_label = "image" if len(images) == 1 else "images"
-            print_pg(f" IMAGES:        {image_tokens:>5} tokens ({len(images)} {image_label})", GREEN)
-        print_pg(" -----------------------------------------", GREEN)
-        print_pg(f" THINKING:      {think_tokens:>5} tokens", GREEN)
-        print_pg(f" FINAL ANSWER:  {ans_tokens:>5} tokens", GREEN)
-        print_pg(" -----------------------------------------", GREEN)
-        print_pg(f" TOTAL:         {total_input + total_output:>5} tokens", GREEN)
-        print_pg(f"{'=' * 60}\n", GREEN)
+            print_pg("IMAGES:", f"{image_tokens:>5} tokens ({len(images)} {image_label})", GREEN)
+        print_pg("THINKING:", f"{think_tokens:>5} tokens", GREEN)
+        print_pg("RESULT:", f"{ans_tokens:>5} tokens", GREEN)
+        print_pg("TOTAL:", f"{total_input + total_output:>5} tokens", GREEN)
+        print_pg("=" * 46, "", GREEN)
+
+    def _generate_via_clip(self, clip, system_prompt, user_content, image, seed, enable_thinking, options, show_everything_in_console, clear_vram_on_run, prompt):
+        """Generate text directly through a connected CLIP/text encoder model."""
+        print_pg("Backend:", "CLIP/text encoder")
+
+        max_length = 512
+        if options and options.get("max_length") is not None:
+            max_length = int(options["max_length"])
+
+        # Sampling parameters
+        use_model_default_sampling = True
+        if options and "use_model_default_sampling" in options:
+            use_model_default_sampling = options["use_model_default_sampling"]
+
+        temperature = 0.7
+        top_k = 64
+        top_p = 0.95
+        min_p = 0.05
+        repetition_penalty = 1.05
+        presence_penalty = 0.0
+        do_sample = not use_model_default_sampling
+
+        if not use_model_default_sampling:
+            temperature = options.get("temperature", temperature)
+            top_k = options.get("top_k", top_k)
+            top_p = options.get("top_p", top_p)
+            min_p = options.get("min_p", min_p)
+            repetition_penalty = options.get("repeat_penalty", repetition_penalty)
+        else:
+            # When model defaults are requested, disable sampling to stay close to the model's deterministic behavior.
+            do_sample = False
+
+        full_prompt = system_prompt
+        if user_content:
+            full_prompt = full_prompt + "\n\n" + user_content if full_prompt else user_content
+
+        if show_everything_in_console:
+            print_pg("seed:", f"{seed}")
+            print_pg("max_length:", f"{max_length}")
+            print_pg("do_sample:", f"{do_sample}")
+            print_pg("temperature:", f"{temperature}")
+            print_pg("top_k:", f"{top_k}")
+            print_pg("top_p:", f"{top_p}")
+            print_pg("min_p:", f"{min_p}")
+            print_pg("repetition_penalty:", f"{repetition_penalty}")
+            print_pg("\nSYSTEM PROMPT:\n", f"{system_prompt}")
+            print_pg("\nUSER PROMPT:\n", f"{user_content}")
+
+        try:
+            # Tokenize with optional image for vision modes.
+            tokenize_kwargs = {"min_length": 1, "thinking": enable_thinking}
+            if image is not None:
+                tokenize_kwargs["image"] = image
+
+            tokens = clip.tokenize(full_prompt, skip_template=False, **tokenize_kwargs)
+
+            generated_ids = clip.generate(
+                tokens,
+                do_sample=do_sample,
+                max_length=max_length,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                presence_penalty=presence_penalty,
+                seed=seed
+            )
+
+            generated_text = clip.decode(generated_ids)
+        except Exception as e:
+            print_pg("Error:", f"Error generating with CLIP/text encoder: {e}", RED)
+            raise RuntimeError(f"CLIP/text encoder generation failed: {e}")
+
+        if not generated_text:
+            print_pg("Warning:", "Empty response from CLIP/text encoder", RED)
+            generated_text = prompt
+
+        if show_everything_in_console:
+            print_pg("\nRESULT:\n", generated_text)
+        else:
+            print_pg("Prompt generation complete.")
+
+        if clear_vram_on_run:
+            self.flush_vram(unload_models=True)
+
+        return (generated_text, "")

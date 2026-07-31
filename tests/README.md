@@ -258,7 +258,6 @@ Preference settings can be found in ComfyUI Settings → Prompt Manager
 - psutil
 - tqdm
 - Pillow
-- colorama
 - llama-server (from llama.cpp)
 
 ## Troubleshooting

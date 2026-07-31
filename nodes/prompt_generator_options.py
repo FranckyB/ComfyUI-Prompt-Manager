@@ -144,6 +144,13 @@ class PromptGenOptions:
                 "show_everything_in_console": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Print system prompt, user prompt, thinking process, and raw model response to console"
+                }),
+                "max_length": ("INT", {
+                    "default": 512,
+                    "min": 1,
+                    "max": 32768,
+                    "step": 1,
+                    "tooltip": "Maximum number of tokens to generate when the Prompt Generator is connected to a CLIP/text encoder."
                 })
             }
         }
@@ -164,7 +171,7 @@ class PromptGenOptions:
                        use_model_default_sampling: bool = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
                        repeat_penalty: float = None, context_size: int = None,
-                       show_everything_in_console: bool = None) -> dict:
+                       show_everything_in_console: bool = None, max_length: int = None) -> dict:
         """Create options dictionary with model, LLM parameters, and extra images"""
 
         # Backward compatibility for workflows saved before `system_prompt_mode` existed.
@@ -255,5 +262,6 @@ class PromptGenOptions:
         options["repeat_penalty"] = repeat_penalty
         options["context_size"] = context_size
         options["show_everything_in_console"] = show_everything_in_console
+        options["max_length"] = max_length
 
         return (options,)
