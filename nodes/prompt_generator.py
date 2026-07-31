@@ -900,9 +900,9 @@ class PromptGenerator:
                 except Exception:
                     pass
 
-            print_pg(f"VRAM flush executed (unload_models={'ON' if unload_models else 'OFF'}).")
+            print_pg("VRAM          :", f"VRAM flush executed")
         except Exception as e:
-            print_pg(f"Warning: VRAM flush failed: {e}", RED)
+            print_pg("WARNING       :", f"VRAM flush failed: {e}", RED)
 
     @staticmethod
     def cleanup_vram_before_run():
@@ -914,8 +914,13 @@ class PromptGenerator:
         global _current_model
 
         print_pg_header()  # Print header for this execution
+
         if clear_vram_on_run:
-            self.cleanup_vram_before_run()
+            if clip is None:
+                self.cleanup_vram_before_run()
+            else:
+                # Skip aggressive pre-run VRAM cleanup when using ComfyUI's CLIP/text encoder;
+                print_pg("VRAM          :", "VRAM flush Skipped for CLIP/text encoder generation.")
 
         # Determine LLM backend: "ollama" or "llama.cpp" (only used when no CLIP is connected)
         use_ollama = (
@@ -1623,7 +1628,8 @@ class PromptGenerator:
 
     def _generate_via_clip(self, clip, system_prompt, user_content, image, seed, enable_thinking, options, show_everything_in_console, clear_vram_on_run, prompt):
         """Generate text directly through a connected CLIP/text encoder model."""
-        print_pg("Backend:", "CLIP/text encoder")
+        print_pg("Backend       :", "CLIP/text encoder")
+        print_pg("Thinking mode :", f"{'ON' if enable_thinking else 'OFF'}")
 
         max_length = 512
         if options and options.get("max_length") is not None:
@@ -1702,8 +1708,5 @@ class PromptGenerator:
             print_pg("\nRESULT:\n", generated_text)
         else:
             print_pg("Prompt generation complete.")
-
-        if clear_vram_on_run:
-            self.flush_vram(unload_models=True)
 
         return (generated_text, "")
