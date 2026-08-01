@@ -6,7 +6,7 @@ instead of the main Prompt Manager library.
 """
 import server
 
-from .prompt_mixer_store import PromptMixerStore
+from ..py.prompt_composer_store import PromptMixerStore
 from .prompt_manager_basic import _get_workflow_node
 
 

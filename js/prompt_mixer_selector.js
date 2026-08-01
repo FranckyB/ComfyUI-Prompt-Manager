@@ -414,7 +414,7 @@ function addMixerPreview(node) {
         this.element.style.setProperty("overflow", "hidden", "important");
     };
 
-    node._mixerPreview = { container, image, emptyLabel, tilesContainer, widget };
+    node._mixerPreview = { container, previewBox, image, emptyLabel, tilesContainer, widget };
     node._mixerPreviewAttached = true;
 
     updateMixerPreview(node);
@@ -438,18 +438,20 @@ function updateMixerPreview(node) {
         displayName = "(Multi)";
         displayCategory = category;
 
-        const containerWidth = Math.max(1, ui.tilesContainer.clientWidth || 0);
-        const containerHeight = Math.max(1, ui.tilesContainer.clientHeight || 0);
+        ui.image.style.display = "none";
+        ui.emptyLabel.style.display = "none";
+        ui.tilesContainer.style.display = "grid";
+        ui.tilesContainer.style.visibility = "hidden";
+        ui.tilesContainer.innerHTML = "";
+
+        // Make container visible first so measurements are stable on first render.
+        const containerWidth = Math.max(1, ui.tilesContainer.clientWidth || ui.previewBox?.clientWidth || 0);
+        const containerHeight = Math.max(1, ui.tilesContainer.clientHeight || ui.previewBox?.clientHeight || 0);
         const layout = getFittingTileLayout(selected.length, containerWidth, containerHeight);
 
         ui.tilesContainer.style.gap = `${layout.gap}px`;
         ui.tilesContainer.style.gridTemplateColumns = `repeat(${layout.columns}, ${Math.max(1, Math.floor(layout.tileWidth))}px)`;
         ui.tilesContainer.style.gridAutoRows = `${Math.max(1, Math.floor(layout.tileHeight))}px`;
-
-        ui.image.style.display = "none";
-        ui.emptyLabel.style.display = "none";
-        ui.tilesContainer.style.display = "grid";
-        ui.tilesContainer.innerHTML = "";
 
         selected.forEach((promptName) => {
             const entry = getMixerEntry(node, category, promptName);
@@ -468,8 +470,11 @@ function updateMixerPreview(node) {
             tile.title = promptName;
             ui.tilesContainer.appendChild(tile);
         });
+
+        ui.tilesContainer.style.visibility = "visible";
     } else {
         ui.tilesContainer.style.display = "none";
+        ui.tilesContainer.style.visibility = "visible";
         ui.tilesContainer.innerHTML = "";
 
         let entry = null;

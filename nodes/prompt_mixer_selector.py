@@ -9,7 +9,7 @@ import random
 import time
 import server
 
-from .prompt_mixer_store import PromptMixerStore, _find_category_case_insensitive, _find_prompt_case_insensitive
+from ..py.prompt_composer_store import PromptMixerStore, _find_category_case_insensitive, _find_prompt_case_insensitive
 
 
 def _normalize_strength(strength):

@@ -174,7 +174,7 @@ function createMixerDropdownButton(text, items) {
 }
 
 function setupPromptMixerManager(nodeType, nodeData) {
-    if (nodeData.name !== "PromptMixerManager") return;
+    if (nodeData.name !== "PromptMixerManager" && nodeData.name !== "PromptComposerManager") return;
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
@@ -751,7 +751,7 @@ function exportMixerJSON(node) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "prompt_mixer_data.json";
+    a.download = "prompt_composer_data.json";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

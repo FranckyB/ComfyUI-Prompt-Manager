@@ -9,8 +9,8 @@ __license__ = "MIT"
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.expression_selector import ExpressionSelector
-from .nodes.prompt_mixer_store import PromptMixerStore
-from .nodes.prompt_mixer_manager import PromptMixerManager
+from .py.prompt_composer_store import PromptMixerStore
+from .nodes.prompt_composer_manager import PromptMixerManager
 from .nodes.prompt_mixer_selector import PromptMixerSelector
 from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
@@ -30,6 +30,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
     "ExpressionSelector":        ExpressionSelector,
+    "PromptComposerManager":     PromptMixerManager,
     "PromptMixerManager":        PromptMixerManager,
     "PromptMixerSelector":       PromptMixerSelector,
     "PromptGenerator":           PromptGenerator,
@@ -54,6 +55,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
     "ExpressionSelector":         "Expression Selector",
+    "PromptComposerManager":      "Prompt Composer Manager",
     "PromptMixerManager":         "Prompt Mixer Manager",
     "PromptMixerSelector":        "Prompt Mixer",
     "PromptGenerator":            "Prompt Generator",
