@@ -347,13 +347,9 @@ function addExpressionPreview(node) {
     container.style.cssText = `
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 0;
         width: 100%;
         height: 100%;
-        background: ${PMA_THEME.panel};
-        border: 1px solid ${PMA_THEME.panelBorder};
-        border-radius: 8px;
-        padding: 8px;
         box-sizing: border-box;
         overflow: hidden;
     `;
@@ -364,9 +360,9 @@ function addExpressionPreview(node) {
         flex: 1;
         min-height: 80px;
         width: 100%;
-        border-radius: 6px;
+        border-radius: 0;
         background: ${PMA_THEME.inputBg};
-        border: 1px solid ${PMA_THEME.inputBorder};
+        border: 2px solid ${PMA_THEME.accent};
         overflow: hidden;
         box-sizing: border-box;
     `;
@@ -399,8 +395,8 @@ function addExpressionPreview(node) {
         font-size: 11px;
         color: ${PMA_THEME.textMuted};
         background: ${PMA_THEME.inputBg};
-        border: 1px dashed ${PMA_THEME.inputBorder};
-        border-radius: 5px;
+        border: 2px dashed ${PMA_THEME.accent};
+        border-radius: 0;
         padding: 8px;
         box-sizing: border-box;
     `;
@@ -536,7 +532,7 @@ app.registerExtension({
             node._configuredFromWorkflow = false;
 
             // Default to a small portrait size matching the 3:4 thumbnail ratio.
-            node.setSize([240, 400]);
+            node.setSize([240, 420]);
 
             // Backward compat: ensure new or restored nodes without a persisted
             // expression_strength default to 1, not 0.
@@ -661,7 +657,7 @@ app.registerExtension({
         nodeType.prototype.onResize = function (size) {
             // Allow narrow portrait widths but keep a sane minimum.
             size[0] = Math.max(240, size[0]);
-            size[1] = Math.max(400, size[1]);
+            size[1] = Math.max(420, size[1]);
             return onResize ? onResize.apply(this, arguments) : size;
         };
     },

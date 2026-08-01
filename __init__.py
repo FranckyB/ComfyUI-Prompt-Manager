@@ -9,6 +9,9 @@ __license__ = "MIT"
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.expression_selector import ExpressionSelector
+from .nodes.prompt_mixer_store import PromptMixerStore
+from .nodes.prompt_mixer_manager import PromptMixerManager
+from .nodes.prompt_mixer_selector import PromptMixerSelector
 from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_generator_kill_switch import PromptGeneratorKillSwitch
@@ -27,6 +30,8 @@ NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
     "ExpressionSelector":        ExpressionSelector,
+    "PromptMixerManager":        PromptMixerManager,
+    "PromptMixerSelector":       PromptMixerSelector,
     "PromptGenerator":           PromptGenerator,
     "PromptGenOptions":          PromptGenOptions,
     "PromptGeneratorKillSwitch": PromptGeneratorKillSwitch,
@@ -49,6 +54,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
     "ExpressionSelector":         "Expression Selector",
+    "PromptMixerManager":         "Prompt Mixer Manager",
+    "PromptMixerSelector":        "Prompt Mixer",
     "PromptGenerator":            "Prompt Generator",
     "PromptGenOptions":           "Prompt Generator Options",
     "PromptGeneratorKillSwitch":  "Prompt Generator Kill Switch",

@@ -5881,9 +5881,9 @@ async function deleteCategory(node, category) {
     }
 }
 
-async function deletePrompt(node, category, name) {
+async function deletePrompt(node, category, name, endpointPrefix = "/prompt-manager-advanced") {
     try {
-        const response = await fetch("/prompt-manager-advanced/delete-prompt", {
+        const response = await fetch(`${endpointPrefix}/delete-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -6891,8 +6891,10 @@ function resizeImageToThumbnail(file, minSize = 200) {
  * Returns { category, prompt } or null if cancelled
  */
 async function showThumbnailBrowser(node, currentCategory, currentPrompt, options = {}) {
-    // Reload prompts to ensure we have the latest data
-    await loadPrompts(node);
+    // Reload prompts to ensure we have the latest data. Callers can pass a custom
+    // loader (e.g. Prompt Mixer) so the browser uses the correct JSON store.
+    const loadPromptsFn = typeof options?.loadPromptsFn === "function" ? options.loadPromptsFn : loadPrompts;
+    await loadPromptsFn(node);
 
     const mode = options?.mode === "save" ? "save" : "select";
     const onSave = typeof options?.onSave === "function" ? options.onSave : null;
@@ -6908,6 +6910,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         ? new Set(allowedCategories.map((c) => c.toLowerCase()))
         : null;
     const selectTitle = typeof options?.title === "string" ? options.title : null;
+    const multiSelect = options?.multiSelect === true;
+    const clearSelectionOnCategorySwitch = options?.clearSelectionOnCategorySwitch === true;
+    const endpointPrefix = typeof options?.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
+    const promptOnly = options?.promptOnly === true;
+    let updateSelectButton = () => {};
 
     const filterAllowedCategories = (categories) => {
         if (!allowedCategorySet || !Array.isArray(categories)) return categories;
@@ -6927,6 +6934,18 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         });
         
         let selectedCategory = currentCategory;
+        let lastSelectedName = currentPrompt;
+        let selectedNames = new Set(multiSelect && Array.isArray(options?.selectedPrompts)
+            ? options.selectedPrompts
+            : (currentPrompt ? [currentPrompt] : []));
+        let multiSelectAnchorName = selectedNames.size > 0 ? Array.from(selectedNames)[0] : "";
+
+        const clearMultiSelection = () => {
+            if (!multiSelect || selectedNames.size === 0) return;
+            selectedNames.clear();
+            multiSelectAnchorName = "";
+            updateSelectButton();
+        };
 
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -6964,6 +6983,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             display: flex;
             flex-direction: column;
             box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+            user-select: none;
+            -webkit-user-select: none;
         `;
 
         // Prevent default context menu on dialog (thumbnail cards have their own)
@@ -7033,6 +7054,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             font-size: 13px;
             box-sizing: border-box;
             outline: none;
+            user-select: text;
+            -webkit-user-select: text;
         `;
         searchInput.onfocus = () => searchInput.style.borderColor = UI.accent;
         searchInput.onblur = () => searchInput.style.borderColor = UI.inputBorder;
@@ -7081,6 +7104,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         // Prompt/Recipe/All filter button
         let contentFilterState = getBrowserContentFilter();
         const contentFilterBtn = document.createElement("button");
+
+        // For prompt-only stores (e.g. Prompt Mixer) the content filter has no meaning.
+        if (promptOnly) {
+            contentFilterState = "prompt";
+        }
 
         // NSFW toggle button
         let hideNSFWState = getHideNSFW();
@@ -7160,7 +7188,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         updateViewModeBtn();
 
         controlsBar.appendChild(searchWrapper);
-        if (!allowedCategories) {
+        if (!allowedCategories && !promptOnly) {
             controlsBar.appendChild(contentFilterBtn);
         }
         controlsBar.appendChild(nsfwBtn);
@@ -7190,6 +7218,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         };
 
         const ensureSelectedCategory = () => {
+            const previousCategory = selectedCategory;
             categories = filterAllowedCategories(getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
@@ -7210,6 +7239,15 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 if (firstVisible) {
                     selectedCategory = firstVisible;
                 }
+            }
+
+            if (
+                clearSelectionOnCategorySwitch &&
+                multiSelect &&
+                previousCategory &&
+                selectedCategory !== previousCategory
+            ) {
+                clearMultiSelection();
             }
 
             return selectedCategory;
@@ -7282,7 +7320,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             item.onclick = async () => {
                 menu.remove();
                 try {
-                    const resp = await fetch("/prompt-manager-advanced/toggle-nsfw", {
+                    const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ type: "category", category: cat })
@@ -7326,7 +7364,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     const newCat = result.newCategory.trim();
                     if (newCat === cat) return;
                     try {
-                        const resp = await fetch("/prompt-manager-advanced/rename-category", {
+                        const resp = await fetch(`${endpointPrefix}/rename-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ old_category: cat, new_category: newCat })
@@ -7335,7 +7373,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         if (data.success) {
                             node.prompts = data.prompts;
                             if (selectedCategory === cat) {
+                                const previousCategory = selectedCategory;
                                 selectedCategory = data.new_category;
+                                if (previousCategory !== selectedCategory && clearSelectionOnCategorySwitch && multiSelect) {
+                                    clearMultiSelection();
+                                }
                             }
                             rebuildCategoryList();
                             renderContent(searchInput.value);
@@ -7368,7 +7410,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 menu.remove();
                 if (await showConfirm("Delete Category", `Are you sure you want to delete category "${cat}" and all its prompts?`)) {
                     try {
-                        const resp = await fetch("/prompt-manager-advanced/delete-category", {
+                        const resp = await fetch(`${endpointPrefix}/delete-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ category: cat })
@@ -7377,8 +7419,12 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         if (data.success) {
                             node.prompts = data.prompts;
                             if (selectedCategory === cat) {
+                                const previousCategory = selectedCategory;
                                 const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
                                 selectedCategory = cats[0] || "";
+                                if (previousCategory !== selectedCategory && clearSelectionOnCategorySwitch && multiSelect) {
+                                    clearMultiSelection();
+                                }
                             }
                             rebuildCategoryList();
                             renderContent(searchInput.value);
@@ -7482,6 +7528,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                                 queue: true,
                                 renderSelection,
                                 fallbackBase,
+                                endpointPrefix,
                             });
                             _thumbQueueDone++;
                         } catch (e) {
@@ -7617,7 +7664,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 btn.textContent = cat;
 
                 btn.onclick = () => {
+                    const categoryChanged = selectedCategory !== cat;
                     selectedCategory = cat;
+                    if (categoryChanged && clearSelectionOnCategorySwitch && multiSelect) {
+                        clearMultiSelection();
+                    }
                     updateCategoryButtons();
                     renderContent(searchInput.value);
                 };
@@ -7657,7 +7708,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         return;
                     }
                     try {
-                        const resp = await fetch("/prompt-manager-advanced/save-category", {
+                        const resp = await fetch(`${endpointPrefix}/save-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ category_name: categoryName, nsfw: result.nsfw })
@@ -7665,7 +7716,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         const data = await resp.json();
                         if (data.success) {
                             node.prompts = data.prompts;
+                            const categoryChanged = selectedCategory !== categoryName;
                             selectedCategory = categoryName;
+                            if (categoryChanged && clearSelectionOnCategorySwitch && multiSelect) {
+                                clearMultiSelection();
+                            }
                             rebuildCategoryList();
                             renderContent(searchInput.value);
                         } else {
@@ -7718,12 +7773,42 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             return promptNames;
         };
 
+        const applyMultiSelectInteraction = (promptName, filteredPrompts, event) => {
+            if (!multiSelect) return "none";
+
+            const promptList = Array.isArray(filteredPrompts) ? filteredPrompts : [];
+            const isShiftRange = event?.shiftKey && multiSelectAnchorName;
+
+            if (isShiftRange) {
+                const anchorIndex = promptList.indexOf(multiSelectAnchorName);
+                const targetIndex = promptList.indexOf(promptName);
+                if (anchorIndex >= 0 && targetIndex >= 0) {
+                    const start = Math.min(anchorIndex, targetIndex);
+                    const end = Math.max(anchorIndex, targetIndex);
+                    for (let i = start; i <= end; i++) {
+                        selectedNames.add(promptList[i]);
+                    }
+                    updateSelectButton();
+                    return "rerender";
+                }
+            }
+
+            if (selectedNames.has(promptName)) {
+                selectedNames.delete(promptName);
+            } else {
+                selectedNames.add(promptName);
+            }
+            multiSelectAnchorName = promptName;
+            updateSelectButton();
+            return "single";
+        };
+
         // Shared right-click handler for prompt items (works in both grid and list view)
         const promptContextMenu = (e, promptName) => {
             e.preventDefault();
             showThumbnailContextMenu(e, node, selectedCategory, promptName, () => {
                 renderContent(searchInput.value);
-            });
+            }, endpointPrefix);
         };
 
         // ---- Grid (Large Thumbnail) View ----
@@ -7753,17 +7838,25 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 return;
             }
 
+            const updateCardSelection = (card, promptName) => {
+                const isSel = selectedNames.has(promptName);
+                card.dataset.selectedPrompt = isSel ? "true" : "false";
+                card.style.background = isSel ? UI.accentSoft : UI.cardBg;
+                card.style.borderColor = isSel ? UI.accentBorder : UI.cardBorder;
+                updateSelectButton();
+            };
+
             filteredPrompts.forEach(promptName => {
                 const promptData = categoryPrompts[promptName];
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = promptName === currentPrompt;
+                const isSelected = multiSelect ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
-                const hasWorkflowData = (
+                const hasWorkflowData = !promptOnly && (
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
-                const hasPromptPayload = hasPromptPresetPayload(promptData);
+                const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
                 if (isSelected) {
@@ -7783,16 +7876,13 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 `;
 
                 card.onmouseenter = () => {
-                    if (!isSelected) {
+                    if (!selectedNames.has(promptName)) {
                         card.style.background = UI.accentSoft;
                         card.style.borderColor = UI.accentBorder;
                     }
                 };
                 card.onmouseleave = () => {
-                    if (!isSelected) {
-                        card.style.background = UI.cardBg;
-                        card.style.borderColor = UI.cardBorder;
-                    }
+                    updateCardSelection(card, promptName);
                 };
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
@@ -7884,7 +7974,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     flex-shrink: 0;
                     cursor: pointer;
                 `;
-                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value));
+                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value), endpointPrefix);
 
                 // Add hover preview with proper event handling (if enabled and not placeholder)
                 // Hover preview is only useful in compact mode; disabled when thumbnails are already large.
@@ -7917,7 +8007,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 card.appendChild(thumbDiv);
                 card.appendChild(nameLabel);
 
-                card.onclick = async () => {
+                card.onclick = async (e) => {
                     if (mode === "save") {
                         selectedSaveName = promptName;
                         if (saveNameInput) {
@@ -7927,6 +8017,16 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         }
                         currentPrompt = promptName;
                         renderContent(searchInput.value);
+                        return;
+                    }
+
+                    if (multiSelect) {
+                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (action === "rerender") {
+                            renderContent(searchInput.value);
+                            return;
+                        }
+                        updateCardSelection(card, promptName);
                         return;
                     }
 
@@ -7957,6 +8057,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         } else {
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
+                    };
+                } else if (multiSelect) {
+                    card.ondblclick = () => {
+                        resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                        cleanup();
                     };
                 }
 
@@ -7993,17 +8098,25 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 return;
             }
 
+            const updateCardSelection = (card, promptName) => {
+                const isSel = selectedNames.has(promptName);
+                card.dataset.selectedPrompt = isSel ? "true" : "false";
+                card.style.background = isSel ? UI.accentSoft : UI.cardBg;
+                card.style.borderColor = isSel ? UI.accentBorder : UI.cardBorder;
+                updateSelectButton();
+            };
+
             filteredPrompts.forEach(promptName => {
                 const promptData = categoryPrompts[promptName];
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = promptName === currentPrompt;
+                const isSelected = multiSelect ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
-                const hasWorkflowData = (
+                const hasWorkflowData = !promptOnly && (
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
-                const hasPromptPayload = hasPromptPresetPayload(promptData);
+                const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
                 if (isSelected) {
@@ -8023,16 +8136,13 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 `;
 
                 card.onmouseenter = () => {
-                    if (!isSelected) {
+                    if (!selectedNames.has(promptName)) {
                         card.style.background = UI.accentSoft;
                         card.style.borderColor = UI.accentBorder;
                     }
                 };
                 card.onmouseleave = () => {
-                    if (!isSelected) {
-                        card.style.background = UI.cardBg;
-                        card.style.borderColor = UI.cardBorder;
-                    }
+                    updateCardSelection(card, promptName);
                 };
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
@@ -8122,7 +8232,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     flex-shrink: 0;
                     cursor: pointer;
                 `;
-                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value));
+                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value), endpointPrefix);
 
                 // Hover preview enabled for compact grid thumbnails.
                 if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
@@ -8154,7 +8264,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 card.appendChild(thumbDiv);
                 card.appendChild(nameLabel);
 
-                card.onclick = async () => {
+                card.onclick = async (e) => {
                     if (mode === "save") {
                         selectedSaveName = promptName;
                         if (saveNameInput) {
@@ -8164,6 +8274,16 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         }
                         currentPrompt = promptName;
                         renderContent(searchInput.value);
+                        return;
+                    }
+
+                    if (multiSelect) {
+                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (action === "rerender") {
+                            renderContent(searchInput.value);
+                            return;
+                        }
+                        updateCardSelection(card, promptName);
                         return;
                     }
 
@@ -8194,6 +8314,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         } else {
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
+                    };
+                } else if (multiSelect) {
+                    card.ondblclick = () => {
+                        resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                        cleanup();
                     };
                 }
 
@@ -8229,18 +8354,26 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 return;
             }
 
+            const updateRowSelection = (row, promptName) => {
+                const isSel = selectedNames.has(promptName);
+                row.dataset.selectedPrompt = isSel ? "true" : "false";
+                row.style.background = isSel ? UI.accentSoft : 'transparent';
+                updateSelectButton();
+            };
+
             // Column headers
             const headerRow = document.createElement("div");
+            const listColumns = promptOnly ? "44px 1fr" : "44px 1fr 70px 70px 70px";
             headerRow.style.cssText = `
                 display: grid;
-                grid-template-columns: 44px 1fr 70px 70px 70px;
+                grid-template-columns: ${listColumns};
                 gap: 8px;
                 padding: 4px 8px 6px 8px;
                     border-bottom: 1px solid rgba(148,163,184,0.2);
                 margin-bottom: 4px;
                 align-items: center;
             `;
-            const headers = ["", "Name", "LoRAs A", "LoRAs B", "Triggers"];
+            const headers = promptOnly ? ["", "Name"] : ["", "Name", "LoRAs A", "LoRAs B", "Triggers"];
             headers.forEach((h, i) => {
                 const hDiv = document.createElement("div");
                 hDiv.textContent = h;
@@ -8258,17 +8391,17 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             filteredPrompts.forEach(promptName => {
                 const promptData = categoryPrompts[promptName];
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = promptName === currentPrompt;
+                const isSelected = multiSelect ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
-                const hasWorkflowData = (
+                const hasWorkflowData = !promptOnly && (
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
-                const hasPromptPayload = hasPromptPresetPayload(promptData);
-                const lorasACount = (promptData?.loras_a || []).length;
-                const lorasBCount = (promptData?.loras_b || []).length;
-                const triggerCount = (promptData?.trigger_words || []).length;
+                const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
+                const lorasACount = promptOnly ? 0 : (promptData?.loras_a || []).length;
+                const lorasBCount = promptOnly ? 0 : (promptData?.loras_b || []).length;
+                const triggerCount = promptOnly ? 0 : (promptData?.trigger_words || []).length;
 
                 const row = document.createElement("div");
                 if (isSelected) {
@@ -8276,7 +8409,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                 }
                 row.style.cssText = `
                     display: grid;
-                    grid-template-columns: 44px 1fr 70px 70px 70px;
+                    grid-template-columns: ${listColumns};
                     gap: 8px;
                     padding: 4px 8px;
                     background: ${isSelected ? UI.accentSoft : 'transparent'};
@@ -8285,8 +8418,8 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     align-items: center;
                     transition: background 0.1s ease;
                 `;
-                row.onmouseenter = () => { if (!isSelected) row.style.background = '#2a2a2a'; };
-                row.onmouseleave = () => { if (!isSelected) row.style.background = 'transparent'; };
+                row.onmouseenter = () => { if (!selectedNames.has(promptName)) row.style.background = '#2a2a2a'; };
+                row.onmouseleave = () => { updateRowSelection(row, promptName); };
 
                 // Thumbnail icon (using div with background-image to avoid browser extension interference)
                 const thumbWrap = document.createElement("div");
@@ -8308,7 +8441,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                     background-color: #1a1a1a;
                     cursor: pointer;
                 `;
-                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value));
+                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value), endpointPrefix);
 
                 // Add hover preview with proper event handling (if enabled and not placeholder)
                 if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
@@ -8424,11 +8557,13 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
 
                 row.appendChild(thumbWrap);
                 row.appendChild(nameDiv);
-                row.appendChild(makeCount(lorasACount));
-                row.appendChild(makeCount(lorasBCount));
-                row.appendChild(makeCount(triggerCount));
+                if (!promptOnly) {
+                    row.appendChild(makeCount(lorasACount));
+                    row.appendChild(makeCount(lorasBCount));
+                    row.appendChild(makeCount(triggerCount));
+                }
 
-                row.onclick = async () => {
+                row.onclick = async (e) => {
                     if (mode === "save") {
                         selectedSaveName = promptName;
                         if (saveNameInput) {
@@ -8438,6 +8573,16 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         }
                         currentPrompt = promptName;
                         renderContent(searchInput.value);
+                        return;
+                    }
+
+                    if (multiSelect) {
+                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (action === "rerender") {
+                            renderContent(searchInput.value);
+                            return;
+                        }
+                        updateRowSelection(row, promptName);
                         return;
                     }
 
@@ -8468,6 +8613,11 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
                         } else {
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
+                    };
+                } else if (multiSelect) {
+                    row.ondblclick = () => {
+                        resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                        cleanup();
                     };
                 }
 
@@ -8717,17 +8867,20 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         // Footer with hint
         const footer = document.createElement("div");
         footer.style.cssText = `
-            margin-top: 4px;
-            margin-bottom: -8px;
-            padding-top: 6px;
+            margin-top: 6px;
+            margin-bottom: 0;
+            padding-top: 8px;
             border-top: 1px solid ${UI.sectionBorder};
-            font-size: 11px;
-            color: #666;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #8a95a6;
             text-align: center;
         `;
         footer.textContent = mode === "save"
             ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
-            : "Right-click a prompt or category for more options (thumbnails, NSFW, delete)";
+            : (multiSelect
+                ? "Click prompts to select/deselect. Shift+click selects all between the previously selected prompt and the one you click. Double-click picks one. Click Select to confirm."
+                : "Right-click a prompt or category for more options (thumbnails, NSFW, delete)");
 
         const saveBar = document.createElement("div");
         if (mode === "save") {
@@ -8802,6 +8955,119 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
             saveBar.appendChild(saveNameInput);
             saveBar.appendChild(cancelSaveButton);
             saveBar.appendChild(saveActionButton);
+        } else if (multiSelect) {
+            saveBar.style.cssText = `
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                justify-content: space-between;
+                margin-top: 8px;
+                padding-top: 8px;
+                border-top: 1px solid ${UI.sectionBorder};
+            `;
+
+            const selectionTools = document.createElement("div");
+            selectionTools.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            `;
+
+            const actionButtons = document.createElement("div");
+            actionButtons.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            `;
+
+            const clearSelectionBtn = document.createElement("button");
+            clearSelectionBtn.textContent = "Clear Selection";
+            clearSelectionBtn.style.cssText = `
+                background: #313843;
+                border: 1px solid #5f6773;
+                color: #ccc;
+                padding: 7px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            clearSelectionBtn.onclick = () => {
+                selectedNames.clear();
+                multiSelectAnchorName = "";
+                updateSelectButton();
+                renderContent(searchInput.value);
+            };
+
+            const selectAllBtn = document.createElement("button");
+            selectAllBtn.textContent = "Select All";
+            selectAllBtn.style.cssText = `
+                background: #313843;
+                border: 1px solid #5f6773;
+                color: #ccc;
+                padding: 7px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            selectAllBtn.onclick = () => {
+                const visiblePrompts = getFilteredPrompts(searchInput.value);
+                visiblePrompts.forEach((promptName) => selectedNames.add(promptName));
+                updateSelectButton();
+                renderContent(searchInput.value);
+            };
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.textContent = "Cancel";
+            cancelBtn.style.cssText = `
+                background: #313843;
+                border: 1px solid #5f6773;
+                color: #ccc;
+                padding: 7px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            cancelBtn.onclick = () => {
+                resolve(null);
+                cleanup();
+            };
+
+            const selectBtn = document.createElement("button");
+            selectBtn.textContent = `Select (${selectedNames.size})`;
+            selectBtn.style.cssText = `
+                background: #2b6d3a;
+                border: 1px solid #4a9158;
+                color: #fff;
+                padding: 7px 14px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            updateSelectButton = () => {
+                selectBtn.textContent = `Select (${selectedNames.size})`;
+            };
+            selectBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const result = {
+                    category: selectedCategory,
+                    prompt: selectedNames.size > 0 ? Array.from(selectedNames)[0] : "",
+                    prompts: Array.from(selectedNames),
+                };
+                resolve(result);
+                cleanup();
+            });
+
+            selectionTools.appendChild(clearSelectionBtn);
+            selectionTools.appendChild(selectAllBtn);
+            actionButtons.appendChild(cancelBtn);
+            actionButtons.appendChild(selectBtn);
+
+            saveBar.appendChild(selectionTools);
+            saveBar.appendChild(actionButtons);
         }
 
         dialog.appendChild(header);
@@ -8809,7 +9075,7 @@ async function showThumbnailBrowser(node, currentCategory, currentPrompt, option
         dialog.appendChild(categoryContainer);
         dialog.appendChild(gridContainer);
         dialog.appendChild(footer);
-        if (mode === "save") {
+        if (mode === "save" || multiSelect) {
             dialog.appendChild(saveBar);
         }
 
@@ -8947,7 +9213,7 @@ function _thumbnailDisplayName(modelPath, maxLength = 68) {
  * Attach drag-and-drop handlers so users can drop an image onto a thumbnail
  * to set it as that prompt's thumbnail.
  */
-function _attachThumbnailDropHandlers(element, node, category, promptName, onUpdate) {
+function _attachThumbnailDropHandlers(element, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
     element.addEventListener("dragover", (e) => {
         const hasFiles = Array.from(e.dataTransfer?.types || []).includes("Files");
         if (!hasFiles) return;
@@ -8985,7 +9251,7 @@ function _attachThumbnailDropHandlers(element, node, category, promptName, onUpd
 
         try {
             const thumbnail = await resizeImageToThumbnail(imageFile, 200);
-            await saveThumbnail(node, category, promptName, thumbnail);
+            await saveThumbnail(node, category, promptName, thumbnail, endpointPrefix);
             onUpdate();
         } catch (error) {
             console.error("[PromptManagerAdvanced] Error setting thumbnail from drop:", error);
@@ -10164,7 +10430,13 @@ function _finishThumbQueueProgress() {
 }
 
 async function generateThumbnailForPrompt(node, category, promptName, onUpdate, options = {}) {
-    const { silent = false, renderSelection: providedRenderSelection = null, fallbackBase = null, queue = false } = options || {};
+    const {
+        silent = false,
+        renderSelection: providedRenderSelection = null,
+        fallbackBase = null,
+        queue = false,
+        endpointPrefix = "/prompt-manager-advanced",
+    } = options || {};
     const promptData = node.prompts[category]?.[promptName];
     if (!promptData) {
         if (!silent && !queue) await showInfo("Error", "Prompt data not found.");
@@ -10251,7 +10523,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
         }
 
         if (thumbnail) {
-            await saveThumbnail(node, category, promptName, thumbnail);
+            await saveThumbnail(node, category, promptName, thumbnail, endpointPrefix);
             onUpdate();
         } else {
             if (!silent && !queue) await showInfo("Generation Failed", "Could not generate thumbnail. The model may be incompatible or an error occurred.");
@@ -10270,7 +10542,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
 /**
  * Show context menu for thumbnail operations
  */
-function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
+function showThumbnailContextMenu(event, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
     // Remove any existing context menu
     const existing = document.querySelector('.thumbnail-context-menu');
     if (existing) existing.remove();
@@ -10318,7 +10590,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
             if (file) {
                 try {
                     const thumbnail = await resizeImageToThumbnail(file, 200);
-                    await saveThumbnail(node, category, promptName, thumbnail);
+                    await saveThumbnail(node, category, promptName, thumbnail, endpointPrefix);
                     onUpdate();
                 } catch (error) {
                     console.error("[PromptManagerAdvanced] Error setting thumbnail:", error);
@@ -10339,7 +10611,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
                     const blob = await item.getType(imageType);
                     const file = new File([blob], 'clipboard.png', { type: imageType });
                     const thumbnail = await resizeImageToThumbnail(file, 200);
-                    await saveThumbnail(node, category, promptName, thumbnail);
+                    await saveThumbnail(node, category, promptName, thumbnail, endpointPrefix);
                     onUpdate();
                     return;
                 }
@@ -10373,7 +10645,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
             }
             _updateThumbQueueProgress(queuedName);
             try {
-                await generateThumbnailForPrompt(node, category, queuedName, onUpdate, { queue: true });
+                await generateThumbnailForPrompt(node, category, queuedName, onUpdate, { queue: true, endpointPrefix });
                 _thumbQueueDone++;
             } catch (e) {
                 console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
@@ -10415,7 +10687,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
         menu.appendChild(divider);
 
         menu.appendChild(createMenuItem("🗑️ Remove Thumbnail", async () => {
-            await saveThumbnail(node, category, promptName, null);
+            await saveThumbnail(node, category, promptName, null, endpointPrefix);
             onUpdate();
         }));
     }
@@ -10428,7 +10700,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
     const isNSFW = promptData?.nsfw === true;
     const nsfwItem = createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
         try {
-            const resp = await fetch("/prompt-manager-advanced/toggle-nsfw", {
+            const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ type: "prompt", category: category, name: promptName })
@@ -10465,7 +10737,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
             const newCat = result.category;
             if (newName === promptName && newCat === category) return;
             try {
-                const resp = await fetch("/prompt-manager-advanced/rename-prompt", {
+                const resp = await fetch(`${endpointPrefix}/rename-prompt`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ category: category, old_name: promptName, new_name: newName, new_category: newCat })
@@ -10490,7 +10762,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
 
     menu.appendChild(createMenuItem("🗑️ Delete Prompt", async () => {
         if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
-            await deletePrompt(node, category, promptName);
+            await deletePrompt(node, category, promptName, endpointPrefix);
             onUpdate();
         }
     }));
@@ -10516,9 +10788,9 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate) {
 /**
  * Save thumbnail to prompt data
  */
-async function saveThumbnail(node, category, promptName, thumbnail) {
+async function saveThumbnail(node, category, promptName, thumbnail, endpointPrefix = "/prompt-manager-advanced") {
     try {
-        const response = await fetch("/prompt-manager-advanced/save-thumbnail", {
+        const response = await fetch(`${endpointPrefix}/save-thumbnail`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
