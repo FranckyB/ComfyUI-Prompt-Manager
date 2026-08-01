@@ -2,10 +2,10 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import {
-    showThumbnailBrowser,
     showInfo,
     showConfirm,
 } from "./prompt_manager_advanced.js";
+import { showThumbnailBrowser } from "./prompt_browser.js";
 import { loadMixerPrompts, getMixerCategories, getMixerNames, getMixerEntry, MIXER_ENDPOINT_PREFIX } from "./prompt_mixer_common.js";
 
 const PMA_THEME = {

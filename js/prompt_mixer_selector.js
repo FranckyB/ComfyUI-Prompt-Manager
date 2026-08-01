@@ -4,9 +4,9 @@ import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import {
     PMA_THEME,
     DEFAULT_THUMBNAIL,
-    showThumbnailBrowser,
     forwardWheelToCanvas,
 } from "./prompt_manager_advanced.js";
+import { showThumbnailBrowser } from "./prompt_browser.js";
 import { loadMixerPrompts, getMixerCategories, getMixerNames, getMixerEntry, MIXER_ENDPOINT_PREFIX } from "./prompt_mixer_common.js";
 
 const DEFAULT_THUMBNAIL_URL = DEFAULT_THUMBNAIL;

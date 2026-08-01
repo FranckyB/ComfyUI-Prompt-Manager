@@ -5,10 +5,10 @@ import {
     PMA_THEME,
     DEFAULT_THUMBNAIL,
     loadPrompts,
-    getPromptNamesForCategory,
-    showThumbnailBrowser,
     forwardWheelToCanvas,
 } from "./prompt_manager_advanced.js";
+import { showThumbnailBrowser } from "./prompt_browser.js";
+import { getPromptNamesForCategory } from "./prompt_browser.js";
 
 const EXPRESSION_CATEGORY = "Expressions";
 
