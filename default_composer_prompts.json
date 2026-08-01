@@ -1,4 +1,4 @@
-﻿{
+{
   "Female Expressions": {
     "_base_prompt_": "A close portrait of a young woman with sun-kissed skin and wavy, chestnut-brown hair that falls just past her shoulders, her face and bare shoulders bathed in warm, direct sunlight against a smooth, neutral cream-colored background. She is bare-shouldered, her skin glowing with a natural sheen, captured in a tight, intimate close-up that keeps her face as the dominant 70% of the frame while the background remains softly out of focus. The lighting is bright and directional, casting distinct highlights on her hair and skin.",
     "_prompt_prefix_": "Expression",
@@ -1421,6 +1421,499 @@
     "Yelling": {
       "prompt": "yelling. his lower jaw is unhinged and pulled wide downward into a massive vertical rectangle, exposing his flattened tongue and throat. his neck tendons stand out like rigid cords beneath taut skin as air is violently expelled. his nostrils are flared wide, and his eyebrows are drawn low and furrowed sharply over wide, staring eyes.",
       "thumbnail": "data:image/jpeg;base64,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"
+    }
+  },
+  "Environments": {
+    "_base_prompt_": "cinematic portrait photograph of an adult person, anatomically correct face and hands, realistic skin texture, balanced color, sharp focus, high dynamic range, professional photography",
+    "Urban Alley": {
+      "prompt": "narrow urban alleyway at night, wet asphalt reflecting signage, layered neon accents, light atmospheric steam, gritty wall textures, cinematic depth perspective"
+    },
+    "Modern Loft": {
+      "prompt": "high end modern loft interior, floor to ceiling windows, soft daylight spill, minimal furniture styling, clean architectural lines, premium editorial atmosphere"
+    },
+    "Forest Clearing": {
+      "prompt": "quiet forest clearing with filtered sunbeams through canopy, soft moss ground cover, subtle floating dust motes, natural color harmony, immersive environmental depth"
+    },
+    "Mountain Ridge": {
+      "prompt": "dramatic alpine mountain ridge overlooking distant peaks, crisp high altitude air, broad horizon separation, textured rocky foreground, cinematic epic landscape scale"
+    },
+    "Coastal Cliffs": {
+      "prompt": "rugged coastal cliffside above active ocean surf, sea mist in backlight, stratified rock formations, cool wind swept atmosphere, expansive horizon composition"
+    },
+    "Desert Dunes": {
+      "prompt": "rolling desert dunes with wind carved ripples, warm directional sunlight, sparse particulate haze, long contour shadows, minimalist but expansive environmental mood"
+    },
+    "Studio Backdrop": {
+      "prompt": "professional seamless studio backdrop with smooth tonal gradient, controlled softbox illumination, clean floor transition, minimal environmental distraction, commercial portrait setup"
+    },
+    "Cyberpunk Street": {
+      "prompt": "dense cyberpunk street corridor, layered holographic signage, mixed magenta cyan practical lights, humid atmospheric haze, crowded visual storytelling details"
+    },
+    "Library Interior": {
+      "prompt": "grand historic library interior, towering bookshelves, carved dark wood architecture, warm practical lamp pools, quiet scholarly atmosphere, strong depth layering"
+    },
+    "Snowy Village": {
+      "prompt": "snow covered village street at dusk, soft window glows, fresh snow accumulation on rooftops, cold ambient air, gentle atmospheric diffusion and winter calm"
+    }
+  },
+  "Camera Values": {
+    "_base_prompt_": "professional portrait photo of an adult subject, realistic skin and fabric detail, controlled exposure, natural expression, high resolution image quality",
+    "35mm Natural": {
+      "prompt": "35mm lens perspective, eye level camera height, balanced environmental inclusion, natural spatial proportions, documentary cinematic framing"
+    },
+    "50mm Portrait": {
+      "prompt": "50mm prime portrait framing, neutral perspective compression, flattering facial proportions, medium close shot distance, classic editorial look"
+    },
+    "85mm Compression": {
+      "prompt": "85mm portrait lens compression, pronounced subject separation from background, elegant facial geometry, refined shallow depth rendering"
+    },
+    "24mm Dynamic": {
+      "prompt": "24mm wide angle perspective, dynamic foreground to background expansion, energized spatial depth, intentional mild edge perspective stretch"
+    },
+    "Low Angle Hero": {
+      "prompt": "camera positioned below eye line, upward hero perspective, stronger jawline and posture emphasis, dramatic and assertive visual read"
+    },
+    "High Angle": {
+      "prompt": "camera positioned above eye line, looking downward perspective, broader scene context visibility, softened character dominance and open composition"
+    },
+    "Shallow DOF": {
+      "prompt": "wide aperture portrait look near f1.8, selective focal plane on eyes, creamy background blur, high subject isolation, smooth bokeh transitions"
+    },
+    "Deep Focus": {
+      "prompt": "deep focus capture near f8, consistent sharpness from subject through environment, informative scene readability, disciplined technical clarity"
+    },
+    "Long Exposure": {
+      "prompt": "long exposure aesthetic with stabilized primary subject, controlled ambient motion streaks in background lights, cinematic temporal energy"
+    },
+    "Handheld Documentary": {
+      "prompt": "handheld documentary framing with slight organic camera imperfection, naturalistic composition bias, lived in realism, grounded reportage style"
+    }
+  },
+  "Lighting": {
+    "_base_prompt_": "portrait of an adult person with neutral wardrobe and minimal background, realistic skin and eye detail, physically plausible shadows, high quality photo output",
+    "Soft Window Light": {
+      "prompt": "large diffused window key from side angle, smooth skin rendering, soft wraparound shadow transitions, natural indoor daylight realism"
+    },
+    "Golden Hour": {
+      "prompt": "low sun golden hour key light, warm spectral highlights, gentle rim separation, elongated soft shadows, cinematic sunset portrait glow"
+    },
+    "Blue Hour": {
+      "prompt": "post sunset blue hour ambient base with subtle practical fill, cool tonal bias, soft contrast envelope, restrained nocturnal mood"
+    },
+    "Rembrandt": {
+      "prompt": "classical rembrandt key placement, distinct cheek triangle highlight, controlled negative fill, sculpted facial planes, painterly cinematic contrast"
+    },
+    "Butterfly": {
+      "prompt": "frontal elevated beauty key creating butterfly shadow under nose, symmetrical facial illumination, clean skin texture definition, fashion portrait polish"
+    },
+    "Split Light": {
+      "prompt": "hard side key producing true split lighting across face, one side illuminated and one side in shadow, dramatic emotional intensity"
+    },
+    "Neon Accent": {
+      "prompt": "dual color edge lighting with magenta and cyan practicals, controlled contrast ratio, reflective highlights on contours, modern stylized nightlife mood"
+    },
+    "Overcast Daylight": {
+      "prompt": "uniform overcast skylight illumination, low contrast tonal range, natural color neutrality, forgiving skin texture, realistic soft outdoor portrait"
+    },
+    "Hard Sun": {
+      "prompt": "direct midday sun producing crisp cast shadows, bright specular highlights, high contrast facial modeling, bold graphic light pattern"
+    },
+    "Candlelit": {
+      "prompt": "localized candle practical key with warm flicker variation, rapid falloff into shadow, intimate low key ambiance, cinematic period atmosphere"
+    }
+  },
+  "Mood": {
+    "_base_prompt_": "close portrait of an adult subject with readable eyes and facial structure, realistic expression detail, controlled composition, high fidelity photographic rendering",
+    "Serene": {
+      "prompt": "calm serene emotional tone, relaxed facial tension, gentle posture, smooth visual rhythm, peaceful atmosphere without dramatic contrast"
+    },
+    "Melancholic": {
+      "prompt": "quiet melancholic emotional state, subtle downward energy in gaze, subdued tonal palette, reflective introspective atmosphere"
+    },
+    "Tense": {
+      "prompt": "restrained tension in expression and posture, micro stress cues around eyes and jaw, cinematic suspense mood with controlled contrast"
+    },
+    "Hopeful": {
+      "prompt": "hopeful emotional presence with lifted gaze, slight softening around mouth and brow, brighter tonal intention, optimistic cinematic feel"
+    },
+    "Mysterious": {
+      "prompt": "mysterious restrained expression, partial concealment through light and framing, unresolved narrative cues, moody atmospheric depth"
+    },
+    "Romantic": {
+      "prompt": "romantic intimate emotional color, softened transitions, warm highlights, gentle expression nuance, elegant cinematic tenderness"
+    },
+    "Joyful": {
+      "prompt": "joyful high energy mood with lively expression and open facial engagement, vibrant tonal response, celebratory atmosphere"
+    },
+    "Gritty": {
+      "prompt": "gritty grounded realism, visible texture and imperfection, harder contrast handling, emotionally raw atmosphere, urban cinematic tone"
+    },
+    "Dreamlike": {
+      "prompt": "dreamlike ethereal emotional register, soft tonal separation, slightly surreal ambience, graceful pacing and visual softness"
+    },
+    "Elegant": {
+      "prompt": "elegant refined mood with composed posture, restrained expression, polished styling coherence, upscale editorial visual language"
+    }
+  },
+  "Male Characters": {
+    "_base_prompt_": "cinematic character portrait of an adult male subject, realistic facial anatomy, detailed skin texture, physically plausible lighting, high resolution output",
+    "Rugged Traveler": {
+      "prompt": "rugged traveler character with weathered outerwear, practical utility details, wind worn texture cues, alert steady gaze, grounded adventure identity"
+    },
+    "Modern Professional": {
+      "prompt": "modern professional male character in tailored wardrobe, clean grooming, confident neutral posture, premium editorial business portrait tone"
+    },
+    "Streetwear Creator": {
+      "prompt": "contemporary streetwear creator persona with layered silhouettes, textured fabrics, directional styling choices, expressive urban creative presence"
+    },
+    "Fantasy Knight": {
+      "prompt": "fantasy knight character with ornate but battle worn armor detailing, noble posture, disciplined demeanor, heroic high fantasy portrait language"
+    },
+    "Sci Fi Pilot": {
+      "prompt": "science fiction pilot archetype with functional flight gear, subtle interface detailing, mission focused gaze, believable near future character design"
+    },
+    "Detective Noir": {
+      "prompt": "noir detective persona with trench coat styling, shadow shaped facial structure, guarded demeanor, moody investigative cinematic atmosphere"
+    },
+    "Athletic Lead": {
+      "prompt": "athletic lead character with strong body carriage, performance oriented styling, focused determined gaze, dynamic protagonist framing"
+    },
+    "Scholar": {
+      "prompt": "scholar character with refined understated wardrobe, thoughtful eye focus, measured demeanor, intellectual and composed narrative impression"
+    },
+    "Outdoorsman": {
+      "prompt": "outdoorsman character with practical layered gear, natural weathering details, resilient calm demeanor, expedition ready identity cues"
+    },
+    "Musician": {
+      "prompt": "musician character portrait with artistic wardrobe accents, emotionally aware gaze, subtle creative intensity, stage inspired personality styling"
+    }
+  },
+  "Female Characters": {
+    "_base_prompt_": "cinematic character portrait of an adult female subject, realistic facial anatomy, detailed skin texture, physically plausible lighting, high resolution output",
+    "Elegant Professional": {
+      "prompt": "elegant professional female character with tailored wardrobe, poised posture, calm confident presence, premium editorial business look"
+    },
+    "Streetwear Artist": {
+      "prompt": "streetwear artist persona with layered contemporary fashion, intentional texture contrasts, expressive confident stance, urban creative storytelling"
+    },
+    "Fantasy Ranger": {
+      "prompt": "fantasy ranger character with practical field gear, weathered material cues, vigilant focused gaze, grounded heroic fantasy tone"
+    },
+    "Sci Fi Engineer": {
+      "prompt": "science fiction engineer archetype with technical attire and utility details, concentrated gaze, believable functional near future design"
+    },
+    "Noir Lead": {
+      "prompt": "noir lead character styling with dramatic silhouette, restrained demeanor, shadow rich facial modeling, cinematic mystery narrative energy"
+    },
+    "Athletic Heroine": {
+      "prompt": "athletic heroine character with strong kinetic posture, performance ready wardrobe, determined gaze, dynamic protagonist presence"
+    },
+    "Scholar": {
+      "prompt": "scholar character with refined minimalist styling, attentive thoughtful gaze, composed demeanor, intelligent narrative identity"
+    },
+    "Outdoors Explorer": {
+      "prompt": "outdoors explorer persona with practical layered garments, subtle weather exposure cues, resilient calm presence, expedition realism"
+    },
+    "Musician": {
+      "prompt": "musician character styling with expressive artistic wardrobe accents, emotionally present gaze, confident stage ready personality"
+    },
+    "Mystic": {
+      "prompt": "mystic archetype with symbolic accessories, restrained enigmatic demeanor, subtle ceremonial detail language, atmospheric contemplative aura"
+    }
+  },
+  "Clothing": {
+    "_base_prompt_": "full body fashion photograph of an adult person standing in neutral pose, anatomically correct proportions, realistic textile behavior, studio quality lighting, high detail output",
+    "Tailored Suit": {
+      "prompt": "precision tailored suit with structured shoulders, defined waist shaping, crisp lapel geometry, refined wool texture, polished formal footwear coordination"
+    },
+    "Casual Denim": {
+      "prompt": "casual denim ensemble with layered foundational pieces, visible stitch detail, realistic fabric weight and drape, contemporary relaxed street styling"
+    },
+    "Techwear": {
+      "prompt": "futuristic techwear outfit with modular utility pockets, matte weather resistant textiles, articulated paneling, functional hardware accents, performance silhouette"
+    },
+    "Bohemian": {
+      "prompt": "bohemian layered wardrobe using mixed natural fabrics, flowing lines, handcrafted texture cues, subtle accessory stacking, expressive freeform styling"
+    },
+    "Athleisure": {
+      "prompt": "modern athleisure set with performance knit materials, ergonomic seam placement, clean monochrome palette options, sleek sport inspired everyday silhouette"
+    },
+    "Evening Formal": {
+      "prompt": "formal eveningwear with luxurious fabric sheen control, elegant line continuity, refined accessory pairing, red carpet ready construction and fit"
+    },
+    "Vintage Classic": {
+      "prompt": "vintage classic outfit with era informed tailoring, heritage fabric textures, period accurate proportions, timeless styling balance and visual cohesion"
+    },
+    "Winter Layered": {
+      "prompt": "winter layered styling with base mid and outer shell garments, wool and technical insulation textures, scarf glove coordination, cold weather practicality"
+    },
+    "Summer Light": {
+      "prompt": "lightweight summer wardrobe with breathable natural fabrics, airy silhouette flow, sun appropriate styling details, clean seasonal color harmony"
+    },
+    "Utility Workwear": {
+      "prompt": "utility workwear composition with durable canvas and twill materials, reinforced seams, practical pocket distribution, rugged functional styling language"
+    }
+  },
+  "Poses": {
+    "_base_prompt_": "full body portrait of an adult person in a clean set, realistic anatomy and balance, neutral wardrobe, clear visibility of limbs and posture",
+    "Relaxed Stand": {
+      "prompt": "balanced relaxed standing posture with natural weight distribution, shoulders at rest, subtle asymmetry in stance, calm approachable body language"
+    },
+    "Hands in Pockets": {
+      "prompt": "standing pose with both hands partially in pockets, easy contralateral weight shift, casual confidence, relaxed elbow and shoulder lines"
+    },
+    "Contrapposto": {
+      "prompt": "classical contrapposto stance with clear hip to shoulder counter angle, elegant spine curve, organic asymmetrical balance, sculptural silhouette"
+    },
+    "Arms Crossed": {
+      "prompt": "arms crossed posture with stable stance, controlled facial engagement, confident but neutral presence, clear forearm overlap readability"
+    },
+    "Seated Casual": {
+      "prompt": "casual seated pose with relaxed torso lean, one leg offset for depth, natural hand placement, comfortable conversational body language"
+    },
+    "Seated Upright": {
+      "prompt": "upright seated posture with elongated spine, squared shoulders, composed formal attitude, symmetrical framing suitable for editorial portrait"
+    },
+    "Walking Forward": {
+      "prompt": "mid stride walking pose toward camera, controlled forward momentum, natural arm swing phase, dynamic but readable full body action"
+    },
+    "Leaning Wall": {
+      "prompt": "standing lean against vertical surface with one shoulder contact, crossed ankle variation, casual urban attitude, diagonal compositional interest"
+    },
+    "Over Shoulder": {
+      "prompt": "torso turned partly away with over shoulder look back to camera, strong neck line, narrative tension, elegant rotational pose"
+    },
+    "Hands on Hips": {
+      "prompt": "hands on hips stance with open chest posture, grounded feet position, assertive confident silhouette, clean waistline definition"
+    }
+  },
+  "Time of Day": {
+    "_base_prompt_": "outdoor portrait of an adult person in a realistic location, consistent environmental physics, natural skin response to ambient light, cinematic photo quality",
+    "Pre Dawn": {
+      "prompt": "pre dawn ambient blue cast before sunrise, low contrast horizon separation, cool atmospheric softness, quiet transitional morning mood"
+    },
+    "Sunrise": {
+      "prompt": "early sunrise with warm low angle light touching subject edges, gentle long shadows, fresh morning moisture in air"
+    },
+    "Morning": {
+      "prompt": "clear morning daylight with balanced color temperature, moderate contrast, clean visibility, energetic but natural daytime atmosphere"
+    },
+    "Noon": {
+      "prompt": "high noon sun with short hard shadow geometry, bright specular highlights, strong scene clarity, vivid daytime intensity"
+    },
+    "Afternoon": {
+      "prompt": "warm afternoon light with softer angle than noon, fuller tonal modeling, comfortable natural brightness and environmental detail retention"
+    },
+    "Golden Hour": {
+      "prompt": "late golden hour with rich amber sidelight, luminous skin highlights, stretched shadow lines, cinematic warmth and depth"
+    },
+    "Sunset": {
+      "prompt": "sunset period with layered orange magenta sky hues, directional backlight options, transitional mood between day and night"
+    },
+    "Blue Hour": {
+      "prompt": "blue hour after sunset with cool ambient dominance, practical lights beginning to glow, subtle contrast and atmospheric calm"
+    },
+    "Night": {
+      "prompt": "nighttime scene lit by mixed practical sources, controlled dark values, selective highlight separation, cinematic nocturnal realism"
+    },
+    "Midnight": {
+      "prompt": "deep midnight environment with minimal ambient fill, isolated light pools, heavy shadow regions, dramatic late hour visual tone"
+    }
+  },
+  "Color Grading": {
+    "_base_prompt_": "portrait image with neutral baseline color science, realistic skin rendering, preserved highlight detail, controllable contrast curve, professional post processing target",
+    "Natural Neutral": {
+      "prompt": "natural neutral grade with accurate white balance, restrained saturation, realistic skin hue preservation, clean tonal separation"
+    },
+    "Warm Film": {
+      "prompt": "warm cinematic film inspired grade with amber highlight bias, softened black floor, gentle contrast rolloff, nostalgic tonal mood"
+    },
+    "Cool Steel": {
+      "prompt": "cool steel blue leaning grade with crisp tonal edges, restrained warmth channels, modern polished atmospheric feel"
+    },
+    "Teal Orange": {
+      "prompt": "classic teal orange cinematic split with controlled skin protection, complementary shadow highlights separation, dramatic blockbuster contrast"
+    },
+    "Muted Matte": {
+      "prompt": "muted matte grade with lowered contrast and lifted blacks, desaturated color response, soft editorial modern finish"
+    },
+    "High Contrast": {
+      "prompt": "high contrast grade with deep blacks and bright highlights, punchy midtone separation, assertive dramatic visual impact"
+    },
+    "Low Contrast": {
+      "prompt": "low contrast treatment with compressed tonal range, gentle transitions, soft visual presence, delicate mood rendering"
+    },
+    "Pastel Soft": {
+      "prompt": "pastel soft palette with light saturation and airy tonal lift, smooth skin response, romantic contemporary editorial flavor"
+    },
+    "Monochrome": {
+      "prompt": "black and white monochrome conversion with controlled channel mix, rich tonal hierarchy, texture focused timeless photograph style"
+    },
+    "Vintage Fade": {
+      "prompt": "vintage fade grade with subtle color shift, lowered micro contrast, mild grain implication, aged analog inspired atmosphere"
+    }
+  },
+  "Composition": {
+    "_base_prompt_": "portrait setup with clear subject readability, realistic scale cues, controlled environment depth, strong photographic craft and intentional framing",
+    "Centered": {
+      "prompt": "center weighted composition with symmetrical balance, strong subject authority, direct visual emphasis, stable formal framing language"
+    },
+    "Rule of Thirds": {
+      "prompt": "rule of thirds subject placement with intentional negative space, directional gaze room, visually dynamic but balanced image structure"
+    },
+    "Symmetrical": {
+      "prompt": "strict symmetrical framing with mirrored architectural or environmental lines, central axis precision, highly ordered visual rhythm"
+    },
+    "Leading Lines": {
+      "prompt": "composition guided by converging leading lines toward subject, depth reinforcement, viewer eye path control, narrative directionality"
+    },
+    "Negative Space": {
+      "prompt": "expanded negative space around subject for minimalist emphasis, clean readability, strong figure to ground separation"
+    },
+    "Tight Close Up": {
+      "prompt": "tight close up crop prioritizing face detail and emotional micro expressions, reduced background distraction, intimate visual proximity"
+    },
+    "Medium Shot": {
+      "prompt": "medium shot framing from waist or chest level, balanced context plus expression visibility, versatile editorial storytelling composition"
+    },
+    "Wide Shot": {
+      "prompt": "wide shot composition showing full body and meaningful environment context, spatial storytelling emphasis, clear scene geography"
+    },
+    "Foreground Layer": {
+      "prompt": "foreground element layering to add depth and parallax, partial frame overlap, enhanced cinematic dimensionality"
+    },
+    "Diagonal Energy": {
+      "prompt": "diagonal compositional flow using tilted lines or posture vectors, dynamic tension, kinetic visual momentum"
+    }
+  },
+  "Lens Artifacts": {
+    "_base_prompt_": "cinematic portrait photo with physically plausible optics, controlled highlight behavior, realistic texture retention, high quality baseline image fidelity",
+    "Clean Optics": {
+      "prompt": "clean optical rendering with minimal flare and aberration, high edge clarity, neutral lens behavior, technically pristine image quality"
+    },
+    "Subtle Bloom": {
+      "prompt": "subtle highlight bloom around bright specular areas, mild diffusion glow, preserved detail in midtones and shadows"
+    },
+    "Soft Halation": {
+      "prompt": "gentle halation around high contrast light edges, film inspired luminous wrap, controlled without excessive detail loss"
+    },
+    "Gentle Vignette": {
+      "prompt": "soft radial vignette darkening toward frame edges, center emphasis on subject, tasteful cinematic framing support"
+    },
+    "Film Grain Light": {
+      "prompt": "fine light film grain texture layered evenly, subtle organic noise character, maintained skin detail and smooth tonal transitions"
+    },
+    "Film Grain Heavy": {
+      "prompt": "pronounced coarse grain structure for stylized analog feel, visible texture pattern, intentionally reduced digital cleanliness"
+    },
+    "Lens Flare": {
+      "prompt": "controlled lens flare from strong light source, directional streak and ghost artifacts, cinematic highlight energy without clipping"
+    },
+    "Chromatic Aberration": {
+      "prompt": "subtle chromatic aberration at high contrast edges, slight color fringing for optical character, restrained and believable implementation"
+    },
+    "Diffusion Filter": {
+      "prompt": "diffusion filter softness reducing micro contrast, smoother highlight rolloff, flattering skin response with retained core sharpness"
+    },
+    "Anamorphic Streak": {
+      "prompt": "horizontal anamorphic light streak artifacts from bright practicals, cinematic widescreen flavor, controlled intensity and placement"
+    }
+  },
+  "Simple Expressions": {
+    "_base_prompt_": "head and shoulders portrait of an adult person, neutral background, realistic facial anatomy, detailed skin texture, natural eye detail, high quality photographic lighting",
+    "_prompt_prefix_": "Expression",
+    "Neutral": {
+      "prompt": "neutral face with relaxed jaw, balanced eyelids, and steady direct gaze"
+    },
+    "Soft Smile": {
+      "prompt": "gentle closed-lip smile with softened cheeks and warm approachable eyes"
+    },
+    "Big Smile": {
+      "prompt": "broad joyful smile showing teeth, lifted cheeks, and bright engaged eyes"
+    },
+    "Smirk": {
+      "prompt": "asymmetrical half-smile at one mouth corner with slightly narrowed amused eyes"
+    },
+    "Laughing": {
+      "prompt": "open laugh with lifted cheeks, visible teeth, crinkled eye corners, and lively energy"
+    },
+    "Focused": {
+      "prompt": "steady concentrated gaze with still mouth, tightened attention around eyes, and composed facial tension"
+    },
+    "Serious": {
+      "prompt": "firm unsmiling mouth, level brows, direct gaze, and controlled no-nonsense demeanor"
+    },
+    "Confident": {
+      "prompt": "calm assured look with subtle chin lift, steady eye contact, and composed mouth line"
+    },
+    "Curious": {
+      "prompt": "slight brow raise with attentive eyes, small mouth parting, and inquisitive facial intent"
+    },
+    "Surprised": {
+      "prompt": "widened eyes with lifted brows, brief parted lips, and alert startled facial reaction"
+    },
+    "Concerned": {
+      "prompt": "drawn inner brows, softened mouth corners, and cautious worried eyes scanning forward"
+    },
+    "Thoughtful": {
+      "prompt": "gentle brow tension with inward-looking gaze, relaxed lips, and reflective facial stillness"
+    },
+    "Determined": {
+      "prompt": "focused forward eyes, subtle jaw set, and firm mouth indicating clear resolve"
+    },
+    "Playful": {
+      "prompt": "light teasing smile, bright eyes, and relaxed facial posture with mischievous charm"
+    },
+    "Calm": {
+      "prompt": "slow-breath calm face, unfurrowed brow, loose jaw, and even tranquil eye contact"
+    },
+    "Tired": {
+      "prompt": "slightly heavy eyelids, mild under-eye shadow, softened mouth, and low-energy facial tone"
+    },
+    "Skeptical": {
+      "prompt": "one brow slightly raised, narrowed evaluative eyes, and restrained doubtful mouth shape"
+    },
+    "Proud": {
+      "prompt": "upright head carriage, satisfied closed-lip smile, and confident settled gaze"
+    },
+    "Shy": {
+      "prompt": "subtle downward gaze, faint restrained smile, and softened facial posture with modest reserve"
+    },
+    "Amazed": {
+      "prompt": "wide open eyes, lifted brows, lightly parted lips, and clear sense of wonder"
+    }
+  },
+  "Weather & Atmosphere": {
+    "_base_prompt_": "outdoor scene with physically plausible weather behavior, volumetric atmospheric depth, natural light scattering, realistic environmental surfaces, high fidelity cinematic rendering",
+    "Clear Air": {
+      "prompt": "clear dry weather with very low humidity, long-range visibility, crisp horizon definition, minimal particulate scattering, and clean high-contrast daylight"
+    },
+    "Light Fog": {
+      "prompt": "light fog layer suspended near ground, softened distant contrast, gentle depth compression, mild highlight bloom, and quiet damp morning atmosphere"
+    },
+    "Dense Fog": {
+      "prompt": "dense fog bank with heavy visibility loss, strong depth falloff, distant forms dissolving into silhouettes, muted tonal separation, and thick moisture-laden air"
+    },
+    "Light Rain": {
+      "prompt": "light rainfall of fine droplets, soft streaks in backlight, thin wet sheen across roads and stone, small ripples in puddles, and cool overcast ambience"
+    },
+    "Heavy Rain": {
+      "prompt": "heavy downpour with dense rain streaks, forceful surface splashes, fast-running water channels, saturated dark materials, and bright specular reflections on wet ground"
+    },
+    "Drizzle": {
+      "prompt": "fine intermittent drizzle, subtle airborne moisture sparkle, thin condensation film on surfaces, restrained reflections, and soft low-contrast gray sky conditions"
+    },
+    "Snowfall": {
+      "prompt": "active snowfall with layered flake depth, cold diffuse ambient light, fresh accumulation on rooftops and ground, muted environmental color, and quiet winter stillness"
+    },
+    "Windy": {
+      "prompt": "strong sustained wind, visible gust patterns through vegetation and dust drift, directional cloud movement, dynamic airborne particles, and unstable turbulent atmosphere"
+    },
+    "Dusty Air": {
+      "prompt": "dust-laden dry air with warm particulate haze, softened mid-range detail, lowered contrast, desaturated distance color, and persistent arid environmental suspension"
+    },
+    "Mist": {
+      "prompt": "low-lying mist pooling along terrain contours, cool humid diffusion between depth layers, softened edge acuity, pale dawn tonal gradients, and tranquil valley atmosphere"
     }
   }
 }
