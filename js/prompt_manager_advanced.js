@@ -1277,9 +1277,19 @@ function hasMeaningfulWorkflowData(rawWorkflowData) {
     return hasRuntimeCarrier || positivePrompt.length > 0 || modelA.length > 0 || modelB.length > 0 || hasLorasA || hasLorasB || hasLorasC || hasLorasD || hasSubstantiveRootField;
 }
 
+// Backward-compatible alias used by save/live workflow resolution paths.
+function hasWorkflowDataPayload(rawWorkflowData) {
+    return hasMeaningfulWorkflowData(rawWorkflowData);
+}
+
 function hasConnectedWorkflowInput(node) {
     const wfInput = node?.inputs?.find((inp) => inp?.name === "recipe_data");
     return wfInput?.link != null;
+}
+
+function isHiddenCategoryEntryKey(key) {
+    const normalized = String(key || "").toLowerCase();
+    return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_prefix_";
 }
 
 function filterPromptDropdown(node, options = {}) {
@@ -1378,7 +1388,10 @@ function updateWorkflowManagerPreview(node) {
         return "";
     };
 
-    const liveThumbnail = pickThumbnail(liveWorkflow) || (typeof node.connectedThumbnail === "string" ? node.connectedThumbnail : "");
+    // Keep preview scoped to workflow/prompt data only.
+    // Do not fall back to connected execution thumbnails here, or unrelated
+    // generation runs can overwrite the visible composer preview.
+    const liveThumbnail = pickThumbnail(liveWorkflow);
     const savedThumbnail = pickThumbnail(promptData);
 
     // In input-connected mode, never fall back to saved prompt thumbnails.
@@ -3626,7 +3639,7 @@ function addButtonBar(node) {
                     const categoryPrompts = node.prompts?.[targetCategory];
                     if (categoryPrompts && typeof categoryPrompts === "object") {
                         const existingName = Object.keys(categoryPrompts)
-                            .filter((k) => k !== "__meta__")
+                            .filter((k) => !isHiddenCategoryEntryKey(k))
                             .find((k) => k.toLowerCase() === promptName.toLowerCase());
                         if (existingName && categoryPrompts[existingName]?.nsfw === true) {
                             preservedNsfw = true;
@@ -3917,7 +3930,7 @@ function setupCategoryChangeHandler(node) {
 
         const category = value;
         if (node.prompts && node.prompts[category]) {
-            const promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__');
+            const promptNames = Object.keys(node.prompts[category]).filter(k => !isHiddenCategoryEntryKey(k));
             promptWidget.options.values = promptNames;
 
             if (promptNames.length > 0) {
@@ -4033,7 +4046,7 @@ function setupCategoryChangeHandler(node) {
 
         // Update prompt dropdown options in case prompts were deleted/added in another tab
         if (node.prompts && node.prompts[category]) {
-            const promptNames = Object.keys(node.prompts[category]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+            const promptNames = Object.keys(node.prompts[category]).filter(k => !isHiddenCategoryEntryKey(k)).sort((a, b) => a.localeCompare(b));
             promptWidget.options.values = promptNames.length > 0 ? promptNames : [""];
 
             // Check if selected prompt still exists after reload
@@ -4070,7 +4083,7 @@ function setupCategoryChangeHandler(node) {
             if (node.prompts && categoryWidget && newValues && newValues.length > 0) {
                 const currentCategory = categoryWidget.value;
                 if (node.prompts[currentCategory]) {
-                    const categoryPrompts = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__');
+                    const categoryPrompts = Object.keys(node.prompts[currentCategory]).filter(k => !isHiddenCategoryEntryKey(k));
                     const hasOtherCategoryPrompts = newValues.some(val =>
                         val !== "" && !categoryPrompts.includes(val)
                     );
@@ -4151,33 +4164,6 @@ function getWorkflowPromptText(workflowData) {
         return String(modelA.positive_prompt || "");
     }
     return String(workflowData?.positive_prompt || "");
-}
-
-/**
- * Patch an existing saved workflow_data so Expression thumbnails prepend the
- * configured character description to the prompt text.
- */
-function patchExpressionPromptInWorkflowData(workflowData, category) {
-    if (!workflowData || typeof workflowData !== "object") {
-        return workflowData;
-    }
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
-    if (!isExpression) {
-        return workflowData;
-    }
-
-    const newText = prepareExpressionPromptText(getWorkflowPromptText(workflowData), category);
-
-    if (Number(workflowData.version || 0) >= 2 && workflowData.models && typeof workflowData.models === "object") {
-        const modelA = workflowData.models.model_a;
-        if (modelA && typeof modelA === "object") {
-            modelA.positive_prompt = newText;
-        }
-    } else {
-        workflowData.positive_prompt = newText;
-    }
-
-    return workflowData;
 }
 
 function getWorkflowLorasBySlot(workflowData, slot = "model_a") {
@@ -5863,7 +5849,7 @@ function updateDropdowns(node) {
     // Update prompt dropdown for current category (sorted alphabetically)
     const currentCategory = categoryWidget.value;
     if (node.prompts[currentCategory]) {
-        const promptNames = Object.keys(node.prompts[currentCategory]).filter(k => k !== '__meta__').sort((a, b) => a.localeCompare(b));
+        const promptNames = Object.keys(node.prompts[currentCategory]).filter(k => !isHiddenCategoryEntryKey(k)).sort((a, b) => a.localeCompare(b));
 
         if (promptNames.length === 0) {
             promptNames.push("");
@@ -6077,109 +6063,6 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory) {
 
         const handleOk = () => {
             resolve({ oldCategory: selectEl.value, newCategory: input.value });
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            resolve(null);
-            cleanup();
-        };
-
-        okBtn.onclick = handleOk;
-        cancelBtn.onclick = handleCancel;
-        overlay.onclick = handleCancel;
-
-        input.onkeydown = (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                e.stopPropagation();
-                handleOk();
-            } else if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                handleCancel();
-            }
-        };
-
-        document.body.appendChild(overlay);
-        document.body.appendChild(dialog);
-        input.focus();
-        input.select();
-    });
-}
-
-function showPromptWithCategory(title, message, defaultName, categories, defaultCategory, defaultNsfw = false) {
-    return new Promise((resolve) => {
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
-            border-radius: 8px;
-            padding: 20px;
-            z-index: 10000;
-            min-width: 320px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-        `;
-
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 9999;
-        `;
-
-        // Build category options — sanitize for safe HTML
-        const categoryOptions = categories.map(cat => {
-            const opt = document.createElement("option");
-            opt.value = cat;
-            opt.textContent = cat;
-            return opt.outerHTML;
-        }).join('');
-
-        dialog.innerHTML = `
-            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category:</div>
-            <select style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
-                ${categoryOptions}
-            </select>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
-            <input type="text" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
-            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 15px; color: #aaa; font-size: 13px; cursor: pointer; user-select: none;">
-                <input type="checkbox" class="nsfw-cb" style="cursor: pointer; accent-color: #c44;" />
-                Mark as NSFW
-            </label>
-            <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
-            </div>
-        `;
-
-        const selectEl = dialog.querySelector("select");
-        const input = dialog.querySelector("input[type='text']");
-        const nsfwCb = dialog.querySelector(".nsfw-cb");
-        const okBtn = dialog.querySelector(".ok-btn");
-        const cancelBtn = dialog.querySelector(".cancel-btn");
-
-        // Set defaults after DOM is built
-        selectEl.value = defaultCategory;
-        input.value = defaultName;
-        nsfwCb.checked = defaultNsfw;
-
-        const cleanup = () => {
-            document.body.removeChild(overlay);
-            document.body.removeChild(dialog);
-        };
-
-        const handleOk = () => {
-            resolve({ name: input.value, category: selectEl.value, nsfw: nsfwCb.checked });
             cleanup();
         };
 
@@ -6742,48 +6625,6 @@ const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
  * Resize an image to fit within maxSize while maintaining aspect ratio
  * Returns a base64 data URL
  */
-function resizeImageToThumbnail(file, minSize = 200) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new Image();
-            img.onload = () => {
-                // Calculate new dimensions maintaining aspect ratio
-                // Smallest dimension should be minSize (200px)
-                let width = img.width;
-                let height = img.height;
-                const minDim = Math.min(width, height);
-
-                if (minDim > minSize) {
-                    // Scale down so smallest dimension = minSize
-                    const scale = minSize / minDim;
-                    width = Math.round(width * scale);
-                    height = Math.round(height * scale);
-                }
-                // Note: We don't scale UP if image is smaller than minSize
-
-                // Create canvas and draw resized image
-                const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
-
-                // Convert to JPEG for smaller file size
-                resolve(canvas.toDataURL('image/jpeg', 0.85));
-            };
-            img.onerror = reject;
-            img.src = e.target.result;
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
-}
-
-/**
- * Show thumbnail browser popup for selecting prompts
- * Returns { category, prompt } or null if cancelled
- */
 // Prompt browser implementation moved to prompt_browser.js.
 
 // ========================
@@ -6854,57 +6695,6 @@ function _thumbnailDisplayName(modelPath, maxLength = 68) {
     const leaf = _thumbnailLeafName(modelPath);
     if (leaf.length <= maxLength) return leaf;
     return `${leaf.slice(0, Math.max(0, maxLength - 1))}…`;
-}
-
-/**
- * Attach drag-and-drop handlers so users can drop an image onto a thumbnail
- * to set it as that prompt's thumbnail.
- */
-function _attachThumbnailDropHandlers(element, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
-    element.addEventListener("dragover", (e) => {
-        const hasFiles = Array.from(e.dataTransfer?.types || []).includes("Files");
-        if (!hasFiles) return;
-        e.preventDefault();
-        e.stopPropagation();
-        element.style.outline = "2px dashed #4CAF50";
-        element.style.outlineOffset = "2px";
-    });
-    element.addEventListener("dragleave", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        element.style.outline = "";
-        element.style.outlineOffset = "";
-    });
-    element.addEventListener("drop", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        element.style.outline = "";
-        element.style.outlineOffset = "";
-
-        const files = Array.from(e.dataTransfer?.files || []);
-        const imageFile = files.find((f) => f.type?.startsWith("image/"));
-        if (!imageFile) return;
-
-        const existing = node.prompts?.[category]?.[promptName]?.thumbnail;
-        if (existing) {
-            const confirmed = await showConfirm(
-                "Replace Thumbnail",
-                `"${promptName}" already has a thumbnail. Do you want to replace it with the dropped image?`,
-                "Replace",
-                "#c00"
-            );
-            if (!confirmed) return;
-        }
-
-        try {
-            const thumbnail = await resizeImageToThumbnail(imageFile, 200);
-            await saveThumbnail(node, category, promptName, thumbnail, endpointPrefix);
-            onUpdate();
-        } catch (error) {
-            console.error("[PromptManagerAdvanced] Error setting thumbnail from drop:", error);
-            await showInfo("Error", "Failed to set thumbnail from dropped image.");
-        }
-    });
 }
 
 async function fetchAvailableThumbnailLoras() {
@@ -7060,21 +6850,18 @@ function applyThumbnailSelectedLoras(workflowData, renderSelection, selectedSlot
     return wf;
 }
 
-function applyThumbnailSeeds(workflowData, selectedSlot = "model_a", category = null) {
+function applyThumbnailSeeds(workflowData, selectedSlot = "model_a", options = {}) {
     if (!workflowData || typeof workflowData !== "object") {
         return workflowData;
     }
 
     const wf = workflowData;
     const slot = String(selectedSlot || "model_a").trim().toLowerCase();
-
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
+    const staticSeed = Number(options?.staticSeed);
     let seedA;
     let seedB;
-    if (isExpression) {
-        const rawSeed = app.ui.settings.getSettingValue("PromptManager.ExpressionSeed");
-        const parsed = Number(rawSeed);
-        seedA = Number.isFinite(parsed) ? parsed : 42;
+    if (Number.isFinite(staticSeed) && staticSeed > 0) {
+        seedA = staticSeed;
         seedB = seedA;
     } else {
         seedA = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
@@ -7118,52 +6905,37 @@ function applyThumbnailSeeds(workflowData, selectedSlot = "model_a", category = 
 }
 
 function applyThumbnailRandomSeeds(workflowData, selectedSlot = "model_a") {
-    return applyThumbnailSeeds(workflowData, selectedSlot, null);
+    return applyThumbnailSeeds(workflowData, selectedSlot, {});
 }
 
-/**
- * For Expression-category thumbnails, append the expression prompt after the
- * configured character description. If the expression does not already start
- * with "expression:" (case-insensitive), prefix it with that label.
- * @param {string} promptText - Original prompt text (the expression)
- * @param {string|null} category - Prompt category
- * @returns {string} Character description + labeled expression
- */
-function prepareExpressionPromptText(promptText, category = null) {
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
-    if (!isExpression) {
-        return String(promptText || "");
-    }
-
-    const rawDesc = app.ui.settings.getSettingValue("PromptManager.ExpressionCharacterDescription");
-    const characterDesc = String(rawDesc || "").trim();
-    let expressionText = String(promptText || "").trim();
-
-    if (!expressionText) {
-        return characterDesc;
-    }
-
-    if (!expressionText.toLowerCase().startsWith("expression:")) {
-        expressionText = `expression: ${expressionText}`;
-    }
-
-    if (!characterDesc) {
-        return expressionText;
-    }
-
-    return `${characterDesc} ${expressionText}`;
+function prependCategoryBasePrompt(promptText, basePrompt) {
+    const base = String(basePrompt || "").trim();
+    const prompt = String(promptText || "").trim();
+    if (!base) return prompt;
+    if (!prompt) return base;
+    return `${base} ${prompt}`;
 }
 
-function applyThumbnailResolution(workflowData, category = null) {
+function getCategoryBasePrompt(node, category) {
+    const raw = node?.prompts?.[category]?._base_prompt_;
+    return typeof raw === "string" ? raw : "";
+}
+
+function getThumbnailComposerSeed() {
+    const rawSeed = app.ui.settings.getSettingValue("PromptManager.ThumbnailComposerSeed");
+    const parsed = Number(rawSeed);
+    return Number.isFinite(parsed) ? parsed : 42;
+}
+
+function applyThumbnailResolution(workflowData) {
     const wfForThumb = JSON.parse(JSON.stringify(workflowData || {}));
     const baseResolution = (wfForThumb.resolution && typeof wfForThumb.resolution === "object")
         ? wfForThumb.resolution
         : {};
-    const isExpression = typeof category === "string" && category.toLowerCase() === "expressions";
     wfForThumb.resolution = {
         ...baseResolution,
-        width: isExpression ? 768 : THUMB_RENDER_WIDTH,
-        height: isExpression ? 1024 : THUMB_RENDER_HEIGHT,
+        width: THUMB_RENDER_WIDTH,
+        height: THUMB_RENDER_HEIGHT,
         batch_size: THUMB_RENDER_BATCH,
         length: THUMB_RENDER_LENGTH,
     };
@@ -7214,7 +6986,7 @@ function getThumbnailFamilySamplerDefaults(familyKey) {
 
 async function buildRendererFallbackWorkflowData(promptText, promptData, renderSelection) {
     const familySamplerDefaults = getThumbnailFamilySamplerDefaults(renderSelection.family);
-    const finalPromptText = prepareExpressionPromptText(promptText, promptData?.category);
+    const finalPromptText = String(promptText || "").trim();
     const baseRaw = {
         model_family: renderSelection.family,
         model_a: renderSelection.model,
@@ -7274,7 +7046,7 @@ async function buildRendererFallbackWorkflowData(promptText, promptData, renderS
             : baseRaw.sampler,
         _source: "PromptManagerAdvancedThumbnail",
     };
-    return applyThumbnailResolution(base, promptData?.category);
+    return applyThumbnailResolution(base);
 }
 
 async function resolveThumbnailFallbackBase(renderSelection) {
@@ -7326,7 +7098,7 @@ async function buildRendererFallbackWorkflowDataWithBase(promptText, promptData,
     }
 
     const normalized = fallbackBase.normalized;
-    const finalPromptText = prepareExpressionPromptText(promptText, promptData?.category);
+    const finalPromptText = String(promptText || "").trim();
     const clipNames = Array.isArray(normalized?.clip?.names)
         ? normalized.clip.names.filter((x) => !!x)
         : [];
@@ -7832,18 +7604,19 @@ function resolveThumbnailModelSlot(workflowData) {
  * Falls back to the basic thumbnail workflow when this path cannot run.
  * @param {Object} workflowData - Saved workflow_data payload
  * @param {Object|null} renderSelection - Selected family/model/loras
- * @param {string|null} category - Prompt category (e.g. "Expression") for category-specific seed handling
+ * @param {Object} options
+ * @param {number|null} options.staticSeed - Optional static seed; <=0 uses random
  * @returns {Promise<string|null>} Base64 thumbnail data URL or null
  */
-async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSelection = null, category = null) {
+async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSelection = null, options = {}) {
     if (!workflowData || typeof workflowData !== "object") {
         return null;
     }
 
     // Enforce thumbnail-safe render sizing before queueing.
-    const wfForThumb = applyThumbnailResolution(workflowData, category);
+    const wfForThumb = applyThumbnailResolution(workflowData);
     const modelSlot = resolveThumbnailModelSlot(wfForThumb);
-    applyThumbnailSeeds(wfForThumb, modelSlot, category);
+    applyThumbnailSeeds(wfForThumb, modelSlot, { staticSeed: options?.staticSeed });
     applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);
 
     const workflow = {};
@@ -8090,12 +7863,19 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
         return;
     }
 
-    // Pass category through so expression character description and seed are applied.
+    // Keep category available on prompt data for any category-aware downstream logic.
     if (promptData && typeof promptData === "object" && !promptData.category) {
         promptData.category = category;
     }
 
-    const promptText = promptData.prompt || promptName;
+    const isComposerManager = endpointPrefix === "/prompt-manager/mixer";
+    const composerSeed = getThumbnailComposerSeed();
+    const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
+        ? composerSeed
+        : null;
+
+    const categoryBasePrompt = getCategoryBasePrompt(node, category);
+    const promptText = prependCategoryBasePrompt(promptData.prompt || promptName, categoryBasePrompt);
     const activeRenderSelection = providedRenderSelection || (
         (_thumbnailRenderFamily && _thumbnailRenderModel)
             ? {
@@ -8147,8 +7927,18 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
 
         if (parsedWorkflowData) {
             try {
-                patchExpressionPromptInWorkflowData(parsedWorkflowData, category);
-                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection, category);
+                const effectivePrompt = String(promptText || "").trim();
+                if (Number(parsedWorkflowData.version || 0) >= 2 && parsedWorkflowData.models && typeof parsedWorkflowData.models === "object") {
+                    const modelA = parsedWorkflowData.models.model_a;
+                    if (modelA && typeof modelA === "object") {
+                        modelA.positive_prompt = effectivePrompt;
+                    }
+                } else {
+                    parsedWorkflowData.positive_prompt = effectivePrompt;
+                }
+                thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection, {
+                    staticSeed: staticSeedForRun,
+                });
             } catch (e) {
                 console.warn("[ThumbnailGen] RecipeRenderer thumbnail path failed, falling back:", e);
                 thumbnail = null;
@@ -8162,11 +7952,13 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
 
             const fallbackWorkflowData = await buildRendererFallbackWorkflowDataWithBase(
                 promptText,
-                promptData,
+                { ...promptData, base_prompt: categoryBasePrompt },
                 renderSelection,
                 fallbackBase
             );
-            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection, category);
+            thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection, {
+                staticSeed: staticSeedForRun,
+            });
         }
 
         if (thumbnail) {
@@ -8184,252 +7976,6 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
             document.body.removeChild(indicator);
         }
     }
-}
-
-/**
- * Show context menu for thumbnail operations
- */
-function showThumbnailContextMenu(event, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
-    // Remove any existing context menu
-    const existing = document.querySelector('.thumbnail-context-menu');
-    if (existing) existing.remove();
-
-    const menu = document.createElement("div");
-    menu.className = "thumbnail-context-menu";
-    menu.style.cssText = `
-        position: fixed;
-        left: ${event.clientX}px;
-        top: ${event.clientY}px;
-        background: #2a2a2a;
-        border: 1px solid #444;
-        border-radius: 6px;
-        padding: 4px 0;
-        z-index: 10001;
-        min-width: 150px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    `;
-
-    const createMenuItem = (label, onClick) => {
-        const item = document.createElement("div");
-        item.textContent = label;
-        item.style.cssText = `
-            padding: 8px 16px;
-            color: #ccc;
-            cursor: pointer;
-            font-size: 13px;
-        `;
-        item.onmouseover = () => item.style.background = '#3a3a3a';
-        item.onmouseout = () => item.style.background = 'transparent';
-        item.onclick = () => {
-            menu.remove();
-            onClick();
-        };
-        return item;
-    };
-
-    // Set thumbnail from file
-    menu.appendChild(createMenuItem("📁 Set Thumbnail from File...", async () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.onchange = async (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                try {
-                    const thumbnail = await resizeImageToThumbnail(file, 200);
-                    await saveThumbnail(node, category, promptName, thumbnail, endpointPrefix);
-                    onUpdate();
-                } catch (error) {
-                    console.error("[PromptManagerAdvanced] Error setting thumbnail:", error);
-                    await showInfo("Error", "Failed to set thumbnail");
-                }
-            }
-        };
-        input.click();
-    }));
-
-    // Set thumbnail from clipboard
-    menu.appendChild(createMenuItem("📋 Set Thumbnail from Clipboard", async () => {
-        try {
-            const clipboardItems = await navigator.clipboard.read();
-            for (const item of clipboardItems) {
-                const imageType = item.types.find(type => type.startsWith('image/'));
-                if (imageType) {
-                    const blob = await item.getType(imageType);
-                    const file = new File([blob], 'clipboard.png', { type: imageType });
-                    const thumbnail = await resizeImageToThumbnail(file, 200);
-                    await saveThumbnail(node, category, promptName, thumbnail, endpointPrefix);
-                    onUpdate();
-                    return;
-                }
-            }
-            await showInfo("No Image", "No image found in clipboard");
-        } catch (error) {
-            console.error("[PromptManagerAdvanced] Error reading clipboard:", error);
-            await showInfo("Error", "Failed to read clipboard. Make sure you have an image copied.");
-        }
-    }));
-
-    // Generate thumbnail divider
-    const genDivider = document.createElement("div");
-    genDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(genDivider);
-
-    // Generate Thumbnail
-    menu.appendChild(createMenuItem("🎨 Generate Thumbnail", async () => {
-        const queuedName = promptName;
-        _thumbQueueTotal++;
-        _ensureThumbQueueProgress();
-        _updateThumbQueueProgress(queuedName);
-
-        _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
-            if (_thumbQueueCancelled) {
-                _thumbQueueDone++;
-                if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                    _finishThumbQueueProgress();
-                }
-                return;
-            }
-            _updateThumbQueueProgress(queuedName);
-            try {
-                await generateThumbnailForPrompt(node, category, queuedName, onUpdate, { queue: true, endpointPrefix });
-                _thumbQueueDone++;
-            } catch (e) {
-                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
-                _thumbQueueFailed++;
-            } finally {
-                if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                    _finishThumbQueueProgress();
-                }
-            }
-        });
-    }));
-
-    // Change Thumbnail Family/Model
-    const selectedLorasForLabel = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
-    const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
-        ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}${selectedLorasForLabel.length ? ` + ${selectedLorasForLabel.length} LoRA` + (selectedLorasForLabel.length > 1 ? "s" : "") : ""}`
-        : "🔧 Select Thumbnail Family + Model";
-    menu.appendChild(createMenuItem(modelLabel, async () => {
-        const picked = await showThumbnailRenderPicker(
-            _thumbnailRenderFamily,
-            _thumbnailRenderModel,
-            _thumbnailRenderLora1,
-            _thumbnailRenderLora2,
-        );
-        if (picked) {
-            saveThumbnailRenderSelection(picked);
-        }
-    }));
-
-    // Remove thumbnail (only show if there is one)
-    const promptData = node.prompts[category]?.[promptName];
-    if (promptData?.thumbnail) {
-        const divider = document.createElement("div");
-        divider.style.cssText = `
-            height: 1px;
-            background: #444;
-            margin: 4px 0;
-        `;
-        menu.appendChild(divider);
-
-        menu.appendChild(createMenuItem("🗑️ Remove Thumbnail", async () => {
-            await saveThumbnail(node, category, promptName, null, endpointPrefix);
-            onUpdate();
-        }));
-    }
-
-    // NSFW toggle divider + option
-    const nsfwDivider = document.createElement("div");
-    nsfwDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(nsfwDivider);
-
-    const isNSFW = promptData?.nsfw === true;
-    const nsfwItem = createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
-        try {
-            const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ type: "prompt", category: category, name: promptName })
-            });
-            const result = await resp.json();
-            if (result.success) {
-                node.prompts = result.prompts;
-                onUpdate();
-            }
-        } catch (err) {
-            console.error("[PromptManagerAdvanced] Error toggling prompt NSFW:", err);
-        }
-    });
-    nsfwItem.style.color = isNSFW ? '#f66' : '#ccc';
-    menu.appendChild(nsfwItem);
-
-    // Rename / Move Prompt
-    const renameDivider = document.createElement("div");
-    renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(renameDivider);
-
-    menu.appendChild(createMenuItem("✏️ Rename / Move", async () => {
-        const allCategories = Object.keys(node.prompts).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
-        const result = await showPromptWithCategory(
-            "Rename / Move Prompt",
-            "Prompt name:",
-            promptName,
-            allCategories,
-            category,
-            promptData?.nsfw || false
-        );
-        if (result && result.name && result.name.trim()) {
-            const newName = result.name.trim();
-            const newCat = result.category;
-            if (newName === promptName && newCat === category) return;
-            try {
-                const resp = await fetch(`${endpointPrefix}/rename-prompt`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ category: category, old_name: promptName, new_name: newName, new_category: newCat })
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    node.prompts = data.prompts;
-                    onUpdate();
-                } else {
-                    await showInfo("Error", data.error);
-                }
-            } catch (err) {
-                console.error("[PromptManagerAdvanced] Error renaming prompt:", err);
-            }
-        }
-    }));
-
-    // Delete Prompt
-    const deleteDivider = document.createElement("div");
-    deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(deleteDivider);
-
-    menu.appendChild(createMenuItem("🗑️ Delete Prompt", async () => {
-        if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
-            await deletePrompt(node, category, promptName, endpointPrefix);
-            onUpdate();
-        }
-    }));
-    // Style the delete item red
-    menu.lastChild.style.color = '#f66';
-
-    // Close menu when clicking outside of it
-    const closeMenu = (e) => {
-        // Only close if clicking outside the menu
-        if (!menu.contains(e.target)) {
-            menu.remove();
-            document.removeEventListener('mousedown', closeMenu, true);
-        }
-    };
-    // Use mousedown with capture to catch clicks before they propagate
-    setTimeout(() => {
-        document.addEventListener('mousedown', closeMenu, true);
-    }, 10);
-
-    document.body.appendChild(menu);
 }
 
 /**
@@ -8966,18 +8512,18 @@ configurePromptBrowserDeps({
     showConfirm,
     showRenameCategoryDialog,
     showNewCategoryDialog,
-    showThumbnailContextMenu,
-    attachThumbnailDropHandlers: _attachThumbnailDropHandlers,
     ensureThumbnailRenderSelection,
     resolveThumbnailFallbackBase,
     generateThumbnailForPrompt,
+    generateThumbnailWorkflowFromWorkflowData,
+    buildRendererFallbackWorkflowDataWithBase,
     showThumbnailRenderPicker,
     saveThumbnailRenderSelection,
     thumbnailLeafName: _thumbnailLeafName,
     getThumbnailRenderState,
 });
 
-// Shared helpers for companion nodes (e.g. ExpressionSelector)
+// Shared helpers for companion nodes
 export {
     PMA_THEME,
     DEFAULT_THUMBNAIL,

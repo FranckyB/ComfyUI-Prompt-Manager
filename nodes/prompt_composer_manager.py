@@ -10,6 +10,11 @@ from ..py.prompt_composer_store import PromptMixerStore
 from .prompt_manager_basic import _get_workflow_node
 
 
+def _is_hidden_category_entry_key(name):
+    normalized = str(name or "").strip().lower()
+    return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_"}
+
+
 class PromptMixerManager:
     """Save/load and edit prompt mixer fragments."""
 
@@ -28,7 +33,7 @@ class PromptMixerManager:
             if not isinstance(entries, dict):
                 continue
             for name, entry in entries.items():
-                if name == "__meta__":
+                if _is_hidden_category_entry_key(name):
                     continue
                 all_prompts.append(name)
                 if not first_prompt:

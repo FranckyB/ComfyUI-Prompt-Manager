@@ -8,8 +8,7 @@ __license__ = "MIT"
 
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
-from .nodes.expression_selector import ExpressionSelector
-from .py.prompt_composer_store import PromptMixerStore
+from .nodes.prompt_composer import PromptComposer
 from .nodes.prompt_composer_manager import PromptMixerManager
 from .nodes.prompt_mixer_selector import PromptMixerSelector
 from .nodes.prompt_generator import PromptGenerator
@@ -29,7 +28,7 @@ from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, Mult
 NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
-    "ExpressionSelector":        ExpressionSelector,
+    "PromptComposer":            PromptComposer,
     "PromptComposerManager":     PromptMixerManager,
     "PromptMixerManager":        PromptMixerManager,
     "PromptMixerSelector":       PromptMixerSelector,
@@ -54,7 +53,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
-    "ExpressionSelector":         "Expression Selector",
+    "PromptComposer":             "Prompt Composer",
     "PromptComposerManager":      "Prompt Composer Manager",
     "PromptMixerManager":         "Prompt Mixer Manager",
     "PromptMixerSelector":        "Prompt Mixer",
@@ -78,4 +77,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
 WEB_DIRECTORY = "./js"
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
-print("[PromptManager] Nodes registered: Prompt Manager, Expression Selector, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")
+print("[PromptManager] Nodes registered: Prompt Manager, Prompt Composer, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")

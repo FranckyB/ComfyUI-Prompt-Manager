@@ -18,11 +18,11 @@ let showInfo = async () => {};
 let showConfirm = async () => false;
 let showRenameCategoryDialog = async () => null;
 let showNewCategoryDialog = async () => null;
-let showThumbnailContextMenu = () => {};
-let _attachThumbnailDropHandlers = () => {};
 let ensureThumbnailRenderSelection = async () => null;
 let resolveThumbnailFallbackBase = async () => null;
 let generateThumbnailForPrompt = async () => null;
+let generateThumbnailWorkflowFromWorkflowData = async () => null;
+let buildRendererFallbackWorkflowDataWithBase = async () => null;
 let showThumbnailRenderPicker = async () => null;
 let saveThumbnailRenderSelection = () => {};
 let _thumbnailLeafName = (path) => String(path || "");
@@ -32,6 +32,13 @@ let _thumbnailRenderFamily = null;
 let _thumbnailRenderModel = null;
 let _thumbnailRenderLora1 = null;
 let _thumbnailRenderLora2 = null;
+
+let _thumbQueueTotal = 0;
+let _thumbQueueDone = 0;
+let _thumbQueueFailed = 0;
+let _thumbQueueCancelled = false;
+let _thumbQueueProgress = null;
+let _thumbQueuePromiseChain = Promise.resolve();
 
 function _syncThumbnailRenderState() {
     if (typeof getThumbnailRenderState !== "function") return;
@@ -52,11 +59,11 @@ export function configurePromptBrowserDeps(deps = {}) {
     if (typeof deps.showConfirm === "function") showConfirm = deps.showConfirm;
     if (typeof deps.showRenameCategoryDialog === "function") showRenameCategoryDialog = deps.showRenameCategoryDialog;
     if (typeof deps.showNewCategoryDialog === "function") showNewCategoryDialog = deps.showNewCategoryDialog;
-    if (typeof deps.showThumbnailContextMenu === "function") showThumbnailContextMenu = deps.showThumbnailContextMenu;
-    if (typeof deps.attachThumbnailDropHandlers === "function") _attachThumbnailDropHandlers = deps.attachThumbnailDropHandlers;
     if (typeof deps.ensureThumbnailRenderSelection === "function") ensureThumbnailRenderSelection = deps.ensureThumbnailRenderSelection;
     if (typeof deps.resolveThumbnailFallbackBase === "function") resolveThumbnailFallbackBase = deps.resolveThumbnailFallbackBase;
     if (typeof deps.generateThumbnailForPrompt === "function") generateThumbnailForPrompt = deps.generateThumbnailForPrompt;
+    if (typeof deps.generateThumbnailWorkflowFromWorkflowData === "function") generateThumbnailWorkflowFromWorkflowData = deps.generateThumbnailWorkflowFromWorkflowData;
+    if (typeof deps.buildRendererFallbackWorkflowDataWithBase === "function") buildRendererFallbackWorkflowDataWithBase = deps.buildRendererFallbackWorkflowDataWithBase;
     if (typeof deps.showThumbnailRenderPicker === "function") showThumbnailRenderPicker = deps.showThumbnailRenderPicker;
     if (typeof deps.saveThumbnailRenderSelection === "function") {
         const wrappedSave = deps.saveThumbnailRenderSelection;
@@ -69,6 +76,598 @@ export function configurePromptBrowserDeps(deps = {}) {
     if (typeof deps.getThumbnailRenderState === "function") getThumbnailRenderState = deps.getThumbnailRenderState;
 
     _syncThumbnailRenderState();
+}
+
+function _ensureThumbQueueProgress() {
+    if (_thumbQueueProgress) return;
+
+    _thumbQueueCancelled = false;
+    const progress = document.createElement("div");
+    progress.style.cssText = `
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        background: #222; border: 2px solid #4CAF50; border-radius: 8px;
+        padding: 14px 16px; z-index: 10000; color: #fff; font-size: 14px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 320px;
+    `;
+
+    const progressRow = document.createElement("div");
+    progressRow.style.cssText = `
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+    `;
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "✕";
+    cancelBtn.title = "Cancel remaining thumbnails";
+    cancelBtn.style.cssText = `
+        width: 24px; height: 24px; line-height: 22px;
+        border-radius: 6px; border: 1px solid #666;
+        background: #2f2f2f; color: #eee;
+        cursor: pointer; font-size: 14px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+    `;
+    cancelBtn.onclick = () => {
+        _thumbQueueCancelled = true;
+        cancelBtn.disabled = true;
+        cancelBtn.style.opacity = "0.6";
+        cancelBtn.style.cursor = "default";
+        cancelBtn.title = "Cancelling...";
+    };
+
+    const progressText = document.createElement("div");
+    progressText.style.cssText = `display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;`;
+    progressText.innerHTML = `
+        <div style="width: 18px; height: 18px; border: 3px solid #4CAF50; border-top-color: transparent; border-radius: 50%; animation: thumb-spin 1s linear infinite; flex-shrink: 0;"></div>
+        <span style="line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+    `;
+    progressRow.appendChild(progressText);
+    progressRow.appendChild(cancelBtn);
+    progress.appendChild(progressRow);
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `@keyframes thumb-spin { to { transform: rotate(360deg); } }`;
+    progress.appendChild(styleEl);
+    document.body.appendChild(progress);
+
+    _thumbQueueProgress = { root: progress, text: progressText.querySelector("span"), cancelBtn };
+}
+
+function _updateThumbQueueProgress(currentName) {
+    if (!_thumbQueueProgress) return;
+    const done = _thumbQueueDone + _thumbQueueFailed;
+    const remaining = Math.max(0, _thumbQueueTotal - done);
+    _thumbQueueProgress.text.textContent = `Generating ${Math.min(done + 1, _thumbQueueTotal)} / ${_thumbQueueTotal}: ${currentName} (${remaining} remaining)`;
+}
+
+function _finishThumbQueueProgress() {
+    if (!_thumbQueueProgress) return;
+    if (_thumbQueueProgress.root.parentNode) {
+        _thumbQueueProgress.root.parentNode.removeChild(_thumbQueueProgress.root);
+    }
+    _thumbQueueProgress = null;
+    _thumbQueueTotal = 0;
+    _thumbQueueDone = 0;
+    _thumbQueueFailed = 0;
+    _thumbQueueCancelled = false;
+}
+
+async function _generateThumbnailForBrowserCategory(node, category, promptName, onUpdate, options = {}) {
+    const {
+        renderSelection: providedRenderSelection = null,
+        fallbackBase = null,
+        endpointPrefix = "/prompt-manager-advanced",
+    } = options || {};
+
+    // If browser has not been wired with low-level generation helpers yet,
+    // fall back to legacy injected implementation.
+    if (
+        typeof generateThumbnailWorkflowFromWorkflowData !== "function" ||
+        typeof buildRendererFallbackWorkflowDataWithBase !== "function" ||
+        typeof saveThumbnailEntry !== "function"
+    ) {
+        return await generateThumbnailForPrompt(node, category, promptName, onUpdate, {
+            queue: true,
+            renderSelection: providedRenderSelection,
+            fallbackBase,
+            endpointPrefix,
+        });
+    }
+
+    const promptData = node?.prompts?.[category]?.[promptName];
+    if (!promptData) return;
+
+    const categoryBasePrompt = getCategoryBasePrompt(node, category);
+    const promptText = [String(categoryBasePrompt || "").trim(), String(promptData.prompt || promptName || "").trim()]
+        .filter(Boolean)
+        .join(" ");
+
+    const activeRenderSelection = providedRenderSelection || (
+        (_thumbnailRenderFamily && _thumbnailRenderModel)
+            ? {
+                family: _thumbnailRenderFamily,
+                model: _thumbnailRenderModel,
+                loras: [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean),
+            }
+            : null
+    );
+
+    const isComposerManager = endpointPrefix === "/prompt-manager/mixer";
+    const composerSeed = Number(getThumbnailComposerSeedFromSettings());
+    const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
+        ? composerSeed
+        : null;
+
+    let thumbnail = null;
+
+    const rawWorkflowData = promptData.workflow_data;
+    let parsedWorkflowData = null;
+    if (rawWorkflowData && typeof rawWorkflowData === "object") {
+        parsedWorkflowData = rawWorkflowData;
+    } else if (typeof rawWorkflowData === "string" && rawWorkflowData.trim()) {
+        try {
+            const maybeObj = JSON.parse(rawWorkflowData);
+            if (maybeObj && typeof maybeObj === "object") {
+                parsedWorkflowData = maybeObj;
+            }
+        } catch {
+            parsedWorkflowData = null;
+        }
+    }
+
+    if (parsedWorkflowData) {
+        const effectivePrompt = String(promptText || "").trim();
+        if (Number(parsedWorkflowData.version || 0) >= 2 && parsedWorkflowData.models && typeof parsedWorkflowData.models === "object") {
+            const modelA = parsedWorkflowData.models.model_a;
+            if (modelA && typeof modelA === "object") {
+                modelA.positive_prompt = effectivePrompt;
+            }
+        } else {
+            parsedWorkflowData.positive_prompt = effectivePrompt;
+        }
+        thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection, {
+            staticSeed: staticSeedForRun,
+        });
+    }
+
+    if (!thumbnail) {
+        const renderSelection = providedRenderSelection || await ensureThumbnailRenderSelection();
+        if (!renderSelection) return;
+
+        const fallbackWorkflowData = await buildRendererFallbackWorkflowDataWithBase(
+            promptText,
+            { ...promptData, base_prompt: categoryBasePrompt },
+            renderSelection,
+            fallbackBase
+        );
+        thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection, {
+            staticSeed: staticSeedForRun,
+        });
+    }
+
+    if (thumbnail) {
+        await saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix);
+        onUpdate?.();
+    }
+}
+
+function getThumbnailComposerSeedFromSettings() {
+    const rawSeed = app?.ui?.settings?.getSettingValue?.("PromptManager.ThumbnailComposerSeed");
+    const parsed = Number(rawSeed);
+    return Number.isFinite(parsed) ? parsed : 42;
+}
+
+async function saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix = "/prompt-manager-advanced") {
+    try {
+        const response = await fetch(`${endpointPrefix}/save-thumbnail`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                category: category,
+                name: promptName,
+                thumbnail: thumbnail
+            })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            if (node?.prompts?.[category]?.[promptName]) {
+                if (thumbnail) {
+                    node.prompts[category][promptName].thumbnail = thumbnail;
+                } else {
+                    delete node.prompts[category][promptName].thumbnail;
+                }
+            }
+        } else {
+            await showInfo("Error", data.error || "Failed to save thumbnail");
+        }
+    } catch (error) {
+        console.error("[PromptBrowser] Error saving thumbnail:", error);
+        await showInfo("Error", "Failed to save thumbnail");
+    }
+}
+
+async function deletePromptEntry(node, category, promptName, endpointPrefix = "/prompt-manager-advanced") {
+    try {
+        const response = await fetch(`${endpointPrefix}/delete-prompt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ category, name: promptName })
+        });
+        const data = await response.json();
+        if (data.success) {
+            node.prompts = data.prompts;
+        } else {
+            await showInfo("Error", data.error || "Failed to delete prompt");
+        }
+    } catch (error) {
+        console.error("[PromptBrowser] Error deleting prompt:", error);
+        await showInfo("Error", "Failed to delete prompt");
+    }
+}
+
+function resizeImageToThumbnail(file, minSize = 200) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                let width = img.width;
+                let height = img.height;
+                const minDim = Math.min(width, height);
+
+                if (minDim > minSize) {
+                    const scale = minSize / minDim;
+                    width = Math.round(width * scale);
+                    height = Math.round(height * scale);
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                resolve(canvas.toDataURL('image/jpeg', 0.85));
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+function _attachThumbnailDropHandlers(element, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
+    element.addEventListener("dragover", (e) => {
+        const hasFiles = Array.from(e.dataTransfer?.types || []).includes("Files");
+        if (!hasFiles) return;
+        e.preventDefault();
+        e.stopPropagation();
+        element.style.outline = "2px dashed #4CAF50";
+        element.style.outlineOffset = "2px";
+    });
+    element.addEventListener("dragleave", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        element.style.outline = "";
+        element.style.outlineOffset = "";
+    });
+    element.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        element.style.outline = "";
+        element.style.outlineOffset = "";
+
+        const files = Array.from(e.dataTransfer?.files || []);
+        const imageFile = files.find((f) => f.type?.startsWith("image/"));
+        if (!imageFile) return;
+
+        const existing = node.prompts?.[category]?.[promptName]?.thumbnail;
+        if (existing) {
+            const confirmed = await showConfirm(
+                "Replace Thumbnail",
+                `"${promptName}" already has a thumbnail. Do you want to replace it with the dropped image?`,
+                "Replace",
+                "#c00"
+            );
+            if (!confirmed) return;
+        }
+
+        try {
+            const thumbnail = await resizeImageToThumbnail(imageFile, 200);
+            await saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix);
+            onUpdate();
+        } catch (error) {
+            console.error("[PromptBrowser] Error setting thumbnail from drop:", error);
+            await showInfo("Error", "Failed to set thumbnail from dropped image.");
+        }
+    });
+}
+
+function showPromptWithCategoryDialog(title, defaultName, categories, defaultCategory) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 10000;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 16px;
+            z-index: 10001;
+            width: min(520px, calc(100vw - 36px));
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: #fff;
+        `;
+
+        const categoryOptions = (categories || [])
+            .map((cat) => `<option value="${cat}" ${cat === defaultCategory ? "selected" : ""}>${cat}</option>`)
+            .join("");
+
+        dialog.innerHTML = `
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">${title}</div>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt name</div>
+            <input class="name-input" type="text" value="${String(defaultName || "")}" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;" />
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category</div>
+            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${categoryOptions}</select>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
+            </div>
+        `;
+
+        const nameInput = dialog.querySelector(".name-input");
+        const catSelect = dialog.querySelector(".cat-select");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve({ name: String(nameInput.value || ""), category: String(catSelect.value || defaultCategory || "") });
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+        nameInput.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                handleOk();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        nameInput.focus();
+        nameInput.select();
+    });
+}
+
+function showThumbnailContextMenu(event, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
+    const existing = document.querySelector('.thumbnail-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement("div");
+    menu.className = "thumbnail-context-menu";
+    menu.style.cssText = `
+        position: fixed;
+        left: ${event.clientX}px;
+        top: ${event.clientY}px;
+        background: #2a2a2a;
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 4px 0;
+        z-index: 10001;
+        min-width: 150px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    `;
+
+    const createMenuItem = (label, onClick) => {
+        const item = document.createElement("div");
+        item.textContent = label;
+        item.style.cssText = `
+            padding: 8px 16px;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 13px;
+        `;
+        item.onmouseover = () => item.style.background = '#3a3a3a';
+        item.onmouseout = () => item.style.background = 'transparent';
+        item.onclick = () => {
+            menu.remove();
+            onClick();
+        };
+        return item;
+    };
+
+    menu.appendChild(createMenuItem("📋 Paste Thumbnail", async () => {
+        try {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                for (const type of item.types) {
+                    if (type.startsWith("image/")) {
+                        const blob = await item.getType(type);
+                        const file = new File([blob], "clipboard-image", { type: blob.type || type });
+                        const thumbnail = await resizeImageToThumbnail(file, 200);
+                        await saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix);
+                        onUpdate();
+                        return;
+                    }
+                }
+            }
+            await showInfo("No Image", "No image found in clipboard");
+        } catch (error) {
+            console.error("[PromptBrowser] Error reading clipboard:", error);
+            await showInfo("Error", "Failed to read clipboard. Make sure you have an image copied.");
+        }
+    }));
+
+    const genDivider = document.createElement("div");
+    genDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(genDivider);
+
+    menu.appendChild(createMenuItem("🎨 Generate Thumbnail", async () => {
+        const queuedName = promptName;
+        _thumbQueueTotal++;
+        _ensureThumbQueueProgress();
+        _updateThumbQueueProgress(queuedName);
+
+        _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
+            if (_thumbQueueCancelled) {
+                _thumbQueueDone++;
+                if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                    _finishThumbQueueProgress();
+                }
+                return;
+            }
+            _updateThumbQueueProgress(queuedName);
+            try {
+                await _generateThumbnailForBrowserCategory(node, category, queuedName, onUpdate, { endpointPrefix });
+                _thumbQueueDone++;
+            } catch (e) {
+                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
+                _thumbQueueFailed++;
+            } finally {
+                if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                    _finishThumbQueueProgress();
+                }
+            }
+        });
+    }));
+
+    const selectedLorasForLabel = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
+    const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
+        ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}${selectedLorasForLabel.length ? ` + ${selectedLorasForLabel.length} LoRA` + (selectedLorasForLabel.length > 1 ? "s" : "") : ""}`
+        : "🔧 Select Thumbnail Family + Model";
+    menu.appendChild(createMenuItem(modelLabel, async () => {
+        const picked = await showThumbnailRenderPicker(
+            _thumbnailRenderFamily,
+            _thumbnailRenderModel,
+            _thumbnailRenderLora1,
+            _thumbnailRenderLora2,
+        );
+        if (picked) {
+            saveThumbnailRenderSelection(picked);
+        }
+    }));
+
+    const promptData = node.prompts?.[category]?.[promptName];
+    if (promptData?.thumbnail) {
+        const divider = document.createElement("div");
+        divider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+        menu.appendChild(divider);
+
+        menu.appendChild(createMenuItem("🗑️ Remove Thumbnail", async () => {
+            await saveThumbnailEntry(node, category, promptName, null, endpointPrefix);
+            onUpdate();
+        }));
+    }
+
+    const nsfwDivider = document.createElement("div");
+    nsfwDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(nsfwDivider);
+
+    const isNSFW = promptData?.nsfw === true;
+    const nsfwItem = createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
+        try {
+            const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type: "prompt", category: category, name: promptName })
+            });
+            const result = await resp.json();
+            if (result.success) {
+                node.prompts = result.prompts;
+                onUpdate();
+            }
+        } catch (err) {
+            console.error("[PromptBrowser] Error toggling prompt NSFW:", err);
+        }
+    });
+    nsfwItem.style.color = isNSFW ? '#f66' : '#ccc';
+    menu.appendChild(nsfwItem);
+
+    const renameDivider = document.createElement("div");
+    renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(renameDivider);
+
+    menu.appendChild(createMenuItem("✏️ Rename / Move", async () => {
+        const allCategories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+        const result = await showPromptWithCategoryDialog("Rename / Move Prompt", promptName, allCategories, category);
+        if (result && result.name && result.name.trim()) {
+            const newName = result.name.trim();
+            const newCat = result.category;
+            if (newName === promptName && newCat === category) return;
+            try {
+                const resp = await fetch(`${endpointPrefix}/rename-prompt`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ category: category, old_name: promptName, new_name: newName, new_category: newCat })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    node.prompts = data.prompts;
+                    onUpdate();
+                } else {
+                    await showInfo("Error", data.error || "Failed to rename prompt");
+                }
+            } catch (err) {
+                console.error("[PromptBrowser] Error renaming prompt:", err);
+            }
+        }
+    }));
+
+    const deleteDivider = document.createElement("div");
+    deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+    menu.appendChild(deleteDivider);
+
+    menu.appendChild(createMenuItem("🗑️ Delete Prompt", async () => {
+        if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
+            await deletePromptEntry(node, category, promptName, endpointPrefix);
+            onUpdate();
+        }
+    }));
+    menu.lastChild.style.color = '#f66';
+
+    const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+            menu.remove();
+            document.removeEventListener('mousedown', closeMenu, true);
+        }
+    };
+    setTimeout(() => {
+        document.addEventListener('mousedown', closeMenu, true);
+    }, 10);
+
+    document.body.appendChild(menu);
 }
 
 // Browser session state persists during a UI session and resets on restart.
@@ -86,6 +685,179 @@ let _sessionPromptColumnWidthByScope = {
 
 function normalizeBrowserPrefScope(scope) {
     return scope === "mixer" ? "mixer" : "manager";
+}
+
+function isHiddenCategoryEntryKey(key) {
+    const normalized = String(key || "").toLowerCase();
+    return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_prefix_";
+}
+
+function getCategoryBasePrompt(node, category) {
+    const raw = node?.prompts?.[category]?._base_prompt_;
+    return typeof raw === "string" ? raw : "";
+}
+
+function getCategoryPromptPrefix(node, category) {
+    const raw = node?.prompts?.[category]?._prompt_prefix_;
+    return typeof raw === "string" ? raw : "";
+}
+
+function showCategoryBasePromptDialog(categoryName, currentValue = "") {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 10000;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 16px;
+            z-index: 10001;
+            width: min(680px, calc(100vw - 36px));
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: #fff;
+        `;
+
+        dialog.innerHTML = `
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 8px;">Edit Base Prompt</div>
+            <div style="font-size: 12px; color: #aaa; margin-bottom: 10px;">Category: ${categoryName}</div>
+            <textarea style="width: 100%; min-height: 140px; resize: vertical; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; padding: 8px; box-sizing: border-box; font-size: 13px;"></textarea>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px;">
+                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="save-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Save</button>
+            </div>
+        `;
+
+        const textarea = dialog.querySelector("textarea");
+        const saveBtn = dialog.querySelector(".save-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+        textarea.value = String(currentValue || "");
+
+        const cleanup = () => {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
+        };
+
+        const handleSave = () => {
+            resolve(String(textarea.value || ""));
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        saveBtn.onclick = handleSave;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+
+        textarea.onkeydown = (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+}
+
+function showCategoryPromptPrefixDialog(categoryName, currentValue = "") {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 10000;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 16px;
+            z-index: 10001;
+            width: min(520px, calc(100vw - 36px));
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: #fff;
+        `;
+
+        dialog.innerHTML = `
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 8px;">Edit Prompt Prefix</div>
+            <div style="font-size: 12px; color: #aaa; margin-bottom: 10px;">Category: ${categoryName}</div>
+            <div style="font-size: 12px; color: #aaa; margin-bottom: 6px;">Used as the label before each prompt (example: Expression: ...)</div>
+            <input class="prefix-input" type="text" style="width: 100%; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; padding: 8px; box-sizing: border-box; font-size: 13px;" />
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px;">
+                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="save-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Save</button>
+            </div>
+        `;
+
+        const input = dialog.querySelector(".prefix-input");
+        const saveBtn = dialog.querySelector(".save-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+        input.value = String(currentValue || "");
+
+        const cleanup = () => {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
+        };
+
+        const handleSave = () => {
+            resolve(String(input.value || ""));
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        saveBtn.onclick = handleSave;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                handleSave();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        input.focus();
+        input.select();
+    });
 }
 
 function getViewModeStorageKey(scope) {
@@ -206,7 +978,7 @@ export function getPromptNamesForCategory(node, category, options = {}) {
     if (!categoryPrompts || typeof categoryPrompts !== "object") return [];
 
     let promptNames = Object.keys(categoryPrompts)
-        .filter((k) => k !== "__meta__")
+        .filter((k) => !isHiddenCategoryEntryKey(k))
         .sort((a, b) => a.localeCompare(b));
 
     if (hideNSFW) {
@@ -651,6 +1423,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const showCategoryContextMenu = (event, cat) => {
             const existing = document.querySelector('.category-context-menu');
             if (existing) existing.remove();
+            const supportsCategoryPromptMetadata = endpointPrefix === "/prompt-manager/mixer";
 
             const menu = document.createElement("div");
             menu.className = "category-context-menu";
@@ -666,6 +1439,47 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 min-width: 150px;
                 box-shadow: 0 4px 12px rgba(0,0,0,0.4);
             `;
+
+            if (supportsCategoryPromptMetadata) {
+                const promptPrefixItem = document.createElement("div");
+                promptPrefixItem.textContent = "🏷️ Edit Prompt Prefix";
+                promptPrefixItem.style.cssText = `
+                    padding: 8px 16px;
+                    color: #ccc;
+                    cursor: pointer;
+                    font-size: 13px;
+                `;
+                promptPrefixItem.onmouseover = () => promptPrefixItem.style.background = '#3a3a3a';
+                promptPrefixItem.onmouseout = () => promptPrefixItem.style.background = 'transparent';
+                promptPrefixItem.onclick = async () => {
+                    menu.remove();
+                    const edited = await showCategoryPromptPrefixDialog(cat, getCategoryPromptPrefix(node, cat));
+                    if (edited === null) return;
+
+                    try {
+                        const resp = await fetch(`${endpointPrefix}/save-category-prompt-prefix`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category: cat, prompt_prefix: edited })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error || "Failed to save prompt prefix.");
+                        }
+                    } catch (err) {
+                        console.error("[PromptBrowser] Error saving category prompt prefix:", err);
+                    }
+                };
+                menu.appendChild(promptPrefixItem);
+
+                const prefixDivider = document.createElement("div");
+                prefixDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+                menu.appendChild(prefixDivider);
+            }
 
             const isNSFW = isCategoryNSFW(cat);
             const item = document.createElement("div");
@@ -753,6 +1567,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             menu.appendChild(renameItem);
 
             // Delete Category
+            const baseDivider = document.createElement("div");
+            baseDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(baseDivider);
+
             const deleteDivider = document.createElement("div");
             deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
             menu.appendChild(deleteDivider);
@@ -883,10 +1701,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         }
                         _updateThumbQueueProgress(pName);
                         try {
-                            await generateThumbnailForPrompt(node, cat, pName, () => {
+                            await _generateThumbnailForBrowserCategory(node, cat, pName, () => {
                                 renderContent(searchInput.value);
                             }, {
-                                queue: true,
                                 renderSelection,
                                 fallbackBase,
                                 endpointPrefix,
@@ -921,7 +1738,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (!catPrompts) return;
 
                 // Collect prompts without thumbnails
-                const missing = Object.keys(catPrompts).filter(name => {
+                const missing = getPromptNamesForCategory(node, cat, { hideNSFW: false, workflowOnly: false, contentFilter: "all" }).filter(name => {
                     const data = catPrompts[name];
                     return data && typeof data === "object" && !data.thumbnail;
                 });
@@ -946,7 +1763,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const catPrompts = node.prompts[cat];
                 if (!catPrompts) return;
 
-                const all = Object.keys(catPrompts).filter(name => {
+                const all = getPromptNamesForCategory(node, cat, { hideNSFW: false, workflowOnly: false, contentFilter: "all" }).filter(name => {
                     const data = catPrompts[name];
                     return data && typeof data === "object";
                 });
@@ -954,6 +1771,56 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 await runBatchGeneration(all, "Re-Generate All Thumbnails");
             };
             menu.appendChild(regenerateItem);
+
+            if (supportsCategoryPromptMetadata) {
+                const basePromptItem = document.createElement("div");
+                basePromptItem.textContent = "📝 Edit Base Prompt";
+                basePromptItem.style.cssText = `
+                    padding: 8px 16px;
+                    color: #ccc;
+                    cursor: pointer;
+                    font-size: 13px;
+                `;
+                basePromptItem.onmouseover = () => basePromptItem.style.background = '#3a3a3a';
+                basePromptItem.onmouseout = () => basePromptItem.style.background = 'transparent';
+                basePromptItem.onclick = async () => {
+                    menu.remove();
+                    const previousBasePrompt = getCategoryBasePrompt(node, cat);
+                    const edited = await showCategoryBasePromptDialog(cat, previousBasePrompt);
+                    if (edited === null) return;
+
+                    const hadPreviousBasePrompt = String(previousBasePrompt || "").trim().length > 0;
+                    const basePromptChanged = String(edited || "") !== String(previousBasePrompt || "");
+                    if (hadPreviousBasePrompt && basePromptChanged) {
+                        const confirmed = await showConfirm(
+                            "Overwrite Base Prompt",
+                            `Category "${cat}" already has a base prompt. Are you sure you want to replace it?`,
+                            "Replace",
+                            "#c00"
+                        );
+                        if (!confirmed) return;
+                    }
+
+                    try {
+                        const resp = await fetch(`${endpointPrefix}/save-category-base-prompt`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category: cat, base_prompt: edited })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error || "Failed to save base prompt.");
+                        }
+                    } catch (err) {
+                        console.error("[PromptBrowser] Error saving category base prompt:", err);
+                    }
+                };
+                menu.appendChild(basePromptItem);
+            }
 
             // Select Thumbnail Family + Model
             const modelItem = document.createElement("div");

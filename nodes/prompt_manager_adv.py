@@ -253,6 +253,11 @@ _LORA_INPUT_MODES = (
 )
 
 
+def _is_hidden_category_entry_key(name):
+    normalized = str(name or "").strip().lower()
+    return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_"}
+
+
 def _coerce_lora_stack(raw_stack):
     """Normalize a LORA_STACK-like payload into list[(path, model, clip)]."""
     if raw_stack is None:
@@ -368,7 +373,7 @@ class PromptManagerAdvanced:
 
         all_prompts = set()
         for category_prompts in prompts_data.values():
-            all_prompts.update(k for k in category_prompts.keys() if k != "__meta__")
+            all_prompts.update(k for k in category_prompts.keys() if not _is_hidden_category_entry_key(k))
 
         all_prompts.add("")
         all_prompts_list = sorted(list(all_prompts))
@@ -1578,6 +1583,72 @@ async def rename_category_advanced(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-category-base-prompt")
+async def save_category_base_prompt_advanced(request):
+    """API endpoint to save a per-category base prompt used for compose thumbnail generation."""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        base_prompt = str(data.get("base_prompt", ""))
+
+        if not category:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+        if category not in prompts:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        cat_data = prompts.get(category)
+        if not isinstance(cat_data, dict):
+            cat_data = {}
+
+        if base_prompt.strip():
+            cat_data["_base_prompt_"] = base_prompt
+        else:
+            cat_data.pop("_base_prompt_", None)
+
+        prompts[category] = cat_data
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in save_category_base_prompt API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-category-prompt-prefix")
+async def save_category_prompt_prefix_advanced(request):
+    """API endpoint to save a per-category prompt prefix used before prompt text."""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        prompt_prefix = str(data.get("prompt_prefix", ""))
+
+        if not category:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptManagerAdvanced.load_prompts()
+        if category not in prompts:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        cat_data = prompts.get(category)
+        if not isinstance(cat_data, dict):
+            cat_data = {}
+
+        if prompt_prefix.strip():
+            cat_data["_prompt_prefix_"] = prompt_prefix
+        else:
+            cat_data.pop("_prompt_prefix_", None)
+
+        prompts[category] = cat_data
+        PromptManagerAdvanced.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in save_category_prompt_prefix API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-prompt")
 async def save_prompt_advanced(request):
     """API endpoint to save a prompt with lora configurations"""
@@ -1602,7 +1673,11 @@ async def save_prompt_advanced(request):
 
         # Case-insensitive check for existing prompt
         # Get existing prompt data BEFORE potentially deleting it (to preserve thumbnail)
-        existing_prompts_lower = {k.lower(): k for k in prompts[category].keys()}
+        existing_prompts_lower = {
+            k.lower(): k
+            for k in prompts[category].keys()
+            if not _is_hidden_category_entry_key(k)
+        }
         existing_prompt = {}
         if name.lower() in existing_prompts_lower:
             old_name = existing_prompts_lower[name.lower()]
@@ -1869,9 +1944,13 @@ async def rename_prompt_advanced(request):
         # If same category, exclude the old name from conflict check
         target_prompts = prompts[new_category]
         if category == new_category:
-            existing_lower = {k.lower(): k for k in target_prompts.keys() if k != "__meta__" and k.lower() != old_name.lower()}
+            existing_lower = {
+                k.lower(): k
+                for k in target_prompts.keys()
+                if not _is_hidden_category_entry_key(k) and k.lower() != old_name.lower()
+            }
         else:
-            existing_lower = {k.lower(): k for k in target_prompts.keys() if k != "__meta__"}
+            existing_lower = {k.lower(): k for k in target_prompts.keys() if not _is_hidden_category_entry_key(k)}
 
         if new_name.lower() in existing_lower:
             return server.web.json_response({
@@ -2014,9 +2093,9 @@ async def import_prompts_advanced(request):
                 if not isinstance(prompt_data, dict):
                     continue
 
-                # Handle __meta__ key (category metadata, not a prompt)
-                if prompt_name == "__meta__" and isinstance(prompt_data, dict):
-                    prompts[category]["__meta__"] = prompt_data
+                # Handle hidden category metadata keys (not prompt entries).
+                if _is_hidden_category_entry_key(prompt_name):
+                    prompts[category][prompt_name] = prompt_data
                     continue
 
                 # Normalize the prompt data structure (include thumbnail if present)

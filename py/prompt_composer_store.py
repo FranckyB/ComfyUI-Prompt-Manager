@@ -159,15 +159,22 @@ def _find_category_case_insensitive(prompts_data, category):
     return None
 
 
+def _is_hidden_category_entry_key(name):
+    normalized = str(name or "").strip().lower()
+    return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_"}
+
+
 def _find_prompt_case_insensitive(category_data, name):
     """Return entry dict and canonical name for a prompt in a category."""
     if not isinstance(category_data, dict):
         return None, None
-    if name in category_data and name != "__meta__":
+    if _is_hidden_category_entry_key(name):
+        return None, None
+    if name in category_data and not _is_hidden_category_entry_key(name):
         return category_data[name], name
     name_lower = str(name or "").lower()
     for entry_name, entry in category_data.items():
-        if entry_name == "__meta__":
+        if _is_hidden_category_entry_key(entry_name):
             continue
         if entry_name.lower() == name_lower:
             return entry, entry_name
@@ -207,6 +214,72 @@ async def mixer_save_category(request):
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
         print(f"[PromptMixerStore] Error in save-category: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/mixer/save-category-base-prompt")
+async def mixer_save_category_base_prompt(request):
+    try:
+        data = await request.json()
+        category = str(data.get("category", "")).strip()
+        base_prompt = str(data.get("base_prompt", ""))
+
+        if not category:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptMixerStore.load_prompts()
+        canonical_category = _find_category_case_insensitive(prompts, category)
+        if canonical_category is None:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        cat_data = prompts.get(canonical_category)
+        if not isinstance(cat_data, dict):
+            cat_data = {}
+
+        trimmed = base_prompt.strip()
+        if trimmed:
+            cat_data["_base_prompt_"] = base_prompt
+        else:
+            cat_data.pop("_base_prompt_", None)
+
+        prompts[canonical_category] = cat_data
+        PromptMixerStore.save_prompts(prompts)
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptMixerStore] Error in save-category-base-prompt: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/mixer/save-category-prompt-prefix")
+async def mixer_save_category_prompt_prefix(request):
+    try:
+        data = await request.json()
+        category = str(data.get("category", "")).strip()
+        prompt_prefix = str(data.get("prompt_prefix", ""))
+
+        if not category:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptMixerStore.load_prompts()
+        canonical_category = _find_category_case_insensitive(prompts, category)
+        if canonical_category is None:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        cat_data = prompts.get(canonical_category)
+        if not isinstance(cat_data, dict):
+            cat_data = {}
+
+        trimmed = prompt_prefix.strip()
+        if trimmed:
+            cat_data["_prompt_prefix_"] = prompt_prefix
+        else:
+            cat_data.pop("_prompt_prefix_", None)
+
+        prompts[canonical_category] = cat_data
+        PromptMixerStore.save_prompts(prompts)
+        return server.web.json_response({"success": True, "prompts": prompts})
+    except Exception as e:
+        print(f"[PromptMixerStore] Error in save-category-prompt-prefix: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -274,7 +347,11 @@ async def mixer_save_prompt(request):
             prompts[category] = {}
 
         # Case-insensitive prompt replacement.
-        existing_lower = {k.lower(): k for k in prompts[category].keys() if k != "__meta__"}
+        existing_lower = {
+            k.lower(): k
+            for k in prompts[category].keys()
+            if not _is_hidden_category_entry_key(k)
+        }
         existing_prompt = {}
         if name.lower() in existing_lower:
             old_name = existing_lower[name.lower()]

@@ -39,7 +39,29 @@ def _prefix_with_category(category, text):
     trimmed_category = str(category or "").strip()
     if not trimmed_category:
         return trimmed_text
+    if trimmed_category.endswith(":"):
+        return f"{trimmed_category} {trimmed_text}"
     return f"{trimmed_category}: {trimmed_text}"
+
+
+def _resolve_prompt_prefix(category_data, fallback_category):
+    def _normalize_prefix(value):
+        prefix = str(value or "").strip()
+        if not prefix:
+            return ""
+        return prefix if prefix.endswith(":") else f"{prefix}:"
+
+    if isinstance(category_data, dict):
+        raw_prefix = category_data.get("_prompt_prefix_", "")
+        prefix = _normalize_prefix(raw_prefix)
+        if prefix:
+            return prefix
+    return _normalize_prefix(fallback_category)
+
+
+def _is_hidden_category_entry_key(name):
+    normalized = str(name or "").strip().lower()
+    return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_"}
 
 
 def _pick_from_selected(selected_json, seed):
@@ -111,7 +133,7 @@ class PromptMixerSelector:
             if not isinstance(entries, dict):
                 continue
             for name, entry in entries.items():
-                if name == "__meta__":
+                if _is_hidden_category_entry_key(name):
                     continue
                 all_prompts.append(name)
                 if not first_prompt:
@@ -202,7 +224,8 @@ class PromptMixerSelector:
             fragment_text = entry.get("prompt", "") or ""
             thumbnail = entry.get("thumbnail")
 
-        labeled_fragment = _prefix_with_category(canonical_category, fragment_text)
+        prompt_prefix = _resolve_prompt_prefix(category_data, canonical_category)
+        labeled_fragment = _prefix_with_category(prompt_prefix, fragment_text)
         formatted = _format_fragment(labeled_fragment, strength)
 
         base = ""
