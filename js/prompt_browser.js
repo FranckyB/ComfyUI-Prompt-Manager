@@ -323,9 +323,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const browserLayout = compactBrowser
             ? { width: 654, height: 680, cols: 5, itemWidth: 120, gap: 4, thumbWidth: 100, thumbHeight: 132 }
             : {
-                width: 1304, height: 985, iconHeight: 1185,
-                cols: 5, itemWidth: 240, gap: 16, thumbWidth: 200, thumbHeight: 264,
-                iconCols: 10, iconItemWidth: 120, iconGap: 7, iconThumbWidth: 100, iconThumbHeight: 132,
+                width: 1400, height: 985, iconHeight: 1185,
+                cols: 6, itemWidth: 220, gap: 8, thumbWidth: 200, thumbHeight: 264,
+                iconCols: 11, iconItemWidth: 120, iconGap: 4, iconThumbWidth: 100, iconThumbHeight: 132,
             };
 
         const dialog = document.createElement("div");
@@ -1738,7 +1738,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const buildListColumns = () => {
                 const promptCol = clampPromptColumnWidth(promptColumnWidth, promptOnly);
                 return promptOnly
-                    ? `44px minmax(80px, 1fr) ${promptCol}px`
+                    ? `44px minmax(120px, 1fr) ${promptCol}px`
                     : `44px minmax(150px, 1fr) ${promptCol}px 70px 70px 70px`;
             };
 
@@ -1802,7 +1802,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         const applyTemplate = (width) => {
                             const clampedWidth = clampPromptColumnWidth(width, promptOnly);
                             const template = promptOnly
-                                ? `44px minmax(80px, 1fr) ${clampedWidth}px`
+                                ? `44px minmax(120px, 1fr) ${clampedWidth}px`
                                 : `44px minmax(150px, 1fr) ${clampedWidth}px 70px 70px 70px`;
                             headerRow.style.gridTemplateColumns = template;
                             const rows = grid.querySelectorAll('[data-pm-list-row="true"]');
