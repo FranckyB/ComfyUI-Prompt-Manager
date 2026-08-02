@@ -9,7 +9,7 @@ __license__ = "MIT"
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.prompt_composer import PromptComposer
-from .nodes.prompt_composer_manager import PromptComposerManager
+from .nodes.prompt_browser import PromptBrowser
 from .nodes.prompt_generator import PromptGenerator
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_generator_kill_switch import PromptGeneratorKillSwitch
@@ -28,7 +28,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
     "PromptComposer":            PromptComposer,
-    "PromptComposerManager":     PromptComposerManager,
+    "PromptBrowser":             PromptBrowser,
     "PromptGenerator":           PromptGenerator,
     "PromptGenOptions":          PromptGenOptions,
     "PromptGeneratorKillSwitch": PromptGeneratorKillSwitch,
@@ -51,7 +51,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
     "PromptComposer":             "Prompt Composer",
-    "PromptComposerManager":      "Prompt Composer Manager",
+    "PromptBrowser":              "Prompt Browser",
     "PromptGenerator":            "Prompt Generator",
     "PromptGenOptions":           "Prompt Generator Options",
     "PromptGeneratorKillSwitch":  "Prompt Generator Kill Switch",

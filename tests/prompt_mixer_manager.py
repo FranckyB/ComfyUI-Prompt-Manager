@@ -1,26 +1,21 @@
 """
-Prompt Composer Manager - simplified writer for Prompt Composer fragments.
+Prompt Mixer Manager - simplified writer for Prompt Mixer fragments.
 
-Mirrors the basic Prompt Manager flow but stores data in prompt_composer_data.json
+Mirrors the basic Prompt Manager flow but stores data in prompt_mixer_data.json
 instead of the main Prompt Manager library.
 """
 import server
 
-from ..py.prompt_composer_store import PromptComposerStore
+from .prompt_mixer_store import PromptMixerStore
 from .prompt_manager_basic import _get_workflow_node
 
 
-def _is_hidden_category_entry_key(name):
-    normalized = str(name or "").strip().lower()
-    return normalized in {"__meta__", "_base_prompt_", "_prompt_type_"}
-
-
-class PromptComposerManager:
-    """Save/load and edit prompt composer fragments."""
+class PromptMixerManager:
+    """Save/load and edit prompt mixer fragments."""
 
     @classmethod
     def INPUT_TYPES(s):
-        prompts_data = PromptComposerStore.load_prompts()
+        prompts_data = PromptMixerStore.load_prompts()
         categories = sorted([c for c in prompts_data.keys() if c != "__meta__"], key=str.lower)
         if not categories:
             categories = [""]
@@ -33,7 +28,7 @@ class PromptComposerManager:
             if not isinstance(entries, dict):
                 continue
             for name, entry in entries.items():
-                if _is_hidden_category_entry_key(name):
+                if name == "__meta__":
                     continue
                 all_prompts.append(name)
                 if not first_prompt:
@@ -78,7 +73,7 @@ class PromptComposerManager:
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Save and edit Prompt Composer fragments in an isolated library."
+    DESCRIPTION = "Save and edit Prompt Mixer fragments in an isolated library."
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
     FUNCTION = "get_prompt"

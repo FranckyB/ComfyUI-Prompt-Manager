@@ -6,7 +6,7 @@ import {
     showConfirm,
 } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
-import { loadComposerPrompts, getComposerCategories, getComposerNames, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
+import { loadMixerPrompts, getMixerCategories, getMixerNames, getMixerEntry, MIXER_ENDPOINT_PREFIX } from "./prompt_mixer_common.js";
 
 const PMA_THEME = {
     panel: UI.panel || "hsl(216 11% 15%)",
@@ -24,45 +24,45 @@ const PMA_THEME = {
     accentBorder: UI.accentBorder || "hsl(208 73% 57% / 0.65)",
 };
 
-async function saveComposerPrompt(node, category, name, text, thumbnail = null) {
+async function saveMixerPrompt(node, category, name, text, thumbnail = null) {
     try {
-        const resp = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/save-prompt`, {
+        const resp = await fetch(`${MIXER_ENDPOINT_PREFIX}/save-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ category, name, text, thumbnail }),
         });
         const data = await resp.json();
         if (data.success) {
-            node.composerPrompts = data.prompts;
+            node.mixerPrompts = data.prompts;
             node.prompts = data.prompts;
         }
         return data;
     } catch (err) {
-        console.error("[PromptComposerManager] Error saving prompt:", err);
+        console.error("[PromptMixerManager] Error saving prompt:", err);
         return { success: false, error: String(err) };
     }
 }
 
-async function deleteComposerPrompt(node, category, name) {
+async function deleteMixerPrompt(node, category, name) {
     try {
-        const resp = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/delete-prompt`, {
+        const resp = await fetch(`${MIXER_ENDPOINT_PREFIX}/delete-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ category, name }),
         });
         const data = await resp.json();
         if (data.success) {
-            node.composerPrompts = data.prompts;
+            node.mixerPrompts = data.prompts;
             node.prompts = data.prompts;
         }
         return data;
     } catch (err) {
-        console.error("[PromptComposerManager] Error deleting prompt:", err);
+        console.error("[PromptMixerManager] Error deleting prompt:", err);
         return { success: false, error: String(err) };
     }
 }
 
-function createComposerButton(text, callback) {
+function createMixerButton(text, callback) {
     const button = document.createElement("button");
     button.textContent = text;
     button.style.flex = "1";
@@ -85,7 +85,7 @@ function createComposerButton(text, callback) {
     return button;
 }
 
-function createComposerDropdownButton(text, items) {
+function createMixerDropdownButton(text, items) {
     const container = document.createElement("div");
     container.style.position = "relative";
     container.style.flex = "1";
@@ -173,15 +173,15 @@ function createComposerDropdownButton(text, items) {
     return container;
 }
 
-function setupPromptComposerManager(nodeType, nodeData) {
-    if (nodeData.name !== "PromptComposerManager") return;
+function setupPromptMixerManager(nodeType, nodeData) {
+    if (nodeData.name !== "PromptMixerManager" && nodeData.name !== "PromptComposerManager") return;
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
         const result = onNodeCreated?.apply(this, arguments);
         const node = this;
 
-        node.composerPrompts = {};
+        node.mixerPrompts = {};
         node.prompts = {};
         node._configuredFromWorkflow = false;
         node.isNewUnsavedPrompt = false;
@@ -189,20 +189,18 @@ function setupPromptComposerManager(nodeType, nodeData) {
         node.newPromptName = null;
 
         // Match Prompt Manager Advanced footprint.
-        node.setSize([440, 440]);
+        node.setSize([300, 300]);
 
         // Hide native category/name widgets immediately; the custom selector bar replaces them.
         const categoryWidget = node.widgets.find((w) => w.name === "category");
         const nameWidget = node.widgets.find((w) => w.name === "name");
         if (categoryWidget) {
             categoryWidget.type = "converted-widget";
-            categoryWidget.computeSize = () => [0, 0];
-            categoryWidget.hidden = true;
+            categoryWidget.computeSize = () => [0, -4];
         }
         if (nameWidget) {
             nameWidget.type = "converted-widget";
-            nameWidget.computeSize = () => [0, 0];
-            nameWidget.hidden = true;
+            nameWidget.computeSize = () => [0, -4];
         }
         for (let i = node.inputs.length - 1; i >= 0; i--) {
             const inp = node.inputs[i];
@@ -211,39 +209,39 @@ function setupPromptComposerManager(nodeType, nodeData) {
             }
         }
 
-        loadComposerPrompts(node).then(() => {
-            buildComposerSelectorBar(node);
-            buildComposerButtonBar(node);
+        loadMixerPrompts(node).then(() => {
+            buildMixerSelectorBar(node);
+            buildMixerButtonBar(node);
             syncSelectorToData(node);
-            updateComposerLastSavedState(node);
-            refreshComposerPromptInputGhosting(node);
+            updateMixerLastSavedState(node);
+            refreshMixerPromptInputGhosting(node);
         });
 
         const textWidget = node.widgets.find((w) => w.name === "text");
         api.addEventListener("prompt-manager-update-text", (event) => {
             if (String(event.detail.node_id) !== String(node.id)) return;
-            node._composerIncomingPrompt = event.detail.prompt || "";
+            node._mixerIncomingPrompt = event.detail.prompt || "";
             const usePromptInput = event.detail.use_prompt_input === true;
             if (textWidget && usePromptInput) {
-                textWidget.value = node._composerIncomingPrompt;
+                textWidget.value = node._mixerIncomingPrompt;
             }
-            refreshComposerPromptInputGhosting(node);
+            refreshMixerPromptInputGhosting(node);
             app.graph.setDirtyCanvas(true, true);
         });
 
         const usePromptInputWidget = node.widgets.find((w) => w.name === "use_prompt_input");
-        if (usePromptInputWidget && !usePromptInputWidget._composerWrapped) {
+        if (usePromptInputWidget && !usePromptInputWidget._mixerWrapped) {
             const originalCallback = usePromptInputWidget.callback;
             usePromptInputWidget.callback = function () {
                 if (typeof originalCallback === "function") {
                     originalCallback.apply(this, arguments);
                 }
-                refreshComposerPromptInputGhosting(node);
+                refreshMixerPromptInputGhosting(node);
             };
-            usePromptInputWidget._composerWrapped = true;
+            usePromptInputWidget._mixerWrapped = true;
         }
 
-        refreshComposerPromptInputGhosting(node);
+        refreshMixerPromptInputGhosting(node);
 
         return result;
     };
@@ -258,13 +256,11 @@ function setupPromptComposerManager(nodeType, nodeData) {
         const nameWidget = node.widgets.find((w) => w.name === "name");
         if (categoryWidget) {
             categoryWidget.type = "converted-widget";
-            categoryWidget.computeSize = () => [0, 0];
-            categoryWidget.hidden = true;
+            categoryWidget.computeSize = () => [0, -4];
         }
         if (nameWidget) {
             nameWidget.type = "converted-widget";
-            nameWidget.computeSize = () => [0, 0];
-            nameWidget.hidden = true;
+            nameWidget.computeSize = () => [0, -4];
         }
         for (let i = node.inputs.length - 1; i >= 0; i--) {
             const inp = node.inputs[i];
@@ -273,31 +269,31 @@ function setupPromptComposerManager(nodeType, nodeData) {
             }
         }
 
-        loadComposerPrompts(node).then(() => {
-            buildComposerSelectorBar(node);
-            buildComposerButtonBar(node);
+        loadMixerPrompts(node).then(() => {
+            buildMixerSelectorBar(node);
+            buildMixerButtonBar(node);
             syncSelectorToData(node);
-            updateComposerLastSavedState(node);
-            refreshComposerPromptInputGhosting(node);
+            updateMixerLastSavedState(node);
+            refreshMixerPromptInputGhosting(node);
         });
 
-        refreshComposerPromptInputGhosting(node);
+        refreshMixerPromptInputGhosting(node);
 
         return result;
     };
 }
 
 function syncSelectorToData(node) {
-    if (typeof node.updateComposerSelectorDisplay === "function") {
-        node.updateComposerSelectorDisplay();
+    if (typeof node.updateMixerSelectorDisplay === "function") {
+        node.updateMixerSelectorDisplay();
     }
 }
 
-function shouldWarnComposerUnsavedChanges() {
+function shouldWarnMixerUnsavedChanges() {
     return app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges") !== false;
 }
 
-function refreshComposerPromptInputGhosting(node) {
+function refreshMixerPromptInputGhosting(node) {
     const textWidget = node.widgets?.find((w) => w.name === "text");
     const usePromptInputWidget = node.widgets?.find((w) => w.name === "use_prompt_input");
     if (!textWidget || !usePromptInputWidget) return;
@@ -307,8 +303,8 @@ function refreshComposerPromptInputGhosting(node) {
     const usePromptInput = usePromptInputWidget.value === true;
 
     if (usePromptInput && isPromptConnected) {
-        if (typeof node._composerIncomingPrompt === "string") {
-            textWidget.value = node._composerIncomingPrompt;
+        if (typeof node._mixerIncomingPrompt === "string") {
+            textWidget.value = node._mixerIncomingPrompt;
         }
         textWidget.disabled = true;
         if (textWidget.inputEl) {
@@ -323,9 +319,9 @@ function refreshComposerPromptInputGhosting(node) {
     }
 }
 
-function buildComposerSelectorBar(node) {
-    if (node._composerSelectorBuilt) return;
-    node._composerSelectorBuilt = true;
+function buildMixerSelectorBar(node) {
+    if (node._mixerSelectorBuilt) return;
+    node._mixerSelectorBuilt = true;
 
     const categoryWidget = node.widgets.find((w) => w.name === "category");
     const nameWidget = node.widgets.find((w) => w.name === "name");
@@ -341,7 +337,7 @@ function buildComposerSelectorBar(node) {
         border-radius: 4px;
         overflow: visible;
         height: 26px;
-        margin: -8px 0 0 0;
+        margin: 0;
         position: relative;
     `;
 
@@ -364,25 +360,22 @@ function buildComposerSelectorBar(node) {
     nameDisplay.style.cssText = `
         flex: 1;
         text-align: center;
-        color: #dbeafe;
+        color: #ddd;
         font-size: 13px;
         padding: 0 10px;
         cursor: pointer;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        background: rgba(56, 130, 246, 0.22);
-        border: 1px solid rgba(56, 130, 246, 0.85);
-        border-radius: 4px;
+        background: #1a1a1a;
         height: 100%;
         display: flex;
         align-items: center;
         justify-content: center;
         transition: background 0.15s ease;
-        box-sizing: border-box;
     `;
-    nameDisplay.onmouseover = () => { nameDisplay.style.background = "rgba(56, 130, 246, 0.32)"; };
-    nameDisplay.onmouseout = () => { nameDisplay.style.background = "rgba(56, 130, 246, 0.22)"; };
+    nameDisplay.onmouseover = () => { nameDisplay.style.background = "#252525"; };
+    nameDisplay.onmouseout = () => { nameDisplay.style.background = "#1a1a1a"; };
 
     // Thumbnail preview tooltip on hover (matches Prompt Manager Advanced).
     const thumbnailPreview = document.createElement("div");
@@ -409,7 +402,7 @@ function buildComposerSelectorBar(node) {
         hoverTimeout = setTimeout(() => {
             const category = categoryWidget.value;
             const prompt = nameWidget.value;
-            const promptData = node.composerPrompts?.[category]?.[prompt] || node.prompts?.[category]?.[prompt];
+            const promptData = node.mixerPrompts?.[category]?.[prompt] || node.prompts?.[category]?.[prompt];
             const thumbnail = promptData?.thumbnail;
             if (!thumbnail) return;
 
@@ -466,9 +459,9 @@ function buildComposerSelectorBar(node) {
 
     const getAllFlat = () => {
         const list = [];
-        const data = node.composerPrompts || {};
-        for (const cat of getComposerCategories(node)) {
-            for (const name of getComposerNames(node, cat)) {
+        const data = node.mixerPrompts || {};
+        for (const cat of getMixerCategories(node)) {
+            for (const name of getMixerNames(node, cat)) {
                 list.push({ category: cat, prompt: name });
             }
         }
@@ -480,7 +473,7 @@ function buildComposerSelectorBar(node) {
     };
 
     const navigateTo = async (item, skipCheck = false) => {
-        if (!skipCheck && shouldWarnComposerUnsavedChanges() && hasComposerUnsavedChanges(node)) {
+        if (!skipCheck && shouldWarnMixerUnsavedChanges() && hasMixerUnsavedChanges(node)) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
                 "You have unsaved changes to the current fragment. Discard them and switch?",
@@ -509,12 +502,12 @@ function buildComposerSelectorBar(node) {
 
         const usePromptInputWidget = node.widgets.find((w) => w.name === "use_prompt_input");
         if (textWidget && usePromptInputWidget?.value !== true) {
-            const entry = getComposerEntry(node, item.category, item.prompt);
+            const entry = getMixerEntry(node, item.category, item.prompt);
             textWidget.value = entry?.prompt || "";
         }
 
-        updateComposerLastSavedState(node);
-        refreshComposerPromptInputGhosting(node);
+        updateMixerLastSavedState(node);
+        refreshMixerPromptInputGhosting(node);
         updateDisplay();
         app.graph.setDirtyCanvas(true, true);
         return true;
@@ -540,41 +533,25 @@ function buildComposerSelectorBar(node) {
 
     nameDisplay.onclick = async (e) => {
         e.stopPropagation();
-        if (shouldWarnComposerUnsavedChanges() && hasComposerUnsavedChanges(node)) {
+        if (shouldWarnMixerUnsavedChanges() && hasMixerUnsavedChanges(node)) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current fragment. Discard them and edit?",
-                "Discard & Edit",
+                "You have unsaved changes to the current fragment. Discard them and browse?",
+                "Discard & Browse",
                 "#f80"
             );
             if (!confirmed) return;
         }
 
         const selection = await showThumbnailBrowser(node, categoryWidget.value, nameWidget.value, {
-            title: "Edit Prompt Composer Fragments",
+            title: "Select Prompt Mixer Fragment",
+            endpointPrefix: MIXER_ENDPOINT_PREFIX,
             promptOnly: true,
-            editMode: true,
-            endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
-            loadPromptsFn: loadComposerPrompts,
-            preferenceScope: "composer",
+            loadPromptsFn: loadMixerPrompts,
         });
 
-        if (selection?.prompt) {
-            categoryWidget.value = selection.category;
-            if (typeof categoryWidget.callback === "function") {
-                await categoryWidget.callback(selection.category);
-            }
-            nameWidget.value = selection.prompt;
-            if (typeof nameWidget.callback === "function") {
-                await nameWidget.callback(selection.prompt);
-            }
-            const entry = getComposerEntry(node, selection.category, selection.prompt);
-            if (textWidget && entry) {
-                textWidget.value = entry.prompt || "";
-            }
-            updateComposerLastSavedState(node);
-            updateDisplay();
-            app.graph.setDirtyCanvas(true, true);
+        if (selection && selection.prompt) {
+            await navigateTo(selection, true);
         }
     };
 
@@ -587,17 +564,17 @@ function buildComposerSelectorBar(node) {
 
     updateDisplay();
 
-    const widget = node.addDOMWidget("composer_selector", "div", container);
+    const widget = node.addDOMWidget("mixer_selector", "div", container);
     widget.computeSize = function(width) {
-        return [width, 24];
+        return [width, 28];
     };
-    node._composerSelectorContainer = container;
-    node.updateComposerSelectorDisplay = updateDisplay;
+    node._mixerSelectorContainer = container;
+    node.updateMixerSelectorDisplay = updateDisplay;
 }
 
-function buildComposerButtonBar(node) {
-    if (node._composerButtonBarBuilt) return;
-    node._composerButtonBarBuilt = true;
+function buildMixerButtonBar(node) {
+    if (node._mixerButtonBarBuilt) return;
+    node._mixerButtonBarBuilt = true;
 
     const categoryWidget = node.widgets.find((w) => w.name === "category");
     const nameWidget = node.widgets.find((w) => w.name === "name");
@@ -608,70 +585,48 @@ function buildComposerButtonBar(node) {
     buttonContainer.style.cssText = `
         display: flex;
         gap: 8px;
-        padding: 2px 0 0 0;
+        padding: 4px 0;
         align-items: center;
         justify-content: space-between;
     `;
 
-    const saveBtn = createComposerButton("Save Prompt", async () => {
-        const currentCategory = String(categoryWidget.value || "").trim();
-        const currentName = String(nameWidget.value || "").trim();
+    const saveBtn = createMixerButton("Save Prompt", async () => {
+        const category = String(categoryWidget.value || "").trim();
+        const name = String(nameWidget.value || "").trim();
+        const text = String(textWidget.value || "").trim();
 
-        const selection = await showThumbnailBrowser(node, currentCategory, currentName, {
-            title: "Save Prompt Composer Fragment",
-            endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
-            promptOnly: true,
-            mode: "save",
-            initialName: currentName,
-            saveButtonText: "Save",
-            onSave: async (category, name) => {
-                const text = String(textWidget.value || "").trim();
-                const existing = getComposerEntry(node, category, name);
-                const result = await saveComposerPrompt(node, category, name, text, existing?.thumbnail || null);
-                if (result?.success) {
-                    categoryWidget.value = category;
-                    if (typeof categoryWidget.callback === "function") {
-                        await categoryWidget.callback(category);
-                    }
-                    nameWidget.value = name;
-                    if (typeof nameWidget.callback === "function") {
-                        await nameWidget.callback(name);
-                    }
-                    updateComposerLastSavedState(node);
-                    if (typeof node.updateComposerSelectorDisplay === "function") {
-                        node.updateComposerSelectorDisplay();
-                    }
-                    app.graph.setDirtyCanvas(true, true);
-                }
-                return result;
-            },
-            loadPromptsFn: loadComposerPrompts,
-            preferenceScope: "composer",
-        });
+        if (!category || !name) {
+            await showInfo("Missing Info", "Category and name are required to save a fragment.");
+            return;
+        }
 
-        if (selection?.prompt) {
-            categoryWidget.value = selection.category;
-            if (typeof categoryWidget.callback === "function") {
-                await categoryWidget.callback(selection.category);
+        const existing = getMixerEntry(node, category, name);
+        if (existing) {
+            const overwrite = await showConfirm(
+                "Overwrite Fragment",
+                `Fragment "${name}" already exists in "${category}". Replace it?`,
+                "Replace",
+                "#c44"
+            );
+            if (!overwrite) return;
+        }
+
+        const result = await saveMixerPrompt(node, category, name, text);
+        if (result.success) {
+            node.isNewUnsavedPrompt = false;
+            node.newPromptCategory = null;
+            node.newPromptName = null;
+            updateMixerLastSavedState(node);
+            if (typeof node.updateMixerSelectorDisplay === "function") {
+                node.updateMixerSelectorDisplay();
             }
-            nameWidget.value = selection.prompt;
-            if (typeof nameWidget.callback === "function") {
-                await nameWidget.callback(selection.prompt);
-            }
-            const entry = getComposerEntry(node, selection.category, selection.prompt);
-            if (textWidget && entry) {
-                textWidget.value = entry.prompt || "";
-            }
-            updateComposerLastSavedState(node);
-            if (typeof node.updateComposerSelectorDisplay === "function") {
-                node.updateComposerSelectorDisplay();
-            }
-            app.graph.setDirtyCanvas(true, true);
+        } else {
+            await showInfo("Save Failed", result.error || "Unknown error");
         }
     });
 
-    const newBtn = createComposerButton("New Prompt", async () => {
-        if (shouldWarnComposerUnsavedChanges() && hasComposerUnsavedChanges(node)) {
+    const newBtn = createMixerButton("New Prompt", async () => {
+        if (shouldWarnMixerUnsavedChanges() && hasMixerUnsavedChanges(node)) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
                 "You have unsaved changes to the current fragment. Discard them and start fresh?",
@@ -688,15 +643,15 @@ function buildComposerButtonBar(node) {
         node.isNewUnsavedPrompt = true;
         node.newPromptCategory = currentCategory;
         node.newPromptName = null;
-        node.composerLastSavedState = null;
+        node.mixerLastSavedState = null;
 
-        if (typeof node.updateComposerSelectorDisplay === "function") {
-            node.updateComposerSelectorDisplay();
+        if (typeof node.updateMixerSelectorDisplay === "function") {
+            node.updateMixerSelectorDisplay();
         }
         app.graph.setDirtyCanvas(true, true);
     });
 
-    const moreBtn = createComposerDropdownButton("More ▼", [
+    const moreBtn = createMixerDropdownButton("More ▼", [
         {
             label: "Delete Prompt",
             action: async () => {
@@ -713,11 +668,11 @@ function buildComposerButtonBar(node) {
                     "#c00"
                 );
                 if (confirmed) {
-                    await deleteComposerPrompt(node, category, name);
+                    await deleteMixerPrompt(node, category, name);
                     nameWidget.value = "";
                     textWidget.value = "";
-                    if (typeof node.updateComposerSelectorDisplay === "function") {
-                        node.updateComposerSelectorDisplay();
+                    if (typeof node.updateMixerSelectorDisplay === "function") {
+                        node.updateMixerSelectorDisplay();
                     }
                     app.graph.setDirtyCanvas(true, true);
                 }
@@ -726,11 +681,11 @@ function buildComposerButtonBar(node) {
         { divider: true },
         {
             label: "Export JSON",
-            action: () => exportComposerJSON(node),
+            action: () => exportMixerJSON(node),
         },
         {
             label: "Import JSON",
-            action: () => importComposerJSON(node),
+            action: () => importMixerJSON(node),
         },
     ]);
 
@@ -738,14 +693,14 @@ function buildComposerButtonBar(node) {
     buttonContainer.appendChild(newBtn);
     buttonContainer.appendChild(moreBtn);
 
-    const widget = node.addDOMWidget("composer_buttons", "div", buttonContainer);
+    const widget = node.addDOMWidget("mixer_buttons", "div", buttonContainer);
     widget.computeSize = function(width) {
         return [width, 40];
     };
-    node._composerButtonBarContainer = buttonContainer;
+    node._mixerButtonBarContainer = buttonContainer;
 }
 
-function hasComposerUnsavedChanges(node) {
+function hasMixerUnsavedChanges(node) {
     const categoryWidget = node.widgets.find((w) => w.name === "category");
     const nameWidget = node.widgets.find((w) => w.name === "name");
     const textWidget = node.widgets.find((w) => w.name === "text");
@@ -765,33 +720,33 @@ function hasComposerUnsavedChanges(node) {
         return text.trim().length > 0 || name.trim().length > 0;
     }
 
-    if (!node.composerLastSavedState) {
-        const entry = getComposerEntry(node, category, name);
-        node.composerLastSavedState = entry ? { category, name, text: entry.prompt || "" } : null;
+    if (!node.mixerLastSavedState) {
+        const entry = getMixerEntry(node, category, name);
+        node.mixerLastSavedState = entry ? { category, name, text: entry.prompt || "" } : null;
     }
 
-    if (!node.composerLastSavedState) return false;
+    if (!node.mixerLastSavedState) return false;
     return (
-        node.composerLastSavedState.category !== category ||
-        node.composerLastSavedState.name !== name ||
-        node.composerLastSavedState.text !== text
+        node.mixerLastSavedState.category !== category ||
+        node.mixerLastSavedState.name !== name ||
+        node.mixerLastSavedState.text !== text
     );
 }
 
-function updateComposerLastSavedState(node) {
+function updateMixerLastSavedState(node) {
     const categoryWidget = node.widgets.find((w) => w.name === "category");
     const nameWidget = node.widgets.find((w) => w.name === "name");
     const textWidget = node.widgets.find((w) => w.name === "text");
     if (!categoryWidget || !nameWidget || !textWidget) return;
-    node.composerLastSavedState = {
+    node.mixerLastSavedState = {
         category: categoryWidget.value || "",
         name: nameWidget.value || "",
         text: textWidget.value || "",
     };
 }
 
-function exportComposerJSON(node) {
-    const data = node.composerPrompts || {};
+function exportMixerJSON(node) {
+    const data = node.mixerPrompts || {};
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -803,7 +758,7 @@ function exportComposerJSON(node) {
     URL.revokeObjectURL(url);
 }
 
-async function importComposerJSON(node) {
+async function importMixerJSON(node) {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json";
@@ -824,16 +779,16 @@ async function importComposerJSON(node) {
                 for (const [name, entry] of Object.entries(entries)) {
                     if (name === "__meta__") continue;
                     const promptText = typeof entry === "string" ? entry : (entry?.prompt || "");
-                    await saveComposerPrompt(node, category, name, promptText, entry?.thumbnail || null);
+                    await saveMixerPrompt(node, category, name, promptText, entry?.thumbnail || null);
                     imported++;
                 }
             }
             await showInfo("Import Complete", `Imported ${imported} fragments.`);
-            if (typeof node.updateComposerSelectorDisplay === "function") {
-                node.updateComposerSelectorDisplay();
+            if (typeof node.updateMixerSelectorDisplay === "function") {
+                node.updateMixerSelectorDisplay();
             }
         } catch (err) {
-            console.error("[PromptComposerManager] Import error:", err);
+            console.error("[PromptMixerManager] Import error:", err);
             await showInfo("Import Failed", err.message || "Unknown error");
         }
     };
@@ -841,8 +796,8 @@ async function importComposerJSON(node) {
 }
 
 app.registerExtension({
-    name: "PromptComposerManager",
+    name: "PromptMixerManager",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        setupPromptComposerManager(nodeType, nodeData);
+        setupPromptMixerManager(nodeType, nodeData);
     },
 });

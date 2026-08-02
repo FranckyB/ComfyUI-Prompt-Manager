@@ -495,6 +495,87 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
     });
 }
 
+function showCategoryPickerDialog(title, categories, defaultCategory) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 10000;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 16px;
+            z-index: 10001;
+            width: min(460px, calc(100vw - 36px));
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: #fff;
+        `;
+
+        const categoryOptions = (categories || [])
+            .map((cat) => `<option value="${cat}" ${cat === defaultCategory ? "selected" : ""}>${cat}</option>`)
+            .join("");
+
+        dialog.innerHTML = `
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">${title}</div>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Target category</div>
+            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${categoryOptions}</select>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Move</button>
+            </div>
+        `;
+
+        const catSelect = dialog.querySelector(".cat-select");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve({ category: String(catSelect.value || defaultCategory || "") });
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+        catSelect.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                handleOk();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        catSelect.focus();
+    });
+}
+
 function showThumbnailContextMenu(event, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
     const existing = document.querySelector('.thumbnail-context-menu');
     if (existing) existing.remove();
@@ -985,6 +1066,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         : null;
     const selectTitle = typeof options?.title === "string" ? options.title : null;
     const multiSelect = options?.multiSelect === true;
+    const supportsMultiSelect = mode !== "save";
     const multiCategorySelect = multiSelect && options?.multiCategorySelect === true;
     const clearSelectionOnCategorySwitch = options?.clearSelectionOnCategorySwitch === true;
     const endpointPrefix = typeof options?.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
@@ -994,7 +1076,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     );
     const allowEditMode = options?.allowEditMode !== false;
     let editMode = allowEditMode && options?.editMode === true;
+    let multiSelectMode = multiSelect;
     let updateSelectButton = () => {};
+    let updateFooterText = () => {};
+    let updateSelectionToolbar = () => {};
 
     const filterAllowedCategories = (categories) => {
         if (!allowedCategorySet || !Array.isArray(categories)) return categories;
@@ -1015,6 +1100,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         
         let selectedCategory = currentCategory;
         let lastSelectedName = currentPrompt;
+        let editPanel = null;
         let selectedByCategory = {};
         let selectedNames;
         if (multiCategorySelect) {
@@ -1034,7 +1120,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let multiSelectAnchorName = selectedNames.size > 0 ? Array.from(selectedNames)[0] : "";
 
         const clearMultiSelection = () => {
-            if (!multiSelect || selectedNames.size === 0) return;
+            if (!supportsMultiSelect || selectedNames.size === 0) return;
             selectedNames.clear();
             if (multiCategorySelect && selectedCategory) {
                 delete selectedByCategory[selectedCategory];
@@ -1308,14 +1394,67 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#313843'; viewModeBtn.style.color = '#aaa'; };
         updateViewModeBtn();
 
+        // Multi-select toggle
+        let multiSelectBtn = null;
+        if (supportsMultiSelect) {
+            multiSelectBtn = document.createElement("button");
+            const updateMultiSelectBtn = () => {
+                if (multiSelectMode) {
+                    multiSelectBtn.textContent = "☑ Multi: On";
+                    multiSelectBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.22); border-color: rgba(56, 130, 246, 0.85); color: #dbeafe;`;
+                    multiSelectBtn.title = "Multi-select is on";
+                } else {
+                    multiSelectBtn.textContent = "☐ Multi: Off";
+                    multiSelectBtn.style.cssText = btnStyle;
+                    multiSelectBtn.title = "Turn on multi-select";
+                }
+            };
+            multiSelectBtn.onmouseover = () => {
+                if (!multiSelectMode) { multiSelectBtn.style.background = '#38414c'; multiSelectBtn.style.color = '#fff'; }
+            };
+            multiSelectBtn.onmouseout = () => {
+                updateMultiSelectBtn();
+            };
+            multiSelectBtn.onclick = () => {
+                multiSelectMode = !multiSelectMode;
+                if (!multiSelectMode) {
+                    selectedNames.clear();
+                    if (multiCategorySelect) {
+                        Object.keys(selectedByCategory).forEach((cat) => {
+                            selectedByCategory[cat].clear();
+                        });
+                    }
+                    multiSelectAnchorName = "";
+                }
+                updateMultiSelectBtn();
+                updateSelectButton();
+                updateFooterText();
+                updateSelectionToolbar();
+                updateEditModeLayout();
+                renderContent(searchInput.value);
+            };
+            updateMultiSelectBtn();
+        }
+
         // Edit mode toggle
         let editModeBtn = null;
         const updateEditModeLayout = () => {
             if (!editPanel) return;
+            const clearPromptForMulti = supportsMultiSelect && multiSelectMode && selectedNames.size > 1;
             if (editMode) {
                 editPanel.element.style.display = "flex";
                 dialog.style.width = `${browserLayout.width + 320}px`;
-                editPanel.loadCategorySettings(selectedCategory);
+                if (clearPromptForMulti) {
+                    if (typeof editPanel.clearPrompt === "function") {
+                        editPanel.clearPrompt();
+                    }
+                    editPanel.loadCategorySettings(selectedCategory);
+                    if (typeof editPanel.showCategorySettings === "function") {
+                        editPanel.showCategorySettings();
+                    }
+                } else {
+                    editPanel.loadCategorySettings(selectedCategory);
+                }
             } else {
                 editPanel.element.style.display = "none";
                 dialog.style.width = `${browserLayout.width}px`;
@@ -1358,6 +1497,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         }
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
+        if (multiSelectBtn) {
+            controlsBar.appendChild(multiSelectBtn);
+        }
         if (editModeBtn) {
             controlsBar.appendChild(editModeBtn);
         }
@@ -1980,7 +2122,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         contentRow.appendChild(gridContainer);
 
         // Edit panel
-        let editPanel = null;
         if (allowEditMode && mode !== "save") {
             editPanel = createPromptBrowserEditPanel({
                 node,
@@ -2108,11 +2249,169 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             return "single";
         };
 
-        const isMultiSelectActive = () => multiSelect && !editMode;
+        const isMultiSelectActive = () => supportsMultiSelect && multiSelectMode;
+
+        const showMultiPromptContextMenu = (e, promptNames) => {
+            const existing = document.querySelector('.thumbnail-context-menu');
+            if (existing) existing.remove();
+
+            const menu = document.createElement("div");
+            menu.className = "thumbnail-context-menu";
+            menu.style.cssText = `
+                position: fixed;
+                left: ${e.clientX}px;
+                top: ${e.clientY}px;
+                background: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 6px;
+                padding: 4px 0;
+                z-index: 10001;
+                min-width: 170px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            `;
+
+            const createMenuItem = (label, onClick, danger = false) => {
+                const item = document.createElement("div");
+                item.textContent = label;
+                item.style.cssText = `
+                    padding: 8px 16px;
+                    color: ${danger ? '#f66' : '#ccc'};
+                    cursor: pointer;
+                    font-size: 13px;
+                `;
+                item.onmouseover = () => item.style.background = '#3a3a3a';
+                item.onmouseout = () => item.style.background = 'transparent';
+                item.onclick = () => {
+                    menu.remove();
+                    onClick();
+                };
+                return item;
+            };
+
+            const selectedList = Array.from(promptNames || []);
+
+            menu.appendChild(createMenuItem(`🎨 Generate Thumbnails (${selectedList.length})`, async () => {
+                const names = selectedList.slice();
+                _thumbQueueTotal += names.length;
+                _ensureThumbQueueProgress();
+                _updateThumbQueueProgress(names[0] || "");
+
+                _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
+                    for (const name of names) {
+                        if (_thumbQueueCancelled) {
+                            _thumbQueueDone++;
+                            continue;
+                        }
+                        _updateThumbQueueProgress(name);
+                        try {
+                            await _generateThumbnailForBrowserCategory(node, selectedCategory, name, () => {
+                                renderContent(searchInput.value);
+                            }, { endpointPrefix });
+                            _thumbQueueDone++;
+                        } catch (err) {
+                            console.error(`[ThumbnailGen] Failed for "${name}":`, err);
+                            _thumbQueueFailed++;
+                        }
+                    }
+                    if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                        _finishThumbQueueProgress();
+                    }
+                });
+            }));
+
+            const dividerA = document.createElement("div");
+            dividerA.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(dividerA);
+
+            menu.appendChild(createMenuItem(`📁 Move (${selectedList.length})`, async () => {
+                const allCategories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
+                const picked = await showCategoryPickerDialog("Move Selected Prompts", allCategories, selectedCategory);
+                const targetCategory = picked?.category;
+                if (!targetCategory || targetCategory === selectedCategory) return;
+
+                let movedCount = 0;
+                const errors = [];
+                for (const promptName of selectedList) {
+                    try {
+                        const resp = await fetch(`${endpointPrefix}/rename-prompt`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                category: selectedCategory,
+                                old_name: promptName,
+                                new_name: promptName,
+                                new_category: targetCategory,
+                            })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            movedCount++;
+                        } else {
+                            errors.push(`${promptName}: ${data.error || "move failed"}`);
+                        }
+                    } catch (err) {
+                        errors.push(`${promptName}: ${err?.message || "request failed"}`);
+                    }
+                }
+
+                selectedNames.clear();
+                multiSelectAnchorName = "";
+                updateSelectButton();
+                updateEditModeLayout();
+                renderContent(searchInput.value);
+
+                if (errors.length > 0) {
+                    await showInfo(
+                        "Move Completed With Errors",
+                        `Moved ${movedCount}/${selectedList.length}.\n\n${errors.slice(0, 8).join("\n")}${errors.length > 8 ? "\n..." : ""}`
+                    );
+                }
+            }));
+
+            const dividerB = document.createElement("div");
+            dividerB.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(dividerB);
+
+            menu.appendChild(createMenuItem(`🗑️ Delete Prompts (${selectedList.length})`, async () => {
+                const confirmed = await showConfirm(
+                    "Delete Prompts",
+                    `Are you sure you want to delete ${selectedList.length} selected prompt(s)?`,
+                    "Delete",
+                    "#c44"
+                );
+                if (!confirmed) return;
+
+                for (const promptName of selectedList) {
+                    await deletePromptEntry(node, selectedCategory, promptName, endpointPrefix);
+                }
+                selectedNames.clear();
+                multiSelectAnchorName = "";
+                updateSelectButton();
+                updateEditModeLayout();
+                renderContent(searchInput.value);
+            }, true));
+
+            const closeMenu = (evt) => {
+                if (!menu.contains(evt.target)) {
+                    menu.remove();
+                    document.removeEventListener('mousedown', closeMenu, true);
+                }
+            };
+            setTimeout(() => {
+                document.addEventListener('mousedown', closeMenu, true);
+            }, 10);
+
+            document.body.appendChild(menu);
+        };
 
         // Shared right-click handler for prompt items (works in both grid and list view)
         const promptContextMenu = (e, promptName) => {
             e.preventDefault();
+            if (isMultiSelectActive() && selectedNames.size > 1 && selectedNames.has(promptName)) {
+                showMultiPromptContextMenu(e, selectedNames);
+                return;
+            }
             showThumbnailContextMenu(e, node, selectedCategory, promptName, () => {
                 renderContent(searchInput.value);
             }, endpointPrefix);
@@ -2316,6 +2615,17 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 card.appendChild(nameLabel);
 
                 card.onclick = async (e) => {
+                    if (isMultiSelectActive()) {
+                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (action === "rerender") {
+                            renderContent(searchInput.value);
+                            return;
+                        }
+                        updateCardSelection(card, promptName);
+                        updateEditModeLayout();
+                        return;
+                    }
+
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
@@ -2341,16 +2651,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         }
                         currentPrompt = promptName;
                         renderContent(searchInput.value);
-                        return;
-                    }
-
-                    if (isMultiSelectActive()) {
-                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (action === "rerender") {
-                            renderContent(searchInput.value);
-                            return;
-                        }
-                        updateCardSelection(card, promptName);
                         return;
                     }
 
@@ -2650,6 +2950,17 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 card.appendChild(nameLabel);
 
                 card.onclick = async (e) => {
+                    if (isMultiSelectActive()) {
+                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (action === "rerender") {
+                            renderContent(searchInput.value);
+                            return;
+                        }
+                        updateCardSelection(card, promptName);
+                        updateEditModeLayout();
+                        return;
+                    }
+
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
@@ -2675,16 +2986,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         }
                         currentPrompt = promptName;
                         renderContent(searchInput.value);
-                        return;
-                    }
-
-                    if (isMultiSelectActive()) {
-                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (action === "rerender") {
-                            renderContent(searchInput.value);
-                            return;
-                        }
-                        updateCardSelection(card, promptName);
                         return;
                     }
 
@@ -3203,6 +3504,17 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
 
                 row.onclick = async (e) => {
+                    if (isMultiSelectActive()) {
+                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (action === "rerender") {
+                            renderContent(searchInput.value);
+                            return;
+                        }
+                        updateRowSelection(row, promptName);
+                        updateEditModeLayout();
+                        return;
+                    }
+
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 1000) {
@@ -3228,16 +3540,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         }
                         currentPrompt = promptName;
                         renderContent(searchInput.value);
-                        return;
-                    }
-
-                    if (isMultiSelectActive()) {
-                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (action === "rerender") {
-                            renderContent(searchInput.value);
-                            return;
-                        }
-                        updateRowSelection(row, promptName);
                         return;
                     }
 
@@ -3679,13 +3981,16 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             color: #8a95a6;
             text-align: center;
         `;
-        footer.textContent = mode === "save"
-            ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
-            : (multiSelect
-                ? (multiCategorySelect
-                    ? "Select prompts across multiple categories. Each category becomes its own part. Shift+click for range selection. Click Select to confirm."
-                    : "Click prompts to select/deselect. Shift+click selects all between the previously selected prompt and the one you click. Double-click picks one. Click Select to confirm.")
-                : "Right-click a prompt or category for more options (thumbnails, NSFW, delete)");
+        updateFooterText = () => {
+            footer.textContent = mode === "save"
+                ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
+                : ((supportsMultiSelect && multiSelectMode)
+                    ? (multiCategorySelect
+                        ? "Multi-select is ON. Select prompts across categories. Shift+click for range selection. Right-click selected prompts for batch actions."
+                        : "Multi-select is ON. Click prompts to select/deselect, Shift+click for range selection, and right-click selected prompts for batch actions.")
+                    : "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Turn Multi on for batch actions.");
+        };
+        updateFooterText();
 
         const saveBar = document.createElement("div");
         if (mode === "save") {
@@ -3760,7 +4065,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             saveBar.appendChild(saveNameInput);
             saveBar.appendChild(cancelSaveButton);
             saveBar.appendChild(saveActionButton);
-        } else if (multiSelect) {
+        } else if (supportsMultiSelect) {
             saveBar.style.cssText = `
                 display: flex;
                 gap: 8px;
@@ -3806,6 +4111,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
                 multiSelectAnchorName = "";
                 updateSelectButton();
+                updateEditModeLayout();
                 renderContent(searchInput.value);
             };
 
@@ -3828,6 +4134,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     selectedByCategory[selectedCategory] = selectedNames;
                 }
                 updateSelectButton();
+                updateEditModeLayout();
                 renderContent(searchInput.value);
             };
 
@@ -3901,13 +4208,18 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             saveBar.appendChild(selectionTools);
             saveBar.appendChild(actionButtons);
+
+            updateSelectionToolbar = () => {
+                saveBar.style.display = (supportsMultiSelect && multiSelectMode) ? "flex" : "none";
+            };
+            updateSelectionToolbar();
         }
 
         dialog.appendChild(header);
         dialog.appendChild(controlsBar);
         dialog.appendChild(categoryContainer);
         dialog.appendChild(contentRow);
-        if (mode === "save" || multiSelect) {
+        if (mode === "save" || supportsMultiSelect) {
             dialog.appendChild(saveBar);
         }
         dialog.appendChild(footer);

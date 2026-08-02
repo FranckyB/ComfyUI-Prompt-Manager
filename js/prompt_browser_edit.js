@@ -18,6 +18,7 @@ const PROMPT_TYPE_CHOICES = [
     { value: "lighting", label: "Lighting" },
     { value: "mood", label: "Mood" },
     { value: "motion", label: "Motion" },
+    { value: "pose", label: "Pose" },
     { value: "scene", label: "Scene" },
     { value: "soundscape", label: "Soundscape" },
     { value: "style", label: "Style" },
