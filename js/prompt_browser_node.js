@@ -294,6 +294,27 @@ function setupPromptBrowserNode(nodeType, nodeData) {
         }
     };
 
+    const clearPromptBrowserSelection = (node) => {
+        if (!node) return;
+        const categoryWidget = node.widgets?.find((w) => w.name === "category");
+        const nameWidget = node.widgets?.find((w) => w.name === "name");
+        const textWidget = node.widgets?.find((w) => w.name === "text");
+        if (categoryWidget) categoryWidget.value = "";
+        if (nameWidget) nameWidget.value = "";
+        if (textWidget) textWidget.value = "";
+        setSelectedPrompts(node, []);
+
+        if (typeof node.updateComposerSelectorDisplay === "function") {
+            node.updateComposerSelectorDisplay();
+        }
+        if (typeof node.updateComposerPromptEditor === "function") {
+            node.updateComposerPromptEditor();
+        }
+        if (typeof node.updateComposerPreview === "function") {
+            node.updateComposerPreview();
+        }
+    };
+
     const attachPromptBrowserInstanceResizeGuard = (node) => {
         if (!node || node._promptBrowserInstanceResizeWrapped) return;
         const onResize = node.onResize;
@@ -317,6 +338,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
         node.composerPrompts = {};
         node.prompts = {};
         node._configuredFromWorkflow = false;
+        node._restoringFromWorkflow = false;
         node.isNewUnsavedPrompt = false;
         node.newPromptCategory = null;
         node.newPromptName = null;
@@ -379,6 +401,12 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             buildComposerSelectorBar(node);
             buildComposerPromptEditor(node);
             buildComposerButtonBar(node);
+            // Only clear defaults for brand-new nodes. During workflow/tab restore,
+            // onConfigure runs before this async block completes and sets
+            // _configuredFromWorkflow=true, which preserves serialized selection.
+            if (!node._configuredFromWorkflow) {
+                clearPromptBrowserSelection(node);
+            }
             syncSelectorToData(node);
             updateComposerLastSavedState(node);
             refreshComposerPromptInputGhosting(node);
@@ -418,8 +446,10 @@ function setupPromptBrowserNode(nodeType, nodeData) {
                 if (typeof originalSourceCallback === "function") {
                     await originalSourceCallback.apply(this, arguments);
                 }
-                setSelectedPrompts(node, []);
                 await loadActivePrompts(node);
+                if (!node._restoringFromWorkflow) {
+                    clearPromptBrowserSelection(node);
+                }
                 syncSelectorToData(node);
                 updateComposerLastSavedState(node);
                 if (typeof node.refreshComposerMultiUiState === "function") {
@@ -440,6 +470,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
         const result = onConfigure?.apply(this, arguments);
         const node = this;
         node._configuredFromWorkflow = true;
+        node._restoringFromWorkflow = true;
 
         const sourceWidget = node.widgets.find((w) => w.name === "source");
         const categoryWidget = node.widgets.find((w) => w.name === "category");
@@ -493,6 +524,8 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             }
             attachPromptBrowserInstanceResizeGuard(node);
             enforcePromptBrowserMinHeight(node);
+        }).finally(() => {
+            node._restoringFromWorkflow = false;
         });
 
         refreshComposerPromptInputGhosting(node);
@@ -655,9 +688,10 @@ function refreshComposerPromptInputGhosting(node) {
 function refreshComposerMultiUiState(node) {
     const multiCount = getSelectedPrompts(node).length;
     const isMulti = multiCount > 1;
+    node._composerIsMultiSelection = isMulti;
 
     if (node._composerPromptEditor?.container) {
-        node._composerPromptEditor.container.style.display = isMulti ? "none" : "";
+        node._composerPromptEditor.container.style.display = "";
     }
 
     const saveBtn = node._composerSaveButton;
@@ -886,6 +920,13 @@ function buildComposerPreview(node) {
 
     node._composerPreview = { container, previewBox, image, emptyLabel, tiles };
 
+    previewBox.style.cursor = "pointer";
+    previewBox.addEventListener("click", async (e) => {
+        if (typeof node.openComposerPromptBrowser === "function") {
+            await node.openComposerPromptBrowser(e);
+        }
+    });
+
     const commitPreviewHeight = () => {
         const inlineHeight = parseFloat(String(previewBox.style.height || ""));
         const nextHeight = Math.max(120, Math.min(560, Math.round(Number.isFinite(inlineHeight) ? inlineHeight : defaultHeight)));
@@ -894,7 +935,7 @@ function buildComposerPreview(node) {
         if (typeof node.updateComposerRootLayout === "function") {
             node.updateComposerRootLayout();
         }
-        const minHeight = Math.max(120, Number(node._composerPreviewHeight) || PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT) + PROMPT_BROWSER_MIN_EXTRA_HEIGHT;
+        const minHeight = Math.max(300, Number(node._composerPreviewHeight) || PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT) + PROMPT_BROWSER_MIN_EXTRA_HEIGHT;
         if (Array.isArray(node.size) && node.size[1] < minHeight) {
             node.setSize([node.size[0], minHeight]);
         }
@@ -1008,13 +1049,25 @@ function buildComposerPromptEditor(node) {
     node.updateComposerPromptEditor = () => {
         const ui = node._composerPromptEditor;
         if (!ui) return;
+
+        if (node._composerIsMultiSelection === true) {
+            ui.textArea.value = "";
+            ui.textArea.placeholder = "Multiple prompts selected";
+            ui.textArea.readOnly = true;
+            ui.textArea.style.opacity = "0.45";
+            ui.textArea.style.pointerEvents = "none";
+            return;
+        }
+
         const incoming = String(textWidget.value || "");
         if (ui.textArea.value !== incoming) {
             ui.textArea.value = incoming;
         }
+        ui.textArea.placeholder = "Prompt text";
         const isInputDriven = ui.usePromptInputWidget?.value === true;
         ui.textArea.readOnly = isInputDriven;
         ui.textArea.style.opacity = isInputDriven ? "0.7" : "1";
+        ui.textArea.style.pointerEvents = "auto";
     };
 
     node.updateComposerPromptEditor();
@@ -1081,67 +1134,6 @@ function buildComposerSelectorBar(node) {
     nameDisplay.onmouseover = () => { nameDisplay.style.background = "rgba(56, 130, 246, 0.32)"; };
     nameDisplay.onmouseout = () => { nameDisplay.style.background = "rgba(56, 130, 246, 0.22)"; };
 
-    // Thumbnail preview tooltip on hover (matches Prompt Manager Advanced).
-    const thumbnailPreview = document.createElement("div");
-    thumbnailPreview.style.cssText = `
-        position: fixed;
-        display: none;
-        z-index: 10001;
-        pointer-events: none;
-    `;
-    const thumbnailImg = document.createElement("img");
-    thumbnailImg.style.cssText = `
-        max-width: 300px;
-        max-height: 300px;
-        object-fit: contain;
-        border-radius: 8px;
-        display: block;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    `;
-    thumbnailPreview.appendChild(thumbnailImg);
-    document.body.appendChild(thumbnailPreview);
-
-    let hoverTimeout = null;
-    nameDisplay.addEventListener("mouseenter", () => {
-        hoverTimeout = setTimeout(() => {
-            const category = categoryWidget.value;
-            const prompt = nameWidget.value;
-            const promptData = getNodeEntry(node, category, prompt);
-            const thumbnail = promptData?.thumbnail;
-            if (!thumbnail) return;
-
-            const tempImg = new Image();
-            tempImg.onload = function() {
-                const imgWidth = Math.min(this.naturalWidth, 300);
-                const imgHeight = Math.min(this.naturalHeight, 300);
-                thumbnailImg.style.width = imgWidth + "px";
-                thumbnailImg.style.height = imgHeight + "px";
-                thumbnailImg.src = thumbnail;
-
-                const rect = nameDisplay.getBoundingClientRect();
-                const margin = 8;
-                let left = rect.left + (rect.width / 2) - (imgWidth / 2);
-                let top = rect.top - imgHeight - margin;
-                left = Math.max(5, Math.min(left, window.innerWidth - imgWidth - 5));
-                top = Math.max(5, Math.min(top, window.innerHeight - imgHeight - 5));
-                thumbnailPreview.style.left = left + "px";
-                thumbnailPreview.style.top = top + "px";
-                thumbnailPreview.style.display = "block";
-            };
-            tempImg.src = thumbnail;
-        }, 300);
-    });
-    nameDisplay.addEventListener("mouseleave", () => {
-        if (hoverTimeout) clearTimeout(hoverTimeout);
-        thumbnailPreview.style.display = "none";
-    });
-
-    node.onRemoved = function() {
-        if (thumbnailPreview && thumbnailPreview.parentNode) {
-            thumbnailPreview.parentNode.removeChild(thumbnailPreview);
-        }
-    };
-
     const rightArrow = document.createElement("button");
     rightArrow.textContent = "▶";
     rightArrow.style.cssText = `
@@ -1176,10 +1168,15 @@ function buildComposerSelectorBar(node) {
     };
 
     const navigateTo = async (item, skipCheck = false) => {
+        const sameTarget = item.category === categoryWidget.value && item.prompt === nameWidget.value;
+        if (sameTarget) {
+            return true;
+        }
+
         if (!skipCheck && shouldWarnComposerUnsavedChanges() && hasComposerUnsavedChanges(node)) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current fragment. Discard them and switch?",
+                "You have unsaved changes to the current prompt. Discard them and switch?",
                 "Discard & Switch",
                 "#f80"
             );
@@ -1236,12 +1233,14 @@ function buildComposerSelectorBar(node) {
         await navigateTo(list[newIdx]);
     };
 
-    nameDisplay.onclick = async (e) => {
-        e.stopPropagation();
+    const openPromptBrowserPicker = async (e) => {
+        if (e?.stopPropagation) {
+            e.stopPropagation();
+        }
         if (shouldWarnComposerUnsavedChanges() && hasComposerUnsavedChanges(node)) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current fragment. Discard them and edit?",
+                "You have unsaved changes to the current prompt. Discard them and edit?",
                 "Discard & Edit",
                 "#f80"
             );
@@ -1254,7 +1253,7 @@ function buildComposerSelectorBar(node) {
         const selectedPrompts = getSelectedPrompts(node);
 
         const selection = await showThumbnailBrowser(node, categoryWidget.value, nameWidget.value, {
-            title: "Select Prompt Browser Fragments",
+            title: "Select Prompt Browser Prompts",
             multiSelect: true,
             clearSelectionOnCategorySwitch: true,
             selectedPrompts,
@@ -1290,9 +1289,12 @@ function buildComposerSelectorBar(node) {
         }
     };
 
+    nameDisplay.onclick = openPromptBrowserPicker;
+    node.openComposerPromptBrowser = openPromptBrowserPicker;
+
     const updateDisplay = () => {
         const category = categoryWidget.value || "";
-        const prompt = nameWidget.value || "new fragment";
+        const prompt = nameWidget.value || "new prompt";
         const selected = getSelectedPrompts(node);
         if (selected.length > 1) {
             nameDisplay.textContent = category ? `${category} : (Multi ${selected.length})` : `(Multi ${selected.length})`;
@@ -1345,7 +1347,7 @@ function buildComposerButtonBar(node) {
         const preferenceScope = getPreferenceScopeForSource(source);
 
         const selection = await showThumbnailBrowser(node, currentCategory, currentName, {
-            title: "Save Prompt Composer Fragment",
+            title: "Save Prompt Composer Prompt",
             endpointPrefix,
             promptOnly: true,
             mode: "save",
@@ -1405,7 +1407,7 @@ function buildComposerButtonBar(node) {
         if (shouldWarnComposerUnsavedChanges() && hasComposerUnsavedChanges(node)) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current fragment. Discard them and start fresh?",
+                "You have unsaved changes to the current prompt. Discard them and start fresh?",
                 "Discard & Continue",
                 "#f80"
             );
@@ -1436,11 +1438,11 @@ function buildComposerButtonBar(node) {
                 const category = categoryWidget.value;
                 const name = nameWidget.value;
                 if (!name) {
-                    await showInfo("Error", "No fragment selected to delete.");
+                    await showInfo("Error", "No prompt selected to delete.");
                     return;
                 }
                 const confirmed = await showConfirm(
-                    "Delete Fragment",
+                    "Delete Prompt",
                     `Are you sure you want to delete "${name}" from "${category}"? This cannot be undone.`,
                     "Delete",
                     "#c00"
@@ -1497,6 +1499,11 @@ function hasComposerUnsavedChanges(node) {
 
     // Mirror Prompt Manager Advanced: input-driven text is read-only and not treated as dirty edits.
     if (usePromptInputWidget?.value === true) {
+        return false;
+    }
+
+    // Multi-select cannot directly edit a specific prompt text in this node UI.
+    if (getSelectedPrompts(node).length > 1) {
         return false;
     }
 
@@ -1571,7 +1578,7 @@ async function importComposerJSON(node) {
                     imported++;
                 }
             }
-            await showInfo("Import Complete", `Imported ${imported} fragments.`);
+            await showInfo("Import Complete", `Imported ${imported} prompts.`);
             if (typeof node.updateComposerSelectorDisplay === "function") {
                 node.updateComposerSelectorDisplay();
             }

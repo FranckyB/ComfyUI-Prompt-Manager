@@ -1100,6 +1100,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         
         let selectedCategory = currentCategory;
         let lastSelectedName = currentPrompt;
+        let blankPromptExplicitSelection = false;
+        const setCurrentPromptSelection = (name) => {
+            currentPrompt = name;
+            blankPromptExplicitSelection = false;
+        };
+        const setBlankPromptSelection = () => {
+            currentPrompt = "";
+            blankPromptExplicitSelection = true;
+        };
         let editPanel = null;
         let selectedByCategory = {};
         let selectedNames;
@@ -2138,7 +2147,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         });
                         const result = await resp.json();
                         if (result?.success) {
-                            currentPrompt = name;
+                            setCurrentPromptSelection(name);
                         }
                         return result;
                     } catch (err) {
@@ -2695,7 +2704,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             });
 
             if (showEditBlank) {
-                const isSelectedBlank = !currentPrompt;
                 const blankCard = document.createElement("div");
                 blankCard.style.cssText = `
                     display: flex;
@@ -2703,8 +2711,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     align-items: center;
                     justify-content: center;
                     padding: 8px;
-                    background: ${isSelectedBlank ? UI.accentSoft : UI.cardBg};
-                    border: 2px dashed ${isSelectedBlank ? UI.accentBorder : UI.cardBorder};
+                    background: ${UI.cardBg};
+                    border: 2px dashed ${UI.cardBorder};
                     border-radius: 8px;
                     cursor: pointer;
                     transition: all 0.15s ease;
@@ -2741,7 +2749,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 blankCard.appendChild(blankThumb);
                 blankCard.appendChild(blankLabel);
                 blankCard.onclick = () => {
-                    currentPrompt = "";
+                    setBlankPromptSelection();
                     if (typeof editPanel.clearPrompt === "function") {
                         editPanel.clearPrompt();
                     }
@@ -2964,14 +2972,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            currentPrompt = promptName;
+                            setCurrentPromptSelection(promptName);
                             resolve({ category: selectedCategory, prompt: promptName });
                             cleanup();
                             return;
                         }
                         editModeLastClickPrompt = promptName;
                         editModeLastClickAt = now;
-                        currentPrompt = promptName;
+                        setCurrentPromptSelection(promptName);
                         editPanel.loadPrompt(selectedCategory, promptName);
                         renderContent(searchInput.value);
                         return;
@@ -2984,7 +2992,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             saveNameInput.focus();
                             saveNameInput.select();
                         }
-                        currentPrompt = promptName;
+                        setCurrentPromptSelection(promptName);
                         renderContent(searchInput.value);
                         return;
                     }
@@ -3030,7 +3038,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             });
 
             if (showEditBlank) {
-                const isSelectedBlank = !currentPrompt;
                 const blankCard = document.createElement("div");
                 blankCard.style.cssText = `
                     display: flex;
@@ -3038,8 +3045,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     align-items: center;
                     justify-content: center;
                     padding: 8px;
-                    background: ${isSelectedBlank ? UI.accentSoft : UI.cardBg};
-                    border: 2px dashed ${isSelectedBlank ? UI.accentBorder : UI.cardBorder};
+                    background: ${UI.cardBg};
+                    border: 2px dashed ${UI.cardBorder};
                     border-radius: 8px;
                     cursor: pointer;
                     transition: all 0.15s ease;
@@ -3075,7 +3082,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 blankCard.appendChild(blankThumb);
                 blankCard.appendChild(blankLabel);
                 blankCard.onclick = () => {
-                    currentPrompt = "";
+                    setBlankPromptSelection();
                     if (typeof editPanel.clearPrompt === "function") {
                         editPanel.clearPrompt();
                     }
@@ -3518,14 +3525,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 1000) {
-                            currentPrompt = promptName;
+                            setCurrentPromptSelection(promptName);
                             resolve({ category: selectedCategory, prompt: promptName });
                             cleanup();
                             return;
                         }
                         editModeLastClickPrompt = promptName;
                         editModeLastClickAt = now;
-                        currentPrompt = promptName;
+                        setCurrentPromptSelection(promptName);
                         editPanel.loadPrompt(selectedCategory, promptName);
                         renderContent(searchInput.value);
                         return;
@@ -3538,7 +3545,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             saveNameInput.focus();
                             saveNameInput.select();
                         }
-                        currentPrompt = promptName;
+                        setCurrentPromptSelection(promptName);
                         renderContent(searchInput.value);
                         return;
                     }
@@ -3586,20 +3593,19 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             if (showEditBlank) {
                 const row = document.createElement("div");
                 row.dataset.pmListRow = "true";
-                const isSelectedBlank = !currentPrompt;
                 row.style.cssText = `
                     display: grid;
                     grid-template-columns: ${listColumns};
                     gap: 0;
                     padding: 0 8px;
-                    background: ${isSelectedBlank ? UI.accentSoft : 'transparent'};
+                    background: transparent;
                     border-radius: 4px;
                     cursor: pointer;
                     align-items: center;
                     transition: background 0.1s ease;
-                    outline: ${isSelectedBlank ? `2px solid ${UI.accentBorder}` : "none"};
-                    outline-offset: ${isSelectedBlank ? "-2px" : "0"};
-                    box-shadow: ${isSelectedBlank ? `0 0 8px ${UI.accentSoft}` : "none"};
+                    outline: none;
+                    outline-offset: 0;
+                    box-shadow: none;
                 `;
 
                 const blankThumbWrap = document.createElement("div");
@@ -3656,7 +3662,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
 
                 row.onclick = () => {
-                    currentPrompt = "";
+                    setBlankPromptSelection();
                     if (typeof editPanel.clearPrompt === "function") {
                         editPanel.clearPrompt();
                     }
