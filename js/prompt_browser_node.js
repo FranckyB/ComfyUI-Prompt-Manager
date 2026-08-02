@@ -964,7 +964,61 @@ function buildComposerPreview(node) {
     node._composerPreview = { container, previewBox, image, emptyLabel, tiles };
 
     previewBox.style.cursor = "pointer";
+    const resizeCornerSize = 18;
+    const dragThresholdPx = 6;
+    let pointerDown = false;
+    let pointerStartX = 0;
+    let pointerStartY = 0;
+    let pointerMoved = false;
+    let pointerStartedInResizeCorner = false;
+    let suppressNextPreviewClick = false;
+
+    const isInResizeCorner = (event) => {
+        const rect = previewBox.getBoundingClientRect();
+        const localX = Number(event?.clientX) - rect.left;
+        const localY = Number(event?.clientY) - rect.top;
+        if (!Number.isFinite(localX) || !Number.isFinite(localY)) return false;
+        return localX >= (rect.width - resizeCornerSize) && localY >= (rect.height - resizeCornerSize);
+    };
+
+    previewBox.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        pointerDown = true;
+        pointerStartX = Number(e.clientX) || 0;
+        pointerStartY = Number(e.clientY) || 0;
+        pointerMoved = false;
+        pointerStartedInResizeCorner = isInResizeCorner(e);
+    });
+
+    previewBox.addEventListener("pointermove", (e) => {
+        if (!pointerDown) return;
+        const dx = Math.abs((Number(e.clientX) || 0) - pointerStartX);
+        const dy = Math.abs((Number(e.clientY) || 0) - pointerStartY);
+        if (dx >= dragThresholdPx || dy >= dragThresholdPx) {
+            pointerMoved = true;
+        }
+    });
+
+    previewBox.addEventListener("pointercancel", () => {
+        pointerDown = false;
+        pointerMoved = false;
+        pointerStartedInResizeCorner = false;
+    });
+
+    previewBox.addEventListener("pointerup", () => {
+        if (pointerDown) {
+            suppressNextPreviewClick = pointerStartedInResizeCorner || pointerMoved;
+        }
+        pointerDown = false;
+        pointerMoved = false;
+        pointerStartedInResizeCorner = false;
+    });
+
     previewBox.addEventListener("click", async (e) => {
+        if (suppressNextPreviewClick) {
+            suppressNextPreviewClick = false;
+            return;
+        }
         if (typeof node.openComposerPromptBrowser === "function") {
             await node.openComposerPromptBrowser(e);
         }
