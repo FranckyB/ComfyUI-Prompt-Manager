@@ -72,17 +72,23 @@ function persistPromptBrowserSource(node, sourceValue) {
     node.properties[PROMPT_BROWSER_SOURCE_PROP] = normalizePromptBrowserSource(sourceValue);
 }
 
-function restorePromptBrowserSource(node, sourceWidget, info = null) {
+function restorePromptBrowserSource(node, sourceWidget, info = null, options = {}) {
     if (!node) return SOURCE_COMPOSE;
+    const persist = options.persist !== false;
     const hasSavedProperty = Object.prototype.hasOwnProperty.call(node.properties || {}, PROMPT_BROWSER_SOURCE_PROP);
     const fromProperty = hasSavedProperty ? coercePromptBrowserSourceOrNull(node.properties?.[PROMPT_BROWSER_SOURCE_PROP]) : null;
     const fromWidget = coercePromptBrowserSourceOrNull(sourceWidget?.value);
     const fromInfo = coercePromptBrowserSourceOrNull(info?.properties?.[PROMPT_BROWSER_SOURCE_PROP]);
-    const effective = fromProperty || fromWidget || fromInfo || SOURCE_COMPOSE;
+    // On workflow/tab restore, trust serialized workflow source first.
+    const effective = info
+        ? (fromInfo || fromWidget || fromProperty || SOURCE_COMPOSE)
+        : (fromProperty || fromWidget || SOURCE_COMPOSE);
     if (sourceWidget) {
         sourceWidget.value = effective;
     }
-    persistPromptBrowserSource(node, effective);
+    if (persist) {
+        persistPromptBrowserSource(node, effective);
+    }
     return effective;
 }
 
@@ -407,7 +413,9 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             sourceWidget.type = "converted-widget";
             sourceWidget.computeSize = () => [0, 0];
             sourceWidget.hidden = true;
-            restorePromptBrowserSource(node, sourceWidget);
+            // Do not persist during initial create; onConfigure may still restore
+            // the real serialized workflow source in the same lifecycle.
+            restorePromptBrowserSource(node, sourceWidget, null, { persist: false });
         }
         if (categoryWidget) {
             categoryWidget.type = "converted-widget";
