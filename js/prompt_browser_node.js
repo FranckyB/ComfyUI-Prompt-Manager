@@ -32,6 +32,7 @@ const PROMPT_BROWSER_MIN_EXTRA_HEIGHT = 500;
 const PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT = 300;
 const PROMPT_BROWSER_DEFAULT_NODE_WIDTH = 440;
 const PROMPT_BROWSER_DEFAULT_NODE_HEIGHT = 800;
+const PROMPT_BROWSER_SOURCE_PROP = "prompt_browser_source";
 
 function _isHiddenPromptEntryKey(name) {
     const normalized = String(name || "").trim().toLowerCase();
@@ -45,6 +46,39 @@ function getSourceWidget(node) {
 function getSourceValue(node) {
     const widget = getSourceWidget(node);
     return String(widget?.value || SOURCE_COMPOSE);
+}
+
+function normalizePromptBrowserSource(value) {
+    const raw = String(value || "");
+    if (raw === SOURCE_PROMPT) return SOURCE_PROMPT;
+    return SOURCE_COMPOSE;
+}
+
+function coercePromptBrowserSourceOrNull(value) {
+    const raw = String(value || "");
+    if (raw === SOURCE_PROMPT) return SOURCE_PROMPT;
+    if (raw === SOURCE_COMPOSE) return SOURCE_COMPOSE;
+    return null;
+}
+
+function persistPromptBrowserSource(node, sourceValue) {
+    if (!node) return;
+    node.properties = node.properties || {};
+    node.properties[PROMPT_BROWSER_SOURCE_PROP] = normalizePromptBrowserSource(sourceValue);
+}
+
+function restorePromptBrowserSource(node, sourceWidget, info = null) {
+    if (!node) return SOURCE_COMPOSE;
+    const hasSavedProperty = Object.prototype.hasOwnProperty.call(node.properties || {}, PROMPT_BROWSER_SOURCE_PROP);
+    const fromProperty = hasSavedProperty ? coercePromptBrowserSourceOrNull(node.properties?.[PROMPT_BROWSER_SOURCE_PROP]) : null;
+    const fromWidget = coercePromptBrowserSourceOrNull(sourceWidget?.value);
+    const fromInfo = coercePromptBrowserSourceOrNull(info?.properties?.[PROMPT_BROWSER_SOURCE_PROP]);
+    const effective = fromProperty || fromWidget || fromInfo || SOURCE_COMPOSE;
+    if (sourceWidget) {
+        sourceWidget.value = effective;
+    }
+    persistPromptBrowserSource(node, effective);
+    return effective;
 }
 
 function getEndpointPrefixForSource(source) {
@@ -62,10 +96,15 @@ async function loadPromptsFromEndpoint(endpointPrefix) {
 }
 
 async function loadActivePrompts(node) {
+    const requestId = (node._promptBrowserLoadRequestId || 0) + 1;
+    node._promptBrowserLoadRequestId = requestId;
     try {
         const source = getSourceValue(node);
         const endpointPrefix = getEndpointPrefixForSource(source);
         const prompts = await loadPromptsFromEndpoint(endpointPrefix);
+        if (requestId !== node._promptBrowserLoadRequestId) {
+            return prompts;
+        }
         node.composerPrompts = prompts;
         node.prompts = prompts;
         node._composerEndpointPrefix = endpointPrefix;
@@ -362,6 +401,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             sourceWidget.type = "converted-widget";
             sourceWidget.computeSize = () => [0, 0];
             sourceWidget.hidden = true;
+            restorePromptBrowserSource(node, sourceWidget);
         }
         if (categoryWidget) {
             categoryWidget.type = "converted-widget";
@@ -446,6 +486,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
                 if (typeof originalSourceCallback === "function") {
                     await originalSourceCallback.apply(this, arguments);
                 }
+                persistPromptBrowserSource(node, sourceValueWidget.value);
                 await loadActivePrompts(node);
                 if (!node._restoringFromWorkflow) {
                     clearPromptBrowserSelection(node);
@@ -481,6 +522,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             sourceWidget.type = "converted-widget";
             sourceWidget.computeSize = () => [0, 0];
             sourceWidget.hidden = true;
+            restorePromptBrowserSource(node, sourceWidget, info);
         }
         if (categoryWidget) {
             categoryWidget.type = "converted-widget";
@@ -807,6 +849,7 @@ function buildComposerSourceBar(node) {
         const nextValue = values[nextIdx];
 
         sourceWidget.value = nextValue;
+        persistPromptBrowserSource(node, nextValue);
         if (typeof sourceWidget.callback === "function") {
             await sourceWidget.callback(nextValue);
         }
