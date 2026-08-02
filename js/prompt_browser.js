@@ -1322,7 +1322,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
             app.graph.setDirtyCanvas(true, true);
         };
-        if (allowEditMode && mode !== "save" && !multiSelect) {
+        if (allowEditMode && mode !== "save") {
             editModeBtn = document.createElement("button");
             const updateEditModeBtn = () => {
                 if (editMode) {
@@ -1981,7 +1981,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // Edit panel
         let editPanel = null;
-        if (allowEditMode && mode !== "save" && !multiSelect) {
+        if (allowEditMode && mode !== "save") {
             editPanel = createPromptBrowserEditPanel({
                 node,
                 endpointPrefix,
@@ -2073,7 +2073,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         const applyMultiSelectInteraction = (promptName, filteredPrompts, event) => {
-            if (!multiSelect) return "none";
+            if (!isMultiSelectActive()) return "none";
 
             const promptList = Array.isArray(filteredPrompts) ? filteredPrompts : [];
             const isShiftRange = event?.shiftKey && multiSelectAnchorName;
@@ -2108,6 +2108,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             return "single";
         };
 
+        const isMultiSelectActive = () => multiSelect && !editMode;
+
         // Shared right-click handler for prompt items (works in both grid and list view)
         const promptContextMenu = (e, promptName) => {
             e.preventDefault();
@@ -2128,7 +2130,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
-            const showEditBlank = editMode && !!editPanel && mode !== "save" && !multiSelect;
+            const showEditBlank = editMode && !!editPanel && mode !== "save";
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
@@ -2155,7 +2157,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             filteredPrompts.forEach(promptName => {
                 const promptData = categoryPrompts[promptName];
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = multiSelect ? selectedNames.has(promptName) : promptName === currentPrompt;
+                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
                 const hasWorkflowData = !promptOnly && (
@@ -2342,7 +2344,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    if (multiSelect) {
+                    if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
                             renderContent(searchInput.value);
@@ -2380,7 +2382,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
                     };
-                } else if (multiSelect) {
+                } else if (isMultiSelectActive()) {
                     card.ondblclick = () => {
                         resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                         cleanup();
@@ -2465,7 +2467,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
-            const showEditBlank = editMode && !!editPanel && mode !== "save" && !multiSelect;
+            const showEditBlank = editMode && !!editPanel && mode !== "save";
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
@@ -2492,7 +2494,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             filteredPrompts.forEach(promptName => {
                 const promptData = categoryPrompts[promptName];
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = multiSelect ? selectedNames.has(promptName) : promptName === currentPrompt;
+                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
                 const hasWorkflowData = !promptOnly && (
@@ -2676,7 +2678,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    if (multiSelect) {
+                    if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
                             renderContent(searchInput.value);
@@ -2714,7 +2716,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
                     };
-                } else if (multiSelect) {
+                } else if (isMultiSelectActive()) {
                     card.ondblclick = () => {
                         resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                         cleanup();
@@ -2799,7 +2801,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
-            const showEditBlank = editMode && !!editPanel && mode !== "save" && !multiSelect;
+            const showEditBlank = editMode && !!editPanel && mode !== "save";
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
@@ -2986,7 +2988,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             filteredPrompts.forEach(promptName => {
                 const promptData = categoryPrompts[promptName];
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = multiSelect ? selectedNames.has(promptName) : promptName === currentPrompt;
+                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
                 const hasWorkflowData = !promptOnly && (
@@ -3229,7 +3231,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    if (multiSelect) {
+                    if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
                             renderContent(searchInput.value);
@@ -3267,7 +3269,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
                     };
-                } else if (multiSelect) {
+                } else if (isMultiSelectActive()) {
                     row.ondblclick = () => {
                         resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                         cleanup();

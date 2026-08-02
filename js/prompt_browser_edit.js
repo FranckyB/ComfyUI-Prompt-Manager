@@ -14,6 +14,7 @@ const PROMPT_TYPE_CHOICES = [
     { value: "color_palette", label: "Color Palette" },
     { value: "composition", label: "Composition" },
     { value: "dialogue", label: "Dialogue" },
+    { value: "expression", label: "Expression" },
     { value: "lighting", label: "Lighting" },
     { value: "mood", label: "Mood" },
     { value: "motion", label: "Motion" },
@@ -308,6 +309,28 @@ export function createPromptBrowserEditPanel(options) {
             await _showInfo("Missing Category", "Please select a category first.");
             return;
         }
+
+        const categoryData = node?.prompts?.[category];
+        const promptKeys = (categoryData && typeof categoryData === "object")
+            ? Object.keys(categoryData).filter((k) => !String(k || "").startsWith("_"))
+            : [];
+        const hasExistingPrompts = promptKeys.length > 0;
+        const hasExistingCategorySettings = !!(
+            categoryData
+            && typeof categoryData === "object"
+            && (String(categoryData._base_prompt_ || "").trim() || String(categoryData._prompt_type_ || "").trim())
+        );
+
+        if (hasExistingPrompts || hasExistingCategorySettings) {
+            const confirmed = await _showConfirm(
+                "Overwrite Category Settings",
+                `Category settings for "${category}" already exist. Replace them?`,
+                "Replace",
+                "#c44"
+            );
+            if (!confirmed) return;
+        }
+
         const result = await saveComposerCategorySettings(category, {
             basePrompt: baseTextArea.value,
             promptType: typeSelect.value,
@@ -429,23 +452,26 @@ export function createPromptBrowserEditPanel(options) {
 
         const categoryData = node?.prompts?.[category];
         let existing = null;
+        let existingFound = false;
         if (categoryData && typeof categoryData === "object") {
             if (Object.prototype.hasOwnProperty.call(categoryData, name)) {
                 existing = categoryData[name];
+                existingFound = true;
             } else {
                 const target = name.toLowerCase();
                 for (const [entryName, entryValue] of Object.entries(categoryData)) {
                     if (String(entryName || "").startsWith("_")) continue;
                     if (String(entryName).toLowerCase() === target) {
                         existing = entryValue;
+                        existingFound = true;
                         break;
                     }
                 }
             }
         }
         let overwrite = false;
-        if (existing) {
-            if (autoFromGeneration && !existing.thumbnail) {
+        if (existingFound) {
+            if (autoFromGeneration && (!existing || !existing.thumbnail)) {
                 overwrite = true;
             } else {
                 overwrite = await _showConfirm(
