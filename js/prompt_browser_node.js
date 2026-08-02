@@ -4,6 +4,7 @@ import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import {
     showInfo,
     showConfirm,
+    DEFAULT_THUMBNAIL,
 } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
 import { COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
@@ -947,6 +948,29 @@ function buildComposerPreview(node) {
         pointer-events: none;
     `;
 
+    const placeholderViewport = document.createElement("div");
+    placeholderViewport.style.cssText = `
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        pointer-events: none;
+    `;
+
+    const placeholderPoster = document.createElement("div");
+    placeholderPoster.style.cssText = `
+        height: 100%;
+        aspect-ratio: 3 / 4;
+        background-image: url(${DEFAULT_THUMBNAIL});
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        border-radius: 2px;
+    `;
+    placeholderViewport.appendChild(placeholderPoster);
+
     const emptyLabel = document.createElement("div");
     emptyLabel.style.cssText = `
         position: absolute;
@@ -975,6 +999,7 @@ function buildComposerPreview(node) {
     `;
 
     previewBox.appendChild(image);
+    previewBox.appendChild(placeholderViewport);
     previewBox.appendChild(tiles);
     previewBox.appendChild(emptyLabel);
     container.appendChild(previewBox);
@@ -990,7 +1015,7 @@ function buildComposerPreview(node) {
         };
     }
 
-    node._composerPreview = { container, previewBox, image, emptyLabel, tiles };
+    node._composerPreview = { container, previewBox, image, placeholderViewport, emptyLabel, tiles };
 
     previewBox.style.cursor = "pointer";
     const resizeCornerSize = 18;
@@ -1085,6 +1110,7 @@ function buildComposerPreview(node) {
 
         if (isMulti) {
             ui.image.style.display = "none";
+            ui.placeholderViewport.style.display = "none";
             ui.emptyLabel.style.display = "none";
             ui.tiles.style.display = "grid";
 
@@ -1099,6 +1125,8 @@ function buildComposerPreview(node) {
                 `;
                 if (entry?.thumbnail) {
                     tile.style.backgroundImage = `url(${entry.thumbnail})`;
+                } else {
+                    tile.style.backgroundImage = `url(${DEFAULT_THUMBNAIL})`;
                 }
                 tile.title = promptName;
                 ui.tiles.appendChild(tile);
@@ -1111,13 +1139,21 @@ function buildComposerPreview(node) {
         const entry = name ? getNodeEntry(node, category, name) : null;
         if (entry?.thumbnail) {
             ui.image.src = entry.thumbnail;
+            ui.image.style.objectFit = "contain";
             ui.image.style.display = "block";
+            ui.placeholderViewport.style.display = "none";
+            ui.emptyLabel.style.display = "none";
+        } else if (name) {
+            ui.image.removeAttribute("src");
+            ui.image.style.display = "none";
+            ui.placeholderViewport.style.display = "flex";
             ui.emptyLabel.style.display = "none";
         } else {
             ui.image.removeAttribute("src");
             ui.image.style.display = "none";
+            ui.placeholderViewport.style.display = "none";
             ui.emptyLabel.style.display = "flex";
-            ui.emptyLabel.textContent = name ? "No thumbnail for selected prompt" : "No prompt selected";
+            ui.emptyLabel.textContent = "No prompt selected";
         }
     };
 
