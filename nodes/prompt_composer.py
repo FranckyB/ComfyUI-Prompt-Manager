@@ -9,7 +9,7 @@ import random
 import time
 
 from ..py.prompt_composer_store import (
-    PromptMixerStore,
+    PromptComposerStore,
     _find_category_case_insensitive,
     _find_prompt_case_insensitive,
 )
@@ -60,6 +60,14 @@ def _resolve_prompt_prefix(category_data, fallback_category):
         if prefix:
             return prefix
     return _normalize_prefix(fallback_category)
+
+
+def _json_section_key(category, prompt_prefix):
+    """Use the explicit prompt prefix or category name as the JSON section key."""
+    key = str(prompt_prefix or "").strip().rstrip(":")
+    if key:
+        return key
+    return str(category or "").strip()
 
 
 def _parse_parts(parts_data):
@@ -134,6 +142,7 @@ class PromptComposer:
                     "forceInput": True,
                     "tooltip": "Optional base prompt. Composed parts are appended after it.",
                 }),
+
             },
             "hidden": {
                 "seed": ("INT", {
@@ -146,8 +155,8 @@ class PromptComposer:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Compose multiple prompt fragments with per-part strength in one node."
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("prompt",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("json_prompt", "text_prompt")
     FUNCTION = "compose"
     OUTPUT_NODE = True
 
@@ -164,13 +173,14 @@ class PromptComposer:
         return (parts_data, seed, prompt)
 
     def compose(self, parts_data="[]", seed=0, prompt=""):
-        prompts_data = PromptMixerStore.load_prompts()
+        prompts_data = PromptComposerStore.load_prompts()
         parts = _parse_parts(parts_data)
 
         run_seed = _resolve_run_seed(seed)
         rng = random.Random(run_seed)
 
         fragments = []
+        json_sections = {}
         for part in parts:
             raw_category = part.get("category") or ""
             category = _find_category_case_insensitive(prompts_data, raw_category) or raw_category
@@ -191,6 +201,9 @@ class PromptComposer:
             formatted = _format_fragment(labeled, part.get("strength", 1.0))
             if formatted:
                 fragments.append(formatted)
+                key = _json_section_key(category, prompt_prefix)
+                if key:
+                    json_sections.setdefault(key, []).append(text)
 
         base = str(prompt or "").strip() if isinstance(prompt, str) else ""
         if base and fragments:
@@ -200,4 +213,11 @@ class PromptComposer:
         else:
             output = "\n".join(fragments)
 
-        return (output,)
+        structured = {}
+        if base:
+            structured["scene"] = base
+        for key, values in json_sections.items():
+            structured[key] = [{"description": v} for v in values]
+        json_output = json.dumps(structured, indent=2, ensure_ascii=False) if structured else ""
+
+        return (json_output, output)

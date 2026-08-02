@@ -1457,36 +1457,37 @@
     }
   },
   "Camera Values": {
-    "_base_prompt_": "professional portrait photo of an adult subject, realistic skin and fabric detail, controlled exposure, natural expression, high resolution image quality",
+    "_base_prompt_": "professional studio portrait of a single middle aged asian woman with straight dark shoulder length hair, wearing a neutral light gray blazer over a black shirt, facing the camera directly, calm neutral expression, plain seamless gray studio background, realistic skin texture, detailed facial features, sharp focus, high quality photography",
+    "_prompt_prefix_": "Camera:",
     "35mm Natural": {
-      "prompt": "35mm lens perspective, eye level camera height, balanced environmental inclusion, natural spatial proportions, documentary cinematic framing"
+      "prompt": "35mm prime lens at eye level, moderate distance showing the subject from the chest up, subtle environmental context around the figure, natural perspective with gentle depth"
     },
     "50mm Portrait": {
-      "prompt": "50mm prime portrait framing, neutral perspective compression, flattering facial proportions, medium close shot distance, classic editorial look"
+      "prompt": "50mm prime portrait lens at eye level, chest up framing, classic flattering perspective with neutral background compression, medium close up composition"
     },
     "85mm Compression": {
-      "prompt": "85mm portrait lens compression, pronounced subject separation from background, elegant facial geometry, refined shallow depth rendering"
+      "prompt": "85mm portrait lens at moderate distance, tight head and shoulders framing, strong background separation with smooth blur, compressed facial geometry, creamy bokeh"
     },
     "24mm Dynamic": {
-      "prompt": "24mm wide angle perspective, dynamic foreground to background expansion, energized spatial depth, intentional mild edge perspective stretch"
+      "prompt": "24mm wide angle lens close to subject, visible perspective stretch at frame edges, dynamic foreground emphasis, exaggerated spatial depth between subject and background"
     },
     "Low Angle Hero": {
-      "prompt": "camera positioned below eye line, upward hero perspective, stronger jawline and posture emphasis, dramatic and assertive visual read"
+      "prompt": "camera placed well below eye level looking upward, subject appears taller and more imposing, chin slightly lifted, dramatic upward perspective, dark moody background"
     },
     "High Angle": {
-      "prompt": "camera positioned above eye line, looking downward perspective, broader scene context visibility, softened character dominance and open composition"
+      "prompt": "camera placed well above eye level looking downward, subject head centered at top of frame, softer less imposing posture, wider scene context below the shoulders"
     },
     "Shallow DOF": {
-      "prompt": "wide aperture portrait look near f1.8, selective focal plane on eyes, creamy background blur, high subject isolation, smooth bokeh transitions"
+      "prompt": "very wide aperture near f1.4, razor thin focus plane on the eyes, extreme background blur, strong subject isolation, soft creamy out of focus backdrop"
     },
     "Deep Focus": {
-      "prompt": "deep focus capture near f8, consistent sharpness from subject through environment, informative scene readability, disciplined technical clarity"
+      "prompt": "narrow aperture near f11, sharp focus from face through background, visible background texture detail, deep depth of field with crisp edges throughout"
     },
     "Long Exposure": {
-      "prompt": "long exposure aesthetic with stabilized primary subject, controlled ambient motion streaks in background lights, cinematic temporal energy"
+      "prompt": "long exposure portrait with the subject frozen by controlled flash while the background shows horizontal motion streaks from passing ambient lights"
     },
     "Handheld Documentary": {
-      "prompt": "handheld documentary framing with slight organic camera imperfection, naturalistic composition bias, lived in realism, grounded reportage style"
+      "prompt": "slightly loose handheld framing with subtle tilt and organic imperfection, off center documentary composition, natural candid reportage feel"
     }
   },
   "Lighting": {

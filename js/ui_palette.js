@@ -37,7 +37,7 @@ export const PM_UI_PALETTE = {
     // Slightly dimmed accent (hover/secondary accent)
     accentDim: "hsl(208 73% 57% / 0.7)",
     // Soft accent fill for selected backgrounds
-    accentSoft: "hsl(208 73% 57% / 0.16)",
+    accentSoft: "hsl(208 73% 57% / 0.55)",
     // Accent border used on selected elements
-    accentBorder: "hsl(208 73% 57% / 0.65)",
+    accentBorder: "hsl(208 73% 57% / 0.95)",
 };

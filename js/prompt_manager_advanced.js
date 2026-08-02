@@ -6901,7 +6901,19 @@ function applyThumbnailSeeds(workflowData, selectedSlot = "model_a", options = {
         }
     }
 
-    return wf;
+    return seedA;
+}
+
+function getThumbnailPositivePrompt(workflowData, selectedSlot = "model_a") {
+    if (!workflowData || typeof workflowData !== "object") return "";
+    const wf = workflowData;
+    if (Number(wf.version || 0) >= 2 && wf.models && typeof wf.models === "object") {
+        const block = wf.models[selectedSlot] || wf.models.model_a;
+        if (block && typeof block === "object") {
+            return String(block.positive_prompt || block.prompt || "").trim();
+        }
+    }
+    return String(wf.positive_prompt || wf.prompt || "").trim();
 }
 
 function applyThumbnailRandomSeeds(workflowData, selectedSlot = "model_a") {
@@ -7616,8 +7628,11 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     // Enforce thumbnail-safe render sizing before queueing.
     const wfForThumb = applyThumbnailResolution(workflowData);
     const modelSlot = resolveThumbnailModelSlot(wfForThumb);
-    applyThumbnailSeeds(wfForThumb, modelSlot, { staticSeed: options?.staticSeed });
+    const seedUsed = applyThumbnailSeeds(wfForThumb, modelSlot, { staticSeed: options?.staticSeed });
     applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);
+
+    const thumbPositive = getThumbnailPositivePrompt(wfForThumb, modelSlot);
+    console.log(`[ThumbnailGen] Workflow queued | slot=${modelSlot} | seed=${seedUsed} | prompt=${thumbPositive || "(not resolved)"}`);
 
     const workflow = {};
     let nodeId = 1;

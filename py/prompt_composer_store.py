@@ -2,7 +2,7 @@
 Prompt Composer Store - isolated JSON storage for composer fragments.
 
 This module provides a separate data file and backend endpoints so Prompt
-Composer/Prompt Mixer nodes do not share the main Prompt Manager library.
+Composer nodes do not share the main Prompt Manager library.
 """
 import json
 import os
@@ -13,7 +13,7 @@ import folder_paths
 import server
 
 
-class PromptMixerStore:
+class PromptComposerStore:
     """Load/save prompt fragments to their own user data file."""
 
     @staticmethod
@@ -28,7 +28,7 @@ class PromptMixerStore:
 
     @staticmethod
     def get_backup_path():
-        return PromptMixerStore.get_data_path() + "_bak"
+        return PromptComposerStore.get_data_path() + "_bak"
 
     @staticmethod
     def get_default_prompts_path():
@@ -59,7 +59,7 @@ class PromptMixerStore:
 
     @classmethod
     def load_prompts(cls):
-        """Load mixer fragments, seeding from bundled defaults if no user file exists."""
+        """Load composer fragments, seeding from bundled defaults if no user file exists."""
         user_path = cls.get_data_path()
         legacy_user_path = cls.get_legacy_data_path()
         default_path = cls.get_default_prompts_path()
@@ -76,7 +76,7 @@ class PromptMixerStore:
                         cls.save_prompts(data)
                     return data
             except Exception as e:
-                print(f"[PromptMixerStore] Error loading data: {e}")
+                print(f"[PromptComposerStore] Error loading data: {e}")
                 backup_candidates = [
                     cls.get_backup_path(),
                     user_path + ".bak",
@@ -94,7 +94,7 @@ class PromptMixerStore:
                             return json.load(f)
                     except Exception:
                         pass
-                print("[PromptMixerStore] User data file exists but could not be parsed; not overwriting.")
+                print("[PromptComposerStore] User data file exists but could not be parsed; not overwriting.")
                 return {}
 
         default_source_path = default_path if os.path.exists(default_path) else legacy_default_path
@@ -107,7 +107,7 @@ class PromptMixerStore:
                     cls.save_prompts(data)
                     return data
             except Exception as e:
-                print(f"[PromptMixerStore] Error loading default prompts: {e}")
+                print(f"[PromptComposerStore] Error loading default prompts: {e}")
 
         return {}
 
@@ -129,7 +129,7 @@ class PromptMixerStore:
 
     @classmethod
     def save_prompts(cls, data):
-        """Save mixer fragments atomically with a weekly backup."""
+        """Save composer fragments atomically with a weekly backup."""
         user_path = cls.get_data_path()
         sorted_data = cls.sort_prompts_data(data)
         tmp_path = user_path + ".tmp"
@@ -141,7 +141,7 @@ class PromptMixerStore:
                 json.dump(sorted_data, f, indent=2, ensure_ascii=False)
             os.replace(tmp_path, user_path)
         except Exception as e:
-            print(f"[PromptMixerStore] Error saving data: {e}")
+            print(f"[PromptComposerStore] Error saving data: {e}")
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
@@ -184,9 +184,9 @@ def _find_prompt_case_insensitive(category_data, name):
 @server.PromptServer.instance.routes.get("/prompt-manager/mixer/get-prompts")
 async def mixer_get_prompts(request):
     try:
-        return server.web.json_response(PromptMixerStore.load_prompts())
+        return server.web.json_response(PromptComposerStore.load_prompts())
     except Exception as e:
-        print(f"[PromptMixerStore] Error in get-prompts: {e}")
+        print(f"[PromptComposerStore] Error in get-prompts: {e}")
         return server.web.json_response({"error": str(e)}, status=500)
 
 
@@ -198,7 +198,7 @@ async def mixer_save_category(request):
         if not category_name:
             return server.web.json_response({"success": False, "error": "Category name is required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         existing = {k.lower(): k for k in prompts.keys()}
         if category_name.lower() in existing:
             return server.web.json_response({
@@ -210,10 +210,10 @@ async def mixer_save_category(request):
         if data.get("nsfw"):
             cat_data["__meta__"] = {"nsfw": True}
         prompts[category_name] = cat_data
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in save-category: {e}")
+        print(f"[PromptComposerStore] Error in save-category: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -227,7 +227,7 @@ async def mixer_save_category_base_prompt(request):
         if not category:
             return server.web.json_response({"success": False, "error": "Category name is required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         canonical_category = _find_category_case_insensitive(prompts, category)
         if canonical_category is None:
             return server.web.json_response({"success": False, "error": "Category not found"})
@@ -243,10 +243,10 @@ async def mixer_save_category_base_prompt(request):
             cat_data.pop("_base_prompt_", None)
 
         prompts[canonical_category] = cat_data
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in save-category-base-prompt: {e}")
+        print(f"[PromptComposerStore] Error in save-category-base-prompt: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -260,7 +260,7 @@ async def mixer_save_category_prompt_prefix(request):
         if not category:
             return server.web.json_response({"success": False, "error": "Category name is required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         canonical_category = _find_category_case_insensitive(prompts, category)
         if canonical_category is None:
             return server.web.json_response({"success": False, "error": "Category not found"})
@@ -276,10 +276,10 @@ async def mixer_save_category_prompt_prefix(request):
             cat_data.pop("_prompt_prefix_", None)
 
         prompts[canonical_category] = cat_data
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in save-category-prompt-prefix: {e}")
+        print(f"[PromptComposerStore] Error in save-category-prompt-prefix: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -292,7 +292,7 @@ async def mixer_rename_category(request):
         if not old_category or not new_category:
             return server.web.json_response({"success": False, "error": "Both old and new category names are required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         if old_category not in prompts:
             return server.web.json_response({"success": False, "error": f"Category '{old_category}' not found"})
 
@@ -305,10 +305,10 @@ async def mixer_rename_category(request):
 
         prompts[new_category] = prompts[old_category]
         del prompts[old_category]
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts, "new_category": new_category})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in rename-category: {e}")
+        print(f"[PromptComposerStore] Error in rename-category: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -320,13 +320,13 @@ async def mixer_delete_category(request):
         if not category:
             return server.web.json_response({"success": False, "error": "Category name is required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         if category in prompts:
             del prompts[category]
-            PromptMixerStore.save_prompts(prompts)
+            PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in delete-category: {e}")
+        print(f"[PromptComposerStore] Error in delete-category: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -342,7 +342,7 @@ async def mixer_save_prompt(request):
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and name are required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         if category not in prompts:
             prompts[category] = {}
 
@@ -357,7 +357,7 @@ async def mixer_save_prompt(request):
             old_name = existing_lower[name.lower()]
             existing_prompt = prompts[category].get(old_name, {})
             if old_name != name:
-                print(f"[PromptMixerStore] Removing old casing '{old_name}' before saving as '{name}'")
+                print(f"[PromptComposerStore] Removing old casing '{old_name}' before saving as '{name}'")
                 del prompts[category][old_name]
 
         entry = {"prompt": text}
@@ -369,10 +369,10 @@ async def mixer_save_prompt(request):
             entry["nsfw"] = existing_prompt["nsfw"]
 
         prompts[category][name] = entry
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in save-prompt: {e}")
+        print(f"[PromptComposerStore] Error in save-prompt: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -385,13 +385,13 @@ async def mixer_delete_prompt(request):
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and name are required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         if category in prompts and name in prompts[category]:
             del prompts[category][name]
-            PromptMixerStore.save_prompts(prompts)
+            PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in delete-prompt: {e}")
+        print(f"[PromptComposerStore] Error in delete-prompt: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -407,7 +407,7 @@ async def mixer_rename_prompt(request):
         if not old_category or not old_name or not new_name:
             return server.web.json_response({"success": False, "error": "Missing required fields"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         if old_category not in prompts or old_name not in prompts[old_category]:
             return server.web.json_response({"success": False, "error": "Prompt not found"})
 
@@ -416,10 +416,10 @@ async def mixer_rename_prompt(request):
 
         entry = prompts[old_category].pop(old_name)
         prompts[new_category][new_name] = entry
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in rename-prompt: {e}")
+        print(f"[PromptComposerStore] Error in rename-prompt: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -431,7 +431,7 @@ async def mixer_toggle_nsfw(request):
         category = str(data.get("category", "")).strip()
         name = str(data.get("name", "")).strip()
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         if toggle_type == "category":
             if category not in prompts:
                 return server.web.json_response({"success": False, "error": "Category not found"})
@@ -445,10 +445,10 @@ async def mixer_toggle_nsfw(request):
             if isinstance(entry, dict):
                 entry["nsfw"] = not entry.get("nsfw", False)
 
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in toggle-nsfw: {e}")
+        print(f"[PromptComposerStore] Error in toggle-nsfw: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -463,7 +463,7 @@ async def mixer_save_thumbnail(request):
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and name are required"})
 
-        prompts = PromptMixerStore.load_prompts()
+        prompts = PromptComposerStore.load_prompts()
         if category not in prompts:
             prompts[category] = {}
         if name not in prompts[category]:
@@ -479,8 +479,8 @@ async def mixer_save_thumbnail(request):
         else:
             entry.pop("thumbnail", None)
 
-        PromptMixerStore.save_prompts(prompts)
+        PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
-        print(f"[PromptMixerStore] Error in save-thumbnail: {e}")
+        print(f"[PromptComposerStore] Error in save-thumbnail: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)

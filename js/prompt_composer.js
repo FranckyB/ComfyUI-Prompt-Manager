@@ -2,13 +2,13 @@ import { app } from "../../scripts/app.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import { DEFAULT_THUMBNAIL } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
-import { loadMixerPrompts, getMixerEntry, MIXER_ENDPOINT_PREFIX } from "./prompt_mixer_common.js";
+import { loadComposerPrompts, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
 
 const PARTS_PROP_KEY = "prompt_composer_parts";
 const THUMB_ZOOM_PROP_KEY = "prompt_composer_thumb_zoom";
 const PARTS_WIDGET_NAME = "parts_data";
-const MIN_NODE_WIDTH = 380;
-const MIN_NODE_HEIGHT = 500;
+const MIN_NODE_WIDTH = 500;
+const MIN_NODE_HEIGHT = 600;
 const HOLD_TO_DRAG_MS = 140;
 const COMPOSER_DRAG_STYLE_ID = "pm-composer-drag-style";
 const THUMB_BASE_WIDTH = 128;
@@ -380,22 +380,53 @@ function ensureComposerUi(node) {
         const selection = await showThumbnailBrowser(node, part.category || "", currentPrompt, {
             title: "Select Prompt Composer Part",
             multiSelect: true,
-            clearSelectionOnCategorySwitch: true,
-            endpointPrefix: MIXER_ENDPOINT_PREFIX,
+            multiCategorySelect: true,
+            endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
             promptOnly: true,
             selectedPrompts: part.prompts,
-            loadPromptsFn: loadMixerPrompts,
-            preferenceScope: "mixer",
+            loadPromptsFn: loadComposerPrompts,
+            preferenceScope: "composer",
         });
 
-        if (!selection || !Array.isArray(selection.prompts)) return;
+        if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) return;
 
         const next = [...parts];
-        next[index] = normalizePart({
-            category: selection.category || part.category || "",
-            prompts: selection.prompts,
-            strength: part.strength,
-        });
+        const originalCategory = part.category || "";
+
+        if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
+            const selectedCats = Object.keys(selection.selectionsByCategory);
+
+            if (selection.selectionsByCategory[originalCategory]) {
+                next[index] = normalizePart({
+                    category: originalCategory,
+                    prompts: selection.selectionsByCategory[originalCategory],
+                    strength: part.strength,
+                });
+            } else {
+                const firstCat = selectedCats[0];
+                next[index] = normalizePart({
+                    category: firstCat,
+                    prompts: selection.selectionsByCategory[firstCat],
+                    strength: part.strength,
+                });
+            }
+
+            const usedCategory = next[index].category;
+            for (const cat of selectedCats) {
+                if (cat === usedCategory) continue;
+                next.push(normalizePart({
+                    category: cat,
+                    prompts: selection.selectionsByCategory[cat],
+                    strength: part.strength,
+                }));
+            }
+        } else {
+            next[index] = normalizePart({
+                category: selection.category || part.category || "",
+                prompts: selection.prompts,
+                strength: part.strength,
+            });
+        }
 
         writeParts(node, next);
         render();
@@ -434,7 +465,7 @@ function ensureComposerUi(node) {
 
         parts.forEach((part, index) => {
             const entry = part.prompts.length > 0
-                ? getMixerEntry(node, part.category, part.prompts[0])
+                ? getComposerEntry(node, part.category, part.prompts[0])
                 : null;
             const thumb = entry?.thumbnail || DEFAULT_THUMBNAIL;
             const multiCount = part.prompts.length;
@@ -723,26 +754,34 @@ function ensureComposerUi(node) {
             const selection = await showThumbnailBrowser(node, "", "", {
                 title: "Add Prompt Composer Part",
                 multiSelect: true,
-                clearSelectionOnCategorySwitch: true,
-                endpointPrefix: MIXER_ENDPOINT_PREFIX,
+                multiCategorySelect: true,
+                endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
                 promptOnly: true,
                 selectedPrompts: [],
-                loadPromptsFn: loadMixerPrompts,
-                preferenceScope: "mixer",
+                loadPromptsFn: loadComposerPrompts,
+                preferenceScope: "composer",
             });
 
             if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) {
                 return;
             }
 
-            const next = [
-                ...parts,
-                normalizePart({
+            const next = [...parts];
+            if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
+                for (const [cat, catPrompts] of Object.entries(selection.selectionsByCategory)) {
+                    next.push(normalizePart({
+                        category: cat,
+                        prompts: catPrompts,
+                        strength: 1.0,
+                    }));
+                }
+            } else {
+                next.push(normalizePart({
                     category: selection.category || "",
                     prompts: selection.prompts,
                     strength: 1.0,
-                }),
-            ];
+                }));
+            }
             writeParts(node, next);
             render();
         };
@@ -820,7 +859,7 @@ app.registerExtension({
 
             ensureComposerUi(node);
 
-            loadMixerPrompts(node).then(() => {
+            loadComposerPrompts(node).then(() => {
                 node._composerUiRefreshHeight?.();
                 node._composerUiRender?.();
                 app.graph.setDirtyCanvas(true, true);

@@ -153,6 +153,24 @@ function _finishThumbQueueProgress() {
     _thumbQueueCancelled = false;
 }
 
+async function logThumbnailToServer(category, name, seed, prompt, mode) {
+    try {
+        await fetch("/prompt-manager/log-thumbnail", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                category: category,
+                name: name,
+                seed: seed,
+                prompt: prompt,
+                mode: mode,
+            })
+        });
+    } catch (e) {
+        console.error("[PromptBrowser] Failed to log thumbnail to server:", e);
+    }
+}
+
 async function _generateThumbnailForBrowserCategory(node, category, promptName, onUpdate, options = {}) {
     const {
         renderSelection: providedRenderSelection = null,
@@ -183,6 +201,16 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         .filter(Boolean)
         .join(" ");
 
+    const isComposerManager = endpointPrefix === "/prompt-manager/mixer";
+    const composerSeed = Number(getThumbnailComposerSeedFromSettings());
+    const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
+        ? composerSeed
+        : null;
+
+    console.log(`[ThumbnailGen] Preparing thumbnail for "${category}/${promptName}" | seed=${staticSeedForRun ?? "random"}`);
+    console.log(`[ThumbnailGen] Effective prompt text: ${promptText}`);
+    logThumbnailToServer(category, promptName, staticSeedForRun, promptText, isComposerManager ? "composer" : "pma");
+
     const activeRenderSelection = providedRenderSelection || (
         (_thumbnailRenderFamily && _thumbnailRenderModel)
             ? {
@@ -192,12 +220,6 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
             }
             : null
     );
-
-    const isComposerManager = endpointPrefix === "/prompt-manager/mixer";
-    const composerSeed = Number(getThumbnailComposerSeedFromSettings());
-    const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
-        ? composerSeed
-        : null;
 
     let thumbnail = null;
 
@@ -1022,7 +1044,7 @@ export function getVisibleCategories(node, options = {}) {
 }
 async function standaloneShowThumbnailBrowser(node, currentCategory, currentPrompt, options = {}) {
     // Reload prompts to ensure we have the latest data. Callers can pass a custom
-    // loader (e.g. Prompt Mixer) so the browser uses the correct JSON store.
+    // loader (e.g. Prompt Composer) so the browser uses the correct JSON store.
     const loadPromptsFn = typeof options?.loadPromptsFn === "function" ? options.loadPromptsFn : loadPrompts;
     await loadPromptsFn(node);
 
@@ -1041,6 +1063,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         : null;
     const selectTitle = typeof options?.title === "string" ? options.title : null;
     const multiSelect = options?.multiSelect === true;
+    const multiCategorySelect = multiSelect && options?.multiCategorySelect === true;
     const clearSelectionOnCategorySwitch = options?.clearSelectionOnCategorySwitch === true;
     const endpointPrefix = typeof options?.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
     const promptOnly = options?.promptOnly === true;
@@ -1068,16 +1091,51 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         
         let selectedCategory = currentCategory;
         let lastSelectedName = currentPrompt;
-        let selectedNames = new Set(multiSelect && Array.isArray(options?.selectedPrompts)
-            ? options.selectedPrompts
-            : (currentPrompt ? [currentPrompt] : []));
+        let selectedByCategory = {};
+        let selectedNames;
+        if (multiCategorySelect) {
+            const initialCat = currentCategory || "";
+            if (initialCat) {
+                const initialPrompts = Array.isArray(options?.selectedPrompts)
+                    ? options.selectedPrompts
+                    : (currentPrompt ? [currentPrompt] : []);
+                selectedByCategory[initialCat] = new Set(initialPrompts);
+            }
+            selectedNames = selectedByCategory[selectedCategory] || new Set();
+        } else {
+            selectedNames = new Set(multiSelect && Array.isArray(options?.selectedPrompts)
+                ? options.selectedPrompts
+                : (currentPrompt ? [currentPrompt] : []));
+        }
         let multiSelectAnchorName = selectedNames.size > 0 ? Array.from(selectedNames)[0] : "";
 
         const clearMultiSelection = () => {
             if (!multiSelect || selectedNames.size === 0) return;
             selectedNames.clear();
+            if (multiCategorySelect && selectedCategory) {
+                delete selectedByCategory[selectedCategory];
+            }
             multiSelectAnchorName = "";
             updateSelectButton();
+        };
+
+        const setSelectedCategory = (newCategory) => {
+            const previousCategory = selectedCategory;
+            if (previousCategory === newCategory) return;
+            if (multiCategorySelect && previousCategory) {
+                if (selectedNames.size > 0) {
+                    selectedByCategory[previousCategory] = selectedNames;
+                } else {
+                    delete selectedByCategory[previousCategory];
+                }
+            }
+            selectedCategory = newCategory;
+            if (multiCategorySelect) {
+                selectedNames = selectedByCategory[selectedCategory] || new Set();
+                multiSelectAnchorName = selectedNames.size > 0 ? Array.from(selectedNames)[0] : "";
+            } else if (clearSelectionOnCategorySwitch) {
+                clearMultiSelection();
+            }
         };
 
         const overlay = document.createElement("div");
@@ -1238,7 +1296,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let contentFilterState = getBrowserContentFilter(app);
         const contentFilterBtn = document.createElement("button");
 
-        // For prompt-only stores (e.g. Prompt Mixer) the content filter has no meaning.
+        // For prompt-only stores (e.g. Prompt Composer) the content filter has no meaning.
         if (promptOnly) {
             contentFilterState = "prompt";
         }
@@ -1351,7 +1409,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         const ensureSelectedCategory = () => {
-            const previousCategory = selectedCategory;
             categories = filterAllowedCategories(getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
@@ -1359,30 +1416,23 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }));
 
             if (!Array.isArray(categories) || categories.length === 0) {
-                selectedCategory = "";
+                setSelectedCategory("");
                 return "";
             }
 
-            if (!selectedCategory || !categories.includes(selectedCategory)) {
-                selectedCategory = categories[0];
+            let newCategory = selectedCategory;
+            if (!newCategory || !categories.includes(newCategory)) {
+                newCategory = categories[0];
             }
 
-            if (hideNSFWState && isCategoryNSFW(selectedCategory)) {
+            if (hideNSFWState && isCategoryNSFW(newCategory)) {
                 const firstVisible = categories.find(c => !isCategoryNSFW(c));
                 if (firstVisible) {
-                    selectedCategory = firstVisible;
+                    newCategory = firstVisible;
                 }
             }
 
-            if (
-                clearSelectionOnCategorySwitch &&
-                multiSelect &&
-                previousCategory &&
-                selectedCategory !== previousCategory
-            ) {
-                clearMultiSelection();
-            }
-
+            setSelectedCategory(newCategory);
             return selectedCategory;
         };
 
@@ -1548,11 +1598,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         if (data.success) {
                             node.prompts = data.prompts;
                             if (selectedCategory === cat) {
-                                const previousCategory = selectedCategory;
-                                selectedCategory = data.new_category;
-                                if (previousCategory !== selectedCategory && clearSelectionOnCategorySwitch && multiSelect) {
-                                    clearMultiSelection();
+                                if (multiCategorySelect && selectedByCategory[cat]) {
+                                    selectedByCategory[data.new_category] = selectedByCategory[cat];
+                                    delete selectedByCategory[cat];
                                 }
+                                setSelectedCategory(data.new_category);
                             }
                             rebuildCategoryList();
                             renderContent(searchInput.value);
@@ -1598,12 +1648,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         if (data.success) {
                             node.prompts = data.prompts;
                             if (selectedCategory === cat) {
-                                const previousCategory = selectedCategory;
-                                const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
-                                selectedCategory = cats[0] || "";
-                                if (previousCategory !== selectedCategory && clearSelectionOnCategorySwitch && multiSelect) {
-                                    clearMultiSelection();
+                                if (multiCategorySelect) {
+                                    delete selectedByCategory[cat];
                                 }
+                                const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
+                                setSelectedCategory(cats[0] || "");
                             }
                             rebuildCategoryList();
                             renderContent(searchInput.value);
@@ -1892,11 +1941,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 btn.textContent = cat;
 
                 btn.onclick = () => {
-                    const categoryChanged = selectedCategory !== cat;
-                    selectedCategory = cat;
-                    if (categoryChanged && clearSelectionOnCategorySwitch && multiSelect) {
-                        clearMultiSelection();
-                    }
+                    setSelectedCategory(cat);
                     updateCategoryButtons();
                     renderContent(searchInput.value);
                 };
@@ -1944,11 +1989,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         const data = await resp.json();
                         if (data.success) {
                             node.prompts = data.prompts;
-                            const categoryChanged = selectedCategory !== categoryName;
-                            selectedCategory = categoryName;
-                            if (categoryChanged && clearSelectionOnCategorySwitch && multiSelect) {
-                                clearMultiSelection();
-                            }
+                            setSelectedCategory(categoryName);
                             rebuildCategoryList();
                             renderContent(searchInput.value);
                         } else {
@@ -2016,6 +2057,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     for (let i = start; i <= end; i++) {
                         selectedNames.add(promptList[i]);
                     }
+                    if (multiCategorySelect && selectedCategory) {
+                        selectedByCategory[selectedCategory] = selectedNames;
+                    }
                     updateSelectButton();
                     return "rerender";
                 }
@@ -2025,6 +2069,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 selectedNames.delete(promptName);
             } else {
                 selectedNames.add(promptName);
+            }
+            if (multiCategorySelect && selectedCategory) {
+                selectedByCategory[selectedCategory] = selectedNames;
             }
             multiSelectAnchorName = promptName;
             updateSelectButton();
@@ -2587,6 +2634,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const isSel = selectedNames.has(promptName);
                 row.dataset.selectedPrompt = isSel ? "true" : "false";
                 row.style.background = isSel ? UI.accentSoft : 'transparent';
+                row.style.outline = isSel ? `2px solid ${UI.accentBorder}` : "none";
+                row.style.outlineOffset = isSel ? "-2px" : "0";
+                row.style.boxShadow = isSel ? `0 0 8px ${UI.accentSoft}` : "none";
                 updateSelectButton();
             };
 
@@ -2622,12 +2672,19 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 align-items: center;
                 position: relative;
             `;
+            const promptHeaderPad = document.createElement("span");
+            promptHeaderPad.style.cssText = "display: inline-block; width: 0.6em;";
             const headers = promptOnly
                 ? ["", "Name", "Prompt"]
                 : ["", "Name", "Prompt", "LoRAs A", "LoRAs B", "Triggers"];
             headers.forEach((h, i) => {
                 const hDiv = document.createElement("div");
-                hDiv.textContent = h;
+                if (h === "Prompt") {
+                    hDiv.appendChild(promptHeaderPad.cloneNode(true));
+                    hDiv.appendChild(document.createTextNode(h));
+                } else {
+                    hDiv.textContent = h;
+                }
                 hDiv.style.cssText = `
                     font-size: 10px;
                     color: #888;
@@ -2772,8 +2829,17 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     cursor: pointer;
                     align-items: center;
                     transition: background 0.1s ease;
+                    outline: ${isSelected ? `2px solid ${UI.accentBorder}` : "none"};
+                    outline-offset: ${isSelected ? "-2px" : "0"};
+                    box-shadow: ${isSelected ? `0 0 8px ${UI.accentSoft}` : "none"};
                 `;
-                row.onmouseenter = () => { if (!selectedNames.has(promptName)) row.style.background = '#2a2a2a'; };
+                row.onmouseenter = () => {
+                    if (!selectedNames.has(promptName)) {
+                        row.style.background = '#2a2a2a';
+                        row.style.outline = `1px solid ${UI.accentBorder}`;
+                        row.style.outlineOffset = "-1px";
+                    }
+                };
                 row.onmouseleave = () => { updateRowSelection(row, promptName); };
 
                 // Thumbnail icon (using div with background-image to avoid browser extension interference)
@@ -2870,7 +2936,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     display: flex;
                     align-items: center;
                     gap: 6px;
-                    padding: 4px 0 4px 12px;
+                    padding: 4px 0 4px 0;
                     overflow: hidden;
                     box-sizing: border-box;
                 `;
@@ -2906,7 +2972,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 promptDiv.style.cssText = `
                     font-size: 12px;
                     color: #9fb0c3;
-                    padding: 4px 0 4px 12px;
+                    padding: 4px 0 4px 0.6em;
                     box-sizing: border-box;
                     white-space: nowrap;
                     overflow: hidden;
@@ -3327,7 +3393,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         footer.textContent = mode === "save"
             ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
             : (multiSelect
-                ? "Click prompts to select/deselect. Shift+click selects all between the previously selected prompt and the one you click. Double-click picks one. Click Select to confirm."
+                ? (multiCategorySelect
+                    ? "Select prompts across multiple categories. Each category becomes its own part. Shift+click for range selection. Click Select to confirm."
+                    : "Click prompts to select/deselect. Shift+click selects all between the previously selected prompt and the one you click. Double-click picks one. Click Select to confirm.")
                 : "Right-click a prompt or category for more options (thumbnails, NSFW, delete)");
 
         const saveBar = document.createElement("div");
@@ -3442,6 +3510,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             `;
             clearSelectionBtn.onclick = () => {
                 selectedNames.clear();
+                if (multiCategorySelect) {
+                    Object.keys(selectedByCategory).forEach((cat) => {
+                        selectedByCategory[cat].clear();
+                    });
+                }
                 multiSelectAnchorName = "";
                 updateSelectButton();
                 renderContent(searchInput.value);
@@ -3462,6 +3535,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             selectAllBtn.onclick = () => {
                 const visiblePrompts = getFilteredPrompts(searchInput.value);
                 visiblePrompts.forEach((promptName) => selectedNames.add(promptName));
+                if (multiCategorySelect && selectedCategory) {
+                    selectedByCategory[selectedCategory] = selectedNames;
+                }
                 updateSelectButton();
                 renderContent(searchInput.value);
             };
@@ -3496,15 +3572,35 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 white-space: nowrap;
             `;
             updateSelectButton = () => {
-                selectBtn.textContent = `Select (${selectedNames.size})`;
+                const count = multiCategorySelect
+                    ? Object.values(selectedByCategory).reduce((sum, set) => sum + set.size, 0)
+                    : selectedNames.size;
+                selectBtn.textContent = `Select (${count})`;
             };
             selectBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
+                if (multiCategorySelect && selectedCategory && selectedNames.size > 0) {
+                    selectedByCategory[selectedCategory] = selectedNames;
+                }
                 const result = {
                     category: selectedCategory,
-                    prompt: selectedNames.size > 0 ? Array.from(selectedNames)[0] : "",
-                    prompts: Array.from(selectedNames),
+                    prompt: "",
+                    prompts: [],
                 };
+                if (multiCategorySelect) {
+                    result.selectionsByCategory = {};
+                    for (const [cat, names] of Object.entries(selectedByCategory)) {
+                        if (names.size > 0) {
+                            result.selectionsByCategory[cat] = Array.from(names);
+                        }
+                    }
+                    const allPrompts = Object.values(result.selectionsByCategory).flat();
+                    result.prompts = allPrompts;
+                    result.prompt = allPrompts[0] || "";
+                } else {
+                    result.prompts = Array.from(selectedNames);
+                    result.prompt = selectedNames.size > 0 ? Array.from(selectedNames)[0] : "";
+                }
                 resolve(result);
                 cleanup();
             });
@@ -3598,6 +3694,9 @@ function standaloneOpenPromptBrowserForSave(options = {}) {
         namePlaceholder: options.namePlaceholder || "Prompt name",
         initialName: options.initialName || "",
         workflowOnly: options.workflowOnly === true || browserNode?._isWorkflowManager === true,
+        promptOnly: options.promptOnly === true,
+        endpointPrefix: options.endpointPrefix,
+        loadPromptsFn: options.loadPromptsFn,
     });
 }
 

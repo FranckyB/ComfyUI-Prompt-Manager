@@ -1,12 +1,12 @@
 """
-Prompt Mixer Manager - simplified writer for Prompt Mixer fragments.
+Prompt Composer Manager - simplified writer for Prompt Composer fragments.
 
-Mirrors the basic Prompt Manager flow but stores data in prompt_mixer_data.json
+Mirrors the basic Prompt Manager flow but stores data in prompt_composer_data.json
 instead of the main Prompt Manager library.
 """
 import server
 
-from ..py.prompt_composer_store import PromptMixerStore
+from ..py.prompt_composer_store import PromptComposerStore
 from .prompt_manager_basic import _get_workflow_node
 
 
@@ -15,12 +15,12 @@ def _is_hidden_category_entry_key(name):
     return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_"}
 
 
-class PromptMixerManager:
-    """Save/load and edit prompt mixer fragments."""
+class PromptComposerManager:
+    """Save/load and edit prompt composer fragments."""
 
     @classmethod
     def INPUT_TYPES(s):
-        prompts_data = PromptMixerStore.load_prompts()
+        prompts_data = PromptComposerStore.load_prompts()
         categories = sorted([c for c in prompts_data.keys() if c != "__meta__"], key=str.lower)
         if not categories:
             categories = [""]
@@ -78,7 +78,7 @@ class PromptMixerManager:
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Save and edit Prompt Mixer fragments in an isolated library."
+    DESCRIPTION = "Save and edit Prompt Composer fragments in an isolated library."
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
     FUNCTION = "get_prompt"

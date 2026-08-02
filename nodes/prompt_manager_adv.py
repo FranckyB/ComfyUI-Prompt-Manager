@@ -2226,3 +2226,22 @@ async def resolve_loras(request):
     except Exception as e:
         print(f"[PromptManagerAdvanced] Error resolving LoRAs: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/log-thumbnail")
+async def log_thumbnail_generation(request):
+    """Log thumbnail generation details to the ComfyUI server terminal."""
+    try:
+        data = await request.json()
+        category = data.get("category", "Unknown")
+        name = data.get("name", "Unknown")
+        seed = data.get("seed")
+        prompt = data.get("prompt", "")
+        mode = data.get("mode", "unknown")
+        print(f"\n[ThumbnailGen] [{mode}] {category}/{name}")
+        print(f"[ThumbnailGen] seed={seed}")
+        print(f"[ThumbnailGen] prompt={prompt}\n")
+        return server.web.json_response({"success": True})
+    except Exception as e:
+        print(f"[PromptManagerAdvanced] Error in log_thumbnail API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
