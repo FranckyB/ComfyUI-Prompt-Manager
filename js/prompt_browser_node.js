@@ -34,6 +34,11 @@ const PROMPT_BROWSER_DEFAULT_NODE_WIDTH = 440;
 const PROMPT_BROWSER_DEFAULT_NODE_HEIGHT = 800;
 const PROMPT_BROWSER_SOURCE_PROP = "prompt_browser_source";
 
+function computePromptBrowserUiHeight(node) {
+    const nodeHeight = Number(node?.size?.[1]) || PROMPT_BROWSER_DEFAULT_NODE_HEIGHT;
+    return Math.max(220, nodeHeight - NODE_CHROME_HEIGHT);
+}
+
 function _isHiddenPromptEntryKey(name) {
     const normalized = String(name || "").trim().toLowerCase();
     return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_prefix_" || normalized === "_prompt_type_";
@@ -364,6 +369,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             }
             const result = onResize ? onResize.apply(this, arguments) : size;
             enforcePromptBrowserMinHeight(this);
+            this.updateComposerRootLayout?.();
             return result;
         };
         node._promptBrowserInstanceResizeWrapped = true;
@@ -586,6 +592,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             }
             const result = onResize ? onResize.apply(this, arguments) : size;
             enforcePromptBrowserMinHeight(this);
+            this.updateComposerRootLayout?.();
             return result;
         };
         nodeType.prototype._promptBrowserResizeWrapped = true;
@@ -617,17 +624,29 @@ function buildComposerRoot(node) {
 
     const root = document.createElement("div");
     root.style.cssText = `
+        display: flex;
+        flex-direction: column;
         width: 100%;
         height: 100%;
         min-height: 0;
-        display: grid;
-        grid-template-rows: auto 26px 26px minmax(110px, 1fr) 34px;
-        gap: 8px;
         box-sizing: border-box;
         margin-top: -6px;
         padding: 0;
         overflow: hidden;
         position: relative;
+    `;
+
+    const surface = document.createElement("div");
+    surface.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        gap: 8px;
+        box-sizing: border-box;
+        padding: 0;
+        overflow: hidden;
     `;
 
     const mkSection = () => {
@@ -637,43 +656,34 @@ function buildComposerRoot(node) {
     };
 
     const previewSection = mkSection();
-    previewSection.style.height = "auto";
+    previewSection.style.flex = "0 0 auto";
     const sourceSection = mkSection();
+    sourceSection.style.flex = "0 0 26px";
     const nameSection = mkSection();
+    nameSection.style.flex = "0 0 26px";
     const promptSection = mkSection();
-    promptSection.style.height = "100%";
+    promptSection.style.flex = "1 1 auto";
+    promptSection.style.minHeight = "110px";
     const buttonsSection = mkSection();
+    buttonsSection.style.flex = "0 0 34px";
 
-    root.appendChild(previewSection);
-    root.appendChild(sourceSection);
-    root.appendChild(nameSection);
-    root.appendChild(promptSection);
-    root.appendChild(buttonsSection);
+    surface.appendChild(previewSection);
+    surface.appendChild(sourceSection);
+    surface.appendChild(nameSection);
+    surface.appendChild(promptSection);
+    surface.appendChild(buttonsSection);
+    root.appendChild(surface);
 
-    const widget = node.addDOMWidget("composer_root", "div", root, { hideOnZoom: false });
-    widget.computeSize = (width) => [width, Math.max(280, (node.size?.[1] || 440) - NODE_CHROME_HEIGHT)];
-
-    const originalDraw = widget.draw;
-    widget.draw = function (ctx, n) {
-        if (typeof originalDraw === "function") {
-            originalDraw.apply(this, arguments);
-        }
-        if (!this.element || n.flags?.collapsed) return;
-
-        const availableWidth = Math.max(120, (n.size?.[0] || 320) - 16);
-        const availableHeight = Math.max(220, (n.size?.[1] || 440) - NODE_CHROME_HEIGHT);
-        this.element.style.setProperty("width", `${availableWidth}px`, "important");
-        this.element.style.setProperty("height", `${availableHeight}px`, "important");
-        this.element.style.setProperty("left", "0px", "important");
-        this.element.style.setProperty("top", "0px", "important");
-        this.element.style.setProperty("margin", "0px", "important");
-        this.element.style.setProperty("padding", "0px", "important");
-        this.element.style.setProperty("box-sizing", "border-box", "important");
-        this.element.style.setProperty("overflow", "hidden", "important");
-    };
+    const widget = node.addDOMWidget("composer_root", "div", root, {
+        serialize: false,
+        hideOnZoom: false,
+        getMinHeight: () => computePromptBrowserUiHeight(node),
+        getHeight: () => "100%",
+    });
 
     node._composerRoot = {
         root,
+        surface,
         previewSection,
         sourceSection,
         nameSection,
@@ -682,12 +692,23 @@ function buildComposerRoot(node) {
         widget,
     };
 
+    node.refreshComposerRootHeight = () => {
+        const h = computePromptBrowserUiHeight(node);
+        root.style.setProperty("--comfy-widget-min-height", `${h}px`);
+        root.style.setProperty("--comfy-widget-height", `${h}px`);
+    };
+
     node.updateComposerRootLayout = () => {
         if (!node._composerRoot?.root) return;
         const previewHeight = Math.max(120, Number(node._composerPreviewHeight) || 190);
-        node._composerRoot.root.style.gridTemplateRows = `${previewHeight}px 26px 26px minmax(110px, 1fr) 34px`;
+        if (node._composerRoot.previewSection) {
+            node._composerRoot.previewSection.style.height = `${previewHeight}px`;
+            node._composerRoot.previewSection.style.flex = `0 0 ${previewHeight}px`;
+        }
+        node.refreshComposerRootHeight?.();
     };
     node.updateComposerRootLayout();
+    node.refreshComposerRootHeight?.();
 }
 
 function shouldWarnComposerUnsavedChanges() {
@@ -1430,9 +1451,12 @@ function buildComposerButtonBar(node) {
     buttonContainer.style.cssText = `
         display: flex;
         gap: 8px;
-        padding: 2px 0 0 0;
+        padding: 0;
         align-items: center;
         justify-content: space-between;
+        width: 100%;
+        height: 100%;
+        box-sizing: border-box;
     `;
 
     const saveBtn = createComposerButton("Save Prompt", async () => {
