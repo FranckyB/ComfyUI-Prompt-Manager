@@ -5,7 +5,7 @@ import {
     showInfo,
     showConfirm,
 } from "./prompt_manager_advanced.js";
-import { showThumbnailBrowser, openPromptBrowserForSave } from "./prompt_browser.js";
+import { showThumbnailBrowser } from "./prompt_browser.js";
 import { loadComposerPrompts, getComposerCategories, getComposerNames, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
 
 const PMA_THEME = {
@@ -360,22 +360,25 @@ function buildComposerSelectorBar(node) {
     nameDisplay.style.cssText = `
         flex: 1;
         text-align: center;
-        color: #ddd;
+        color: #dbeafe;
         font-size: 13px;
         padding: 0 10px;
         cursor: pointer;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        background: #1a1a1a;
+        background: rgba(56, 130, 246, 0.22);
+        border: 1px solid rgba(56, 130, 246, 0.85);
+        border-radius: 4px;
         height: 100%;
         display: flex;
         align-items: center;
         justify-content: center;
         transition: background 0.15s ease;
+        box-sizing: border-box;
     `;
-    nameDisplay.onmouseover = () => { nameDisplay.style.background = "#252525"; };
-    nameDisplay.onmouseout = () => { nameDisplay.style.background = "#1a1a1a"; };
+    nameDisplay.onmouseover = () => { nameDisplay.style.background = "rgba(56, 130, 246, 0.32)"; };
+    nameDisplay.onmouseout = () => { nameDisplay.style.background = "rgba(56, 130, 246, 0.22)"; };
 
     // Thumbnail preview tooltip on hover (matches Prompt Manager Advanced).
     const thumbnailPreview = document.createElement("div");
@@ -536,22 +539,38 @@ function buildComposerSelectorBar(node) {
         if (shouldWarnComposerUnsavedChanges() && hasComposerUnsavedChanges(node)) {
             const confirmed = await showConfirm(
                 "Unsaved Changes",
-                "You have unsaved changes to the current fragment. Discard them and browse?",
-                "Discard & Browse",
+                "You have unsaved changes to the current fragment. Discard them and edit?",
+                "Discard & Edit",
                 "#f80"
             );
             if (!confirmed) return;
         }
 
         const selection = await showThumbnailBrowser(node, categoryWidget.value, nameWidget.value, {
-            title: "Select Prompt Composer Fragment",
-            endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
+            title: "Edit Prompt Composer Fragments",
             promptOnly: true,
+            editMode: true,
+            endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
             loadPromptsFn: loadComposerPrompts,
+            preferenceScope: "composer",
         });
 
-        if (selection && selection.prompt) {
-            await navigateTo(selection, true);
+        if (selection?.prompt) {
+            categoryWidget.value = selection.category;
+            if (typeof categoryWidget.callback === "function") {
+                await categoryWidget.callback(selection.category);
+            }
+            nameWidget.value = selection.prompt;
+            if (typeof nameWidget.callback === "function") {
+                await nameWidget.callback(selection.prompt);
+            }
+            const entry = getComposerEntry(node, selection.category, selection.prompt);
+            if (textWidget && entry) {
+                textWidget.value = entry.prompt || "";
+            }
+            updateComposerLastSavedState(node);
+            updateDisplay();
+            app.graph.setDirtyCanvas(true, true);
         }
     };
 
@@ -593,63 +612,58 @@ function buildComposerButtonBar(node) {
     const saveBtn = createComposerButton("Save Prompt", async () => {
         const currentCategory = String(categoryWidget.value || "").trim();
         const currentName = String(nameWidget.value || "").trim();
-        const initialName = currentName || "New Prompt";
 
-        await openPromptBrowserForSave({
-            node,
-            currentCategory,
-            currentPrompt: currentName,
+        const selection = await showThumbnailBrowser(node, currentCategory, currentName, {
             title: "Save Prompt Composer Fragment",
-            saveButtonText: "Save",
-            namePlaceholder: "Fragment name",
-            initialName,
-            promptOnly: true,
             endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
-            loadPromptsFn: loadComposerPrompts,
-            onSave: async ({ category, name, overwrite }) => {
-                const targetCategory = String(category || "").trim();
-                const promptName = String(name || "").trim();
+            promptOnly: true,
+            mode: "save",
+            initialName: currentName,
+            saveButtonText: "Save",
+            onSave: async (category, name) => {
                 const text = String(textWidget.value || "").trim();
-
-                if (!targetCategory || !promptName) {
-                    return { success: false, error: "Category and fragment name are required." };
-                }
-
-                try {
-                    const result = await saveComposerPrompt(node, targetCategory, promptName, text);
-                    if (!result.success) {
-                        return { success: false, error: result.error || "Failed to save fragment." };
-                    }
-
-                    categoryWidget.value = targetCategory;
+                const existing = getComposerEntry(node, category, name);
+                const result = await saveComposerPrompt(node, category, name, text, existing?.thumbnail || null);
+                if (result?.success) {
+                    categoryWidget.value = category;
                     if (typeof categoryWidget.callback === "function") {
-                        await categoryWidget.callback(targetCategory);
+                        await categoryWidget.callback(category);
                     }
-                    nameWidget.value = promptName;
+                    nameWidget.value = name;
                     if (typeof nameWidget.callback === "function") {
-                        await nameWidget.callback(promptName);
+                        await nameWidget.callback(name);
                     }
-
-                    node.isNewUnsavedPrompt = false;
-                    node.newPromptCategory = null;
-                    node.newPromptName = null;
                     updateComposerLastSavedState(node);
                     if (typeof node.updateComposerSelectorDisplay === "function") {
                         node.updateComposerSelectorDisplay();
                     }
-
-                    return {
-                        success: true,
-                        category: targetCategory,
-                        name: promptName,
-                        overwritten: overwrite === true,
-                    };
-                } catch (err) {
-                    console.error("[PromptComposerManager] Error during save:", err);
-                    return { success: false, error: err?.message || "Error during save" };
+                    app.graph.setDirtyCanvas(true, true);
                 }
+                return result;
             },
+            loadPromptsFn: loadComposerPrompts,
+            preferenceScope: "composer",
         });
+
+        if (selection?.prompt) {
+            categoryWidget.value = selection.category;
+            if (typeof categoryWidget.callback === "function") {
+                await categoryWidget.callback(selection.category);
+            }
+            nameWidget.value = selection.prompt;
+            if (typeof nameWidget.callback === "function") {
+                await nameWidget.callback(selection.prompt);
+            }
+            const entry = getComposerEntry(node, selection.category, selection.prompt);
+            if (textWidget && entry) {
+                textWidget.value = entry.prompt || "";
+            }
+            updateComposerLastSavedState(node);
+            if (typeof node.updateComposerSelectorDisplay === "function") {
+                node.updateComposerSelectorDisplay();
+            }
+            app.graph.setDirtyCanvas(true, true);
+        }
     });
 
     const newBtn = createComposerButton("New Prompt", async () => {

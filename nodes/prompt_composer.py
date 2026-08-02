@@ -47,6 +47,34 @@ def _prefix_with_category(category, text):
     return f"{trimmed_category}: {trimmed_text}"
 
 
+PROMPT_TYPE_CHOICES = [
+    "scene",
+    "subject",
+    "character",
+    "animal",
+    "style",
+    "color_palette",
+    "lighting",
+    "mood",
+    "background",
+    "composition",
+    "camera",
+    "motion",
+    "temporal_flow",
+    "soundscape",
+    "dialogue",
+]
+
+
+def _resolve_prompt_type(category_data, fallback_category):
+    if isinstance(category_data, dict):
+        raw_type = category_data.get("_prompt_type_", "")
+        prompt_type = str(raw_type or "").strip()
+        if prompt_type:
+            return prompt_type
+    return str(fallback_category or "").strip()
+
+
 def _resolve_prompt_prefix(category_data, fallback_category):
     def _normalize_prefix(value):
         prefix = str(value or "").strip()
@@ -55,10 +83,10 @@ def _resolve_prompt_prefix(category_data, fallback_category):
         return prefix if prefix.endswith(":") else f"{prefix}:"
 
     if isinstance(category_data, dict):
-        raw_prefix = category_data.get("_prompt_prefix_", "")
-        prefix = _normalize_prefix(raw_prefix)
-        if prefix:
-            return prefix
+        raw_type = category_data.get("_prompt_type_", "")
+        prompt_type = str(raw_type or "").strip()
+        if prompt_type:
+            return _normalize_prefix(prompt_type)
     return _normalize_prefix(fallback_category)
 
 

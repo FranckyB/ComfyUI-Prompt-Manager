@@ -40,4 +40,22 @@ export function getComposerEntry(node, category, name) {
     return catData[name] || null;
 }
 
+export async function saveComposerCategorySettings(category, settings) {
+    try {
+        const resp = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/save-category-settings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                category,
+                base_prompt: settings.basePrompt || "",
+                prompt_type: settings.promptType || "",
+            }),
+        });
+        return await resp.json();
+    } catch (err) {
+        console.error("[PromptComposer] Error saving category settings:", err);
+        return { success: false, error: String(err) };
+    }
+}
+
 export { COMPOSER_ENDPOINT_PREFIX };

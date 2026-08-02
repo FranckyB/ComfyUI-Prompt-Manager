@@ -12,7 +12,7 @@ from .prompt_manager_basic import _get_workflow_node
 
 def _is_hidden_category_entry_key(name):
     normalized = str(name or "").strip().lower()
-    return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_"}
+    return normalized in {"__meta__", "_base_prompt_", "_prompt_type_"}
 
 
 class PromptComposerManager:

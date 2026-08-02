@@ -1,3 +1,5 @@
+import { createPromptBrowserEditPanel } from "./prompt_browser_edit.js";
+
 let app = null;
 let UI = {
     overlay: "hsl(0 0% 0% / 0.8)",
@@ -711,7 +713,7 @@ function normalizeBrowserPrefScope(scope) {
 
 function isHiddenCategoryEntryKey(key) {
     const normalized = String(key || "").toLowerCase();
-    return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_prefix_";
+    return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_type_";
 }
 
 function getCategoryBasePrompt(node, category) {
@@ -719,8 +721,8 @@ function getCategoryBasePrompt(node, category) {
     return typeof raw === "string" ? raw : "";
 }
 
-function getCategoryPromptPrefix(node, category) {
-    const raw = node?.prompts?.[category]?._prompt_prefix_;
+function getCategoryPromptType(node, category) {
+    const raw = node?.prompts?.[category]?._prompt_type_;
     return typeof raw === "string" ? raw : "";
 }
 
@@ -799,86 +801,6 @@ function showCategoryBasePromptDialog(categoryName, currentValue = "") {
         document.body.appendChild(dialog);
         textarea.focus();
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    });
-}
-
-function showCategoryPromptPrefixDialog(categoryName, currentValue = "") {
-    return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 10000;
-        `;
-
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
-            border-radius: 8px;
-            padding: 16px;
-            z-index: 10001;
-            width: min(520px, calc(100vw - 36px));
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            color: #fff;
-        `;
-
-        dialog.innerHTML = `
-            <div style="font-size: 16px; font-weight: bold; margin-bottom: 8px;">Edit Prompt Prefix</div>
-            <div style="font-size: 12px; color: #aaa; margin-bottom: 10px;">Category: ${categoryName}</div>
-            <div style="font-size: 12px; color: #aaa; margin-bottom: 6px;">Used as the label before each prompt (example: Expression: ...)</div>
-            <input class="prefix-input" type="text" style="width: 100%; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; padding: 8px; box-sizing: border-box; font-size: 13px;" />
-            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px;">
-                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="save-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Save</button>
-            </div>
-        `;
-
-        const input = dialog.querySelector(".prefix-input");
-        const saveBtn = dialog.querySelector(".save-btn");
-        const cancelBtn = dialog.querySelector(".cancel-btn");
-        input.value = String(currentValue || "");
-
-        const cleanup = () => {
-            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
-        };
-
-        const handleSave = () => {
-            resolve(String(input.value || ""));
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            resolve(null);
-            cleanup();
-        };
-
-        saveBtn.onclick = handleSave;
-        cancelBtn.onclick = handleCancel;
-        overlay.onclick = handleCancel;
-        input.onkeydown = (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                handleSave();
-            } else if (e.key === "Escape") {
-                e.preventDefault();
-                handleCancel();
-            }
-        };
-
-        document.body.appendChild(overlay);
-        document.body.appendChild(dialog);
-        input.focus();
-        input.select();
     });
 }
 
@@ -1070,6 +992,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const browserPrefScope = normalizeBrowserPrefScope(
         options?.preferenceScope || (promptOnly ? "mixer" : "manager")
     );
+    const allowEditMode = options?.allowEditMode !== false;
+    let editMode = allowEditMode && options?.editMode === true;
     let updateSelectButton = () => {};
 
     const filterAllowedCategories = (categories) => {
@@ -1135,6 +1059,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 multiSelectAnchorName = selectedNames.size > 0 ? Array.from(selectedNames)[0] : "";
             } else if (clearSelectionOnCategorySwitch) {
                 clearMultiSelection();
+            }
+            if (editMode && editPanel) {
+                editPanel.loadCategorySettings(selectedCategory);
             }
         };
 
@@ -1378,12 +1305,56 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#313843'; viewModeBtn.style.color = '#aaa'; };
         updateViewModeBtn();
 
+        // Edit mode toggle
+        let editModeBtn = null;
+        const updateEditModeLayout = () => {
+            if (!editPanel) return;
+            if (editMode) {
+                editPanel.element.style.display = "flex";
+                dialog.style.width = `${browserLayout.width + 320}px`;
+                editPanel.loadCategorySettings(selectedCategory);
+            } else {
+                editPanel.element.style.display = "none";
+                dialog.style.width = `${browserLayout.width}px`;
+            }
+            app.graph.setDirtyCanvas(true, true);
+        };
+        if (allowEditMode && mode !== "save" && !multiSelect) {
+            editModeBtn = document.createElement("button");
+            const updateEditModeBtn = () => {
+                if (editMode) {
+                    editModeBtn.textContent = "✎ Edit: On";
+                    editModeBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.22); border-color: rgba(56, 130, 246, 0.85); color: #dbeafe;`;
+                    editModeBtn.title = "Edit mode is on — click to turn off";
+                } else {
+                    editModeBtn.textContent = "✎ Edit: Off";
+                    editModeBtn.style.cssText = btnStyle;
+                    editModeBtn.title = "Toggle edit mode";
+                }
+            };
+            editModeBtn.onmouseover = () => {
+                if (!editMode) { editModeBtn.style.background = '#38414c'; editModeBtn.style.color = '#fff'; }
+            };
+            editModeBtn.onmouseout = () => {
+                updateEditModeBtn();
+            };
+            editModeBtn.onclick = () => {
+                editMode = !editMode;
+                updateEditModeBtn();
+                updateEditModeLayout();
+            };
+            updateEditModeBtn();
+        }
+
         controlsBar.appendChild(searchWrapper);
         if (!allowedCategories && !promptOnly) {
             controlsBar.appendChild(contentFilterBtn);
         }
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
+        if (editModeBtn) {
+            controlsBar.appendChild(editModeBtn);
+        }
 
         // Category selector
         const categoryContainer = document.createElement("div");
@@ -1491,44 +1462,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             `;
 
             if (supportsCategoryPromptMetadata) {
-                const promptPrefixItem = document.createElement("div");
-                promptPrefixItem.textContent = "🏷️ Edit Prompt Prefix";
-                promptPrefixItem.style.cssText = `
-                    padding: 8px 16px;
-                    color: #ccc;
-                    cursor: pointer;
-                    font-size: 13px;
-                `;
-                promptPrefixItem.onmouseover = () => promptPrefixItem.style.background = '#3a3a3a';
-                promptPrefixItem.onmouseout = () => promptPrefixItem.style.background = 'transparent';
-                promptPrefixItem.onclick = async () => {
-                    menu.remove();
-                    const edited = await showCategoryPromptPrefixDialog(cat, getCategoryPromptPrefix(node, cat));
-                    if (edited === null) return;
-
-                    try {
-                        const resp = await fetch(`${endpointPrefix}/save-category-prompt-prefix`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ category: cat, prompt_prefix: edited })
-                        });
-                        const data = await resp.json();
-                        if (data.success) {
-                            node.prompts = data.prompts;
-                            rebuildCategoryList();
-                            renderContent(searchInput.value);
-                        } else {
-                            await showInfo("Error", data.error || "Failed to save prompt prefix.");
-                        }
-                    } catch (err) {
-                        console.error("[PromptBrowser] Error saving category prompt prefix:", err);
-                    }
-                };
-                menu.appendChild(promptPrefixItem);
-
-                const prefixDivider = document.createElement("div");
-                prefixDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-                menu.appendChild(prefixDivider);
             }
 
             const isNSFW = isCategoryNSFW(cat);
@@ -2011,11 +1944,22 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             categoryContainer.style.display = "none";
         }
 
+        // Main content area: grid + optional edit panel
+        const contentRow = document.createElement("div");
+        contentRow.style.cssText = `
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        `;
+
         // Content container - fixed size
         const gridContainer = document.createElement("div");
         gridContainer.className = "thumbnail-grid-container";
         gridContainer.style.cssText = `
             overflow-y: auto;
+            flex: 1;
+            min-width: 0;
             height: ${currentViewMode === "icon" ? browserLayout.iconHeight : browserLayout.height}px;
             scrollbar-width: none;
             -ms-overflow-style: none;
@@ -2024,6 +1968,84 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const style = document.createElement("style");
         style.textContent = `.thumbnail-grid-container::-webkit-scrollbar { display: none; }`;
         document.head.appendChild(style);
+
+        contentRow.appendChild(gridContainer);
+
+        // Edit panel
+        let editPanel = null;
+        if (allowEditMode && mode !== "save" && !multiSelect) {
+            editPanel = createPromptBrowserEditPanel({
+                node,
+                endpointPrefix,
+                showInfo,
+                showConfirm,
+                loadPrompts: loadPromptsFn,
+                savePrompt: async ({ category, name, text, thumbnail, overwrite }) => {
+                    try {
+                        const resp = await fetch(`${endpointPrefix}/save-prompt`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category, name, text, thumbnail }),
+                        });
+                        const result = await resp.json();
+                        if (result?.success) {
+                            currentPrompt = name;
+                        }
+                        return result;
+                    } catch (err) {
+                        console.error("[PromptBrowser] Error saving prompt:", err);
+                        return { success: false, error: String(err) };
+                    }
+                },
+                generateThumbnail: async (category, promptName) => {
+                    return new Promise((resolve, reject) => {
+                        const queuedName = promptName;
+                        _thumbQueueTotal++;
+                        _ensureThumbQueueProgress();
+                        _updateThumbQueueProgress(queuedName);
+
+                        _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
+                            if (_thumbQueueCancelled) {
+                                _thumbQueueDone++;
+                                if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                                    _finishThumbQueueProgress();
+                                }
+                                resolve(null);
+                                return;
+                            }
+                            _updateThumbQueueProgress(queuedName);
+                            try {
+                                await _generateThumbnailForBrowserCategory(node, category, queuedName, () => {
+                                    renderContent(searchInput.value);
+                                }, { endpointPrefix });
+                                _thumbQueueDone++;
+                            } catch (e) {
+                                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
+                                _thumbQueueFailed++;
+                                reject(e);
+                                return;
+                            } finally {
+                                if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                                    _finishThumbQueueProgress();
+                                }
+                            }
+                            await loadPromptsFn(node);
+                            resolve(node?.prompts?.[category]?.[queuedName]?.thumbnail || null);
+                        });
+                    });
+                },
+                onChange: () => {
+                    renderContent(searchInput.value);
+                },
+            });
+            if (!editMode) {
+                editPanel.element.style.display = "none";
+            }
+            contentRow.appendChild(editPanel.element);
+            if (editMode) {
+                updateEditModeLayout();
+            }
+        }
 
         const grid = document.createElement("div");
 
@@ -2283,6 +2305,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 card.appendChild(nameLabel);
 
                 card.onclick = async (e) => {
+                    if (editMode && editPanel) {
+                        currentPrompt = promptName;
+                        editPanel.loadPrompt(selectedCategory, promptName);
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
                     if (mode === "save") {
                         selectedSaveName = promptName;
                         if (saveNameInput) {
@@ -2540,6 +2569,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 card.appendChild(nameLabel);
 
                 card.onclick = async (e) => {
+                    if (editMode && editPanel) {
+                        currentPrompt = promptName;
+                        editPanel.loadPrompt(selectedCategory, promptName);
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
                     if (mode === "save") {
                         selectedSaveName = promptName;
                         if (saveNameInput) {
@@ -3016,6 +3052,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
 
                 row.onclick = async (e) => {
+                    if (editMode && editPanel) {
+                        currentPrompt = promptName;
+                        editPanel.loadPrompt(selectedCategory, promptName);
+                        renderContent(searchInput.value);
+                        return;
+                    }
+
                     if (mode === "save") {
                         selectedSaveName = promptName;
                         if (saveNameInput) {
@@ -3617,7 +3660,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         dialog.appendChild(header);
         dialog.appendChild(controlsBar);
         dialog.appendChild(categoryContainer);
-        dialog.appendChild(gridContainer);
+        dialog.appendChild(contentRow);
         dialog.appendChild(footer);
         if (mode === "save" || multiSelect) {
             dialog.appendChild(saveBar);
@@ -3678,6 +3721,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         document.body.appendChild(overlay);
         document.body.appendChild(dialog);
+        updateEditModeLayout();
         searchInput.focus();
     });
 }
