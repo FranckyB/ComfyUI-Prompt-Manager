@@ -225,6 +225,14 @@ app.registerExtension({
             defaultValue: false
         },
         {
+            id: "PromptManager.ComposerExtraPromptTypes",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Composer Extra Prompt Types"],
+            name: "Extra Prompt Composer types (comma-separated)",
+            tooltip: "Optional custom prompt types for Prompt Composer. Example: attire, environment, VFX. Each value is added to the Prompt Type dropdown as both value and label.",
+            type: "text",
+            defaultValue: ""
+        },
+        {
             id: "PromptManager.ThumbnailCheckpoint",
             category: ["Prompt Manager", "4. Advanced Preferences", "Thumbnail Generation Checkpoint"],
             name: "Checkpoint for thumbnail generation",

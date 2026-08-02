@@ -196,11 +196,13 @@ function setupPromptComposerManager(nodeType, nodeData) {
         const nameWidget = node.widgets.find((w) => w.name === "name");
         if (categoryWidget) {
             categoryWidget.type = "converted-widget";
-            categoryWidget.computeSize = () => [0, -4];
+            categoryWidget.computeSize = () => [0, 0];
+            categoryWidget.hidden = true;
         }
         if (nameWidget) {
             nameWidget.type = "converted-widget";
-            nameWidget.computeSize = () => [0, -4];
+            nameWidget.computeSize = () => [0, 0];
+            nameWidget.hidden = true;
         }
         for (let i = node.inputs.length - 1; i >= 0; i--) {
             const inp = node.inputs[i];
@@ -256,11 +258,13 @@ function setupPromptComposerManager(nodeType, nodeData) {
         const nameWidget = node.widgets.find((w) => w.name === "name");
         if (categoryWidget) {
             categoryWidget.type = "converted-widget";
-            categoryWidget.computeSize = () => [0, -4];
+            categoryWidget.computeSize = () => [0, 0];
+            categoryWidget.hidden = true;
         }
         if (nameWidget) {
             nameWidget.type = "converted-widget";
-            nameWidget.computeSize = () => [0, -4];
+            nameWidget.computeSize = () => [0, 0];
+            nameWidget.hidden = true;
         }
         for (let i = node.inputs.length - 1; i >= 0; i--) {
             const inp = node.inputs[i];
@@ -337,7 +341,7 @@ function buildComposerSelectorBar(node) {
         border-radius: 4px;
         overflow: visible;
         height: 26px;
-        margin: 0;
+        margin: -8px 0 0 0;
         position: relative;
     `;
 
@@ -585,7 +589,7 @@ function buildComposerSelectorBar(node) {
 
     const widget = node.addDOMWidget("composer_selector", "div", container);
     widget.computeSize = function(width) {
-        return [width, 28];
+        return [width, 24];
     };
     node._composerSelectorContainer = container;
     node.updateComposerSelectorDisplay = updateDisplay;
@@ -604,7 +608,7 @@ function buildComposerButtonBar(node) {
     buttonContainer.style.cssText = `
         display: flex;
         gap: 8px;
-        padding: 4px 0;
+        padding: 2px 0 0 0;
         align-items: center;
         justify-content: space-between;
     `;

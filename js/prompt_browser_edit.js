@@ -1,24 +1,50 @@
 import { saveComposerCategorySettings } from "./prompt_composer_common.js";
 import { DEFAULT_THUMBNAIL } from "./prompt_manager_advanced.js";
+import { app } from "../../scripts/app.js";
+
+const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
 
 const PROMPT_TYPE_CHOICES = [
     { value: "", label: "None" },
-    { value: "scene", label: "Scene" },
-    { value: "subject", label: "Subject" },
-    { value: "character", label: "Character" },
     { value: "animal", label: "Animal" },
-    { value: "style", label: "Style" },
+    { value: "attire", label: "Attire" },
+    { value: "background", label: "Background" },
+    { value: "camera", label: "Camera" },
+    { value: "character", label: "Character" },
     { value: "color_palette", label: "Color Palette" },
+    { value: "composition", label: "Composition" },
+    { value: "dialogue", label: "Dialogue" },
     { value: "lighting", label: "Lighting" },
     { value: "mood", label: "Mood" },
-    { value: "background", label: "Background" },
-    { value: "composition", label: "Composition" },
-    { value: "camera", label: "Camera" },
     { value: "motion", label: "Motion" },
-    { value: "temporal_flow", label: "Temporal Flow" },
+    { value: "scene", label: "Scene" },
     { value: "soundscape", label: "Soundscape" },
-    { value: "dialogue", label: "Dialogue" },
+    { value: "style", label: "Style" },
+    { value: "subject", label: "Subject" },
+    { value: "temporal_flow", label: "Temporal Flow" },
 ];
+
+function getPromptTypeChoices() {
+    const choices = [...PROMPT_TYPE_CHOICES];
+    const seen = new Set(choices.map((c) => String(c.value || "").trim().toLowerCase()));
+
+    const raw = String(app?.ui?.settings?.getSettingValue?.(SETTING_COMPOSER_EXTRA_TYPES) || "");
+    if (!raw.trim()) return choices;
+
+    const extras = raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+    for (const item of extras) {
+        const key = item.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        choices.push({ value: item, label: item });
+    }
+
+    return choices;
+}
 
 const STYLE = {
     panel: "hsl(216 11% 15%)",
@@ -173,7 +199,6 @@ export function createPromptBrowserEditPanel(options) {
         alignItems: "center",
         gap: "6px",
         padding: "6px 0 8px 0",
-        borderBottom: `1px solid ${STYLE.sectionBorder}`,
         cursor: "pointer",
         userSelect: "none",
         color: STYLE.textPrimary,
@@ -184,7 +209,7 @@ export function createPromptBrowserEditPanel(options) {
     const settingsArrow = el("span", {
         display: "inline-block",
         width: "12px",
-        transition: "transform 0.2s ease",
+        transition: "color 0.2s ease",
     }, "▶");
     settingsHeader.prepend(settingsArrow);
 
@@ -197,27 +222,84 @@ export function createPromptBrowserEditPanel(options) {
         flexShrink: "0",
     });
 
+    const promptHeader = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "6px 0 8px 0",
+        cursor: "pointer",
+        userSelect: "none",
+        color: STYLE.textPrimary,
+        fontSize: "13px",
+        fontWeight: "bold",
+    }, "Prompt Settings");
+
+    const promptArrow = el("span", {
+        display: "inline-block",
+        width: "12px",
+        transition: "color 0.2s ease",
+    }, "▶");
+    promptHeader.prepend(promptArrow);
+
+    const promptBody = el("div", {
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+        flex: "1",
+        minHeight: "0",
+        overflowY: "auto",
+    });
+
     let settingsOpen = false;
-    settingsHeader.addEventListener("click", () => {
-        settingsOpen = !settingsOpen;
+    let promptOpen = true;
+
+    const syncSectionVisibility = () => {
         settingsBody.style.display = settingsOpen ? "flex" : "none";
-        settingsArrow.style.transform = settingsOpen ? "rotate(90deg)" : "rotate(0deg)";
+        promptBody.style.display = promptOpen ? "flex" : "none";
+        settingsArrow.textContent = settingsOpen ? "▼" : "▶";
+        promptArrow.textContent = promptOpen ? "▼" : "▶";
+    };
+
+    settingsHeader.addEventListener("click", () => {
+        if (settingsOpen) {
+            settingsOpen = false;
+            promptOpen = true;
+        } else {
+            settingsOpen = true;
+            promptOpen = false;
+        }
+        syncSectionVisibility();
+    });
+
+    promptHeader.addEventListener("click", () => {
+        if (promptOpen) {
+            promptOpen = false;
+            settingsOpen = true;
+        } else {
+            promptOpen = true;
+            settingsOpen = false;
+        }
+        syncSectionVisibility();
     });
 
     root.appendChild(settingsHeader);
     root.appendChild(settingsBody);
+    root.appendChild(promptHeader);
+    root.appendChild(promptBody);
+    syncSectionVisibility();
 
     const typeLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prompt Type");
     settingsBody.appendChild(typeLabel);
 
-    const typeSelect = createSelect("", PROMPT_TYPE_CHOICES);
+    const typeSelect = createSelect("", getPromptTypeChoices());
     settingsBody.appendChild(typeSelect);
 
     const baseLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Base Prompt (for thumbnails)");
     settingsBody.appendChild(baseLabel);
 
     const baseTextArea = createTextarea("", "Base prompt used when generating thumbnails for this category");
-    baseTextArea.style.minHeight = "80px";
+    baseTextArea.style.minHeight = "355px";
+
     settingsBody.appendChild(baseTextArea);
 
     const saveSettingsBtn = createButton("Save Category Settings", async () => {
@@ -239,27 +321,14 @@ export function createPromptBrowserEditPanel(options) {
     }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
     settingsBody.appendChild(saveSettingsBtn);
 
-    // Scrollable prompt editor section
-    const scrollArea = el("div", {
-        display: "flex",
-        flexDirection: "column",
-        gap: "10px",
-        flex: "1",
-        minHeight: "0",
-        overflowY: "auto",
-        overflowX: "hidden",
-        paddingRight: "4px",
-    });
-    root.appendChild(scrollArea);
-
     // Prompt editor section
     const promptNameInput = createInput("", "Prompt name");
-    scrollArea.appendChild(promptNameInput);
+    promptBody.appendChild(promptNameInput);
 
     const promptTextArea = createTextarea("", "Prompt text");
-    promptTextArea.style.minHeight = "140px";
+    promptTextArea.style.minHeight = "220px";
     promptTextArea.style.flex = "1";
-    scrollArea.appendChild(promptTextArea);
+    promptBody.appendChild(promptTextArea);
 
     const editorButtonRow = el("div", {
         display: "flex",
@@ -282,7 +351,7 @@ export function createPromptBrowserEditPanel(options) {
 
     editorButtonRow.appendChild(clearBtn);
     editorButtonRow.appendChild(saveBtn);
-    scrollArea.appendChild(editorButtonRow);
+    promptBody.appendChild(editorButtonRow);
 
     const thumbnailWrap = el("div", {
         display: "flex",
@@ -312,7 +381,7 @@ export function createPromptBrowserEditPanel(options) {
     `;
     thumbnailWrap.appendChild(thumbnailImg);
 
-    scrollArea.appendChild(thumbnailWrap);
+    promptBody.appendChild(thumbnailWrap);
 
     const generateBtn = createButton("Generate Thumbnail", async () => {
         const category = currentCategory;
@@ -337,7 +406,7 @@ export function createPromptBrowserEditPanel(options) {
             generateBtn.textContent = "Generate Thumbnail";
         }
     });
-    scrollArea.appendChild(generateBtn);
+    promptBody.appendChild(generateBtn);
 
     function updateThumbnailDisplay(thumbnail) {
         thumbnailImg.src = thumbnail || DEFAULT_THUMBNAIL;
@@ -358,7 +427,22 @@ export function createPromptBrowserEditPanel(options) {
             return { success: false };
         }
 
-        const existing = node?.prompts?.[category]?.[name];
+        const categoryData = node?.prompts?.[category];
+        let existing = null;
+        if (categoryData && typeof categoryData === "object") {
+            if (Object.prototype.hasOwnProperty.call(categoryData, name)) {
+                existing = categoryData[name];
+            } else {
+                const target = name.toLowerCase();
+                for (const [entryName, entryValue] of Object.entries(categoryData)) {
+                    if (String(entryName || "").startsWith("_")) continue;
+                    if (String(entryName).toLowerCase() === target) {
+                        existing = entryValue;
+                        break;
+                    }
+                }
+            }
+        }
         let overwrite = false;
         if (existing) {
             if (autoFromGeneration && !existing.thumbnail) {
@@ -397,6 +481,11 @@ export function createPromptBrowserEditPanel(options) {
         promptNameInput.value = currentPromptName;
         pendingThumbnail = null;
 
+        // Selecting a prompt should always focus Prompt Settings.
+        settingsOpen = false;
+        promptOpen = true;
+        syncSectionVisibility();
+
         const entry = node?.prompts?.[category]?.[promptName];
         if (entry && typeof entry === "object") {
             promptTextArea.value = entry.prompt || "";
@@ -410,6 +499,7 @@ export function createPromptBrowserEditPanel(options) {
     }
 
     function loadCategorySettings(category) {
+        currentCategory = category || currentCategory || "";
         const catData = node?.prompts?.[category];
         if (catData && typeof catData === "object") {
             const promptType = catData._prompt_type_ || "";
@@ -419,6 +509,18 @@ export function createPromptBrowserEditPanel(options) {
             typeSelect.value = "";
             baseTextArea.value = "";
         }
+    }
+
+    function showCategorySettings() {
+        settingsOpen = true;
+        promptOpen = false;
+        syncSectionVisibility();
+    }
+
+    function showPromptSettings() {
+        settingsOpen = false;
+        promptOpen = true;
+        syncSectionVisibility();
     }
 
     function clearPrompt() {
@@ -433,6 +535,8 @@ export function createPromptBrowserEditPanel(options) {
         element: root,
         loadPrompt,
         loadCategorySettings,
+        showCategorySettings,
+        showPromptSettings,
         clearPrompt,
         getCurrentPromptName: () => String(promptNameInput.value || "").trim(),
     };

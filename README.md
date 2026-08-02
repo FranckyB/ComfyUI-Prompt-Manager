@@ -4,18 +4,19 @@
 ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, generating, extracting, organizing, and reusing prompts with LoRA-aware workflows. It includes prompt generation powered by local LLM (llama.cpp or Ollama) or direct generation using ComfyUI's own CLIP/text encoders, automatic download of Qwen3.5 models, metadata extraction from images/videos/JSON, prompt browser tooling, and advanced prompt save/load flows. For users who want full pipeline reuse, it also includes an optional Recipe toolset to build, edit, render, load, relay, and save complete generation configs from extracted or hand-authored data. Metadata extraction supports media generated in ComfyUI, A1111, and Forge, including Wan workflows with dual model/stack support.
 
 ## Latest update
-- Larger Prompt Manager Advanced browser with Grid/Icon/List views and persisted view mode.
-- Krea2 support added to Recipe Renderer thumbnail generation.
-- New Expression Selector node for appending saved expressions.
+- First draft of a new Prompt Compose system is now included.
+- This first draft is functional and usable today, though the provided default prompts still need refinement.
+- Prompt Compose replaces the Expression Selector node and expands on it significantly: it still handles expression-style prompt appending, but also adds a broader prompt composition workflow with category/prompt management and editing tools.  Prompt Compose also support random generation, selecting multiple prompts with randomly select one.
+- New Prompt Compose Manager is provided to add new prompts and categories.
 
 <div align="center">
-  <figcaption>Expression Selector appends expression to prompts</figcaption>
-  <img src="docs/images/Expression_Selector_example.png" alt="Expression Selector Example">
+  <figcaption>Use Prompt Compose to generate Prompt from preset fragments</figcaption>
+  <img src="docs/images/prompt_compose.png" alt="Expression Selector Example">
 </div>
 
 <div align="center">
-  <figcaption>Example of the Expression Browser</figcaption>
-  <img src="docs/images/Expression_Selector_Browser.png" alt="Expression Selector Browser">
+  <figcaption>Prompt Browser now allows for direct Editing</figcaption>
+  <img src="docs/images/prompt_browser_edit_mode.png" alt="Expression Selector Browser">
 </div>
 
 ## What This Provides

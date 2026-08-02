@@ -1062,6 +1062,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
             if (editMode && editPanel) {
                 editPanel.loadCategorySettings(selectedCategory);
+                if (typeof editPanel.showCategorySettings === "function") {
+                    editPanel.showCategorySettings();
+                }
             }
         };
 
@@ -1342,6 +1345,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 editMode = !editMode;
                 updateEditModeBtn();
                 updateEditModeLayout();
+                requestAnimationFrame(() => {
+                    renderContent(searchInput.value);
+                });
             };
             updateEditModeBtn();
         }
@@ -1374,6 +1380,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         }));
         let selectedSaveName = initialSaveName;
         let categoryButtons = [];
+        let editModeLastClickPrompt = "";
+        let editModeLastClickAt = 0;
 
         const isCategoryNSFW = (cat) => {
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
@@ -2120,8 +2128,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
+            const showEditBlank = editMode && !!editPanel && mode !== "save" && !multiSelect;
 
-            if (filteredPrompts.length === 0) {
+            if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
                 emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
                 emptyMsg.style.cssText = `
@@ -2306,6 +2315,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 card.onclick = async (e) => {
                     if (editMode && editPanel) {
+                        const now = Date.now();
+                        if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
+                            currentPrompt = promptName;
+                            resolve({ category: selectedCategory, prompt: promptName });
+                            cleanup();
+                            return;
+                        }
+                        editModeLastClickPrompt = promptName;
+                        editModeLastClickAt = now;
                         currentPrompt = promptName;
                         editPanel.loadPrompt(selectedCategory, promptName);
                         renderContent(searchInput.value);
@@ -2373,6 +2391,66 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 grid.appendChild(card);
             });
+
+            if (showEditBlank) {
+                const isSelectedBlank = !currentPrompt;
+                const blankCard = document.createElement("div");
+                blankCard.style.cssText = `
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 8px;
+                    background: ${isSelectedBlank ? UI.accentSoft : UI.cardBg};
+                    border: 2px dashed ${isSelectedBlank ? UI.accentBorder : UI.cardBorder};
+                    border-radius: 8px;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                    min-height: ${browserLayout.thumbHeight + 34}px;
+                `;
+
+                const blankThumb = document.createElement("div");
+                blankThumb.style.cssText = `
+                    width: ${browserLayout.thumbWidth}px;
+                    height: ${browserLayout.thumbHeight}px;
+                    border-radius: 6px;
+                    background: ${UI.inputBg};
+                    border: 1px dashed ${UI.inputBorder};
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #98a3af;
+                    font-size: 36px;
+                    line-height: 1;
+                `;
+                blankThumb.textContent = "+";
+
+                const blankLabel = document.createElement("div");
+                blankLabel.textContent = "Blank Prompt";
+                blankLabel.style.cssText = `
+                    margin-top: 8px;
+                    font-size: 12px;
+                    color: #ccc;
+                    text-align: center;
+                    width: 100%;
+                    white-space: nowrap;
+                `;
+
+                blankCard.appendChild(blankThumb);
+                blankCard.appendChild(blankLabel);
+                blankCard.onclick = () => {
+                    currentPrompt = "";
+                    if (typeof editPanel.clearPrompt === "function") {
+                        editPanel.clearPrompt();
+                    }
+                    if (typeof editPanel.showPromptSettings === "function") {
+                        editPanel.showPromptSettings();
+                    }
+                    renderContent(searchInput.value);
+                };
+
+                grid.appendChild(blankCard);
+            }
         };
 
         // ---- Icon (Small Thumbnail) Grid View ----
@@ -2387,8 +2465,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
+            const showEditBlank = editMode && !!editPanel && mode !== "save" && !multiSelect;
 
-            if (filteredPrompts.length === 0) {
+            if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
                 emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
                 emptyMsg.style.cssText = `
@@ -2570,6 +2649,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 card.onclick = async (e) => {
                     if (editMode && editPanel) {
+                        const now = Date.now();
+                        if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
+                            currentPrompt = promptName;
+                            resolve({ category: selectedCategory, prompt: promptName });
+                            cleanup();
+                            return;
+                        }
+                        editModeLastClickPrompt = promptName;
+                        editModeLastClickAt = now;
                         currentPrompt = promptName;
                         editPanel.loadPrompt(selectedCategory, promptName);
                         renderContent(searchInput.value);
@@ -2637,6 +2725,65 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 grid.appendChild(card);
             });
+
+            if (showEditBlank) {
+                const isSelectedBlank = !currentPrompt;
+                const blankCard = document.createElement("div");
+                blankCard.style.cssText = `
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 8px;
+                    background: ${isSelectedBlank ? UI.accentSoft : UI.cardBg};
+                    border: 2px dashed ${isSelectedBlank ? UI.accentBorder : UI.cardBorder};
+                    border-radius: 8px;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                `;
+
+                const blankThumb = document.createElement("div");
+                blankThumb.style.cssText = `
+                    width: ${browserLayout.iconThumbWidth}px;
+                    height: ${browserLayout.iconThumbHeight}px;
+                    border-radius: 6px;
+                    background: ${UI.inputBg};
+                    border: 1px dashed ${UI.inputBorder};
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #98a3af;
+                    font-size: 24px;
+                    line-height: 1;
+                `;
+                blankThumb.textContent = "+";
+
+                const blankLabel = document.createElement("div");
+                blankLabel.textContent = "Blank Prompt";
+                blankLabel.style.cssText = `
+                    margin-top: 8px;
+                    font-size: 12px;
+                    color: #ccc;
+                    text-align: center;
+                    width: 100%;
+                    white-space: nowrap;
+                `;
+
+                blankCard.appendChild(blankThumb);
+                blankCard.appendChild(blankLabel);
+                blankCard.onclick = () => {
+                    currentPrompt = "";
+                    if (typeof editPanel.clearPrompt === "function") {
+                        editPanel.clearPrompt();
+                    }
+                    if (typeof editPanel.showPromptSettings === "function") {
+                        editPanel.showPromptSettings();
+                    }
+                    renderContent(searchInput.value);
+                };
+
+                grid.appendChild(blankCard);
+            }
         };
 
         // ---- List View ----
@@ -2645,15 +2792,16 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 display: flex;
                 flex-direction: column;
                 gap: 0;
-                padding: 4px 0;
+                padding: 0;
                 position: relative;
             `;
             grid.innerHTML = "";
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
+            const showEditBlank = editMode && !!editPanel && mode !== "save" && !multiSelect;
 
-            if (filteredPrompts.length === 0) {
+            if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
                 emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
                 emptyMsg.style.cssText = `
@@ -2702,7 +2850,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 display: grid;
                 grid-template-columns: ${listColumns};
                 gap: 0;
-                padding: 4px 8px 6px 8px;
+                padding: 0 8px 6px 8px;
                 border-bottom: 1px solid rgba(148,163,184,0.2);
                 margin-bottom: 4px;
                 align-items: center;
@@ -2730,7 +2878,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 `;
 
                 if (i > 0) {
-                    hDiv.style.paddingLeft = "12px";
+                    hDiv.style.paddingLeft = "16px";
                     hDiv.style.boxSizing = "border-box";
                 }
 
@@ -2885,6 +3033,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     height: 36px;
                     position: relative;
                     flex-shrink: 0;
+                    margin: 0 auto;
                 `;
 
                 const thumbDiv = document.createElement("div");
@@ -2972,7 +3121,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     display: flex;
                     align-items: center;
                     gap: 6px;
-                    padding: 4px 0 4px 0;
+                    padding: 4px 16px;
                     overflow: hidden;
                     box-sizing: border-box;
                 `;
@@ -3008,7 +3157,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 promptDiv.style.cssText = `
                     font-size: 12px;
                     color: #9fb0c3;
-                    padding: 4px 0 4px 0.6em;
+                    padding: 4px 16px;
                     box-sizing: border-box;
                     white-space: nowrap;
                     overflow: hidden;
@@ -3036,7 +3185,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         font-size: 12px;
                         color: ${n > 0 ? '#aaa' : '#555'};
                         text-align: center;
-                        padding: 4px 0;
+                        padding: 4px 16px;
                         box-sizing: border-box;
                     `;
                     return d;
@@ -3053,6 +3202,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 row.onclick = async (e) => {
                     if (editMode && editPanel) {
+                        const now = Date.now();
+                        if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 1000) {
+                            currentPrompt = promptName;
+                            resolve({ category: selectedCategory, prompt: promptName });
+                            cleanup();
+                            return;
+                        }
+                        editModeLastClickPrompt = promptName;
+                        editModeLastClickAt = now;
                         currentPrompt = promptName;
                         editPanel.loadPrompt(selectedCategory, promptName);
                         renderContent(searchInput.value);
@@ -3120,6 +3278,92 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 grid.appendChild(row);
             });
+
+            if (showEditBlank) {
+                const row = document.createElement("div");
+                row.dataset.pmListRow = "true";
+                const isSelectedBlank = !currentPrompt;
+                row.style.cssText = `
+                    display: grid;
+                    grid-template-columns: ${listColumns};
+                    gap: 0;
+                    padding: 0 8px;
+                    background: ${isSelectedBlank ? UI.accentSoft : 'transparent'};
+                    border-radius: 4px;
+                    cursor: pointer;
+                    align-items: center;
+                    transition: background 0.1s ease;
+                    outline: ${isSelectedBlank ? `2px solid ${UI.accentBorder}` : "none"};
+                    outline-offset: ${isSelectedBlank ? "-2px" : "0"};
+                    box-shadow: ${isSelectedBlank ? `0 0 8px ${UI.accentSoft}` : "none"};
+                `;
+
+                const blankThumbWrap = document.createElement("div");
+                blankThumbWrap.style.cssText = `
+                    width: 36px;
+                    height: 36px;
+                    margin: 0 auto;
+                    border-radius: 4px;
+                    background: ${UI.inputBg};
+                    border: 1px dashed ${UI.inputBorder};
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #98a3af;
+                    font-size: 20px;
+                    line-height: 1;
+                `;
+                blankThumbWrap.textContent = "+";
+
+                const blankName = document.createElement("div");
+                blankName.textContent = "Blank Prompt";
+                blankName.style.cssText = `
+                    font-size: 13px;
+                    color: #ddd;
+                    padding: 4px 16px;
+                    box-sizing: border-box;
+                `;
+
+                const blankPrompt = document.createElement("div");
+                blankPrompt.textContent = "New empty prompt";
+                blankPrompt.style.cssText = `
+                    font-size: 12px;
+                    color: #9fb0c3;
+                    padding: 4px 16px;
+                    box-sizing: border-box;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                `;
+
+                row.appendChild(blankThumbWrap);
+                row.appendChild(blankName);
+                row.appendChild(blankPrompt);
+                if (!promptOnly) {
+                    const dash = () => {
+                        const d = document.createElement("div");
+                        d.textContent = "—";
+                        d.style.cssText = `font-size: 12px; color: #555; text-align: center; padding: 4px 16px; box-sizing: border-box;`;
+                        return d;
+                    };
+                    row.appendChild(dash());
+                    row.appendChild(dash());
+                    row.appendChild(dash());
+                }
+
+                row.onclick = () => {
+                    currentPrompt = "";
+                    if (typeof editPanel.clearPrompt === "function") {
+                        editPanel.clearPrompt();
+                    }
+                    if (typeof editPanel.showPromptSettings === "function") {
+                        editPanel.showPromptSettings();
+                    }
+                    renderContent(searchInput.value);
+                };
+
+                grid.appendChild(row);
+            }
 
             requestAnimationFrame(() => {
                 refreshContinuousDividers();
@@ -3661,10 +3905,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         dialog.appendChild(controlsBar);
         dialog.appendChild(categoryContainer);
         dialog.appendChild(contentRow);
-        dialog.appendChild(footer);
         if (mode === "save" || multiSelect) {
             dialog.appendChild(saveBar);
         }
+        dialog.appendChild(footer);
 
         const cleanup = () => {
             clearTimeout(hoverTimer);
