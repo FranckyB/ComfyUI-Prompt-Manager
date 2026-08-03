@@ -2135,9 +2135,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         gridContainer.className = "thumbnail-grid-container";
         gridContainer.style.cssText = `
             overflow-y: auto;
-            flex: 0 0 auto;
+            flex: 1;
             min-width: 0;
-            height: ${currentViewMode === "icon" ? browserLayout.iconHeight : browserLayout.height}px;
+            height: ${browserLayout.height}px;
             scrollbar-width: none;
             -ms-overflow-style: none;
         `;
@@ -3202,7 +3202,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const listViewportWidth = Math.max(
                 520,
-                (gridContainer.clientWidth > 0 ? gridContainer.clientWidth : browserLayout.width) - 18
+                browserLayout.width - 18
             );
             const defaultPromptColumnWidth = promptOnly
                 ? Math.round(listViewportWidth * (browserPrefScope === "mixer" ? 0.68 : 0.5))
@@ -3987,10 +3987,18 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         viewModeBtn.onclick = () => {
-            if (currentViewMode === "grid") {
-                currentViewMode = compactBrowser ? "list" : "icon";
+            if (compactBrowser) {
+                // Compact mode: only Grid and List make sense.
+                currentViewMode = currentViewMode === "grid" ? "list" : "grid";
             } else {
-                currentViewMode = "grid";
+                // Full mode: cycle Grid (large) -> Icon (medium) -> List (small) -> Grid.
+                if (currentViewMode === "grid") {
+                    currentViewMode = "icon";
+                } else if (currentViewMode === "icon") {
+                    currentViewMode = "list";
+                } else {
+                    currentViewMode = "grid";
+                }
             }
             setViewMode(currentViewMode, browserPrefScope);
             localStorage.setItem(getViewModeStorageKey(browserPrefScope), currentViewMode);

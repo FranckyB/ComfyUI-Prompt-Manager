@@ -299,6 +299,20 @@ export function createPromptBrowserEditPanel(options) {
     const typeSelect = createSelect("", getPromptTypeChoices());
     settingsBody.appendChild(typeSelect);
 
+    // Auto-save prompt type when changed (no confirmation; prompt-level Save handles the prompt itself).
+    typeSelect.addEventListener("change", async () => {
+        const category = currentCategory;
+        if (!category) return;
+        const result = await saveComposerCategorySettings(category, {
+            basePrompt: baseTextArea.value,
+            promptType: typeSelect.value,
+        });
+        if (result?.success) {
+            node.prompts = result.prompts;
+            _onChange();
+        }
+    });
+
     const baseLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Base Prompt (for thumbnails)");
     settingsBody.appendChild(baseLabel);
 
