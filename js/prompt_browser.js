@@ -1558,29 +1558,27 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             controlsBar.appendChild(editModeBtn);
         }
 
-        // Category selector (single-line horizontal scroll)
-        const categoryContainer = document.createElement("div");
-        categoryContainer.className = "category-scroll-bar";
-        categoryContainer.style.cssText = `
+        // Category bar: static filter/add controls + horizontally scrollable category tabs
+        const categoryBar = document.createElement("div");
+        categoryBar.style.cssText = `
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.15);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+            min-height: 0;
+        `;
+
+        // Static controls (always visible, left side)
+        const categoryControls = document.createElement("div");
+        categoryControls.style.cssText = `
             display: flex;
             gap: 6px;
-            margin-bottom: 10px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid ${UI.sectionBorder};
-            flex-wrap: nowrap;
-            overflow-x: auto;
-            overflow-y: hidden;
-            scrollbar-width: thin;
-            scrollbar-color: #444 transparent;
+            flex-shrink: 0;
+            align-items: center;
         `;
-        categoryContainer.addEventListener("wheel", (e) => {
-            if (e.deltaY !== 0) {
-                e.preventDefault();
-                categoryContainer.scrollLeft += e.deltaY;
-            }
-        }, { passive: false });
 
-        // Category type filter dropdown (first item in the category bar)
         const typeFilterSelect = document.createElement("select");
         typeFilterSelect.style.cssText = `
             padding: 6px 10px;
@@ -1592,7 +1590,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             font-size: 13px;
             flex-shrink: 0;
             outline: none;
-            margin-right: 2px;
+            margin-top: 1px;
         `;
         const allTypesOption = document.createElement("option");
         allTypesOption.value = "__all__";
@@ -1609,7 +1607,93 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             rebuildCategoryList();
             renderContent(searchInput.value);
         });
-        categoryContainer.appendChild(typeFilterSelect);
+        categoryControls.appendChild(typeFilterSelect);
+
+        const addCategoryBtn = document.createElement("button");
+        addCategoryBtn.textContent = "+";
+        addCategoryBtn.title = "New Category";
+        addCategoryBtn.style.cssText = `
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid #5f6773;
+            background: #313843;
+            color: #aaa;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.15s ease;
+            flex-shrink: 0;
+            margin-top: 1px;
+        `;
+        addCategoryBtn.onmouseover = () => { addCategoryBtn.style.background = '#38414c'; addCategoryBtn.style.color = '#fff'; };
+        addCategoryBtn.onmouseout = () => { addCategoryBtn.style.background = '#313843'; addCategoryBtn.style.color = '#aaa'; };
+        addCategoryBtn.onclick = async () => {
+            const result = await showNewCategoryDialog();
+            if (result && result.name && result.name.trim()) {
+                const categoryName = result.name.trim();
+                const existingCategories = Object.keys(node.prompts || {});
+                const existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.toLowerCase());
+                if (existingCategoryName) {
+                    await showInfo("Category Exists", `Category already exists as "${existingCategoryName}".`);
+                    return;
+                }
+                try {
+                    const resp = await fetch(`${endpointPrefix}/save-category`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ category_name: categoryName, nsfw: result.nsfw })
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        node.prompts = data.prompts;
+                        setSelectedCategory(categoryName);
+                        rebuildCategoryList();
+                        renderContent(searchInput.value);
+                    } else {
+                        await showInfo("Error", data.error);
+                    }
+                } catch (err) {
+                    console.error("[PromptManagerAdvanced] Error creating category:", err);
+                }
+            }
+        };
+        categoryControls.appendChild(addCategoryBtn);
+
+        // Horizontally scrollable category tabs
+        const categoryContainer = document.createElement("div");
+        categoryContainer.className = "category-scroll-bar";
+        categoryContainer.style.cssText = `
+            display: flex;
+            gap: 6px;
+            flex-wrap: nowrap;
+            align-items: center;
+            overflow-x: scroll;
+            overflow-y: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(74, 138, 212, 0.65) transparent;
+            flex: 1;
+            min-width: 0;
+            padding-right: 1px;
+            padding-bottom: 4px;
+        `;
+        categoryContainer.addEventListener("wheel", (e) => {
+            if (e.deltaY !== 0) {
+                e.preventDefault();
+                categoryContainer.scrollLeft += e.deltaY;
+            }
+        }, { passive: false });
+
+        const categoryContainerLeftBorder = document.createElement("div");
+        categoryContainerLeftBorder.style.cssText = `
+            width: 1px;
+            align-self: stretch;
+            background: rgba(255, 255, 255, 0.22);
+            margin: 0 2px;
+            flex-shrink: 0;
+        `;
+
+        categoryBar.appendChild(categoryControls);
+        categoryBar.appendChild(categoryContainerLeftBorder);
+        categoryBar.appendChild(categoryContainer);
 
         let allCategories = [];
         let categoryTypeFilter = "__all__";
@@ -2113,7 +2197,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             ensureSelectedCategory();
             categoryButtons = [];
             categoryContainer.innerHTML = "";
-            categoryContainer.appendChild(typeFilterSelect);
             categories.forEach(cat => {
                 const btn = document.createElement("button");
                 btn.dataset.category = cat;
@@ -2129,6 +2212,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     position: relative;
                     flex-shrink: 0;
                     white-space: nowrap;
+                    margin-top: 1px;
                 `;
 
                 btn.textContent = cat;
@@ -2161,6 +2245,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 font-size: 13px;
                 transition: all 0.15s ease;
                 flex-shrink: 0;
+                margin-bottom: 2px;
             `;
             addBtn.onmouseover = () => { addBtn.style.background = '#38414c'; addBtn.style.color = '#fff'; };
             addBtn.onmouseout = () => { addBtn.style.background = '#313843'; addBtn.style.color = '#aaa'; };
@@ -2194,15 +2279,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                 }
             };
-            categoryContainer.appendChild(addBtn);
-
             updateCategoryButtons();
         };
         rebuildCategoryList();
 
-        // When the caller locks the browser to a single category, hide the tabs.
+        // When the caller locks the browser to a single category, hide the whole bar.
         if (allowedCategories && allowedCategories.length === 1) {
-            categoryContainer.style.display = "none";
+            categoryBar.style.display = "none";
         }
 
         // Main content area: grid + optional edit panel
@@ -2230,9 +2313,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         style.textContent = `
             .thumbnail-grid-container::-webkit-scrollbar { display: none; }
             .category-scroll-bar::-webkit-scrollbar { height: 6px; }
+            .category-scroll-bar::-webkit-scrollbar:horizontal { display: block; }
             .category-scroll-bar::-webkit-scrollbar-track { background: transparent; }
-            .category-scroll-bar::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-            .category-scroll-bar::-webkit-scrollbar-thumb:hover { background: #555; }
+            .category-scroll-bar::-webkit-scrollbar-thumb { background: rgba(74, 138, 212, 0.55); border-radius: 3px; }
+            .category-scroll-bar::-webkit-scrollbar-thumb:hover { background: rgba(74, 138, 212, 0.85); }
+            .category-scroll-bar::-webkit-scrollbar-corner { background: transparent; }
         `;
         document.head.appendChild(style);
 
@@ -4422,7 +4507,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         dialog.appendChild(header);
         dialog.appendChild(controlsBar);
-        dialog.appendChild(categoryContainer);
+        dialog.appendChild(categoryBar);
         dialog.appendChild(contentRow);
         dialog.appendChild(footer);
 
