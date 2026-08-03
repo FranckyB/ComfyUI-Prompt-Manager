@@ -457,8 +457,12 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             selectedPromptsWidget.value = "[]";
         }
 
+        // Build the root DOM widget synchronously so LiteGraph/ComfyUI can position
+        // and size the widget container before the first paint. Prompt Composer uses
+        // the same pattern. The child UI sections are populated after data loads.
+        buildComposerRoot(node);
+
         loadActivePrompts(node).then(() => {
-            buildComposerRoot(node);
             buildComposerPreview(node);
             buildComposerSourceBar(node);
             buildComposerSelectorBar(node);
@@ -574,8 +578,11 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             }
         }
 
+        // Re-create/ensure the root DOM widget synchronously during workflow restore
+        // so the widget container is positioned before async data loads.
+        buildComposerRoot(node);
+
         loadActivePrompts(node).then(() => {
-            buildComposerRoot(node);
             buildComposerPreview(node);
             buildComposerSourceBar(node);
             buildComposerSelectorBar(node);
