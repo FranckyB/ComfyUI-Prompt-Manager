@@ -1174,7 +1174,20 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             z-index: 9999;
         `;
 
-        const compactBrowser = Boolean(app.ui.settings.getSettingValue("PromptManager.CompactPromptBrowser"));
+        const compactBrowserPref = Boolean(app.ui.settings.getSettingValue("PromptManager.CompactPromptBrowser"));
+        // Auto-detect compact mode if the viewport is too small for the full layout.
+        // The full dialog needs the grid height plus header, controls, category tabs,
+        // footer toolbar, and padding/margins. window.innerHeight includes ComfyUI UI
+        // chrome, so we compare against the estimated total dialog height.
+        const FULL_DIALOG_HEIGHT = 1280;
+        const FULL_DIALOG_WIDTH = 1480;
+        const compactBrowser = compactBrowserPref || (
+            window.innerHeight < FULL_DIALOG_HEIGHT || window.innerWidth < FULL_DIALOG_WIDTH
+        );
+        console.log(
+            `[PromptBrowser] viewport=${window.innerWidth}x${window.innerHeight}, ` +
+            `pref=${compactBrowserPref}, compact=${compactBrowser}`
+        );
         const browserLayout = compactBrowser
             ? { width: 654, height: 680, cols: 5, itemWidth: 120, gap: 4, thumbWidth: 100, thumbHeight: 132 }
             : {
