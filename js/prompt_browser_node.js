@@ -1417,6 +1417,7 @@ function buildComposerSelectorBar(node) {
         const selection = await showThumbnailBrowser(node, categoryWidget.value, nameWidget.value, {
             title: "Select Prompt Browser Prompts",
             multiSelect: true,
+            startInMultiSelect: false,
             clearSelectionOnCategorySwitch: true,
             selectedPrompts,
             promptOnly: true,

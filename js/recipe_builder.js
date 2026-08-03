@@ -1850,8 +1850,6 @@ function _getLoraOriginalStrength(node, stateKey, lora) {
 }
 
 // --- LoRA display ---
-    requestAnimationFrame(() => reflowNode(node));
-
 function updateLoras(node) {
     const containerA = node._weLoraAContainer;
     const containerB = node._weLoraBContainer;
