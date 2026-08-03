@@ -15,6 +15,7 @@ const PROMPT_TYPE_CHOICES = [
     { value: "composition", label: "Composition" },
     { value: "dialogue", label: "Dialogue" },
     { value: "expression", label: "Expression" },
+    { value: "lens_artifact", label: "Lens Artifact" },
     { value: "lighting", label: "Lighting" },
     { value: "mood", label: "Mood" },
     { value: "motion", label: "Motion" },
@@ -24,9 +25,10 @@ const PROMPT_TYPE_CHOICES = [
     { value: "style", label: "Style" },
     { value: "subject", label: "Subject" },
     { value: "temporal_flow", label: "Temporal Flow" },
+    { value: "weather", label: "Weather" },
 ];
 
-function getPromptTypeChoices() {
+export function getPromptTypeChoices() {
     const choices = [...PROMPT_TYPE_CHOICES];
     const seen = new Set(choices.map((c) => String(c.value || "").trim().toLowerCase()));
 

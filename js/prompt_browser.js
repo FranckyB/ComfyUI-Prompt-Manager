@@ -1,4 +1,4 @@
-import { createPromptBrowserEditPanel } from "./prompt_browser_edit.js";
+import { createPromptBrowserEditPanel, getPromptTypeChoices } from "./prompt_browser_edit.js";
 
 let app = null;
 let UI = {
@@ -1580,11 +1580,40 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         }, { passive: false });
 
-        let categories = filterAllowedCategories(getVisibleCategories(node, {
-            hideNSFW: hideNSFWState,
-            workflowOnly,
-            contentFilter: contentFilterState,
-        }));
+        // Category type filter dropdown (first item in the category bar)
+        const typeFilterSelect = document.createElement("select");
+        typeFilterSelect.style.cssText = `
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid ${UI.inputBorder};
+            background: ${UI.buttonBg};
+            color: #aaa;
+            cursor: pointer;
+            font-size: 13px;
+            flex-shrink: 0;
+            outline: none;
+            margin-right: 2px;
+        `;
+        const allTypesOption = document.createElement("option");
+        allTypesOption.value = "__all__";
+        allTypesOption.textContent = "All Types";
+        typeFilterSelect.appendChild(allTypesOption);
+        for (const choice of getPromptTypeChoices()) {
+            const opt = document.createElement("option");
+            opt.value = choice.value;
+            opt.textContent = choice.label;
+            typeFilterSelect.appendChild(opt);
+        }
+        typeFilterSelect.addEventListener("change", () => {
+            categoryTypeFilter = typeFilterSelect.value;
+            rebuildCategoryList();
+            renderContent(searchInput.value);
+        });
+        categoryContainer.appendChild(typeFilterSelect);
+
+        let allCategories = [];
+        let categoryTypeFilter = "__all__";
+        let categories = [];
         let selectedSaveName = initialSaveName;
         let categoryButtons = [];
         let editModeLastClickPrompt = "";
@@ -1594,12 +1623,21 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
         };
 
+        const applyCategoryTypeFilter = () => {
+            if (categoryTypeFilter === "__all__") {
+                categories = [...allCategories];
+            } else {
+                categories = allCategories.filter(cat => (getCategoryPromptType(node, cat) || "") === categoryTypeFilter);
+            }
+        };
+
         const ensureSelectedCategory = () => {
-            categories = filterAllowedCategories(getVisibleCategories(node, {
+            allCategories = filterAllowedCategories(getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
             }));
+            applyCategoryTypeFilter();
 
             if (!Array.isArray(categories) || categories.length === 0) {
                 setSelectedCategory("");
@@ -2067,7 +2105,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         const rebuildCategoryList = () => {
-            categories = filterAllowedCategories(getVisibleCategories(node, {
+            allCategories = filterAllowedCategories(getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
@@ -2075,6 +2113,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             ensureSelectedCategory();
             categoryButtons = [];
             categoryContainer.innerHTML = "";
+            categoryContainer.appendChild(typeFilterSelect);
             categories.forEach(cat => {
                 const btn = document.createElement("button");
                 btn.dataset.category = cat;
