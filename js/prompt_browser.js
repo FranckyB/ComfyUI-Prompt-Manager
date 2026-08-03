@@ -1730,56 +1730,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
             menu.appendChild(renameItem);
 
-            // Delete Category
-            const baseDivider = document.createElement("div");
-            baseDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(baseDivider);
-
-            const deleteDivider = document.createElement("div");
-            deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(deleteDivider);
-
-            const deleteItem = document.createElement("div");
-            deleteItem.textContent = "🗑️ Delete Category";
-            deleteItem.style.cssText = `
-                padding: 8px 16px;
-                color: #f66;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            deleteItem.onmouseover = () => deleteItem.style.background = '#3a3a3a';
-            deleteItem.onmouseout = () => deleteItem.style.background = 'transparent';
-            deleteItem.onclick = async () => {
-                menu.remove();
-                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${cat}" and all its prompts?`)) {
-                    try {
-                        const resp = await fetch(`${endpointPrefix}/delete-category`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ category: cat })
-                        });
-                        const data = await resp.json();
-                        if (data.success) {
-                            node.prompts = data.prompts;
-                            if (selectedCategory === cat) {
-                                if (multiCategorySelect) {
-                                    delete selectedByCategory[cat];
-                                }
-                                const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
-                                setSelectedCategory(cats[0] || "");
-                            }
-                            rebuildCategoryList();
-                            renderContent(searchInput.value);
-                        } else {
-                            await showInfo("Error", data.error);
-                        }
-                    } catch (err) {
-                        console.error("[PromptManagerAdvanced] Error deleting category:", err);
-                    }
-                }
-            };
-            menu.appendChild(deleteItem);
-
             // Generate Missing Thumbnails
             const thumbDivider = document.createElement("div");
             thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
@@ -2013,6 +1963,52 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             };
             menu.appendChild(modelItem);
+
+            // Delete Category (always last, separated by a divider)
+            const deleteDivider = document.createElement("div");
+            deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(deleteDivider);
+
+            const deleteItem = document.createElement("div");
+            deleteItem.textContent = "🗑️ Delete Category";
+            deleteItem.style.cssText = `
+                padding: 8px 16px;
+                color: #f66;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            deleteItem.onmouseover = () => deleteItem.style.background = '#3a3a3a';
+            deleteItem.onmouseout = () => deleteItem.style.background = 'transparent';
+            deleteItem.onclick = async () => {
+                menu.remove();
+                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${cat}" and all its prompts?`)) {
+                    try {
+                        const resp = await fetch(`${endpointPrefix}/delete-category`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ category: cat })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            node.prompts = data.prompts;
+                            if (selectedCategory === cat) {
+                                if (multiCategorySelect) {
+                                    delete selectedByCategory[cat];
+                                }
+                                const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
+                                setSelectedCategory(cats[0] || "");
+                            }
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error deleting category:", err);
+                    }
+                }
+            };
+            menu.appendChild(deleteItem);
 
             document.body.appendChild(menu);
             const closeMenu = (e) => {
