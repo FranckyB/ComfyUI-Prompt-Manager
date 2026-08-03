@@ -1482,21 +1482,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let editModeBtn = null;
         const updateEditModeLayout = () => {
             if (!editPanel) return;
-            const clearPromptForMulti = supportsMultiSelect && multiSelectMode && selectedNames.size > 1;
             if (editMode) {
                 editPanel.element.style.display = "flex";
                 dialog.style.width = `${browserLayout.width + EDIT_PANEL_WIDTH}px`;
-                if (clearPromptForMulti) {
-                    if (typeof editPanel.clearPrompt === "function") {
-                        editPanel.clearPrompt();
-                    }
-                    editPanel.loadCategorySettings(selectedCategory);
-                    if (typeof editPanel.showCategorySettings === "function") {
-                        editPanel.showCategorySettings();
-                    }
-                } else {
-                    editPanel.loadCategorySettings(selectedCategory);
-                }
+                editPanel.loadCategorySettings(selectedCategory);
             } else {
                 editPanel.element.style.display = "none";
                 dialog.style.width = `${browserLayout.width}px`;
@@ -2662,6 +2651,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
                         enableMultiSelect();
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (editMode && editPanel) {
+                            editPanel.loadPrompt(selectedCategory, promptName);
+                        }
                         renderContent(searchInput.value);
                         return;
                     }
@@ -2669,8 +2661,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
+                            if (editMode && editPanel) {
+                                editPanel.loadPrompt(selectedCategory, promptName);
+                            }
                             renderContent(searchInput.value);
                             return;
+                        }
+                        if (editMode && editPanel) {
+                            editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         updateCardSelection(card, promptName);
                         updateEditModeLayout();
@@ -3010,6 +3008,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
                         enableMultiSelect();
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (editMode && editPanel) {
+                            editPanel.loadPrompt(selectedCategory, promptName);
+                        }
                         renderContent(searchInput.value);
                         return;
                     }
@@ -3017,8 +3018,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
+                            if (editMode && editPanel) {
+                                editPanel.loadPrompt(selectedCategory, promptName);
+                            }
                             renderContent(searchInput.value);
                             return;
+                        }
+                        if (editMode && editPanel) {
+                            editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         updateCardSelection(card, promptName);
                         updateEditModeLayout();
@@ -3577,6 +3584,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
                         enableMultiSelect();
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
+                        if (editMode && editPanel) {
+                            editPanel.loadPrompt(selectedCategory, promptName);
+                        }
                         renderContent(searchInput.value);
                         return;
                     }
@@ -3584,8 +3594,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
+                            if (editMode && editPanel) {
+                                editPanel.loadPrompt(selectedCategory, promptName);
+                            }
                             renderContent(searchInput.value);
                             return;
+                        }
+                        if (editMode && editPanel) {
+                            editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         updateRowSelection(row, promptName);
                         updateEditModeLayout();
