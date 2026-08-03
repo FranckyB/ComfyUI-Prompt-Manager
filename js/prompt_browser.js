@@ -1576,7 +1576,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             display: flex;
             gap: 6px;
             flex-shrink: 0;
-            align-items: center;
+            align-items: flex-start;
         `;
 
         const typeFilterSelect = document.createElement("select");
@@ -1666,14 +1666,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             gap: 6px;
             flex-wrap: nowrap;
             align-items: center;
-            overflow-x: scroll;
+            overflow-x: auto;
             overflow-y: hidden;
             scrollbar-width: thin;
             scrollbar-color: rgba(74, 138, 212, 0.65) transparent;
             flex: 1;
             min-width: 0;
             padding-right: 1px;
-            padding-bottom: 4px;
         `;
         categoryContainer.addEventListener("wheel", (e) => {
             if (e.deltaY !== 0) {
