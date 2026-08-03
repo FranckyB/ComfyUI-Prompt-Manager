@@ -877,10 +877,14 @@ class PromptGenerator:
                 cmd_args.extend(["--n-gpu-layers", "0"])
 
             # GPU device selection (multi-GPU support)
+            # Use --device rather than --main-gpu: main-gpu only designates the
+            # device for KV cache/intermediate results while the default
+            # split-mode (layer) still spreads model layers across every visible
+            # GPU. --device restricts offloading to the specified device only.
             if gpu_device is not None and str(gpu_device).strip():
                 try:
                     gpu_idx = int(gpu_device)
-                    cmd_args.extend(["--main-gpu", str(gpu_idx)])
+                    cmd_args.extend(["--device", f"CUDA{gpu_idx}"])
                     print_pg("GPU device:", f"using GPU {gpu_idx}")
                 except ValueError:
                     print_pg("Warning:", f"Invalid GPU device '{gpu_device}', using system default.", RED)
@@ -900,7 +904,7 @@ class PromptGenerator:
             if gpu_device is not None and str(gpu_device).strip():
                 try:
                     gpu_idx = int(gpu_device)
-                    cmd_args_fallback.extend(["--main-gpu", str(gpu_idx)])
+                    cmd_args_fallback.extend(["--device", f"CUDA{gpu_idx}"])
                 except ValueError:
                     pass
 
