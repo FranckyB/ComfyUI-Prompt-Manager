@@ -1151,9 +1151,8 @@ function buildComposerPreview(node) {
         } else {
             ui.image.removeAttribute("src");
             ui.image.style.display = "none";
-            ui.placeholderViewport.style.display = "none";
-            ui.emptyLabel.style.display = "flex";
-            ui.emptyLabel.textContent = "No prompt selected";
+            ui.placeholderViewport.style.display = "flex";
+            ui.emptyLabel.style.display = "none";
         }
     };
 

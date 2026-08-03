@@ -576,6 +576,9 @@ export function createPromptBrowserEditPanel(options) {
         currentPromptName = "";
     }
 
+    // Initialize the thumbnail area with the placeholder so it never starts empty.
+    updateThumbnailDisplay(null);
+
     return {
         element: root,
         loadPrompt,
