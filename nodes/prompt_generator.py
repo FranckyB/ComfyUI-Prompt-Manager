@@ -877,15 +877,17 @@ class PromptGenerator:
                 cmd_args.extend(["--n-gpu-layers", "0"])
 
             # GPU device selection (multi-GPU support)
-            # Use --device rather than --main-gpu: main-gpu only designates the
-            # device for KV cache/intermediate results while the default
-            # split-mode (layer) still spreads model layers across every visible
-            # GPU. --device restricts offloading to the specified device only.
+            # Isolate via CUDA_VISIBLE_DEVICES rather than --device/--main-gpu.
+            # llama.cpp's mmproj/clip loader has a known bug (upstream issue #15804)
+            # where it ignores --main-gpu/--device and always loads the multimodal
+            # projector onto GPU 0. Restricting device visibility at the CUDA
+            # driver level, before the process starts, is unaffected by that bug
+            # since no other GPU is visible to any code path in the process.
+            gpu_env_idx = None
             if gpu_device is not None and str(gpu_device).strip():
                 try:
-                    gpu_idx = int(gpu_device)
-                    cmd_args.extend(["--device", f"CUDA{gpu_idx}"])
-                    print_pg("GPU device:", f"using GPU {gpu_idx}")
+                    gpu_env_idx = int(gpu_device)
+                    print_pg("GPU device:", f"using GPU {gpu_env_idx}")
                 except ValueError:
                     print_pg("Warning:", f"Invalid GPU device '{gpu_device}', using system default.", RED)
 
@@ -899,14 +901,6 @@ class PromptGenerator:
                 "-ngl", "100",
                 "-c", str(context_size),
             ]
-
-            # Add GPU device selection to fallback as well
-            if gpu_device is not None and str(gpu_device).strip():
-                try:
-                    gpu_idx = int(gpu_device)
-                    cmd_args_fallback.extend(["--device", f"CUDA{gpu_idx}"])
-                except ValueError:
-                    pass
 
             # Add vision flags for models with mmproj
             if use_vision_model:
@@ -925,6 +919,11 @@ class PromptGenerator:
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
             }
+
+            if gpu_env_idx is not None:
+                popen_env = os.environ.copy()
+                popen_env["CUDA_VISIBLE_DEVICES"] = str(gpu_env_idx)
+                popen_kwargs["env"] = popen_env
 
             if os.name == 'nt':
                 popen_kwargs["creationflags"] = creation_flags
