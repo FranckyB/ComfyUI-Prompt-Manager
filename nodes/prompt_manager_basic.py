@@ -359,6 +359,37 @@ async def save_prompt(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-manager/save-thumbnail")
+async def save_thumbnail(request):
+    """API endpoint to save or remove a thumbnail for a prompt"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+        thumbnail = data.get("thumbnail")  # Can be None to remove thumbnail
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name required"})
+
+        prompts = PromptManager.load_prompts()
+
+        if category not in prompts or name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        # Update or remove thumbnail
+        if thumbnail:
+            prompts[category][name]["thumbnail"] = thumbnail
+        elif "thumbnail" in prompts[category][name]:
+            del prompts[category][name]["thumbnail"]
+
+        PromptManager.save_prompts(prompts)
+
+        return server.web.json_response({"success": True})
+    except Exception as e:
+        print(f"[PromptManager] Error in save_thumbnail API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager/delete-category")
 async def delete_category(request):
     """API endpoint to delete a category"""

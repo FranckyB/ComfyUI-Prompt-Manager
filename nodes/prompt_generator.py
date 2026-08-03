@@ -3,6 +3,7 @@ import subprocess
 import time
 import os
 import sys
+import shutil
 import gc
 import atexit
 import signal
@@ -12,6 +13,7 @@ import base64
 import ctypes
 import numpy as np
 import torch
+import server
 import folder_paths
 from PIL import Image
 from io import BytesIO
@@ -211,13 +213,36 @@ def reload_prompts():
     _prompts_cache = {}
 
 
-def _get_prompt_manager_data_path():
-    return os.path.join(folder_paths.get_user_directory(), "default", "prompt_manager_data.json")
+def _get_prompt_generator_data_path():
+    return os.path.join(folder_paths.get_user_directory(), "default", "prompt_generator_data.json")
 
 
-def _load_system_prompts_from_prompt_manager():
+def _get_default_system_prompts_path():
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "default_system_prompts.json")
+
+
+def _ensure_prompt_generator_data():
+    """Ensure prompt_generator_data.json exists in user/default, seeding from default_system_prompts.json."""
+    data_path = _get_prompt_generator_data_path()
+    if os.path.exists(data_path):
+        return data_path
+
+    default_path = _get_default_system_prompts_path()
+    os.makedirs(os.path.dirname(data_path), exist_ok=True)
+
+    if os.path.exists(default_path):
+        try:
+            shutil.copy2(default_path, data_path)
+            print_pg(f"Created {data_path} from default system prompts.")
+            return data_path
+        except Exception as e:
+            print_pg(f"Warning: Failed to copy default system prompts to {data_path}: {e}", RED)
+    return data_path
+
+
+def _load_system_prompts_from_generator_data():
     prompts = {}
-    data_path = _get_prompt_manager_data_path()
+    data_path = _ensure_prompt_generator_data()
     if not os.path.exists(data_path):
         return prompts
 
@@ -244,8 +269,249 @@ def _load_system_prompts_from_prompt_manager():
 
 def _system_prompt_override_choices():
     base = ["(Use Generator's Prompt)"]
-    saved = sorted(_load_system_prompts_from_prompt_manager().keys(), key=lambda s: s.lower())
+    saved = sorted(_load_system_prompts_from_generator_data().keys(), key=lambda s: s.lower())
     return base + saved
+
+
+class PromptGeneratorDataStore:
+    """Light-weight store for prompt_generator_data.json, exposed via HTTP routes."""
+
+    @staticmethod
+    def load():
+        data_path = _ensure_prompt_generator_data()
+        if not os.path.exists(data_path):
+            return {}
+        try:
+            with open(data_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print_pg(f"Warning: Error loading prompt generator data: {e}", RED)
+            return {}
+
+    @staticmethod
+    def save(data):
+        data_path = _ensure_prompt_generator_data()
+        try:
+            os.makedirs(os.path.dirname(data_path), exist_ok=True)
+            with open(data_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print_pg(f"Warning: Error saving prompt generator data: {e}", RED)
+            return False
+
+
+def _generator_sort_prompts_data(data):
+    sorted_data = {}
+    for category in sorted(data.keys(), key=str.lower):
+        cat_data = data[category]
+        meta = cat_data.get("__meta__")
+        sorted_prompts = dict(sorted(
+            ((k, v) for k, v in cat_data.items() if k != "__meta__"),
+            key=lambda item: item[0].lower()
+        ))
+        if meta is not None:
+            sorted_prompts["__meta__"] = meta
+        sorted_data[category] = sorted_prompts
+    return sorted_data
+
+
+@server.PromptServer.instance.routes.get("/prompt-generator/get-prompts")
+async def generator_get_prompts(request):
+    try:
+        return server.web.json_response(PromptGeneratorDataStore.load())
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in get_prompts API: {e}", RED)
+        return server.web.json_response({"error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/save-category")
+async def generator_save_category(request):
+    try:
+        data = await request.json()
+        category_name = data.get("category_name", "").strip()
+        if not category_name:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        existing_lower = {k.lower(): k for k in prompts.keys()}
+        if category_name.lower() in existing_lower:
+            return server.web.json_response({"success": False, "error": f"Category already exists as '{existing_lower[category_name.lower()]}'"})
+
+        prompts[category_name] = {}
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in save_category API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/rename-category")
+async def generator_rename_category(request):
+    try:
+        data = await request.json()
+        old_category = data.get("old_category", "").strip()
+        new_category = data.get("new_category", "").strip()
+        if not old_category or not new_category:
+            return server.web.json_response({"success": False, "error": "Old and new category names are required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        if old_category not in prompts:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        existing_lower = {k.lower(): k for k in prompts.keys() if k.lower() != old_category.lower()}
+        if new_category.lower() in existing_lower:
+            return server.web.json_response({"success": False, "error": f"Category already exists as '{existing_lower[new_category.lower()]}'"})
+
+        prompts[new_category] = prompts.pop(old_category)
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts, "new_category": new_category})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in rename_category API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/delete-category")
+async def generator_delete_category(request):
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        if not category:
+            return server.web.json_response({"success": False, "error": "Category name is required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        if category not in prompts:
+            return server.web.json_response({"success": False, "error": "Category not found"})
+
+        del prompts[category]
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in delete_category API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/toggle-nsfw")
+async def generator_toggle_nsfw(request):
+    try:
+        data = await request.json()
+        toggle_type = data.get("type", "").strip()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+
+        prompts = PromptGeneratorDataStore.load()
+        if toggle_type == "category":
+            if category not in prompts:
+                return server.web.json_response({"success": False, "error": "Category not found"})
+            meta = prompts[category].get("__meta__", {}) if isinstance(prompts[category], dict) else {}
+            meta["nsfw"] = not meta.get("nsfw", False)
+            prompts[category]["__meta__"] = meta
+        elif toggle_type == "prompt":
+            if category not in prompts or name not in prompts[category]:
+                return server.web.json_response({"success": False, "error": "Prompt not found"})
+            entry = prompts[category][name]
+            if isinstance(entry, dict):
+                entry["nsfw"] = not entry.get("nsfw", False)
+        else:
+            return server.web.json_response({"success": False, "error": "Invalid toggle type"})
+
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in toggle_nsfw API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/save-prompt")
+async def generator_save_prompt(request):
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+        text = data.get("text", "").strip()
+        thumbnail = data.get("thumbnail")
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name are required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        if category not in prompts:
+            prompts[category] = {}
+
+        existing_data = prompts[category].get(name, {})
+        prompts[category][name] = {
+            "prompt": text,
+            "loras_a": existing_data.get("loras_a", []) if isinstance(existing_data, dict) else [],
+            "loras_b": existing_data.get("loras_b", []) if isinstance(existing_data, dict) else [],
+            "trigger_words": existing_data.get("trigger_words", []) if isinstance(existing_data, dict) else [],
+            "thumbnail": thumbnail if thumbnail is not None else (existing_data.get("thumbnail") if isinstance(existing_data, dict) else None),
+        }
+        if isinstance(existing_data, dict) and existing_data.get("nsfw"):
+            prompts[category][name]["nsfw"] = existing_data["nsfw"]
+
+        prompts = _generator_sort_prompts_data(prompts)
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in save_prompt API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/delete-prompt")
+async def generator_delete_prompt(request):
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name are required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        if category not in prompts or name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        del prompts[category][name]
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in delete_prompt API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/save-thumbnail")
+async def generator_save_thumbnail(request):
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+        thumbnail = data.get("thumbnail")
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        if category not in prompts or name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        if thumbnail:
+            prompts[category][name]["thumbnail"] = thumbnail
+        elif "thumbnail" in prompts[category][name]:
+            del prompts[category][name]["thumbnail"]
+
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in save_thumbnail API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
 
 def get_default_context_size():
     """Return a context size scaled to the active GPU's total VRAM.
@@ -494,7 +760,7 @@ class PromptGenerator:
                 }),
                 "override_system_prompt": (_system_prompt_override_choices(), {
                     "default": "(Use Generator's Prompt)",
-                    "tooltip": "Override Prompt Generator's built-in system prompt with a saved prompt from category 'System Prompts' in prompt_manager_data.json. '(Use Generator's Prompt)' keeps the normal mode prompt."
+                    "tooltip": "Override Prompt Generator's built-in system prompt with a saved prompt from category 'System Prompts' in prompt_generator_data.json. '(Use Generator's Prompt)' keeps the normal mode prompt."
                 }),
                 "clip": ("CLIP", {
                     "tooltip": "Optional: Connect a CLIP/text encoder to generate prompts directly without starting llama.cpp/Ollama. Requires a model that supports .generate()."
@@ -972,7 +1238,7 @@ class PromptGenerator:
         # Optional override from Prompt Generator main node.
         override_prompt = ""
         if override_system_prompt and override_system_prompt != "(Use Generator's Prompt)":
-            saved_prompts = _load_system_prompts_from_prompt_manager()
+            saved_prompts = _load_system_prompts_from_generator_data()
             override_prompt = str(saved_prompts.get(override_system_prompt, "") or "").strip()
             if not override_prompt:
                 print_pg(f"Warning: Selected override system prompt '{override_system_prompt}' was not found or is empty. Using generator mode prompt.", RED)

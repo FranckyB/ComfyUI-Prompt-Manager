@@ -203,7 +203,7 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         .filter(Boolean)
         .join(" ");
 
-    const isComposerManager = endpointPrefix === "/prompt-manager/mixer";
+    const isComposerManager = endpointPrefix === "/prompt-manager/compose";
     const composerSeed = Number(getThumbnailComposerSeedFromSettings());
     const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
         ? composerSeed
@@ -284,7 +284,9 @@ function getThumbnailComposerSeedFromSettings() {
 
 async function saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix = "/prompt-manager-advanced") {
     try {
-        const response = await fetch(`${endpointPrefix}/save-thumbnail`, {
+        const url = `${endpointPrefix}/save-thumbnail`;
+        console.log("[PromptBrowser] save-thumbnail request:", url, "method=POST", "prefix=", endpointPrefix);
+        const response = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -294,7 +296,14 @@ async function saveThumbnailEntry(node, category, promptName, thumbnail, endpoin
             })
         });
 
-        const data = await response.json();
+        const rawText = await response.text();
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch (parseErr) {
+            console.error("[PromptBrowser] Non-JSON save-thumbnail response:", response.status, url, rawText);
+            throw parseErr;
+        }
         if (data.success) {
             if (node?.prompts?.[category]?.[promptName]) {
                 if (thumbnail) {
@@ -779,17 +788,17 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
 let _sessionHideNSFW = null;
 let _sessionViewModeByScope = {
     manager: null,
-    mixer: null,
+    composer: null,
 };
 let _sessionEnableThumbnailPreview = null;
 let _sessionBrowserContentFilter = null;
 let _sessionPromptColumnWidthByScope = {
     manager: null,
-    mixer: null,
+    composer: null,
 };
 
 function normalizeBrowserPrefScope(scope) {
-    return scope === "mixer" ? "mixer" : "manager";
+    return scope === "composer" ? "composer" : "manager";
 }
 
 function isHiddenCategoryEntryKey(key) {
@@ -886,14 +895,14 @@ function showCategoryBasePromptDialog(categoryName, currentValue = "") {
 }
 
 function getViewModeStorageKey(scope) {
-    return normalizeBrowserPrefScope(scope) === "mixer"
-        ? "PromptManager.BrowserViewMode.Mixer"
+    return normalizeBrowserPrefScope(scope) === "composer"
+        ? "PromptManager.BrowserViewMode.Composer"
         : "PromptManager.BrowserViewMode";
 }
 
 function getPromptColumnWidthStorageKey(scope) {
-    return normalizeBrowserPrefScope(scope) === "mixer"
-        ? "PromptManager.ListPromptColumnWidth.Mixer"
+    return normalizeBrowserPrefScope(scope) === "composer"
+        ? "PromptManager.ListPromptColumnWidth.Composer"
         : "PromptManager.ListPromptColumnWidth";
 }
 
@@ -1071,9 +1080,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const multiCategorySelect = multiSelect && options?.multiCategorySelect === true;
     const clearSelectionOnCategorySwitch = options?.clearSelectionOnCategorySwitch === true;
     const endpointPrefix = typeof options?.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
+    const showCategoryTypeFilter = endpointPrefix === "/prompt-manager/compose";
     const promptOnly = options?.promptOnly === true;
     const browserPrefScope = normalizeBrowserPrefScope(
-        options?.preferenceScope || (promptOnly ? "mixer" : "manager")
+        options?.preferenceScope || (promptOnly ? "composer" : "manager")
     );
     const allowEditMode = options?.allowEditMode !== false;
     let editMode = allowEditMode && options?.editMode === true;
@@ -1607,7 +1617,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             rebuildCategoryList();
             renderContent(searchInput.value);
         });
-        categoryControls.appendChild(typeFilterSelect);
+        if (showCategoryTypeFilter) {
+            categoryControls.appendChild(typeFilterSelect);
+        } else {
+            typeFilterSelect.style.display = "none";
+        }
 
         const addCategoryBtn = document.createElement("button");
         addCategoryBtn.textContent = "+";
@@ -1688,6 +1702,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             background: rgba(255, 255, 255, 0.22);
             margin: 0 2px;
             flex-shrink: 0;
+            display: ${showCategoryTypeFilter ? "block" : "none"};
         `;
 
         categoryBar.appendChild(categoryControls);
@@ -1788,7 +1803,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const showCategoryContextMenu = (event, cat) => {
             const existing = document.querySelector('.category-context-menu');
             if (existing) existing.remove();
-            const supportsCategoryPromptMetadata = endpointPrefix === "/prompt-manager/mixer";
+            const supportsCategoryPromptMetadata = endpointPrefix === "/prompt-manager/compose";
 
             const menu = document.createElement("div");
             menu.className = "category-context-menu";
@@ -3379,7 +3394,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 browserLayout.width - 18
             );
             const defaultPromptColumnWidth = promptOnly
-                ? Math.round(listViewportWidth * (browserPrefScope === "mixer" ? 0.68 : 0.5))
+                ? Math.round(listViewportWidth * (browserPrefScope === "composer" ? 0.68 : 0.5))
                 : Math.round(listViewportWidth * 0.43);
             let promptColumnWidth = getPromptColumnWidth(
                 browserPrefScope,

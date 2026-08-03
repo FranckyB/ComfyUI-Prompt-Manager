@@ -8,6 +8,7 @@ import server
 from ..py.prompt_composer_store import PromptComposerStore, _find_category_case_insensitive, _find_prompt_case_insensitive
 from .prompt_manager_basic import _get_workflow_node
 from .prompt_manager_basic import PromptManager
+from .prompt_generator import PromptGeneratorDataStore
 
 
 def _is_hidden_category_entry_key(name):
@@ -20,11 +21,14 @@ class PromptBrowser:
 
     SOURCE_COMPOSE = "Compose Data"
     SOURCE_PROMPT = "Prompt Data"
+    SOURCE_SYSTEM_PROMPTS = "System Prompts"
 
     @staticmethod
     def _load_prompts_for_source(source):
         if str(source or "") == PromptBrowser.SOURCE_PROMPT:
             return PromptManager.load_prompts()
+        if str(source or "") == PromptBrowser.SOURCE_SYSTEM_PROMPTS:
+            return PromptGeneratorDataStore.load()
         return PromptComposerStore.load_prompts()
 
     @staticmethod
@@ -63,9 +67,10 @@ class PromptBrowser:
     def INPUT_TYPES(s):
         compose_data = PromptComposerStore.load_prompts()
         prompt_data = PromptManager.load_prompts()
+        system_data = PromptGeneratorDataStore.load()
 
         categories_set = set()
-        for source_data in (compose_data, prompt_data):
+        for source_data in (compose_data, prompt_data, system_data):
             for category_name in source_data.keys():
                 if category_name == "__meta__":
                     continue
@@ -78,7 +83,7 @@ class PromptBrowser:
         all_prompts = []
         first_prompt_text = ""
         first_prompt = ""
-        for source_data in (compose_data, prompt_data):
+        for source_data in (compose_data, prompt_data, system_data):
             for cat in categories:
                 entries = source_data.get(cat, {})
                 if not isinstance(entries, dict):
@@ -98,7 +103,7 @@ class PromptBrowser:
 
         return {
             "required": {
-                "source": ([s.SOURCE_COMPOSE, s.SOURCE_PROMPT], {"default": s.SOURCE_COMPOSE}),
+                "source": ([s.SOURCE_COMPOSE, s.SOURCE_PROMPT, s.SOURCE_SYSTEM_PROMPTS], {"default": s.SOURCE_COMPOSE}),
                 "category": (categories, {"default": categories[0]}),
                 "name": (all_prompts, {"default": first_prompt}),
                 "selected_prompts": ("STRING", {
@@ -141,7 +146,7 @@ class PromptBrowser:
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Browse prompts from Prompt Data or Compose Data with single or multi-random selection."
+    DESCRIPTION = "Browse prompts from Prompt Data, Compose Data, or System Prompts with single or multi-random selection."
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
     FUNCTION = "get_prompt"

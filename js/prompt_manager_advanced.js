@@ -7883,7 +7883,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
         promptData.category = category;
     }
 
-    const isComposerManager = endpointPrefix === "/prompt-manager/mixer";
+    const isComposerManager = endpointPrefix === "/prompt-manager/compose";
     const composerSeed = getThumbnailComposerSeed();
     const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
         ? composerSeed

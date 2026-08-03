@@ -26,8 +26,10 @@ const PMA_THEME = {
 };
 
 const PROMPT_ENDPOINT_PREFIX = "/prompt-manager";
+const SYSTEM_PROMPTS_ENDPOINT_PREFIX = "/prompt-generator";
 const SOURCE_COMPOSE = "Compose Data";
 const SOURCE_PROMPT = "Prompt Data";
+const SOURCE_SYSTEM_PROMPTS = "System Prompts";
 const NODE_CHROME_HEIGHT = 86;
 const PROMPT_BROWSER_MIN_EXTRA_HEIGHT = 500;
 const PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT = 300;
@@ -57,6 +59,7 @@ function getSourceValue(node) {
 function normalizePromptBrowserSource(value) {
     const raw = String(value || "");
     if (raw === SOURCE_PROMPT) return SOURCE_PROMPT;
+    if (raw === SOURCE_SYSTEM_PROMPTS) return SOURCE_SYSTEM_PROMPTS;
     return SOURCE_COMPOSE;
 }
 
@@ -64,6 +67,7 @@ function coercePromptBrowserSourceOrNull(value) {
     const raw = String(value || "");
     if (raw === SOURCE_PROMPT) return SOURCE_PROMPT;
     if (raw === SOURCE_COMPOSE) return SOURCE_COMPOSE;
+    if (raw === SOURCE_SYSTEM_PROMPTS) return SOURCE_SYSTEM_PROMPTS;
     return null;
 }
 
@@ -94,11 +98,15 @@ function restorePromptBrowserSource(node, sourceWidget, info = null, options = {
 }
 
 function getEndpointPrefixForSource(source) {
-    return source === SOURCE_PROMPT ? PROMPT_ENDPOINT_PREFIX : COMPOSER_ENDPOINT_PREFIX;
+    if (source === SOURCE_PROMPT) return PROMPT_ENDPOINT_PREFIX;
+    if (source === SOURCE_SYSTEM_PROMPTS) return SYSTEM_PROMPTS_ENDPOINT_PREFIX;
+    return COMPOSER_ENDPOINT_PREFIX;
 }
 
 function getPreferenceScopeForSource(source) {
-    return source === SOURCE_PROMPT ? "manager" : "composer";
+    if (source === SOURCE_PROMPT) return "manager";
+    if (source === SOURCE_SYSTEM_PROMPTS) return "system";
+    return "composer";
 }
 
 async function loadPromptsFromEndpoint(endpointPrefix) {
@@ -864,7 +872,7 @@ function buildComposerSourceBar(node) {
         if (Array.isArray(raw) && raw.length > 0) {
             return raw.map((v) => String(v));
         }
-        return [SOURCE_COMPOSE, SOURCE_PROMPT];
+        return [SOURCE_COMPOSE, SOURCE_PROMPT, SOURCE_SYSTEM_PROMPTS];
     };
 
     const updateDisplay = () => {

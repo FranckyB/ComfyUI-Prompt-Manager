@@ -1,6 +1,6 @@
 import { api } from "../../scripts/api.js";
 
-const COMPOSER_ENDPOINT_PREFIX = "/prompt-manager/mixer";
+const COMPOSER_ENDPOINT_PREFIX = "/prompt-manager/compose";
 
 export async function loadComposerPrompts(node) {
     try {
