@@ -214,7 +214,7 @@ app.registerExtension({
             name: "Enable thumbnail hover preview",
             tooltip: "When enabled, hovering over thumbnails in the prompt browser shows a larger preview after a short delay.",
             type: "boolean",
-            defaultValue: true
+            defaultValue: false
         },
         {
             id: "PromptManager.CompactPromptBrowser",

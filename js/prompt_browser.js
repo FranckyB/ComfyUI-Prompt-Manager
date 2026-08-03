@@ -3899,9 +3899,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         viewModeBtn.onclick = () => {
             if (currentViewMode === "grid") {
-                currentViewMode = "icon";
-            } else if (currentViewMode === "icon") {
-                currentViewMode = "list";
+                currentViewMode = compactBrowser ? "list" : "icon";
             } else {
                 currentViewMode = "grid";
             }
