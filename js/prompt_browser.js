@@ -1190,14 +1190,35 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             `pref=${compactBrowserPref}, compact=${compactBrowser}`
         );
         const EDIT_PANEL_WIDTH = compactBrowser ? 280 : 320;
-        const browserLayout = compactBrowser
+        const normalBrowserLayout = compactBrowser
             ? { width: 654, height: 680, cols: 5, itemWidth: 120, gap: 4, thumbWidth: 100, thumbHeight: 132 }
             : {
                 width: 1400, height: 985, iconHeight: 1185,
                 cols: 6, itemWidth: 220, gap: 8, thumbWidth: 200, thumbHeight: 264,
                 iconCols: 11, iconItemWidth: 120, iconGap: 4, iconThumbWidth: 100, iconThumbHeight: 132,
             };
-        const minGridWidth = browserLayout.cols * browserLayout.itemWidth + Math.max(0, browserLayout.cols - 1) * browserLayout.gap;
+        const editBrowserLayout = compactBrowser
+            ? { ...normalBrowserLayout,
+                cols: 3,
+                itemWidth: 110,
+                thumbWidth: 100,
+                thumbHeight: 132,
+            }
+            : {
+                ...normalBrowserLayout,
+                cols: 6,
+                gap: 4,
+                itemWidth: 170,
+                thumbWidth: 150,
+                thumbHeight: 200,
+                iconCols: 11,
+                iconItemWidth: 91,
+                iconGap: 4,
+                iconThumbWidth: 80,
+                iconThumbHeight: 106,
+            };
+        let browserLayout = normalBrowserLayout;
+        const computeMinGridWidth = () => browserLayout.cols * browserLayout.itemWidth + Math.max(0, browserLayout.cols - 1) * browserLayout.gap;
 
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -1483,13 +1504,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let editModeBtn = null;
         const updateEditModeLayout = () => {
             if (!editPanel) return;
+            browserLayout = editMode ? editBrowserLayout : normalBrowserLayout;
+            gridContainer.style.minWidth = `${computeMinGridWidth()}px`;
+            gridContainer.style.height = `${browserLayout.height}px`;
             if (editMode) {
                 editPanel.element.style.display = "flex";
-                dialog.style.width = `${browserLayout.width + EDIT_PANEL_WIDTH}px`;
                 editPanel.loadCategorySettings(selectedCategory);
             } else {
                 editPanel.element.style.display = "none";
-                dialog.style.width = `${browserLayout.width}px`;
             }
             app.graph.setDirtyCanvas(true, true);
         };
@@ -2137,7 +2159,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         gridContainer.style.cssText = `
             overflow-y: auto;
             flex: 1;
-            min-width: ${minGridWidth}px;
+            min-width: ${computeMinGridWidth()}px;
             height: ${browserLayout.height}px;
             scrollbar-width: none;
             -ms-overflow-style: none;

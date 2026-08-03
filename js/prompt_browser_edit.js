@@ -102,7 +102,7 @@ function createTextarea(value, placeholder, styles = {}) {
         border: 1px solid ${STYLE.inputBorder};
         border-radius: 4px;
         color: #fff;
-        font-size: 13px;
+        font-size: 14px;
         padding: 8px;
         box-sizing: border-box;
         outline: none;
