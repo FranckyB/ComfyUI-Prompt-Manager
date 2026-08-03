@@ -168,7 +168,10 @@ export function createPromptBrowserEditPanel(options) {
         savePrompt,
         loadPrompts,
         onChange,
+        compact,
     } = options || {};
+    const isCompact = Boolean(compact);
+    const EDIT_PANEL_WIDTH = isCompact ? 280 : 320;
 
     const _showInfo = typeof showInfo === "function" ? showInfo : async () => {};
     const _showConfirm = typeof showConfirm === "function" ? showConfirm : async () => false;
@@ -184,12 +187,12 @@ export function createPromptBrowserEditPanel(options) {
     const root = el("div", {
         display: "flex",
         flexDirection: "column",
-        width: "300px",
+        width: `${EDIT_PANEL_WIDTH}px`,
         flexShrink: "0",
         borderLeft: `1px solid ${STYLE.sectionBorder}`,
         background: STYLE.panel,
-        padding: "0 12px 12px 12px",
-        gap: "10px",
+        padding: "0 8px 8px 12px",
+        gap: "8px",
         boxSizing: "border-box",
         overflow: "hidden",
         marginTop: "-1px",
@@ -300,7 +303,7 @@ export function createPromptBrowserEditPanel(options) {
     settingsBody.appendChild(baseLabel);
 
     const baseTextArea = createTextarea("", "Base prompt used when generating thumbnails for this category");
-    baseTextArea.style.minHeight = "355px";
+    baseTextArea.style.minHeight = isCompact ? "140px" : "260px";
 
     settingsBody.appendChild(baseTextArea);
 
@@ -350,7 +353,7 @@ export function createPromptBrowserEditPanel(options) {
     promptBody.appendChild(promptNameInput);
 
     const promptTextArea = createTextarea("", "Prompt text");
-    promptTextArea.style.minHeight = "220px";
+    promptTextArea.style.minHeight = isCompact ? "60px" : "120px";
     promptTextArea.style.flex = "1";
     promptBody.appendChild(promptTextArea);
 
@@ -387,7 +390,7 @@ export function createPromptBrowserEditPanel(options) {
         border: `1px solid ${STYLE.inputBorder}`,
         borderRadius: "4px",
         width: "100%",
-        aspectRatio: "3 / 4",
+        aspectRatio: "1 / 1",
         flexShrink: "0",
         alignSelf: "stretch",
         boxSizing: "border-box",
@@ -399,7 +402,8 @@ export function createPromptBrowserEditPanel(options) {
     thumbnailImg.style.cssText = `
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
+        object-position: center;
         border-radius: 4px;
         display: block;
     `;

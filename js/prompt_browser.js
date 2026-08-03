@@ -1188,6 +1188,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             `[PromptBrowser] viewport=${window.innerWidth}x${window.innerHeight}, ` +
             `pref=${compactBrowserPref}, compact=${compactBrowser}`
         );
+        const EDIT_PANEL_WIDTH = compactBrowser ? 280 : 320;
         const browserLayout = compactBrowser
             ? { width: 654, height: 680, cols: 5, itemWidth: 120, gap: 4, thumbWidth: 100, thumbHeight: 132 }
             : {
@@ -1465,7 +1466,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const clearPromptForMulti = supportsMultiSelect && multiSelectMode && selectedNames.size > 1;
             if (editMode) {
                 editPanel.element.style.display = "flex";
-                dialog.style.width = `${browserLayout.width + 320}px`;
+                dialog.style.width = `${browserLayout.width + EDIT_PANEL_WIDTH}px`;
                 if (clearPromptForMulti) {
                     if (typeof editPanel.clearPrompt === "function") {
                         editPanel.clearPrompt();
@@ -2208,6 +2209,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 onChange: () => {
                     renderContent(searchInput.value);
                 },
+                compact: compactBrowser,
+                width: EDIT_PANEL_WIDTH,
             });
             if (!editMode) {
                 editPanel.element.style.display = "none";
