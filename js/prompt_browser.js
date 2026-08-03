@@ -1558,16 +1558,27 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             controlsBar.appendChild(editModeBtn);
         }
 
-        // Category selector
+        // Category selector (single-line horizontal scroll)
         const categoryContainer = document.createElement("div");
+        categoryContainer.className = "category-scroll-bar";
         categoryContainer.style.cssText = `
             display: flex;
             gap: 6px;
             margin-bottom: 10px;
             padding-bottom: 10px;
             border-bottom: 1px solid ${UI.sectionBorder};
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: #444 transparent;
         `;
+        categoryContainer.addEventListener("wheel", (e) => {
+            if (e.deltaY !== 0) {
+                e.preventDefault();
+                categoryContainer.scrollLeft += e.deltaY;
+            }
+        }, { passive: false });
 
         let categories = filterAllowedCategories(getVisibleCategories(node, {
             hideNSFW: hideNSFWState,
@@ -1616,6 +1627,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const updateCategoryButtons = () => {
             ensureSelectedCategory();
 
+            let selectedBtn = null;
             categoryButtons.forEach(btn => {
                 const cat = btn.dataset.category;
                 const isSelected = cat === selectedCategory;
@@ -1638,7 +1650,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 } else {
                     btn.style.borderColor = isSelected ? '#5a9ae4' : '#444';
                 }
+
+                if (isSelected) selectedBtn = btn;
             });
+
+            // Keep the active category visible in the scroll bar
+            if (selectedBtn) {
+                selectedBtn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+            }
 
             // If selected category is now hidden/empty under current filters, switch.
             ensureSelectedCategory();
@@ -2069,6 +2088,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     font-size: 13px;
                     transition: all 0.15s ease;
                     position: relative;
+                    flex-shrink: 0;
+                    white-space: nowrap;
                 `;
 
                 btn.textContent = cat;
@@ -2100,6 +2121,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 cursor: pointer;
                 font-size: 13px;
                 transition: all 0.15s ease;
+                flex-shrink: 0;
             `;
             addBtn.onmouseover = () => { addBtn.style.background = '#38414c'; addBtn.style.color = '#fff'; };
             addBtn.onmouseout = () => { addBtn.style.background = '#313843'; addBtn.style.color = '#aaa'; };
@@ -2164,9 +2186,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             scrollbar-width: none;
             -ms-overflow-style: none;
         `;
-        // Hide scrollbar for webkit browsers
+        // Hide grid scrollbar; style category scrollbar for webkit browsers
         const style = document.createElement("style");
-        style.textContent = `.thumbnail-grid-container::-webkit-scrollbar { display: none; }`;
+        style.textContent = `
+            .thumbnail-grid-container::-webkit-scrollbar { display: none; }
+            .category-scroll-bar::-webkit-scrollbar { height: 6px; }
+            .category-scroll-bar::-webkit-scrollbar-track { background: transparent; }
+            .category-scroll-bar::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+            .category-scroll-bar::-webkit-scrollbar-thumb:hover { background: #555; }
+        `;
         document.head.appendChild(style);
 
         contentRow.appendChild(gridContainer);
