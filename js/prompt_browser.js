@@ -1195,7 +1195,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             padding: 16px;
             z-index: 10000;
             width: ${browserLayout.width}px;
-            max-height: 80vh;
+            max-height: 95vh;
             display: flex;
             flex-direction: column;
             box-shadow: 0 8px 32px rgba(0,0,0,0.6);
@@ -2112,12 +2112,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             overflow: hidden;
         `;
 
-        // Content container - fixed size
+        // Content container - fixed size so thumbnails never get encroached by bottom toolbar
         const gridContainer = document.createElement("div");
         gridContainer.className = "thumbnail-grid-container";
         gridContainer.style.cssText = `
             overflow-y: auto;
-            flex: 1;
+            flex: 0 0 auto;
             min-width: 0;
             height: ${currentViewMode === "icon" ? browserLayout.iconHeight : browserLayout.height}px;
             scrollbar-width: none;
@@ -3976,25 +3976,16 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         // Footer with hint
         const footer = document.createElement("div");
         footer.style.cssText = `
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
             margin-top: 6px;
             margin-bottom: 0;
-            padding-top: 8px;
-            border-top: 1px solid ${UI.sectionBorder};
             font-size: 12px;
             line-height: 1.35;
             color: #8a95a6;
             text-align: center;
         `;
-        updateFooterText = () => {
-            footer.textContent = mode === "save"
-                ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
-                : ((supportsMultiSelect && multiSelectMode)
-                    ? (multiCategorySelect
-                        ? "Multi-select is ON. Select prompts across categories. Shift+click for range selection. Right-click selected prompts for batch actions."
-                        : "Multi-select is ON. Click prompts to select/deselect, Shift+click for range selection, and right-click selected prompts for batch actions.")
-                    : "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Turn Multi on for batch actions.");
-        };
-        updateFooterText();
 
         const saveBar = document.createElement("div");
         if (mode === "save") {
@@ -4219,13 +4210,33 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             updateSelectionToolbar();
         }
 
+        if (mode === "save" || supportsMultiSelect) {
+            footer.appendChild(saveBar);
+        }
+
+        const footerHint = document.createElement("div");
+        footerHint.style.cssText = `
+            border-top: 1px solid ${UI.sectionBorder};
+            padding-top: 8px;
+            text-align: center;
+        `;
+        footer.appendChild(footerHint);
+
+        updateFooterText = () => {
+            footerHint.textContent = mode === "save"
+                ? "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Single-click fills name; double-click replaces."
+                : ((supportsMultiSelect && multiSelectMode)
+                    ? (multiCategorySelect
+                        ? "Multi-select is ON. Select prompts across categories. Shift+click for range selection. Right-click selected prompts for batch actions."
+                        : "Multi-select is ON. Click prompts to select/deselect, Shift+click for range selection, and right-click selected prompts for batch actions.")
+                    : "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Turn Multi on for batch actions.");
+        };
+        updateFooterText();
+
         dialog.appendChild(header);
         dialog.appendChild(controlsBar);
         dialog.appendChild(categoryContainer);
         dialog.appendChild(contentRow);
-        if (mode === "save" || supportsMultiSelect) {
-            dialog.appendChild(saveBar);
-        }
         dialog.appendChild(footer);
 
         const cleanup = () => {
