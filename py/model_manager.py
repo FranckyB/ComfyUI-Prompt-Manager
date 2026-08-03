@@ -20,6 +20,7 @@ _preferences_cache = {
     "llm_backend": "llama.cpp",        # "llama.cpp" or "ollama"
     "ollama_url": "http://127.0.0.1:11434",
     "ollama_keep_alive": "5m",           # How long Ollama keeps model loaded after request
+    "llama_gpu_device": "",              # GPU device index for llama.cpp (e.g. "0", "1")
 }
 
 # Predefined models - use real filenames as keys
@@ -65,7 +66,8 @@ async def save_preference(request):
                        "custom_llama_port",
                        "llm_backend",
                        "ollama_url",
-                       "ollama_keep_alive"]:
+                       "ollama_keep_alive",
+                       "llama_gpu_device"]:
             return server.web.json_response({"success": False, "error": "Invalid preference key"})
 
         # Update in-memory cache
