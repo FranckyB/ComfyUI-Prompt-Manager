@@ -1197,6 +1197,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 cols: 6, itemWidth: 220, gap: 8, thumbWidth: 200, thumbHeight: 264,
                 iconCols: 11, iconItemWidth: 120, iconGap: 4, iconThumbWidth: 100, iconThumbHeight: 132,
             };
+        const minGridWidth = browserLayout.cols * browserLayout.itemWidth + Math.max(0, browserLayout.cols - 1) * browserLayout.gap;
 
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -2136,7 +2137,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         gridContainer.style.cssText = `
             overflow-y: auto;
             flex: 1;
-            min-width: 0;
+            min-width: ${minGridWidth}px;
             height: ${browserLayout.height}px;
             scrollbar-width: none;
             -ms-overflow-style: none;

@@ -191,7 +191,7 @@ export function createPromptBrowserEditPanel(options) {
         flexShrink: "0",
         borderLeft: `1px solid ${STYLE.sectionBorder}`,
         background: STYLE.panel,
-        padding: "0 8px 8px 12px",
+        padding: "0 0 8px 12px",
         gap: "8px",
         boxSizing: "border-box",
         overflow: "hidden",
