@@ -17,6 +17,7 @@ import server
 import folder_paths
 from PIL import Image
 from io import BytesIO
+from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
 
 # ComfyUI-style ANSI console colors (matches app/logger.py)
 RESET       = "\033[0m"
@@ -278,28 +279,20 @@ class PromptGeneratorDataStore:
     """Light-weight store for prompt_generator_data.json, exposed via HTTP routes."""
 
     @staticmethod
+    def get_data_path():
+        return _get_prompt_generator_data_path()
+
+    @staticmethod
     def load():
         data_path = _ensure_prompt_generator_data()
-        if not os.path.exists(data_path):
-            return {}
-        try:
-            with open(data_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            print_pg(f"Warning: Error loading prompt generator data: {e}", RED)
-            return {}
+        check_backup(data_path)
+        data = load_with_fallback(data_path, "PromptGeneratorDataStore")
+        return data if isinstance(data, dict) else {}
 
     @staticmethod
     def save(data):
         data_path = _ensure_prompt_generator_data()
-        try:
-            os.makedirs(os.path.dirname(data_path), exist_ok=True)
-            with open(data_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception as e:
-            print_pg(f"Warning: Error saving prompt generator data: {e}", RED)
-            return False
+        return atomic_save(data_path, data, "PromptGeneratorDataStore")
 
 
 def _generator_sort_prompts_data(data):
@@ -433,7 +426,12 @@ async def generator_save_prompt(request):
         data = await request.json()
         category = data.get("category", "").strip()
         name = data.get("name", "").strip()
-        text = data.get("text", "").strip()
+        text_raw = data.get("text", "")
+        if isinstance(text_raw, dict):
+            text = text_raw.get("prompt", "") or text_raw.get("text", "")
+        else:
+            text = str(text_raw)
+        text = text.strip()
         thumbnail = data.get("thumbnail")
 
         if not category or not name:

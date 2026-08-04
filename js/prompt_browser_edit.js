@@ -185,6 +185,7 @@ export function createPromptBrowserEditPanel(options) {
     let currentCategory = "";
     let currentPromptName = "";
     let pendingThumbnail = null;
+    let loadedThumbnail = null;
 
     const root = el("div", {
         display: "flex",
@@ -505,7 +506,7 @@ export function createPromptBrowserEditPanel(options) {
             if (!overwrite) return { success: false };
         }
 
-        const thumbnail = pendingThumbnail;
+        const thumbnail = pendingThumbnail || loadedThumbnail;
         const result = await _savePrompt({ category, name, text, thumbnail });
         if (result?.success) {
             await _loadPrompts(node);
@@ -536,9 +537,11 @@ export function createPromptBrowserEditPanel(options) {
         const entry = node?.prompts?.[category]?.[promptName];
         if (entry && typeof entry === "object") {
             promptTextArea.value = entry.prompt || "";
-            updateThumbnailDisplay(entry.thumbnail || null);
+            loadedThumbnail = entry.thumbnail || null;
+            updateThumbnailDisplay(loadedThumbnail);
         } else {
             promptTextArea.value = "";
+            loadedThumbnail = null;
             updateThumbnailDisplay(null);
         }
 
@@ -574,6 +577,7 @@ export function createPromptBrowserEditPanel(options) {
         promptNameInput.value = "";
         promptTextArea.value = "";
         pendingThumbnail = null;
+        loadedThumbnail = null;
         updateThumbnailDisplay(null);
         currentPromptName = "";
     }

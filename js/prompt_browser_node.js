@@ -1536,7 +1536,9 @@ function buildComposerButtonBar(node) {
             onSave: async (category, name) => {
                 const text = String(textWidget.value || "").trim();
                 const existing = getNodeEntry(node, category, name);
-                const result = await saveComposerPrompt(node, endpointPrefix, category, name, text, existing?.thumbnail || null);
+                const selectedEntry = getNodeEntry(node, currentCategory, currentName);
+                const thumbnailToSave = existing?.thumbnail || selectedEntry?.thumbnail || null;
+                const result = await saveComposerPrompt(node, endpointPrefix, category, name, text, thumbnailToSave);
                 if (result?.success) {
                     categoryWidget.value = category;
                     if (typeof categoryWidget.callback === "function") {

@@ -11,6 +11,7 @@ import time
 
 import folder_paths
 import server
+from .backup_manager import atomic_save, load_with_fallback, check_backup
 
 
 class PromptComposerStore:
@@ -27,10 +28,6 @@ class PromptComposerStore:
         return os.path.join(folder_paths.get_user_directory(), "default", "prompt_mixer_data.json")
 
     @staticmethod
-    def get_backup_path():
-        return PromptComposerStore.get_data_path() + "_bak"
-
-    @staticmethod
     def get_default_prompts_path():
         """Path to the bundled default composer prompts JSON file."""
         return os.path.join(os.path.dirname(os.path.dirname(__file__)), "default_composer_prompts.json")
@@ -39,23 +36,6 @@ class PromptComposerStore:
     def get_legacy_default_prompts_path():
         """Legacy bundled defaults path kept for backward compatibility."""
         return os.path.join(os.path.dirname(os.path.dirname(__file__)), "default_mixer_prompts.json")
-
-    @classmethod
-    def _refresh_weekly_backup_if_due(cls, source_path, backup_path, interval_days=7):
-        if not os.path.exists(source_path):
-            return
-        should_refresh = not os.path.exists(backup_path)
-        if not should_refresh:
-            try:
-                backup_age = time.time() - os.path.getmtime(backup_path)
-                should_refresh = backup_age > interval_days * 24 * 60 * 60
-            except Exception:
-                should_refresh = True
-        if should_refresh:
-            try:
-                shutil.copy2(source_path, backup_path)
-            except Exception:
-                pass
 
     @classmethod
     def load_prompts(cls):
@@ -77,23 +57,10 @@ class PromptComposerStore:
                     return data
             except Exception as e:
                 print(f"[PromptComposerStore] Error loading data: {e}")
-                backup_candidates = [
-                    cls.get_backup_path(),
-                    user_path + ".bak",
-                    user_path + ".backup",
-                    user_path + ".tmp",
-                    legacy_user_path + ".bak",
-                    legacy_user_path + ".backup",
-                    legacy_user_path + ".tmp",
-                ]
-                for backup_path in backup_candidates:
-                    if not os.path.exists(backup_path):
-                        continue
-                    try:
-                        with open(backup_path, "r", encoding="utf-8") as f:
-                            return json.load(f)
-                    except Exception:
-                        pass
+                check_backup(user_path)
+                data = load_with_fallback(user_path, "PromptComposerStore")
+                if isinstance(data, dict):
+                    return data
                 print("[PromptComposerStore] User data file exists but could not be parsed; not overwriting.")
                 return {}
 
@@ -129,24 +96,10 @@ class PromptComposerStore:
 
     @classmethod
     def save_prompts(cls, data):
-        """Save composer fragments atomically with a weekly backup."""
+        """Save composer fragments atomically with rotating backups."""
         user_path = cls.get_data_path()
         sorted_data = cls.sort_prompts_data(data)
-        tmp_path = user_path + ".tmp"
-        bak_path = cls.get_backup_path()
-        try:
-            os.makedirs(os.path.dirname(user_path), exist_ok=True)
-            cls._refresh_weekly_backup_if_due(user_path, bak_path)
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(sorted_data, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_path, user_path)
-        except Exception as e:
-            print(f"[PromptComposerStore] Error saving data: {e}")
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
+        atomic_save(user_path, sorted_data, "PromptComposerStore")
 
 
 def _find_category_case_insensitive(prompts_data, category):

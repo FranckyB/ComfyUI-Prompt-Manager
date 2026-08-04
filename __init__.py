@@ -6,11 +6,13 @@ __version__ = "2.6.0"
 __author__ = "François Beaudry"
 __license__ = "MIT"
 
+from .py.backup_manager import check_backup
+from .py.prompt_composer_store import PromptComposerStore
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.prompt_composer import PromptComposer
 from .nodes.prompt_browser import PromptBrowser
-from .nodes.prompt_generator import PromptGenerator
+from .nodes.prompt_generator import PromptGenerator, PromptGeneratorDataStore
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_generator_kill_switch import PromptGeneratorKillSwitch
 from .nodes.prompt_extractor import PromptExtractor
@@ -72,4 +74,13 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
 WEB_DIRECTORY = "./js"
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
+
+# Ensure rotating backups exist for all prompt data files on ComfyUI startup.
+try:
+    check_backup(PromptManager.get_prompts_path())
+    check_backup(PromptComposerStore.get_data_path())
+    check_backup(PromptGeneratorDataStore.get_data_path())
+except Exception as e:
+    print(f"[PromptManager] Backup initialization skipped: {e}")
+
 print("[PromptManager] Nodes registered: Prompt Manager, Prompt Composer, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")

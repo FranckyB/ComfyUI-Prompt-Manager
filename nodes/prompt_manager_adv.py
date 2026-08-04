@@ -11,6 +11,7 @@ from datetime import datetime
 from io import BytesIO
 import folder_paths
 import server
+from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
 from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 
 # Import numpy and PIL for image processing (available in ComfyUI environment)
@@ -344,28 +345,6 @@ class PromptManagerAdvanced:
     Features two LoRA stack inputs/outputs for dual LoRA workflows (e.g., Wan video).
     """
 
-    @staticmethod
-    def get_weekly_backup_path():
-        """Get the path to the weekly rotating backup file."""
-        return PromptManagerAdvanced.get_prompts_path() + "_bak"
-
-    @staticmethod
-    def _refresh_weekly_backup_if_due(source_path, backup_path, interval_days=7):
-        """Refresh backup only when missing or older than interval_days."""
-        if not os.path.exists(source_path):
-            return
-
-        should_refresh = not os.path.exists(backup_path)
-        if not should_refresh:
-            try:
-                age_seconds = time.time() - os.path.getmtime(backup_path)
-                should_refresh = age_seconds >= (interval_days * 24 * 60 * 60)
-            except Exception:
-                should_refresh = True
-
-        if should_refresh:
-            shutil.copy2(source_path, backup_path)
-
     @classmethod
     def INPUT_TYPES(s):
         prompts_data = PromptManagerAdvanced.load_prompts()
@@ -526,32 +505,11 @@ class PromptManagerAdvanced:
         user_path = cls.get_prompts_path()
         default_path = cls.get_default_prompts_path()
 
-        if os.path.exists(user_path):
-            try:
-                with open(user_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"[PromptManagerAdvanced] Error loading user prompts: {e}")
-                # Try backup variants before falling back to defaults.
-                # Never overwrite a user file just because parsing failed.
-                backup_candidates = [
-                    cls.get_weekly_backup_path(),
-                    user_path + ".bak",
-                    user_path + ".backup",
-                    user_path + ".tmp",
-                ]
-                for backup_path in backup_candidates:
-                    if not os.path.exists(backup_path):
-                        continue
-                    try:
-                        with open(backup_path, 'r', encoding='utf-8') as f:
-                            backup_data = json.load(f)
-                        print(f"[PromptManagerAdvanced] Recovered prompts from backup: {backup_path}")
-                        return backup_data
-                    except Exception as be:
-                        print(f"[PromptManagerAdvanced] Backup load failed ({backup_path}): {be}")
-                print("[PromptManagerAdvanced] User prompt file exists but could not be parsed; not overwriting with defaults.")
-                return {}
+        check_backup(user_path)
+
+        data = load_with_fallback(user_path, "PromptManagerAdvanced")
+        if isinstance(data, dict):
+            return data
 
         if os.path.exists(default_path):
             try:
@@ -588,25 +546,7 @@ class PromptManagerAdvanced:
         """Save prompts to user folder"""
         user_path = cls.get_prompts_path()
         sorted_data = cls.sort_prompts_data(data)
-        tmp_path = user_path + ".tmp"
-        bak_path = cls.get_weekly_backup_path()
-
-        try:
-            os.makedirs(os.path.dirname(user_path), exist_ok=True)
-            # Weekly rotating backup: refresh at most once every 7 days.
-            cls._refresh_weekly_backup_if_due(user_path, bak_path)
-
-            # Atomic write: write temp then replace to avoid truncated/corrupt files.
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(sorted_data, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_path, user_path)
-        except Exception as e:
-            print(f"[PromptManagerAdvanced] Error saving prompts: {e}")
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
+        atomic_save(user_path, sorted_data, "PromptManagerAdvanced")
 
     def _merge_lora_stacks(self, preset_stack, connected_stack):
         """

@@ -141,10 +141,6 @@ class PromptGenOptions:
                     "step": 512,
                     "tooltip": "Context size (increase for vision models or large prompts)"
                 }),
-                "gpu_device": ("STRING", {
-                    "default": "",
-                    "tooltip": "GPU device index for llama.cpp (e.g. '0', '1').\nLeave empty to use the system default GPU.\nUseful with multi-GPU setups to control which GPU loads LLM weights."
-                }),
                 "show_everything_in_console": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Print system prompt, user prompt, thinking process, and raw model response to console"
@@ -155,6 +151,10 @@ class PromptGenOptions:
                     "max": 32768,
                     "step": 1,
                     "tooltip": "Maximum number of tokens to generate when the Prompt Generator is connected to a CLIP/text encoder."
+                }),
+                "gpu_device": ("STRING", {
+                    "default": "",
+                    "tooltip": "GPU device index for llama.cpp (e.g. '0', '1').\nLeave empty to use the system default GPU.\nUseful with multi-GPU setups to control which GPU loads LLM weights."
                 })
             }
         }
