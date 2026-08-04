@@ -589,7 +589,15 @@ class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
     # Server configuration
-    SERVER_PORT = _preferences_cache.get("custom_llama_port", 8080)
+    # NOTE: read fresh on every access instead of caching at class-definition time,
+    # since the preferences cache isn't populated with the user's saved setting
+    # until the frontend pushes it after the backend has already started.
+    @staticmethod
+    def get_server_port():
+        try:
+            return int(_preferences_cache.get("custom_llama_port", 8080))
+        except (TypeError, ValueError):
+            return 8080
 
     # Prompts are now loaded from external text files in the 'prompts' folder
     # This makes them easier to edit without modifying Python code
@@ -782,7 +790,7 @@ class PromptGenerator:
     def is_server_alive():
         """Check if llama.cpp server is responding"""
         try:
-            response = requests.get(f"http://localhost:{PromptGenerator.SERVER_PORT}/health", timeout=2)
+            response = requests.get(f"http://localhost:{PromptGenerator.get_server_port()}/health", timeout=2)
             return response.status_code == 200
         except:
             return False
@@ -855,7 +863,7 @@ class PromptGenerator:
             cmd_args = [
                 server_cmd,
                 "-m", model_path,
-                "--port", str(PromptGenerator.SERVER_PORT),
+                "--port", str(PromptGenerator.get_server_port()),
                 "--no-warmup",
                 "--ctx-size", str(context_size),
                 "--batch-size", "1024",
@@ -879,7 +887,7 @@ class PromptGenerator:
             cmd_args_fallback = [
                 server_cmd,
                 "-m", model_path,
-                "--port", str(PromptGenerator.SERVER_PORT),
+                "--port", str(PromptGenerator.get_server_port()),
                 "--no-warmup",
                 "-ngl", "100",
                 "-c", str(context_size),
@@ -1089,7 +1097,7 @@ class PromptGenerator:
         """Get exact token count for text using server's tokenize endpoint"""
         try:
             response = requests.post(
-                f"http://localhost:{self.SERVER_PORT}/tokenize",
+                f"http://localhost:{self.get_server_port()}/tokenize",
                 json={"content": text},
                 timeout=10
             )
@@ -1105,7 +1113,7 @@ class PromptGenerator:
         """Fetch default generation parameters from the server"""
         global _model_default_params
         try:
-            response = requests.get(f"http://localhost:{PromptGenerator.SERVER_PORT}/props", timeout=5)
+            response = requests.get(f"http://localhost:{PromptGenerator.get_server_port()}/props", timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 params = data.get("default_generation_settings", {}).get("params", {})
@@ -1411,7 +1419,7 @@ class PromptGenerator:
                     raise RuntimeError(error_msg)
 
         # Build the endpoint URL
-        full_url = f"http://localhost:{self.SERVER_PORT}/v1/chat/completions"
+        full_url = f"http://localhost:{self.get_server_port()}/v1/chat/completions"
 
         # === TOKENIZATION (only for non-cached requests, llama.cpp only) ===
         cached_token_counts = None
