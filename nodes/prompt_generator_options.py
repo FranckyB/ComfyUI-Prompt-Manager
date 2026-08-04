@@ -141,6 +141,10 @@ class PromptGenOptions:
                     "step": 512,
                     "tooltip": "Context size (increase for vision models or large prompts)"
                 }),
+                "gpu_device": ("STRING", {
+                    "default": "",
+                    "tooltip": "GPU device index for llama.cpp (e.g. '0', '1').\nLeave empty to use the system default GPU.\nUseful with multi-GPU setups to control which GPU loads LLM weights."
+                }),
                 "show_everything_in_console": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Print system prompt, user prompt, thinking process, and raw model response to console"
@@ -171,7 +175,8 @@ class PromptGenOptions:
                        use_model_default_sampling: bool = None, temperature: float = None,
                        top_k: int = None, top_p: float = None, min_p: float = None,
                        repeat_penalty: float = None, context_size: int = None,
-                       show_everything_in_console: bool = None, max_length: int = None) -> dict:
+                       show_everything_in_console: bool = None, max_length: int = None,
+                       gpu_device: str = None) -> dict:
         """Create options dictionary with model, LLM parameters, and extra images"""
 
         # Backward compatibility for workflows saved before `system_prompt_mode` existed.
@@ -263,5 +268,13 @@ class PromptGenOptions:
         options["context_size"] = context_size
         options["show_everything_in_console"] = show_everything_in_console
         options["max_length"] = max_length
+
+        # GPU device: use node input if provided, otherwise fall back to global preference
+        gpu_device_value = None
+        if gpu_device is not None and str(gpu_device).strip():
+            gpu_device_value = str(gpu_device).strip()
+        elif _preferences_cache.get("llama_gpu_device", ""):
+            gpu_device_value = _preferences_cache["llama_gpu_device"]
+        options["gpu_device"] = gpu_device_value
 
         return (options,)

@@ -42,6 +42,7 @@ except ImportError:
 _server_process = None
 _current_model = None
 _current_context_size = None
+_current_gpu_device = None
 _job_handle = None
 _close_llama_on_exit = True
 _model_default_params = None
@@ -796,18 +797,19 @@ class PromptGenerator:
             return False
 
     @staticmethod
-    def start_server(model_name, context_size=2048, use_vision_model=False):
+    def start_server(model_name, context_size=2048, use_vision_model=False, gpu_device=None):
         """Start llama.cpp server with specified model
 
         Args:
             model_name: Name of the model to use
             context_size: Context size (default 2048)
             use_vision_model: Whether to use the vision model's mmproj
+            gpu_device: GPU device index (e.g. "0", "1"), or None for system default
 
         Returns:
             tuple: (success: bool, error_message: str or None)
         """
-        global _server_process, _current_model, _current_context_size, _job_handle, _close_llama_on_exit
+        global _server_process, _current_model, _current_context_size, _current_gpu_device, _job_handle, _close_llama_on_exit
 
         # Set the close preference for cleanup
         _close_llama_on_exit = _preferences_cache.get("close_llama_on_exit", True)
@@ -882,6 +884,21 @@ class PromptGenerator:
             else:
                 cmd_args.extend(["--n-gpu-layers", "0"])
 
+            # GPU device selection (multi-GPU support)
+            # Isolate via CUDA_VISIBLE_DEVICES rather than --device/--main-gpu.
+            # llama.cpp's mmproj/clip loader has a known bug (upstream issue #15804)
+            # where it ignores --main-gpu/--device and always loads the multimodal
+            # projector onto GPU 0. Restricting device visibility at the CUDA
+            # driver level, before the process starts, is unaffected by that bug
+            # since no other GPU is visible to any code path in the process.
+            gpu_env_idx = None
+            if gpu_device is not None and str(gpu_device).strip():
+                try:
+                    gpu_env_idx = int(gpu_device)
+                    print_pg("GPU device:", f"using GPU {gpu_env_idx}")
+                except ValueError:
+                    print_pg("Warning:", f"Invalid GPU device '{gpu_device}', using system default.", RED)
+
             # Compatibility fallback for older llama-server builds that don't
             # support newer tuning flags.
             cmd_args_fallback = [
@@ -911,6 +928,11 @@ class PromptGenerator:
                 "stderr": subprocess.PIPE,
             }
 
+            if gpu_env_idx is not None:
+                popen_env = os.environ.copy()
+                popen_env["CUDA_VISIBLE_DEVICES"] = str(gpu_env_idx)
+                popen_kwargs["env"] = popen_env
+
             if os.name == 'nt':
                 popen_kwargs["creationflags"] = creation_flags
             else:
@@ -935,7 +957,7 @@ class PromptGenerator:
                     popen_kwargs["preexec_fn"] = _set_pdeathsig
 
             def _launch_and_wait(args):
-                global _server_process, _current_model, _current_context_size
+                global _server_process, _current_model, _current_context_size, _current_gpu_device
 
                 _server_process = subprocess.Popen(args, **popen_kwargs)
 
@@ -949,6 +971,7 @@ class PromptGenerator:
 
                 _current_model = model_name
                 _current_context_size = context_size
+                _current_gpu_device = gpu_device
 
                 # Wait for server to be ready
                 for _ in range(60):  # Wait up to 60 seconds
@@ -973,6 +996,7 @@ class PromptGenerator:
                         _server_process = None
                         _current_model = None
                         _current_context_size = None
+                        _current_gpu_device = None
                         return (False, error, stderr_output)
 
                     if PromptGenerator.is_server_alive():
@@ -1041,7 +1065,7 @@ class PromptGenerator:
     @staticmethod
     def stop_server():
         """Stop the llama.cpp server"""
-        global _server_process, _current_model, _job_handle
+        global _server_process, _current_model, _current_context_size, _current_gpu_device, _job_handle
 
         if _server_process:
             try:
@@ -1056,6 +1080,8 @@ class PromptGenerator:
             finally:
                 _server_process = None
                 _current_model = None
+                _current_context_size = None
+                _current_gpu_device = None
 
         # Close and release Windows Job Object if created
         if os.name == 'nt' and _job_handle:
@@ -1407,14 +1433,15 @@ class PromptGenerator:
                 raise RuntimeError(error_msg)
 
         # If the current model is not the one we want, or server is not running, restart
-        # Also restart if context_size has changed (llama.cpp only)
+        # Also restart if context_size or gpu_device has changed (llama.cpp only)
         context_size = options.get("context_size", get_default_context_size()) if options else get_default_context_size()
+        gpu_device = options.get("gpu_device") if options else None
 
         if not use_ollama:
-            if _current_model != model_to_use or _current_context_size != context_size or not self.is_server_alive():
+            if _current_model != model_to_use or _current_context_size != context_size or _current_gpu_device != gpu_device or not self.is_server_alive():
                 self.stop_server()
-                # Get context_size from options or use default
-                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
+                # Get context_size and gpu_device from options or use defaults
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device)
                 if not success:
                     raise RuntimeError(error_msg)
 
@@ -1536,7 +1563,7 @@ class PromptGenerator:
             if response.status_code == 500:
                 print_pg("Error:", "Server error 500, restarting server and retrying...", RED)
                 self.stop_server()
-                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model)
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device)
                 if success:
                     response = requests.post(
                         full_url,
