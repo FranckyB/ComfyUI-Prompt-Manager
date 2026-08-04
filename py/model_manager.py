@@ -2,7 +2,6 @@
 Utility functions for managing llama.cpp models
 """
 import os
-import glob
 import re
 import folder_paths
 import server
@@ -131,12 +130,13 @@ def get_local_models():
     all_models = set()  # Use set to avoid duplicates
     for models_dir in all_dirs:
         if os.path.exists(models_dir):
-            gguf_files = glob.glob(os.path.join(models_dir, "*.gguf"))
-            for f in gguf_files:
-                basename = os.path.basename(f)
-                # Filter out mmproj files
-                if 'mmproj' not in basename.lower():
-                    all_models.add(basename)
+            for dirpath, _subdirs, filenames in os.walk(models_dir, followlinks=True):
+                for filename in filenames:
+                    if not filename.lower().endswith(".gguf") or 'mmproj' in filename.lower():
+                        continue
+                    full_path = os.path.join(dirpath, filename)
+                    rel_path = os.path.relpath(full_path, models_dir)
+                    all_models.add(rel_path)
 
     # Return sorted list of unique filenames
     return sorted(list(all_models))
