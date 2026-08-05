@@ -80,6 +80,10 @@ def _patch_runtime_prompt_metadata(unique_id, output_text, extra_pnginfo=None, a
             if isinstance(inputs, dict):
                 inputs["use_prompt_input"] = False
                 inputs["text"] = output_text
+                # Remove any serialized connected prompt input so saver nodes embed a
+                # self-contained prompt instead of a dangling link reference.
+                if "prompt" in inputs:
+                    del inputs["prompt"]
 
 
 def image_to_base64_thumbnail(image_tensor, max_size=200):
