@@ -2362,6 +2362,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return { success: false, error: String(err) };
                     }
                 },
+                selectPrompt: (category, name) => {
+                    if (category) {
+                        selectedCategory = category;
+                        renderCategoryTabs();
+                    }
+                    setCurrentPromptSelection(name);
+                    renderContent(searchInput.value);
+                },
                 generateThumbnail: async (category, promptName) => {
                     return new Promise((resolve, reject) => {
                         const queuedName = promptName;
