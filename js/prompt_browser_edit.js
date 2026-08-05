@@ -186,6 +186,7 @@ export function createPromptBrowserEditPanel(options) {
     let currentPromptName = "";
     let pendingThumbnail = null;
     let loadedThumbnail = null;
+    let loadedPromptText = "";
 
     const root = el("div", {
         display: "flex",
@@ -381,12 +382,10 @@ export function createPromptBrowserEditPanel(options) {
     });
 
     const clearBtn = createButton("Clear", async () => {
-        promptNameInput.value = "";
-        promptTextArea.value = "";
-        pendingThumbnail = null;
-        updateThumbnailDisplay(null);
-        currentPromptName = "";
-        _onChange();
+        const cleared = await clearPrompt();
+        if (cleared) {
+            _onChange();
+        }
     });
 
     const saveBtn = createButton("Save", async () => {
@@ -513,6 +512,7 @@ export function createPromptBrowserEditPanel(options) {
             currentPromptName = name;
             pendingThumbnail = null;
             const entry = node?.prompts?.[category]?.[name];
+            loadedPromptText = entry?.prompt || "";
             updateThumbnailDisplay(entry?.thumbnail || null);
             _onChange();
         } else {
@@ -523,7 +523,45 @@ export function createPromptBrowserEditPanel(options) {
         return result || { success: false };
     }
 
-    function loadPrompt(category, promptName) {
+    function hasUnsavedChanges() {
+        const currentName = String(promptNameInput.value || "").trim();
+        const currentText = String(promptTextArea.value || "").trim();
+
+        if (!currentCategory) {
+            return false;
+        }
+
+        const entry = node?.prompts?.[currentCategory]?.[currentPromptName];
+        if (currentPromptName && entry && typeof entry === "object") {
+            const originalText = String(entry.prompt || "").trim();
+            const originalThumbnail = entry.thumbnail || null;
+            if (currentName !== currentPromptName) return true;
+            if (currentText !== originalText) return true;
+            if (pendingThumbnail !== null && pendingThumbnail !== originalThumbnail) return true;
+            return false;
+        }
+
+        if (currentName || currentText || pendingThumbnail !== null) {
+            return true;
+        }
+        return false;
+    }
+
+    async function confirmDiscardChanges() {
+        if (!hasUnsavedChanges()) return true;
+        const confirmed = await _showConfirm(
+            "Unsaved Changes",
+            "You have unsaved changes. Discard them?",
+            "Discard",
+            "#c44"
+        );
+        return confirmed;
+    }
+
+    async function loadPrompt(category, promptName) {
+        const canProceed = await confirmDiscardChanges();
+        if (!canProceed) return false;
+
         currentCategory = category || "";
         currentPromptName = promptName || "";
         promptNameInput.value = currentPromptName;
@@ -537,15 +575,18 @@ export function createPromptBrowserEditPanel(options) {
         const entry = node?.prompts?.[category]?.[promptName];
         if (entry && typeof entry === "object") {
             promptTextArea.value = entry.prompt || "";
+            loadedPromptText = entry.prompt || "";
             loadedThumbnail = entry.thumbnail || null;
             updateThumbnailDisplay(loadedThumbnail);
         } else {
             promptTextArea.value = "";
+            loadedPromptText = "";
             loadedThumbnail = null;
             updateThumbnailDisplay(null);
         }
 
         loadCategorySettings(category);
+        return true;
     }
 
     function loadCategorySettings(category) {
@@ -573,13 +614,17 @@ export function createPromptBrowserEditPanel(options) {
         syncSectionVisibility();
     }
 
-    function clearPrompt() {
+    async function clearPrompt() {
+        const canProceed = await confirmDiscardChanges();
+        if (!canProceed) return false;
         promptNameInput.value = "";
         promptTextArea.value = "";
+        loadedPromptText = "";
         pendingThumbnail = null;
         loadedThumbnail = null;
         updateThumbnailDisplay(null);
         currentPromptName = "";
+        return true;
     }
 
     // Initialize the thumbnail area with the placeholder so it never starts empty.

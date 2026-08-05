@@ -6483,7 +6483,7 @@ function showNewCategoryDialog() {
     });
 }
 
-function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c00", useOverlay = true) {
+function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c44", useOverlay = true) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -6491,13 +6491,14 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
+            background: hsl(216 11% 15%);
+            border: 1px solid hsl(216 20% 65% / 0.24);
             border-radius: 8px;
             padding: 20px;
             z-index: 10000;
             min-width: 300px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: hsl(0 0% 87%);
         `;
 
         const overlay = document.createElement("div");
@@ -6512,11 +6513,11 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
         `;
 
         dialog.innerHTML = `
-            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
-            <div style="margin-bottom: 20px; color: #ccc;">${message}</div>
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: hsl(0 0% 87%);">${title}</div>
+            <div style="margin-bottom: 20px; color: hsl(0 0% 67%); line-height: 1.4;">${message}</div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 16px; background: ${confirmColor}; color: #fff; border: none; border-radius: 4px; cursor: pointer;">${confirmText}</button>
+                <button class="cancel-btn" style="padding: 8px 16px; background: hsl(219 16% 18%); color: hsl(0 0% 87%); border: 1px solid hsl(218 10% 41%); border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: ${confirmColor}; color: #fff; border: 1px solid transparent; border-radius: 4px; cursor: pointer;">${confirmText}</button>
             </div>
         `;
 
@@ -6561,13 +6562,14 @@ function showInfo(title, message) {
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
+            background: hsl(216 11% 15%);
+            border: 1px solid hsl(216 20% 65% / 0.24);
             border-radius: 8px;
             padding: 20px;
             z-index: 10000;
             min-width: 300px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: hsl(0 0% 87%);
         `;
 
         const overlay = document.createElement("div");
@@ -6582,10 +6584,10 @@ function showInfo(title, message) {
         `;
 
         dialog.innerHTML = `
-            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
-            <div style="margin-bottom: 20px; color: #ccc;">${message}</div>
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: hsl(0 0% 87%);">${title}</div>
+            <div style="margin-bottom: 20px; color: hsl(0 0% 67%); line-height: 1.4;">${message}</div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #2b6d3a; color: #fff; border: 1px solid #4a9158; border-radius: 4px; cursor: pointer;">OK</button>
             </div>
         `;
 
@@ -8524,7 +8526,7 @@ configurePromptBrowserDeps({
     DEFAULT_THUMBNAIL,
     loadPrompts,
     showInfo,
-    showConfirm,
+    showConfirm: (title, message, confirmText, confirmColor) => showConfirm(title, message, confirmText, confirmColor, false),
     showRenameCategoryDialog,
     showNewCategoryDialog,
     ensureThumbnailRenderSelection,
