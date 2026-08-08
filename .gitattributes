@@ -1,0 +1,50 @@
+# Normalize all text files to LF in the repository.
+# Working-tree endings are controlled by each machine's core.autocrlf setting;
+# the repo always stores LF so Windows/Linux checkouts stop showing phantom diffs.
+* text=auto
+
+# Source files: always LF (in repo and on disk)
+*.py        text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.toml      text eol=lf
+*.txt       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.sh        text eol=lf
+
+# Windows-only scripts keep CRLF
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# Binary files: never convert
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.webp      binary
+*.ico       binary
+*.mp4       binary
+*.webm      binary
+*.mkv       binary
+*.mov       binary
+*.avi       binary
+*.mp3       binary
+*.wav       binary
+*.flac      binary
+*.safetensors binary
+*.ckpt      binary
+*.pt        binary
+*.pth       binary
+*.bin       binary
+*.onnx      binary
+*.af        binary
+*.pyc       binary
+*.pdf       binary
+*.zip       binary
