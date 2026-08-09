@@ -2298,7 +2298,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         rebuildCategoryList();
 
         // When the caller locks the browser to a single category, hide the whole bar.
-        if (allowedCategories && allowedCategories.length === 1) {
+        // Also hidden for the System Prompts source: that data has no real
+        // categories (a single "System Prompts" bucket), so the bar is noise.
+        const hideCategoryBar = (allowedCategories && allowedCategories.length === 1)
+            || endpointPrefix === "/prompt-generator";
+        if (hideCategoryBar) {
             categoryBar.style.display = "none";
         }
 
@@ -2345,12 +2349,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 showInfo,
                 showConfirm,
                 loadPrompts: loadPromptsFn,
-                savePrompt: async ({ category, name, text, thumbnail, overwrite }) => {
+                savePrompt: async ({ category, name, text, thumbnail, overwrite, prompt_category }) => {
                     try {
+                        const payload = { category, name, text, thumbnail };
+                        if (prompt_category) payload.prompt_category = prompt_category;
                         const resp = await fetch(`${endpointPrefix}/save-prompt`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ category, name, text, thumbnail }),
+                            body: JSON.stringify(payload),
                         });
                         const result = await resp.json();
                         if (result?.success) {

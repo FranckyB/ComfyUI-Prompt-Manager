@@ -215,12 +215,37 @@ def reload_prompts():
     _prompts_cache = {}
 
 
+SYSTEM_PROMPT_CATEGORIES = ("Image", "Video", "Audio", "Other")
+
+# Map legacy mode names to their seeded default entries (Category / Name).
+LEGACY_MODE_TO_ENTRY = {
+    "Enhance Prompt (Image)": ("Image", "Enhance Prompt (Image)"),
+    "Enhance Prompt (Video)": ("Video", "Enhance Prompt (Video)"),
+    "Enhance Prompt (Audio)": ("Audio", "Enhance Prompt (Audio)"),
+    "Analyze Image": ("Image", "Analyze Image"),
+    "Analyze Image with Prompt": ("Image", "Analyze Image with Prompt"),
+}
+
+
 def _get_prompt_generator_data_path():
     return os.path.join(folder_paths.get_user_directory(), "default", "prompt_generator_data.json")
 
 
 def _get_default_system_prompts_path():
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "default_system_prompts.json")
+
+
+def _get_basic_system_prompts_path():
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "basic_system_prompts.json")
+
+
+def _read_json_file(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def _ensure_prompt_generator_data():
@@ -242,37 +267,115 @@ def _ensure_prompt_generator_data():
     return data_path
 
 
-def _load_system_prompts_from_generator_data():
-    prompts = {}
+def _merge_missing_basic_system_prompts(data):
+    """Merge any missing basic system prompts into the loaded data.
+
+    Basic prompts are the built-in defaults the node cannot function without
+    (the Image/Video/Audio enhancement prompts and the image-analysis prompts).
+    Missing entries are re-added on every load so the node never ends up broken
+    if the user deletes them. Returns a new data dict; caller decides whether
+    to persist.
+    """
+    basic = _read_json_file(_get_basic_system_prompts_path())
+    if not basic:
+        return data
+
+    merged = dict(data) if isinstance(data, dict) else {}
+    changed = False
+    for category, bucket in basic.items():
+        if not isinstance(bucket, dict):
+            continue
+        target = merged.setdefault(category, {})
+        if not isinstance(target, dict):
+            target = {}
+            merged[category] = target
+        for name, entry in bucket.items():
+            if name == "__meta__" or name in target:
+                continue
+            target[name] = entry
+            changed = True
+    return merged if changed else data
+
+
+def _load_system_prompt_entries():
+    """Load all saved system prompts as {name: {category, prompt}} across every bucket.
+
+    Each prompt entry carries its own "category" field (Audio/Image/Video/Other);
+    the JSON bucket it is stored under is just an organizational group and its
+    name is NOT used as the prompt's category. Category-level metadata keys
+    (__meta__, _prompt_type_, ...) are skipped. Missing basic prompts are
+    re-seeded and persisted so the node stays usable.
+    """
+    entries = {}
     data_path = _ensure_prompt_generator_data()
     if not os.path.exists(data_path):
-        return prompts
+        return entries
 
-    try:
-        with open(data_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception:
-        return prompts
+    data = _read_json_file(data_path)
+    if not data:
+        return entries
 
-    bucket = data.get("System Prompts", {}) if isinstance(data, dict) else {}
-    if not isinstance(bucket, dict):
-        return prompts
+    merged = _merge_missing_basic_system_prompts(data)
+    if merged is not data:
+        try:
+            atomic_save(data_path, merged, "PromptGenerator")
+            print_pg("Seeding:", "Re-added missing basic system prompts to prompt_generator_data.json")
+        except Exception as e:
+            print_pg(f"Warning: Failed to persist basic system prompts: {e}", RED)
+        data = merged
 
-    for name, entry in bucket.items():
-        if name == "__meta__":
+    for category, bucket in data.items():
+        if not isinstance(bucket, dict):
             continue
-        text = entry.get("prompt", "") if isinstance(entry, dict) else entry
-        text = str(text or "").strip()
-        if text:
-            prompts[str(name)] = text
+        for name, entry in bucket.items():
+            if str(name).startswith("_"):
+                continue
+            if isinstance(entry, dict):
+                text = str(entry.get("prompt", "") or "").strip()
+                entry_category = str(entry.get("category", "") or "").strip()
+                if entry_category not in SYSTEM_PROMPT_CATEGORIES:
+                    entry_category = "Other"
+            else:
+                text = str(entry or "").strip()
+                entry_category = "Other"
+            if text:
+                entries[str(name)] = {"category": entry_category, "prompt": text}
 
-    return prompts
+    return entries
 
 
-def _system_prompt_override_choices():
-    base = ["(Use Generator's Prompt)"]
-    saved = sorted(_load_system_prompts_from_generator_data().keys(), key=lambda s: s.lower())
-    return base + saved
+def _system_prompt_choices():
+    """Widget choices for the system_prompt picker: 'Category / Name' entries.
+
+    Ordered by category (Image, Video, Audio, Other), then by prompt name.
+    """
+    entries = _load_system_prompt_entries()
+    category_order = {cat: idx for idx, cat in enumerate(SYSTEM_PROMPT_CATEGORIES)}
+
+    def sort_key(item):
+        name, entry = item
+        return (category_order.get(entry["category"], len(SYSTEM_PROMPT_CATEGORIES)), name.lower())
+
+    labels = [f"{e['category']} / {name}" for name, e in sorted(entries.items(), key=sort_key)]
+    return labels or ["Other / Enhance Prompt (Image)"]
+
+
+def _parse_system_prompt_choice(value):
+    """Parse a widget value into (category, name).
+
+    Accepts 'Category / Name' and tolerates legacy/unknown values by falling
+    back to the first seeded Image default.
+    """
+    value = str(value or "").strip()
+    if "/" in value:
+        category, _, name = value.partition("/")
+        category = category.strip()
+        name = name.strip()
+        if name:
+            return (category if category in SYSTEM_PROMPT_CATEGORIES else "Other", name)
+    if value in LEGACY_MODE_TO_ENTRY:
+        return LEGACY_MODE_TO_ENTRY[value]
+    return ("Image", "Enhance Prompt (Image)")
 
 
 class PromptGeneratorDataStore:
@@ -420,6 +523,38 @@ async def generator_toggle_nsfw(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-generator/set-prompt-category")
+async def generator_set_prompt_category(request):
+    """Update only the per-prompt 'category' field of an existing entry.
+
+    Used by the Prompt Browser dropdown so switching a system prompt's category
+    applies instantly without touching the prompt text/name.
+    """
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+        prompt_category = str(data.get("prompt_category", "") or "").strip()
+        if prompt_category not in SYSTEM_PROMPT_CATEGORIES:
+            prompt_category = "Other"
+
+        if not category or not name:
+            return server.web.json_response({"success": False, "error": "Category and name are required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        existing_data = prompts.get(category, {}).get(name)
+        if not isinstance(existing_data, dict):
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        existing_data["category"] = prompt_category
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in set_prompt_category API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-generator/save-prompt")
 async def generator_save_prompt(request):
     try:
@@ -433,6 +568,9 @@ async def generator_save_prompt(request):
             text = str(text_raw)
         text = text.strip()
         thumbnail = data.get("thumbnail")
+        prompt_category = str(data.get("prompt_category", "") or "").strip()
+        if prompt_category not in SYSTEM_PROMPT_CATEGORIES:
+            prompt_category = ""
 
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and name are required"})
@@ -442,13 +580,18 @@ async def generator_save_prompt(request):
             prompts[category] = {}
 
         existing_data = prompts[category].get(name, {})
-        prompts[category][name] = {
+        entry = {
             "prompt": text,
             "loras_a": existing_data.get("loras_a", []) if isinstance(existing_data, dict) else [],
             "loras_b": existing_data.get("loras_b", []) if isinstance(existing_data, dict) else [],
             "trigger_words": existing_data.get("trigger_words", []) if isinstance(existing_data, dict) else [],
             "thumbnail": thumbnail if thumbnail is not None else (existing_data.get("thumbnail") if isinstance(existing_data, dict) else None),
         }
+        if prompt_category:
+            entry["category"] = prompt_category
+        elif isinstance(existing_data, dict) and existing_data.get("category") in SYSTEM_PROMPT_CATEGORIES:
+            entry["category"] = existing_data["category"]
+        prompts[category][name] = entry
         if isinstance(existing_data, dict) and existing_data.get("nsfw"):
             prompts[category][name]["nsfw"] = existing_data["nsfw"]
 
@@ -598,33 +741,10 @@ class PromptGenerator:
         except (TypeError, ValueError):
             return 8080
 
-    # Prompts are now loaded from external text files in the 'prompts' folder
-    # This makes them easier to edit without modifying Python code
-
-    @staticmethod
-    def get_text_image_system_prompt():
-        """Load the default system prompt for prompt enhancement."""
-        return load_prompt("text_image_system_prompt.txt")
-    
-    @staticmethod
-    def get_text_video_system_prompt():
-        """Load the video system prompt."""
-        return load_prompt("text_video_system_prompt.txt")
-
-    @staticmethod
-    def get_text_audio_system_prompt():
-        """Load the audio system prompt."""
-        return load_prompt("text_audio_system_prompt.txt")
-
-    @staticmethod
-    def get_image_system_prompt():
-        """Load the system prompt for image description (used with vision models)."""
-        return load_prompt("image_default_system_prompt.txt")
-
-    @staticmethod
-    def get_image_custom_system_prompt():
-        """Load the system prompt for custom image description with user prompt."""
-        return load_prompt("image_custom_system_prompt.txt")
+    # System prompts now live in prompt_generator_data.json (seeded from
+    # default_system_prompts.json) and are selected directly via the
+    # system_prompt widget. The 'prompts' folder only keeps the JSON-format
+    # instruction files, which are appended when format_as_json is enabled.
 
     @staticmethod
     def get_image_action_prompt():
@@ -632,8 +752,47 @@ class PromptGenerator:
         return load_prompt("image_action_prompt.txt")
 
     @staticmethod
+    def get_system_prompt_entry(system_prompt):
+        """Resolve the selected system prompt to its {category, name, prompt} entry.
+
+        Falls back to the seeded Image default (and finally to a bundled .txt
+        file) if the selection cannot be found.
+        """
+        category, name = _parse_system_prompt_choice(system_prompt)
+        entries = _load_system_prompt_entries()
+        entry = entries.get(name)
+        if entry:
+            return {"category": entry["category"], "name": name, "prompt": entry["prompt"]}
+
+        # Name lookup failed: use the mapped default entry for this category.
+        default_name = None
+        for mode, (cat, entry_name) in LEGACY_MODE_TO_ENTRY.items():
+            if cat == category:
+                default_name = entry_name
+                break
+        if default_name and default_name in entries:
+            return {"category": entries[default_name]["category"], "name": default_name, "prompt": entries[default_name]["prompt"]}
+
+        # Last resort: any available entry, else a bundled prompt file.
+        if entries:
+            any_name = sorted(entries.keys(), key=lambda s: s.lower())[0]
+            return {"category": entries[any_name]["category"], "name": any_name, "prompt": entries[any_name]["prompt"]}
+        return {"category": category, "name": name, "prompt": load_prompt("text_image_system_prompt.txt")}
+
+    @staticmethod
     def get_json_system_prompt():
         """Load the additional instructions for JSON formatted output."""
+        return load_prompt("json_system_prompt.txt")
+
+    @staticmethod
+    def get_json_system_prompt_for_category(category):
+        """Pick the JSON-format instruction file based on the selected prompt's category."""
+        if category == "Image":
+            return load_prompt("json_system_prompt_image.txt")
+        if category == "Video":
+            return load_prompt("json_system_prompt_video.txt")
+        if category == "Audio":
+            return load_prompt("json_system_prompt_audio.txt")
         return load_prompt("json_system_prompt.txt")
 
     @staticmethod
@@ -733,15 +892,15 @@ class PromptGenerator:
                 }),
             },
             "optional": {
-                "mode": (["Enhance Prompt (Image)", "Enhance Prompt (Video)", "Enhance Prompt (Audio)", "Analyze Image", "Analyze Image with Prompt"], {
-                    "default": "Enhance Prompt (Image)",
-                    "tooltip": "Choose mode: Enhance text prompt | Analyze image | Analyze image with custom instructions"
+                "system_prompt": (_system_prompt_choices(), {
+                    "default": "Image / Enhance Prompt (Image)",
+                    "tooltip": "System prompt to use. Prompts are grouped by category (Audio / Image / Video / Other) and managed via the Prompt Browser 'System Prompts' source."
                 }),
                 "prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
                     "placeholder": "Enter prompt...",
-                    "tooltip": "Text prompt (required for 'Enhance Prompts', optional for 'Analyze Image with Prompt')"
+                    "tooltip": "Text prompt (optional when an image is connected; combined with the image when both are given)"
                 }),
                 "image": ("IMAGE", {
                     "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
@@ -764,10 +923,6 @@ class PromptGenerator:
                 }),
                 "options": ("OPTIONS", {
                     "tooltip": "Optional: Connect options node to control model and parameters"
-                }),
-                "override_system_prompt": (_system_prompt_override_choices(), {
-                    "default": "(Use Generator's Prompt)",
-                    "tooltip": "Override Prompt Generator's built-in system prompt with a saved prompt from category 'System Prompts' in prompt_generator_data.json. '(Use Generator's Prompt)' keeps the normal mode prompt."
                 }),
                 "clip": ("CLIP", {
                     "tooltip": "Optional: Connect a CLIP/text encoder to generate prompts directly without starting llama.cpp/Ollama. Requires a model that supports .generate()."
@@ -1207,10 +1362,12 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, mode="Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, override_system_prompt="(Use Generator's Prompt)", clip=None, **kwargs) -> str:
+    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 
+        # Legacy widgets (mode / override_system_prompt) from old workflows are
+        # absorbed via **kwargs and ignored.
         print_pg_header()  # Print header for this execution
 
         if clear_vram_on_run:
@@ -1229,54 +1386,29 @@ class PromptGenerator:
         # Extract console option from connected options node
         show_everything_in_console = False  # Default to False when options not connected
         use_model_default_sampling = True   # Default to using model defaults
-        use_vision_model = False            # Default to False, set to True for vision modes
 
-        if options and "show_everything_in_console" in options:
-            show_everything_in_console = options["show_everything_in_console"]
-        if options and "use_model_default_sampling" in options:
-            use_model_default_sampling = options["use_model_default_sampling"]
+        # Resolve the selected system prompt and derive behavior from its category.
+        selected = self.get_system_prompt_entry(system_prompt)
+        prompt_category = selected["category"]
+        prompt_label = f"{selected['category']} / {selected['name']}"
+        has_image = image is not None
+        has_prompt = bool(str(prompt or "").strip())
+        use_vision_model = has_image
 
-        if mode in ["Analyze Image", "Analyze Image with Prompt"] or (mode in ["Enhance Prompt (Video)", "Enhance Prompt (Audio)"] and image is not None):
-            use_vision_model = True
-
-        if mode == "Enhance Prompt (Audio)" and not prompt.strip() and image is None:
-            error_msg = "Did you perhaps forget to enter a User Prompt?"
+        # Permissive validation: only error when there is nothing to work with.
+        if not has_prompt and not has_image:
+            error_msg = "Did you perhaps forget to enter a User Prompt or connect an Image?"
             print_pg(error_msg, RED)
             raise RuntimeError(error_msg)
 
-        # Validate inputs based on mode
-        if mode == "Enhance Prompt (Image)" and not prompt.strip():
-            error_msg = "Did you perhaps forget to enter a User Prompt?"
-            print_pg(error_msg, RED)
-            raise RuntimeError(error_msg)
+        print_pg("System prompt :", prompt_label)
 
-        if mode == "Enhance Prompt (Video)" and not prompt.strip() and image is None:
-            error_msg = "Did you perhaps forget to enter a User Prompt?"
-            print_pg(error_msg, RED)
-            raise RuntimeError(error_msg)
-
-        # Prepare the system prompt
-        if mode == "Analyze Image":
-            base_system_prompt = self.get_image_system_prompt()
-        elif mode == "Analyze Image with Prompt":
-            base_system_prompt = self.get_image_custom_system_prompt()
-        elif mode == "Enhance Prompt (Video)":
-            base_system_prompt = self.get_text_video_system_prompt()
-        elif mode == "Enhance Prompt (Audio)":
-            base_system_prompt = self.get_text_audio_system_prompt()
-        else:
-            base_system_prompt = self.get_text_image_system_prompt()
-
-        # Optional override from Prompt Generator main node.
-        override_prompt = ""
-        if override_system_prompt and override_system_prompt != "(Use Generator's Prompt)":
-            saved_prompts = _load_system_prompts_from_generator_data()
-            override_prompt = str(saved_prompts.get(override_system_prompt, "") or "").strip()
-            if not override_prompt:
-                print_pg(f"Warning: Selected override system prompt '{override_system_prompt}' was not found or is empty. Using generator mode prompt.", RED)
+        # Prepare the system prompt from the selected entry.
+        base_system_prompt = selected["prompt"]
 
         # Backward compatibility: allow old Options-node override payloads to continue working.
-        if not override_prompt and options:
+        override_prompt = ""
+        if options:
             override_prompt = str(options.get("override_system_prompt_text", "") or "").strip()
 
         if override_prompt:
@@ -1292,16 +1424,19 @@ class PromptGenerator:
         else:
             system_prompt = base_system_prompt
 
-        # Add JSON formatting instructions only when `format_as_json` is True
+        # Add JSON formatting instructions only when `format_as_json` is True.
+        # The instruction file is chosen from the selected prompt's category.
         if format_as_json:
-            system_prompt = system_prompt + self.get_json_system_prompt_for_mode(mode)
+            system_prompt = system_prompt + self.get_json_system_prompt_for_category(prompt_category)
 
-        # Determine user content based on mode
-        if mode == "Analyze Image":
-            user_content = self.get_image_action_prompt()
-        elif mode == "Analyze Image with Prompt":
-            # Use user prompt if provided, otherwise default to generic description
-            user_content = prompt.strip() if prompt.strip() else self.get_image_action_prompt()
+        # Determine user content: combine image analysis action with optional
+        # user text when both are present.
+        if has_image:
+            image_action = self.get_image_action_prompt()
+            if has_prompt:
+                user_content = f"{prompt.strip()}\n\n{image_action}"
+            else:
+                user_content = image_action
         else:
             user_content = prompt
 
@@ -1361,10 +1496,10 @@ class PromptGenerator:
                     print_pg(f"Using vision model from options node: {model_to_use}")
                 elif options and "model" in options and is_model_local(options["model"]):
                     # Selected model doesn't support vision
-                    print_pg(f"Warning: Model '{options['model']}' has no mmproj (no vision support) but '{mode}' mode is active.\nIgnoring model selection and searching for a vision-capable model.")
+                    print_pg(f"Warning: Model '{options['model']}' has no mmproj (no vision support) but an image is connected for '{prompt_label}'.\nIgnoring model selection and searching for a vision-capable model.")
                     model_to_use = self.find_vision_model(available_models)
                     if model_to_use is None:
-                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                        error_msg = f"Error: '{prompt_label}' uses an image and requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                         print_pg(error_msg, RED)
                         raise RuntimeError(error_msg)
                 elif preferred_local_model and is_model_local(preferred_local_model):
@@ -1372,17 +1507,17 @@ class PromptGenerator:
                         model_to_use = preferred_local_model
                         print_pg(f"Using preferred model from settings: {model_to_use}")
                     else:
-                        print_pg(f"Warning: Preferred model '{preferred_local_model}' has no mmproj (no vision support) for '{mode}' mode.\nSearching for a vision-capable model.")
+                        print_pg(f"Warning: Preferred model '{preferred_local_model}' has no mmproj (no vision support) but an image is connected for '{prompt_label}'.\nSearching for a vision-capable model.")
                         model_to_use = self.find_vision_model(available_models)
                         if model_to_use is None:
-                            error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                            error_msg = f"Error: '{prompt_label}' uses an image and requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                             print_pg(error_msg, RED)
                             raise RuntimeError(error_msg)
                 else:
                     # Try to find a vision model automatically
                     model_to_use = self.find_vision_model(available_models)
                     if model_to_use is None:
-                        error_msg = f"Error: '{mode}' mode requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
+                        error_msg = f"Error: '{prompt_label}' uses an image and requires a vision model (one with an mmproj file). Please download a vision-capable model via the Options node."
                         print_pg(error_msg, RED)
                         raise RuntimeError(error_msg)
             else:
@@ -1426,7 +1561,7 @@ class PromptGenerator:
                         images.append(img)
 
             if not images:
-                error_msg = f"Error: '{mode}' mode requires at least one image to be connected. Please connect an image or switch to 'Enhance Prompt' mode."
+                error_msg = "Error: An image-dependent prompt was selected but no image is connected. Please connect an image or pick a text-only system prompt."
                 print_pg(error_msg, RED)
                 raise RuntimeError(error_msg)
 

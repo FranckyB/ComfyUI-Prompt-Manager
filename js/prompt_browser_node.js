@@ -184,12 +184,14 @@ function setSelectedPrompts(node, names) {
     widget.value = JSON.stringify(normalized);
 }
 
-async function saveComposerPrompt(node, endpointPrefix, category, name, text, thumbnail = null) {
+async function saveComposerPrompt(node, endpointPrefix, category, name, text, thumbnail = null, promptCategory = null) {
     try {
+        const payload = { category, name, text, thumbnail };
+        if (promptCategory) payload.prompt_category = promptCategory;
         const resp = await fetch(`${endpointPrefix}/save-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ category, name, text, thumbnail }),
+            body: JSON.stringify(payload),
         });
         const data = await resp.json();
         if (data.success) {
@@ -1533,7 +1535,10 @@ function buildComposerButtonBar(node) {
             mode: "save",
             initialName: currentName,
             saveButtonText: "Save",
-            onSave: async (category, name) => {
+            onSave: async (payload) => {
+                // prompt_browser.js calls onSave with an object: { category, name, overwrite }
+                const category = String(payload?.category || "").trim();
+                const name = String(payload?.name || "").trim();
                 const text = String(textWidget.value || "").trim();
                 const existing = getNodeEntry(node, category, name);
                 const selectedEntry = getNodeEntry(node, currentCategory, currentName);

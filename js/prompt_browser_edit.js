@@ -4,6 +4,10 @@ import { app } from "../../scripts/app.js";
 
 const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
 
+// Per-prompt category for system prompts (Prompt Generator). Stored on each
+// prompt entry as "category"; distinct from the category-level _prompt_type_.
+const SYSTEM_PROMPT_CATEGORIES = ["Audio", "Image", "Video", "Other"];
+
 const PROMPT_TYPE_CHOICES = [
     { value: "", label: "None" },
     { value: "animal", label: "Animal" },
@@ -174,6 +178,8 @@ export function createPromptBrowserEditPanel(options) {
     } = options || {};
     const isCompact = Boolean(compact);
     const EDIT_PANEL_WIDTH = isCompact ? 280 : 320;
+    const isSystemPromptsSource = String(endpointPrefix) === "/prompt-generator";
+    const isPromptManagerSource = String(endpointPrefix) === "/prompt-manager" || String(endpointPrefix) === "/prompt-manager-advanced";
 
     const _showInfo = typeof showInfo === "function" ? showInfo : async () => {};
     const _showConfirm = typeof showConfirm === "function" ? showConfirm : async () => false;
@@ -300,6 +306,18 @@ export function createPromptBrowserEditPanel(options) {
         toolsArrow.textContent = toolsOpen ? "▼" : "▶";
     };
 
+    // Category Settings / Tools are only meaningful for the compose source;
+    // hide them for System Prompts and Prompt Manager prompts.
+    const showCategorySections = !isSystemPromptsSource && !isPromptManagerSource;
+    settingsHeader.style.display = showCategorySections ? "flex" : "none";
+    settingsBody.style.display = showCategorySections ? settingsBody.style.display : "none";
+    toolsHeader.style.display = showCategorySections ? "flex" : "none";
+    toolsBody.style.display = showCategorySections ? toolsBody.style.display : "none";
+    if (!showCategorySections) {
+        settingsOpen = false;
+        toolsOpen = false;
+    }
+
     settingsHeader.addEventListener("click", () => {
         if (settingsOpen) {
             settingsOpen = false;
@@ -413,6 +431,43 @@ export function createPromptBrowserEditPanel(options) {
     // Prompt editor section
     const promptNameInput = createInput("", "Prompt name");
     promptBody.appendChild(promptNameInput);
+
+    // Per-prompt category selector (system prompts only). Placed directly
+    // under the prompt name; saved on the prompt entry as "category".
+    const promptCategoryWrap = el("div", {
+        display: isSystemPromptsSource ? "flex" : "none",
+        flexDirection: "column",
+        gap: "4px",
+    });
+    const promptCategoryLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prompt Category");
+    const promptCategorySelect = createSelect("Other", SYSTEM_PROMPT_CATEGORIES.map((c) => ({ value: c, label: c })));
+    promptCategorySelect.title = "What this prompt generates. The Prompt Generator uses it to pick the JSON-format instructions.";
+    promptCategorySelect.addEventListener("change", async () => {
+        if (!isSystemPromptsSource) return;
+        const category = currentCategory;
+        const name = String(promptNameInput.value || "").trim();
+        if (!category || !name) return;  // new unsaved prompt: value is used on Save
+        const entry = node?.prompts?.[category]?.[name];
+        if (!entry || typeof entry !== "object") return;  // not saved yet — fail silently
+        if (String(entry.category || "Other") === promptCategorySelect.value) return;
+        try {
+            const resp = await fetch(`${endpointPrefix}/set-prompt-category`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ category, name, prompt_category: promptCategorySelect.value }),
+            });
+            const result = await resp.json();
+            if (result?.success) {
+                node.prompts = result.prompts;
+                _onChange();
+            }
+        } catch (err) {
+            console.warn("[PromptBrowserEdit] Failed to update prompt category:", err);
+        }
+    });
+    promptCategoryWrap.appendChild(promptCategoryLabel);
+    promptCategoryWrap.appendChild(promptCategorySelect);
+    promptBody.appendChild(promptCategoryWrap);
 
     const promptTextArea = createTextarea("", "Prompt text");
     promptTextArea.style.minHeight = isCompact ? "60px" : "120px";
@@ -555,7 +610,11 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         const thumbnail = pendingThumbnail || loadedThumbnail;
-        const result = await _savePrompt({ category, name, text, thumbnail });
+        const savePayload = { category, name, text, thumbnail };
+        if (isSystemPromptsSource) {
+            savePayload.prompt_category = promptCategorySelect.value;
+        }
+        const result = await _savePrompt(savePayload);
         if (result?.success) {
             await _loadPrompts(node);
             currentPromptName = name;
@@ -619,6 +678,9 @@ export function createPromptBrowserEditPanel(options) {
         // Selecting a prompt should always focus Prompt Settings.
         settingsOpen = false;
         promptOpen = true;
+        if (!showCategorySections) {
+            toolsOpen = false;
+        }
         syncSectionVisibility();
 
         const entry = node?.prompts?.[category]?.[promptName];
@@ -627,11 +689,14 @@ export function createPromptBrowserEditPanel(options) {
             loadedPromptText = entry.prompt || "";
             loadedThumbnail = entry.thumbnail || null;
             updateThumbnailDisplay(loadedThumbnail);
+            const entryCategory = String(entry.category || "");
+            promptCategorySelect.value = SYSTEM_PROMPT_CATEGORIES.includes(entryCategory) ? entryCategory : "Other";
         } else {
             promptTextArea.value = "";
             loadedPromptText = "";
             loadedThumbnail = null;
             updateThumbnailDisplay(null);
+            promptCategorySelect.value = "Other";
         }
 
         loadCategorySettings(category);
@@ -652,6 +717,10 @@ export function createPromptBrowserEditPanel(options) {
     }
 
     function showCategorySettings() {
+        if (!showCategorySections) {
+            showPromptSettings();
+            return;
+        }
         settingsOpen = true;
         promptOpen = false;
         syncSectionVisibility();
