@@ -232,11 +232,11 @@ def _get_prompt_generator_data_path():
 
 
 def _get_default_system_prompts_path():
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "default_system_prompts.json")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "default_system_prompts.json")
 
 
 def _get_basic_system_prompts_path():
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "basic_system_prompts.json")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "basic_system_prompts.json")
 
 
 def _read_json_file(path):

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Prompt Composer Store - isolated JSON storage for composer fragments.
 
 This module provides a separate data file and backend endpoints so Prompt
@@ -23,37 +23,20 @@ class PromptComposerStore:
         return os.path.join(folder_paths.get_user_directory(), "default", "prompt_composer_data.json")
 
     @staticmethod
-    def get_legacy_data_path():
-        """Legacy mixer file path kept for backward compatibility."""
-        return os.path.join(folder_paths.get_user_directory(), "default", "prompt_mixer_data.json")
-
-    @staticmethod
     def get_default_prompts_path():
         """Path to the bundled default composer prompts JSON file."""
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "default_composer_prompts.json")
-
-    @staticmethod
-    def get_legacy_default_prompts_path():
-        """Legacy bundled defaults path kept for backward compatibility."""
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "default_mixer_prompts.json")
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", "default_composer_prompts.json")
 
     @classmethod
     def load_prompts(cls):
         """Load composer fragments, seeding from bundled defaults if no user file exists."""
         user_path = cls.get_data_path()
-        legacy_user_path = cls.get_legacy_data_path()
-        default_path = cls.get_default_prompts_path()
-        legacy_default_path = cls.get_legacy_default_prompts_path()
 
-        source_user_path = user_path if os.path.exists(user_path) else legacy_user_path
-
-        if os.path.exists(source_user_path):
+        if os.path.exists(user_path):
             try:
-                with open(source_user_path, "r", encoding="utf-8") as f:
+                with open(user_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    if source_user_path != user_path:
-                        cls.save_prompts(data)
                     return data
             except Exception as e:
                 print(f"[PromptComposerStore] Error loading data: {e}")
@@ -64,11 +47,10 @@ class PromptComposerStore:
                 print("[PromptComposerStore] User data file exists but could not be parsed; not overwriting.")
                 return {}
 
-        default_source_path = default_path if os.path.exists(default_path) else legacy_default_path
-
-        if os.path.exists(default_source_path):
+        default_path = cls.get_default_prompts_path()
+        if os.path.exists(default_path):
             try:
-                with open(default_source_path, "r", encoding="utf-8") as f:
+                with open(default_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
                     cls.save_prompts(data)
@@ -135,7 +117,7 @@ def _find_prompt_case_insensitive(category_data, name):
 
 
 @server.PromptServer.instance.routes.get("/prompt-manager/compose/get-prompts")
-async def mixer_get_prompts(request):
+async def compose_get_prompts(request):
     try:
         return server.web.json_response(PromptComposerStore.load_prompts())
     except Exception as e:
@@ -144,7 +126,7 @@ async def mixer_get_prompts(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/save-category")
-async def mixer_save_category(request):
+async def compose_save_category(request):
     try:
         data = await request.json()
         category_name = str(data.get("category_name", "")).strip()
@@ -171,7 +153,7 @@ async def mixer_save_category(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/save-category-base-prompt")
-async def mixer_save_category_base_prompt(request):
+async def compose_save_category_base_prompt(request):
     try:
         data = await request.json()
         category = str(data.get("category", "")).strip()
@@ -204,7 +186,7 @@ async def mixer_save_category_base_prompt(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/save-category-settings")
-async def mixer_save_category_settings(request):
+async def compose_save_category_settings(request):
     try:
         data = await request.json()
         category = str(data.get("category", "")).strip()
@@ -245,7 +227,7 @@ async def mixer_save_category_settings(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/rename-category")
-async def mixer_rename_category(request):
+async def compose_rename_category(request):
     try:
         data = await request.json()
         old_category = str(data.get("old_category", "")).strip()
@@ -274,7 +256,7 @@ async def mixer_rename_category(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/delete-category")
-async def mixer_delete_category(request):
+async def compose_delete_category(request):
     try:
         data = await request.json()
         category = str(data.get("category", "")).strip()
@@ -292,7 +274,7 @@ async def mixer_delete_category(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/save-prompt")
-async def mixer_save_prompt(request):
+async def compose_save_prompt(request):
     try:
         data = await request.json()
         category = str(data.get("category", "")).strip()
@@ -338,7 +320,7 @@ async def mixer_save_prompt(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/delete-prompt")
-async def mixer_delete_prompt(request):
+async def compose_delete_prompt(request):
     try:
         data = await request.json()
         category = str(data.get("category", "")).strip()
@@ -357,7 +339,7 @@ async def mixer_delete_prompt(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/rename-prompt")
-async def mixer_rename_prompt(request):
+async def compose_rename_prompt(request):
     try:
         data = await request.json()
         old_category = str(data.get("category", "")).strip()
@@ -385,7 +367,7 @@ async def mixer_rename_prompt(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/toggle-nsfw")
-async def mixer_toggle_nsfw(request):
+async def compose_toggle_nsfw(request):
     try:
         data = await request.json()
         toggle_type = data.get("type", "prompt")
@@ -414,7 +396,7 @@ async def mixer_toggle_nsfw(request):
 
 
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/save-thumbnail")
-async def mixer_save_thumbnail(request):
+async def compose_save_thumbnail(request):
     try:
         data = await request.json()
         category = str(data.get("category", "")).strip()
