@@ -19,6 +19,11 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, gener
   <img src="docs/images/prompt_browser_edit_mode.png" alt="Expression Selector Browser">
 </div>
 
+### Prompt Browser — one place to edit every prompt type
+The new **Prompt Browser** lets you create and edit all three prompt libraries from a single interface: **Prompt Manager prompts** (your saved user prompts), **Compose prompts** (Prompt Composer fragments), and **System prompts** (the instructions that steer the Prompt Generator's LLM).
+
+System prompts now feed straight into the **Prompt Generator**, so you can author your own and pick them right in the node. Sample system prompts ship in the node's `/prompts` folder to get you started, and the original built-in prompts are always restored automatically if they're ever missing — they're sourced from `basic_system_prompts.json`, so your edits never cost you the defaults.
+
 ## What This Provides
 
 - **Prompt authoring and management**: Prompt Manager (Advanced + Basic) for prompt save/load workflows, LoRA stacks or Multi Lora Stacks, trigger words, expressions, and reusable prompt libraries.
@@ -128,6 +133,7 @@ Version 2.x introduces an optional Recipe toolset that can be used on its own, o
 - Addon settings are available in ComfyUI Preferences (Settings) under Prompt Manager.
 - This is where you set model/backend defaults, NSFW visibility defaults, view preferences, and related addon behavior.
 - Prompt Generator backend choices (llama.cpp, Ollama, or direct CLIP/text encoder connection) and related options are configured there.
+- The Prompt Generator's system prompts are fully user-customizable. They're stored in `user/default/prompt_generator_data.json` and can be created and edited with the **Prompt Browser** — your custom prompts then show up directly in the Prompt Generator node.
 
 ## Workflow Examples
 
