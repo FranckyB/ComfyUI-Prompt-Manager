@@ -285,15 +285,9 @@ app.registerExtension({
                     useWorkflowWidget.label = "use workflow input";
                 }
 
-                // Make text widget scrollable even when disabled
+                // Make text widget scrollable even when read-only
                 if (promptTextWidget && promptTextWidget.inputEl) {
                     promptTextWidget.inputEl.style.pointerEvents = "auto";
-                    promptTextWidget.inputEl.addEventListener("mousedown", function(e) {
-                        if (this.disabled) {
-                            // Allow scrolling but prevent editing
-                            e.stopPropagation();
-                        }
-                    });
                 }
 
                 // Listen for updates from backend
@@ -609,26 +603,26 @@ app.registerExtension({
                             }
 
                             if (useExternal && llmInput) {
-                                // Using external prompt — display the input text (grayed out)
+                                // Using external prompt — display the input text (read-only, ghosted)
                                 promptTextWidget.value = llmInput;
-                                promptTextWidget.disabled = true;
                                 if (promptTextWidget.inputEl) {
-                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
                                     promptTextWidget.inputEl.readOnly = true;
+                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                    promptTextWidget.inputEl.style.opacity = "0.5";
                                 }
                             } else if (useWorkflow && wfData && getWorkflowPromptText(wfData)) {
-                                // Using workflow_data prompt — display it (grayed out)
+                                // Using workflow_data prompt — display it (read-only, ghosted)
                                 promptTextWidget.value = getWorkflowPromptText(wfData);
-                                promptTextWidget.disabled = true;
                                 if (promptTextWidget.inputEl) {
-                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
                                     promptTextWidget.inputEl.readOnly = true;
+                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                    promptTextWidget.inputEl.style.opacity = "0.5";
                                 }
                             } else {
                                 // Using internal text — enable the widget
-                                promptTextWidget.disabled = false;
                                 if (promptTextWidget.inputEl) {
                                     promptTextWidget.inputEl.readOnly = false;
+                                    promptTextWidget.inputEl.style.opacity = "";
                                 }
                             }
 
@@ -4535,21 +4529,21 @@ function refreshPmaPromptGhosting(node) {
     const useWorkflow = useWorkflowWidget?.value === true && isWorkflowConnected;
 
     if (useExternalWidget.value && isLlmConnected) {
-        textWidget.disabled = true;
         if (textWidget.inputEl) {
-            textWidget.inputEl.style.pointerEvents = "auto";
             textWidget.inputEl.readOnly = true;
+            textWidget.inputEl.style.pointerEvents = "auto";
+            textWidget.inputEl.style.opacity = "0.5";
         }
     } else if (useWorkflow) {
-        textWidget.disabled = true;
         if (textWidget.inputEl) {
-            textWidget.inputEl.style.pointerEvents = "auto";
             textWidget.inputEl.readOnly = true;
+            textWidget.inputEl.style.pointerEvents = "auto";
+            textWidget.inputEl.style.opacity = "0.5";
         }
     } else {
-        textWidget.disabled = false;
         if (textWidget.inputEl) {
             textWidget.inputEl.readOnly = false;
+            textWidget.inputEl.style.opacity = "";
         }
     }
 }
@@ -4735,12 +4729,11 @@ function setupUseExternalToggleHandler(node) {
         const useWorkflow = useWorkflowWidget?.value && isWorkflowConnected;
 
         if (value && isLlmConnected) {
-            // Using LLM and it's connected - disable text widget immediately
-            textWidget.disabled = true;
-            // Keep scrolling enabled but prevent editing
+            // Using LLM and it's connected - make text widget read-only (ghosted)
             if (textWidget.inputEl) {
-                textWidget.inputEl.style.pointerEvents = "auto";
                 textWidget.inputEl.readOnly = true;
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.style.opacity = "0.5";
             }
 
             // Try to show prompt input value if available
@@ -4763,17 +4756,17 @@ function setupUseExternalToggleHandler(node) {
                 }
             }
         } else if (useWorkflow) {
-            // Using workflow_data — ghost the text widget
-            textWidget.disabled = true;
+            // Using workflow_data — make text widget read-only (ghosted)
             if (textWidget.inputEl) {
-                textWidget.inputEl.style.pointerEvents = "auto";
                 textWidget.inputEl.readOnly = true;
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.style.opacity = "0.5";
             }
         } else {
             // Using internal text - enable widget but keep current text (which may be LLM output)
-            textWidget.disabled = false;
             if (textWidget.inputEl) {
                 textWidget.inputEl.readOnly = false;
+                textWidget.inputEl.style.opacity = "";
             }
         }
     };

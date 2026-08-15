@@ -32,9 +32,11 @@ const SOURCE_PROMPT = "Prompt Data";
 const SOURCE_SYSTEM_PROMPTS = "System Prompts";
 const NODE_CHROME_HEIGHT = 86;
 const PROMPT_BROWSER_MIN_EXTRA_HEIGHT = 500;
-const PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT = 300;
+const PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT = 200;
 const PROMPT_BROWSER_DEFAULT_NODE_WIDTH = 440;
-const PROMPT_BROWSER_DEFAULT_NODE_HEIGHT = 800;
+const PROMPT_BROWSER_DEFAULT_NODE_HEIGHT = 700;
+// Hard minimum node size - the resize handle can never shrink below this.
+const PROMPT_BROWSER_MIN_NODE_HEIGHT = 500;
 const PROMPT_BROWSER_SOURCE_PROP = "prompt_browser_source";
 
 function computePromptBrowserUiHeight(node) {
@@ -339,12 +341,7 @@ function setupPromptBrowserNode(nodeType, nodeData) {
     if (nodeData?.name !== "PromptBrowser") return;
 
     const getPromptBrowserMinHeight = (node) => {
-        // Use the stored (graph-space) preview height, not getBoundingClientRect — the DOM
-        // widget is CSS-scaled by canvas zoom, so a screen-space measurement understates the
-        // real height while zoomed out and lets the node be shrunk past the thumbnail area.
-        const storedPreviewHeight = Number(node?._composerPreviewHeight) || 0;
-        const previewHeight = Math.max(120, storedPreviewHeight || PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT);
-        return previewHeight + PROMPT_BROWSER_MIN_EXTRA_HEIGHT;
+        return PROMPT_BROWSER_MIN_NODE_HEIGHT;
     };
 
     const enforcePromptBrowserMinHeight = (node) => {
@@ -380,12 +377,12 @@ function setupPromptBrowserNode(nodeType, nodeData) {
         if (!node || node._promptBrowserInstanceResizeWrapped) return;
         const onResize = node.onResize;
         node.onResize = function (size) {
-            if (Array.isArray(size)) {
-                size[0] = Math.max(PROMPT_BROWSER_DEFAULT_NODE_WIDTH, size[0]);
-                size[1] = Math.max(getPromptBrowserMinHeight(this), size[1]);
+            // Hard clamp so the node can never shrink below the image + UI.
+            if (size) {
+                if (size[0] < PROMPT_BROWSER_DEFAULT_NODE_WIDTH) size[0] = PROMPT_BROWSER_DEFAULT_NODE_WIDTH;
+                if (size[1] < PROMPT_BROWSER_MIN_NODE_HEIGHT) size[1] = PROMPT_BROWSER_MIN_NODE_HEIGHT;
             }
-            const result = onResize ? onResize.apply(this, arguments) : size;
-            enforcePromptBrowserMinHeight(this);
+            const result = onResize ? onResize.apply(this, arguments) : undefined;
             this.updateComposerRootLayout?.();
             return result;
         };
@@ -609,25 +606,10 @@ function setupPromptBrowserNode(nodeType, nodeData) {
         return result;
     };
 
-    if (!nodeType.prototype._promptBrowserResizeWrapped) {
-        const onResize = nodeType.prototype.onResize;
-        nodeType.prototype.onResize = function (size) {
-            if (Array.isArray(size)) {
-                size[0] = Math.max(PROMPT_BROWSER_DEFAULT_NODE_WIDTH, size[0]);
-                size[1] = Math.max(getPromptBrowserMinHeight(this), size[1]);
-            }
-            const result = onResize ? onResize.apply(this, arguments) : size;
-            enforcePromptBrowserMinHeight(this);
-            this.updateComposerRootLayout?.();
-            return result;
-        };
-        nodeType.prototype._promptBrowserResizeWrapped = true;
-    }
-
     if (!nodeType.prototype._promptBrowserDrawClampWrapped) {
         const onDrawForeground = nodeType.prototype.onDrawForeground;
         nodeType.prototype.onDrawForeground = function () {
-            // Final safety net: enforce min height from live preview dimensions on every draw.
+            // Final safety net: enforce min height on every draw.
             enforcePromptBrowserMinHeight(this);
             return onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
         };
@@ -933,7 +915,7 @@ function buildComposerPreview(node) {
     if (node._composerPreviewBuilt) return;
     node._composerPreviewBuilt = true;
 
-    const defaultHeight = Math.max(140, Number(node._composerPreviewHeight) || PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT);
+    const defaultHeight = PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT;
     const container = document.createElement("div");
     container.style.cssText = `display: flex; width: 100%; height: 100%; box-sizing: border-box;`;
 
@@ -946,9 +928,7 @@ function buildComposerPreview(node) {
         background: ${PMA_THEME.inputBg};
         border: 1px solid ${PMA_THEME.inputBorder};
         overflow: hidden;
-        resize: vertical;
         min-height: 120px;
-        max-height: 560px;
         box-sizing: border-box;
     `;
 
@@ -1094,23 +1074,6 @@ function buildComposerPreview(node) {
             await node.openComposerPromptBrowser(e);
         }
     });
-
-    const commitPreviewHeight = () => {
-        const inlineHeight = parseFloat(String(previewBox.style.height || ""));
-        const nextHeight = Math.max(120, Math.min(560, Math.round(Number.isFinite(inlineHeight) ? inlineHeight : defaultHeight)));
-        if (node._composerPreviewHeight === nextHeight) return;
-        node._composerPreviewHeight = nextHeight;
-        if (typeof node.updateComposerRootLayout === "function") {
-            node.updateComposerRootLayout();
-        }
-        const minHeight = Math.max(300, Number(node._composerPreviewHeight) || PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT) + PROMPT_BROWSER_MIN_EXTRA_HEIGHT;
-        if (Array.isArray(node.size) && node.size[1] < minHeight) {
-            node.setSize([node.size[0], minHeight]);
-        }
-        app.graph.setDirtyCanvas(true, true);
-    };
-    previewBox.addEventListener("mouseup", commitPreviewHeight);
-    previewBox.addEventListener("pointerup", commitPreviewHeight);
 
     node.updateComposerPreview = () => {
         const ui = node._composerPreview;
@@ -1727,13 +1690,22 @@ function updateComposerLastSavedState(node) {
     };
 }
 
+function getSourceExportFilename(node) {
+    const source = getSourceValue(node);
+    if (source === SOURCE_PROMPT) return "prompt_manager_data.json";
+    if (source === SOURCE_SYSTEM_PROMPTS) return "prompt_generator_data.json";
+    return "prompt_composer_data.json";
+}
+
 function exportComposerJSON(node) {
-    const data = node.composerPrompts || {};
+    // Export the currently selected source's data (node.prompts reflects whatever
+    // source is active after loadActivePrompts), with a source-appropriate filename.
+    const data = node.prompts || node.composerPrompts || {};
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "prompt_composer_data.json";
+    a.download = getSourceExportFilename(node);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1766,8 +1738,13 @@ async function importComposerJSON(node) {
                 }
             }
             await showInfo("Import Complete", `Imported ${imported} prompts.`);
+            // Reload the active source so the imported prompts appear in the UI.
+            await loadActivePrompts(node);
             if (typeof node.updateComposerSelectorDisplay === "function") {
                 node.updateComposerSelectorDisplay();
+            }
+            if (typeof node.updateComposerPreview === "function") {
+                node.updateComposerPreview();
             }
         } catch (err) {
             console.error("[PromptBrowser] Import error:", err);

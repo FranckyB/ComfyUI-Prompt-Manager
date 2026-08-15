@@ -398,15 +398,9 @@ app.registerExtension({
                     useExternalWidget.label = "use llm input";
                 }
 
-                // Make text widget scrollable even when disabled
+                // Make text widget scrollable even when read-only
                 if (promptTextWidget && promptTextWidget.inputEl) {
                     promptTextWidget.inputEl.style.pointerEvents = "auto";
-                    promptTextWidget.inputEl.addEventListener("mousedown", function(e) {
-                        if (this.disabled) {
-                            // Allow scrolling but prevent editing
-                            e.stopPropagation();
-                        }
-                    });
                 }
 
                 // Listen for text updates from backend (when connected inputs change or toggle changes)
@@ -417,16 +411,19 @@ app.registerExtension({
                             const llmInput = event.detail.llm_input || "";
                             
                             if (useExternal && llmInput) {
-                                // When using external, display the LLM input text (grayed out)
+                                // When using external, display the LLM input text (read-only, ghosted)
                                 promptTextWidget.value = llmInput;
-                                promptTextWidget.disabled = true;
-                                // Keep scrolling enabled
                                 if (promptTextWidget.inputEl) {
+                                    promptTextWidget.inputEl.readOnly = true;
                                     promptTextWidget.inputEl.style.pointerEvents = "auto";
+                                    promptTextWidget.inputEl.style.opacity = "0.5";
                                 }
                             } else {
                                 // When using internal, enable the widget
-                                promptTextWidget.disabled = false;
+                                if (promptTextWidget.inputEl) {
+                                    promptTextWidget.inputEl.readOnly = false;
+                                    promptTextWidget.inputEl.style.opacity = "";
+                                }
                             }
                             
                             this.serialize_widgets = true;
@@ -1038,12 +1035,11 @@ function setupUseExternalToggleHandler(node) {
         const isLlmConnected = llmInputConnection && llmInputConnection.link != null;
 
         if (value && isLlmConnected) {
-            // Using LLM and it's connected - disable text widget immediately
-            textWidget.disabled = true;
-            // Keep scrolling enabled but prevent editing
+            // Using LLM and it's connected - make text widget read-only (ghosted)
             if (textWidget.inputEl) {
-                textWidget.inputEl.style.pointerEvents = "auto";
                 textWidget.inputEl.readOnly = true;
+                textWidget.inputEl.style.pointerEvents = "auto";
+                textWidget.inputEl.style.opacity = "0.5";
             }
             
             // Try to show LLM value if available
@@ -1067,9 +1063,9 @@ function setupUseExternalToggleHandler(node) {
             }
         } else {
             // Using internal text - enable widget but keep current text (which may be LLM output)
-            textWidget.disabled = false;
             if (textWidget.inputEl) {
                 textWidget.inputEl.readOnly = false;
+                textWidget.inputEl.style.opacity = "";
             }
         }
     };
