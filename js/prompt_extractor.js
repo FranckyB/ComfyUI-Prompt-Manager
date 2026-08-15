@@ -1689,7 +1689,7 @@ app.registerExtension({
                     const isWorkflowExtractor = this.type === "RecipeExtractor";
                     const VALID_INPUTS = isWorkflowExtractor
                         ? new Set([])
-                        : new Set(["lora_stack_a", "lora_stack_b"]);
+                        : new Set(["lora_stack_a", "lora_stack_b", "video"]);
                     if (this.inputs) {
                         for (let i = this.inputs.length - 1; i >= 0; i--) {
                             if (!VALID_INPUTS.has(this.inputs[i].name)) {
@@ -2023,9 +2023,69 @@ app.registerExtension({
                             return true; // Consume the event
                         }
                     }
-                    
+
                     return onMouseDown ? onMouseDown.apply(this, arguments) : undefined;
                 };
+
+                // ── Ghost the file-picker UI when a VIDEO input is connected ──
+                // When the optional "video" input is linked, extraction reads the
+                // connected video directly, so the image/source/browse widgets are
+                // irrelevant. We hide them (LiteGraph "ghosting") while connected.
+                const videoInputIndex = () => (node.inputs || []).findIndex(i => i?.name === "video");
+                const isVideoConnected = () => {
+                    const idx = videoInputIndex();
+                    return idx >= 0 && node.inputs[idx]?.link != null;
+                };
+                const updateVideoConnectedUI = () => {
+                    const connected = isVideoConnected();
+                    const targets = [imageWidget, imagePickerWidget, sourceFolderWidget];
+                    // Also hide the browse button (added after imagePickerWidget).
+                    const browseBtn = node.widgets?.find(w => w?.type === "button" && w?.name && String(w.name).toLowerCase().includes("browse"));
+                    if (browseBtn) targets.push(browseBtn);
+                    for (const w of targets) {
+                        if (!w) continue;
+                        if (connected) {
+                            if (!w._peHiddenForVideo) {
+                                w._peHiddenForVideo = true;
+                                w._pePrevHidden = w.hidden;
+                                w._pePrevComputeSize = w.computeSize;
+                            }
+                            w.hidden = true;
+                            w.computeSize = () => [0, -4];
+                            if (w.inputEl) w.inputEl.style.display = "none";
+                        } else if (w._peHiddenForVideo) {
+                            w._peHiddenForVideo = false;
+                            // Restore: source_folder stays hidden (it was always hidden),
+                            // others return to their prior state.
+                            w.hidden = w === sourceFolderWidget ? true : (w._pePrevHidden ?? false);
+                            if (w._pePrevComputeSize) { w.computeSize = w._pePrevComputeSize; delete w._pePrevComputeSize; }
+                            if (w.inputEl && !w.hidden) w.inputEl.style.display = "";
+                        }
+                    }
+                    node.setDirtyCanvas(true, true);
+                    node.setSize(node.computeSize());
+                };
+
+                const origOnConnectionsChange = node.onConnectionsChange;
+                node.onConnectionsChange = function (type, index, connected) {
+                    const r = origOnConnectionsChange?.apply(this, arguments);
+                    updateVideoConnectedUI();
+                    return r;
+                };
+                const origOnConnectInput = node.onConnectInput;
+                node.onConnectInput = function (idx, type) {
+                    const r = origOnConnectInput?.apply(this, arguments);
+                    updateVideoConnectedUI();
+                    return r;
+                };
+                const origOnConfigureVideo = node.onConfigure;
+                node.onConfigure = function (info) {
+                    const r = origOnConfigureVideo?.apply(this, arguments);
+                    updateVideoConnectedUI();
+                    return r;
+                };
+                // Initial state.
+                setTimeout(updateVideoConnectedUI, 100);
 
                 return result;
             };

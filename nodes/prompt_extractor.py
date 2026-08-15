@@ -3882,6 +3882,7 @@ class PromptExtractor:
             "optional": {
                 "lora_stack_a": ("LORA_STACK",),
                 "lora_stack_b": ("LORA_STACK",),
+                "video": ("VIDEO", {"tooltip": "Optional video input. When connected, extract from this video directly and the file picker is ignored."}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -3901,8 +3902,8 @@ class PromptExtractor:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def extract(self, image="", source_folder="input", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, unique_id=None, extra_pnginfo=None, prompt=None):
-        """Extract prompts and LoRAs from the specified file."""
+    def extract(self, image="", source_folder="input", frame_position=0.0, use_lora_input_only=False, lora_stack_a=None, lora_stack_b=None, video=None, unique_id=None, extra_pnginfo=None, prompt=None):
+        """Extract prompts and LoRAs from the specified file (or connected video)."""
 
         # Handle None for frame_position (workflow compatibility)
         if frame_position is None:
@@ -3930,35 +3931,53 @@ class PromptExtractor:
         if image == "(none)":
             image = ""
 
-        # Normalize file path
+        # A connected VIDEO input overrides the file picker: resolve its path
+        # directly and ignore the image/source_folder widgets.
         resolved_path = None
         file_path = ""  # Initialize file_path to avoid UnboundLocalError
-        if image and image.strip():
-            file_path = image.strip()
+        if video is not None:
+            video_path = None
+            try:
+                src = video.get_stream_source()
+                if isinstance(src, str) and src:
+                    video_path = src
+            except Exception as e:
+                print(f"[PromptExtractor] Could not get connected video path: {e}")
+            if video_path and os.path.exists(video_path):
+                resolved_path = video_path
+                file_path = video_path
+                print(f"[PromptExtractor] Using connected video input: {os.path.basename(video_path)}")
+                # Skip the file-picker path entirely
+                image = ""
 
-            # Handle relative paths (check selected source directory first, then temp as fallback)
-            if not os.path.isabs(file_path):
-                # Check selected source directory first
-                if source_folder == "output":
-                    base_dir = folder_paths.get_output_directory()
-                else:
-                    base_dir = folder_paths.get_input_directory()
-                potential_path = os.path.join(base_dir, file_path)
-                if os.path.exists(potential_path):
-                    resolved_path = potential_path
-                else:
-                    # Check temp directory as fallback (for backwards compatibility)
-                    temp_dir = folder_paths.get_temp_directory()
-                    potential_path = os.path.join(temp_dir, file_path)
+        # Normalize file path
+        if not resolved_path:
+            if image and image.strip():
+                file_path = image.strip()
+
+                # Handle relative paths (check selected source directory first, then temp as fallback)
+                if not os.path.isabs(file_path):
+                    # Check selected source directory first
+                    if source_folder == "output":
+                        base_dir = folder_paths.get_output_directory()
+                    else:
+                        base_dir = folder_paths.get_input_directory()
+                    potential_path = os.path.join(base_dir, file_path)
                     if os.path.exists(potential_path):
                         resolved_path = potential_path
                     else:
-                        print(f"[PromptExtractor] File not found in {source_folder} or temp directories: {file_path}")
-            else:
-                if os.path.exists(file_path):
-                    resolved_path = file_path
+                        # Check temp directory as fallback (for backwards compatibility)
+                        temp_dir = folder_paths.get_temp_directory()
+                        potential_path = os.path.join(temp_dir, file_path)
+                        if os.path.exists(potential_path):
+                            resolved_path = potential_path
+                        else:
+                            print(f"[PromptExtractor] File not found in {source_folder} or temp directories: {file_path}")
                 else:
-                    print(f"[PromptExtractor] Absolute path does not exist: {file_path}")
+                    if os.path.exists(file_path):
+                        resolved_path = file_path
+                    else:
+                        print(f"[PromptExtractor] Absolute path does not exist: {file_path}")
 
         if resolved_path:
             print(f"[PromptExtractor] Processing file: {resolved_path}")
