@@ -103,7 +103,7 @@ class PromptBrowser:
 
         return {
             "required": {
-                "source": ([s.SOURCE_COMPOSE, s.SOURCE_PROMPT, s.SOURCE_SYSTEM_PROMPTS], {"default": s.SOURCE_COMPOSE}),
+                "source": ([s.SOURCE_COMPOSE, s.SOURCE_PROMPT, s.SOURCE_SYSTEM_PROMPTS], {"default": s.SOURCE_SYSTEM_PROMPTS}),
                 "category": (categories, {"default": categories[0]}),
                 "name": (all_prompts, {"default": first_prompt}),
                 "selected_prompts": ("STRING", {

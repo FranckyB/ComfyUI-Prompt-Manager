@@ -1,6 +1,12 @@
 import { saveComposerCategorySettings } from "./prompt_composer_common.js";
-import { DEFAULT_THUMBNAIL } from "./prompt_manager_advanced.js";
 import { app } from "../../scripts/app.js";
+
+// Placeholder thumbnail. Defined locally (NOT imported from prompt_manager_advanced.js)
+// to break the module cycle:
+//   prompt_manager_advanced -> prompt_browser -> prompt_browser_edit -> prompt_manager_advanced
+// which left prompt_browser's bindings in the temporal dead zone and intermittently
+// prevented the PromptBrowser node's JS from registering.
+const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
 
 const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
 

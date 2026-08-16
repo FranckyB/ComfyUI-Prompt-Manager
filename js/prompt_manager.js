@@ -576,9 +576,9 @@ app.registerExtension({
            const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated?.apply(this, arguments);
-                // Set a default size (width x height)
+                // Set a default size (width x height) - taller to fit the UI comfortably
                 try {
-                    this.setSize([400, 300]);
+                    this.setSize([400, 600]);
                 } catch (e) {
                     // ignore if method unavailable
                 }

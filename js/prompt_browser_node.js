@@ -55,7 +55,7 @@ function getSourceWidget(node) {
 
 function getSourceValue(node) {
     const widget = getSourceWidget(node);
-    return String(widget?.value || SOURCE_COMPOSE);
+    return String(widget?.value || SOURCE_SYSTEM_PROMPTS);
 }
 
 function normalizePromptBrowserSource(value) {
@@ -80,16 +80,17 @@ function persistPromptBrowserSource(node, sourceValue) {
 }
 
 function restorePromptBrowserSource(node, sourceWidget, info = null, options = {}) {
-    if (!node) return SOURCE_COMPOSE;
+    if (!node) return SOURCE_SYSTEM_PROMPTS;
     const persist = options.persist !== false;
     const hasSavedProperty = Object.prototype.hasOwnProperty.call(node.properties || {}, PROMPT_BROWSER_SOURCE_PROP);
     const fromProperty = hasSavedProperty ? coercePromptBrowserSourceOrNull(node.properties?.[PROMPT_BROWSER_SOURCE_PROP]) : null;
     const fromWidget = coercePromptBrowserSourceOrNull(sourceWidget?.value);
     const fromInfo = coercePromptBrowserSourceOrNull(info?.properties?.[PROMPT_BROWSER_SOURCE_PROP]);
-    // On workflow/tab restore, trust serialized workflow source first.
+    // On workflow/tab restore, trust serialized workflow source first. New nodes
+    // fall back to the widget default (System Prompts).
     const effective = info
-        ? (fromInfo || fromWidget || fromProperty || SOURCE_COMPOSE)
-        : (fromProperty || fromWidget || SOURCE_COMPOSE);
+        ? (fromInfo || fromWidget || fromProperty || SOURCE_SYSTEM_PROMPTS)
+        : (fromProperty || fromWidget || SOURCE_SYSTEM_PROMPTS);
     if (sourceWidget) {
         sourceWidget.value = effective;
     }
@@ -867,7 +868,7 @@ function buildComposerSourceBar(node) {
     };
 
     const updateDisplay = () => {
-        valueDisplay.textContent = String(sourceWidget.value || SOURCE_COMPOSE).toUpperCase();
+        valueDisplay.textContent = String(sourceWidget.value || SOURCE_SYSTEM_PROMPTS).toUpperCase();
     };
 
     const cycleSource = async (direction) => {
