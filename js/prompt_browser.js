@@ -43,8 +43,18 @@ let _thumbQueueProgress = null;
 let _thumbQueuePromiseChain = Promise.resolve();
 
 function _syncThumbnailRenderState() {
-    if (typeof getThumbnailRenderState !== "function") return;
-    const state = getThumbnailRenderState() || {};
+    // Guard against TDZ: `getThumbnailRenderState` is a `let` that may be in its
+    // temporal dead zone if this is invoked while the module is mid-evaluation
+    // (e.g. via a circular import). `typeof` on a TDZ binding throws, so we read it
+    // through a function that swallows the ReferenceError.
+    let getter = null;
+    try {
+        getter = getThumbnailRenderState;
+    } catch (e) {
+        return; // TDZ / not yet initialized - nothing to sync.
+    }
+    if (typeof getter !== "function") return;
+    const state = getter() || {};
     _thumbnailRenderFamily = state.family || null;
     _thumbnailRenderModel = state.model || null;
     _thumbnailRenderLora1 = state.lora1 || null;
