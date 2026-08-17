@@ -157,27 +157,60 @@ def generate_chat(user_config, model_name, messages, temperature=0.8,
 # Memory management — unload model from Ollama VRAM
 # ============================================================================
 
-def unload_model(user_config, model_name):
-    """Tell Ollama to unload a model from memory (free VRAM).
+def _loaded_models(user_config):
+    """Return the list of models currently loaded in Ollama memory (via /api/ps)."""
+    base = _get_ollama_base(user_config)
+    try:
+        resp = requests.get(f"{base}/api/ps", timeout=10)
+        if resp.status_code != 200:
+            return []
+        payload = resp.json()
+        names = []
+        for item in payload.get("models", []):
+            if isinstance(item, dict):
+                name = item.get("model") or item.get("name")
+                if isinstance(name, str) and name.strip():
+                    names.append(name.strip())
+        return names
+    except Exception:
+        return []
 
-    Uses the /api/generate endpoint with keep_alive=0 to immediately
-    evict the model from GPU memory.
+
+def unload_model(user_config):
+    """Unload all models from Ollama memory (free VRAM).
+
+    Queries /api/ps for every model currently loaded, then evicts each with
+    keep_alive=0 via the /api/generate endpoint.
     """
     base = _get_ollama_base(user_config)
     url = f"{base}/api/generate"
 
-    try:
-        response = requests.post(url, json={
-            "model": model_name,
-            "keep_alive": 0,
-        }, timeout=15)
-        if response.status_code == 200:
-            return True, f"Model '{model_name}' unloaded from Ollama memory."
-        return False, f"Ollama returned HTTP {response.status_code} while unloading model."
-    except requests.exceptions.ConnectionError:
-        return False, "Could not connect to Ollama to unload model."
-    except Exception as e:
-        return False, f"Failed to unload model from Ollama: {e}"
+    targets = _loaded_models(user_config)
+    if not targets:
+        return True, "No models currently loaded in Ollama."
+
+    unloaded = []
+    failures = []
+    for name in targets:
+        try:
+            response = requests.post(url, json={
+                "model": name,
+                "keep_alive": 0,
+            }, timeout=15)
+            if response.status_code == 200:
+                unloaded.append(name)
+            else:
+                failures.append(f"{name} (HTTP {response.status_code})")
+        except requests.exceptions.ConnectionError:
+            return False, None
+        except Exception as e:
+            failures.append(f"{name} ({e})")
+
+    if unloaded and not failures:
+        return True, f"Unloaded {len(unloaded)} model(s) from Ollama memory."
+    if unloaded:
+        return True, f"Unloaded {len(unloaded)} model(s); failed: {', '.join(failures)}."
+    return False, f"Failed to unload model(s): {', '.join(failures) if failures else 'unknown error'}"
 
 
 # ============================================================================

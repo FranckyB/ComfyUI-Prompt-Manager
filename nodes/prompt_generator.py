@@ -880,6 +880,25 @@ class PromptGenerator:
         return candidates[0]
 
     @classmethod
+    def _available_models(cls):
+        """Models for the base node's model dropdown. Mirrors the Options node's
+        discovery (Ollama vs llama.cpp) but adds a passthrough first entry so the
+        dropdown defaults to 'use Options node / settings' for backward compat."""
+        passthrough = "(use default)"
+        backend = _preferences_cache.get("llm_backend", "llama.cpp")
+        try:
+            if backend == "ollama":
+                from ..py.ollama_wrapper import discover_ollama_models
+                discovered, _status = discover_ollama_models(_preferences_cache)
+                models = list(discovered) if discovered else []
+            else:
+                from ..py.model_manager import get_all_models
+                models = list(get_all_models() or [])
+        except Exception:
+            models = []
+        return [passthrough] + models
+
+    @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
@@ -926,6 +945,14 @@ class PromptGenerator:
                 }),
                 "clip": ("CLIP", {
                     "tooltip": "Optional: Connect a CLIP/text encoder to generate prompts directly without starting llama.cpp/Ollama. Requires a model that supports .generate()."
+                }),
+                "prompt_input": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Optional: Connect a text input. When connected, it overrides the prompt widget (which becomes read-only)."
+                }),
+                "model": (cls._available_models(), {
+                    "default": "(use default)",
+                    "tooltip": "Model to use. Leave on '(use default)' to fall back to the preferred-model setting."
                 })
             }
         }
@@ -1362,9 +1389,19 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, **kwargs) -> str:
+    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, prompt_input=None, model="(use default)", **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
+
+        # A connected prompt_input overrides the prompt widget.
+        if isinstance(prompt_input, str) and prompt_input.strip():
+            prompt = prompt_input
+
+        # A model selected on the base node overrides the Options node's model.
+        # "(use default)" (the default) means defer to options/settings.
+        if isinstance(model, str) and model.strip() and model != "(use default)":
+            options = dict(options) if isinstance(options, dict) else {}
+            options["model"] = model
 
         # Legacy widgets (mode / override_system_prompt) from old workflows are
         # absorbed via **kwargs and ignored.
@@ -1975,11 +2012,11 @@ class PromptGenerator:
                 print_pg("Warning: Empty response from Ollama")
                 full_response = prompt
 
-            # "stop_server_after" → unload model from Ollama memory immediately
+            # "stop_server_after" → unload all models from Ollama memory immediately
             # (This overrides the keep_alive duration for this request)
             if stop_server_after:
                 print_pg("Unloading model from Ollama memory...")
-                ok, msg = ollama_unload_model(_preferences_cache, model_to_use)
+                ok, msg = ollama_unload_model(_preferences_cache)
                 print_pg(msg, GREEN if ok else RED)
             else:
                 keep_alive = _preferences_cache.get("ollama_keep_alive", "5m")
@@ -2065,7 +2102,7 @@ class PromptGenerator:
         print_pg("Backend       :", "CLIP/text encoder")
         print_pg("Thinking mode :", f"{'ON' if enable_thinking else 'OFF'}")
 
-        max_length = 512
+        max_length = 1024
         if options and options.get("max_length") is not None:
             max_length = int(options["max_length"])
 
@@ -2080,7 +2117,12 @@ class PromptGenerator:
         min_p = 0.05
         repetition_penalty = 1.05
         presence_penalty = 0.0
-        do_sample = not use_model_default_sampling
+
+        # Always sample so the seed produces varied results. Previously
+        # `use_model_default_sampling` (default True) forced do_sample=False, making
+        # generation greedy/deterministic and the seed a no-op. Sampling with the
+        # seed is the expected behavior for a "generate with seed" node.
+        do_sample = True
 
         if not use_model_default_sampling:
             temperature = options.get("temperature", temperature)
@@ -2088,9 +2130,6 @@ class PromptGenerator:
             top_p = options.get("top_p", top_p)
             min_p = options.get("min_p", min_p)
             repetition_penalty = options.get("repeat_penalty", repetition_penalty)
-        else:
-            # When model defaults are requested, disable sampling to stay close to the model's deterministic behavior.
-            do_sample = False
 
         full_prompt = system_prompt
         if user_content:

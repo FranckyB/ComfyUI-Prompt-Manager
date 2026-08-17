@@ -549,6 +549,15 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated?.apply(this, arguments);
                 migrateLegacyPromptGenOptionsWidgets(this);
+                // Model selection now lives on the Prompt Generator base node. The
+                // Options node's model widget is kept (hidden) purely so old workflows
+                // still load and pass their value through as a fallback.
+                const modelWidget = this.widgets?.find(w => w.name === "model");
+                if (modelWidget) {
+                    modelWidget.hidden = true;
+                    modelWidget.computeSize = () => [0, -4];
+                    if (modelWidget.inputEl) modelWidget.inputEl.style.display = "none";
+                }
                 // Set a default size (width x height)
                 try {
                     this.setSize([400, 420]);
@@ -561,6 +570,13 @@ app.registerExtension({
             nodeType.prototype.onConfigure = function(info) {
                 const result = onConfigureOpt?.apply(this, arguments);
                 migrateLegacyPromptGenOptionsWidgets(this);
+                // Re-hide the legacy model widget on restore (tab switch / reload).
+                const modelWidget = this.widgets?.find(w => w.name === "model");
+                if (modelWidget) {
+                    modelWidget.hidden = true;
+                    modelWidget.computeSize = () => [0, -4];
+                    if (modelWidget.inputEl) modelWidget.inputEl.style.display = "none";
+                }
                 return result;
             };
             // Enforce sensible minimums when the user resizes the options node
@@ -582,6 +598,75 @@ app.registerExtension({
                 } catch (e) {
                     // ignore if method unavailable
                 }
+
+                // Darken + make the prompt widget read-only while a `prompt_input`
+                // link is connected (mirrors PromptManager's use_prompt_input UI).
+                // Also display the connected upstream text in the widget so you can
+                // see what prompt is actually being fed in.
+                const node = this;
+                const promptWidget = node.widgets?.find(w => w.name === "prompt");
+                const promptInputSlot = () => node.inputs?.find(i => i && i.name === "prompt_input");
+                const isPromptInputConnected = () => {
+                    const inp = promptInputSlot();
+                    return !!(inp && inp.link != null);
+                };
+
+                // Read the text coming from the connected upstream node, if available.
+                const readUpstreamPrompt = () => {
+                    const inp = promptInputSlot();
+                    if (!inp || inp.link == null) return null;
+                    const graph = app.graph;
+                    const link = graph?.links?.[inp.link];
+                    if (!link) return null;
+                    const originNode = graph.getNodeById(link.origin_id);
+                    if (!originNode) return null;
+                    // Prefer live output data (set after the upstream node executed).
+                    const outputData = originNode.getOutputData?.(link.origin_slot);
+                    if (typeof outputData === "string") return outputData;
+                    if (Array.isArray(outputData) && typeof outputData[0] === "string") return outputData[0];
+                    // Fallback: a text-ish widget on the origin node.
+                    if (originNode.widgets) {
+                        const w = originNode.widgets.find(w => typeof w.value === "string" && (w.name === "text" || w.type === "string" || w.name === "prompt"));
+                        if (w && typeof w.value === "string") return w.value;
+                    }
+                    return null;
+                };
+
+                const applyPromptInputState = () => {
+                    if (!promptWidget || !promptWidget.inputEl) return;
+                    const connected = isPromptInputConnected();
+                    promptWidget.inputEl.readOnly = connected;
+                    promptWidget.inputEl.style.opacity = connected ? "0.5" : "";
+                    if (connected) {
+                        const upstream = readUpstreamPrompt();
+                        if (typeof upstream === "string" && upstream !== promptWidget.value) {
+                            promptWidget.value = upstream;
+                        }
+                    }
+                };
+                const prevOnConnectionsChange = node.onConnectionsChange;
+                node.onConnectionsChange = function () {
+                    const r = prevOnConnectionsChange?.apply(this, arguments);
+                    applyPromptInputState();
+                    return r;
+                };
+                const prevOnConfigure = node.onConfigure;
+                node.onConfigure = function () {
+                    const r = prevOnConfigure?.apply(this, arguments);
+                    applyPromptInputState();
+                    return r;
+                };
+                // After this node executes, refresh the displayed prompt from the
+                // (now-executed) upstream node so the widget shows the actual text used.
+                const prevOnExecuted = node.onExecuted;
+                node.onExecuted = function () {
+                    const r = prevOnExecuted?.apply(this, arguments);
+                    applyPromptInputState();
+                    return r;
+                };
+                // Initial state.
+                applyPromptInputState();
+
                 return result;
             };
             const onResizeModel = nodeType.prototype.onResize;
