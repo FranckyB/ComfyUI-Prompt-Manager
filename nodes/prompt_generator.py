@@ -1840,7 +1840,8 @@ class PromptGenerator:
             if stop_server_after:
                 self.stop_server()
 
-            return (full_response, thinking_content)
+            # Echo the input prompt back so the widget displays it on execute.
+            return {"result": (full_response, thinking_content), "ui": {"prompt": [prompt]}}
 
         except comfy.model_management.InterruptProcessingException:
             # User requested interrupt; ensure response is closed and optionally stop server
@@ -2023,7 +2024,7 @@ class PromptGenerator:
                 if keep_alive and str(keep_alive) != "0":
                     print_pg(f"Model will stay loaded for: {keep_alive}")
 
-            return (full_response, thinking_content)
+            return {"result": (full_response, thinking_content), "ui": {"prompt": [prompt]}}
 
         except comfy.model_management.InterruptProcessingException:
             try:
@@ -2182,4 +2183,4 @@ class PromptGenerator:
         else:
             print_pg("Prompt generation complete.")
 
-        return (generated_text, "")
+        return {"result": (generated_text, ""), "ui": {"prompt": [prompt]}}

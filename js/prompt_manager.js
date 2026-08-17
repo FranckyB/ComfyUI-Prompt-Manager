@@ -601,8 +601,8 @@ app.registerExtension({
 
                 // Darken + make the prompt widget read-only while a `prompt_input`
                 // link is connected (mirrors PromptManager's use_prompt_input UI).
-                // Also display the connected upstream text in the widget so you can
-                // see what prompt is actually being fed in.
+                // On execute, the server echoes the resolved input prompt back via
+                // ui.prompt, which we display so you can see (and later edit) it.
                 const node = this;
                 const promptWidget = node.widgets?.find(w => w.name === "prompt");
                 const promptInputSlot = () => node.inputs?.find(i => i && i.name === "prompt_input");
@@ -611,38 +611,11 @@ app.registerExtension({
                     return !!(inp && inp.link != null);
                 };
 
-                // Read the text coming from the connected upstream node, if available.
-                const readUpstreamPrompt = () => {
-                    const inp = promptInputSlot();
-                    if (!inp || inp.link == null) return null;
-                    const graph = app.graph;
-                    const link = graph?.links?.[inp.link];
-                    if (!link) return null;
-                    const originNode = graph.getNodeById(link.origin_id);
-                    if (!originNode) return null;
-                    // Prefer live output data (set after the upstream node executed).
-                    const outputData = originNode.getOutputData?.(link.origin_slot);
-                    if (typeof outputData === "string") return outputData;
-                    if (Array.isArray(outputData) && typeof outputData[0] === "string") return outputData[0];
-                    // Fallback: a text-ish widget on the origin node.
-                    if (originNode.widgets) {
-                        const w = originNode.widgets.find(w => typeof w.value === "string" && (w.name === "text" || w.type === "string" || w.name === "prompt"));
-                        if (w && typeof w.value === "string") return w.value;
-                    }
-                    return null;
-                };
-
                 const applyPromptInputState = () => {
                     if (!promptWidget || !promptWidget.inputEl) return;
                     const connected = isPromptInputConnected();
                     promptWidget.inputEl.readOnly = connected;
                     promptWidget.inputEl.style.opacity = connected ? "0.5" : "";
-                    if (connected) {
-                        const upstream = readUpstreamPrompt();
-                        if (typeof upstream === "string" && upstream !== promptWidget.value) {
-                            promptWidget.value = upstream;
-                        }
-                    }
                 };
                 const prevOnConnectionsChange = node.onConnectionsChange;
                 node.onConnectionsChange = function () {
@@ -656,11 +629,20 @@ app.registerExtension({
                     applyPromptInputState();
                     return r;
                 };
-                // After this node executes, refresh the displayed prompt from the
-                // (now-executed) upstream node so the widget shows the actual text used.
+                // On execute, the server returns the resolved input prompt in
+                // output.ui.prompt - write it into the widget so it shows the text
+                // that was actually fed in (from prompt_input when connected).
                 const prevOnExecuted = node.onExecuted;
-                node.onExecuted = function () {
+                node.onExecuted = function (output) {
                     const r = prevOnExecuted?.apply(this, arguments);
+                    try {
+                        const text = output?.ui?.prompt?.[0] ?? output?.prompt?.[0];
+                        if (promptWidget && typeof text === "string") {
+                            promptWidget.value = text;
+                            if (promptWidget.inputEl) promptWidget.inputEl.value = text;
+                            node.setDirtyCanvas(true, true);
+                        }
+                    } catch (e) { /* ignore */ }
                     applyPromptInputState();
                     return r;
                 };
