@@ -3,26 +3,7 @@
 
 ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, generating, extracting, organizing, and reusing prompts with LoRA-aware workflows. It includes prompt generation powered by local LLM (llama.cpp or Ollama) or direct generation using ComfyUI's own CLIP/text encoders, automatic download of Qwen3.5 models, metadata extraction from images/videos/JSON, prompt browser tooling, and advanced prompt save/load flows. For users who want full pipeline reuse, it also includes an optional Recipe toolset to build, edit, render, load, relay, and save complete generation configs from extracted or hand-authored data. Metadata extraction supports media generated in ComfyUI, A1111, and Forge, including Wan workflows with dual model/stack support.
 
-## Latest update
-- First draft of a new Prompt Compose system is now included.
-- This first draft is functional and usable today, though the provided default prompts still need refinement.
-- Prompt Compose replaces the Expression Selector node and expands on it significantly: it still handles expression-style prompt appending, but also adds a broader prompt composition workflow with category/prompt management and editing tools.  Prompt Compose also support random generation, selecting multiple prompts with randomly select one.
-- New Prompt Compose Manager is provided to add new prompts and categories.
-
-<div align="center">
-  <figcaption>Use Prompt Compose to generate Prompt from preset fragments</figcaption>
-  <img src="docs/images/prompt_compose.png" alt="Expression Selector Example">
-</div>
-
-<div align="center">
-  <figcaption>Prompt Browser now allows for direct Editing</figcaption>
-  <img src="docs/images/prompt_browser_edit_mode.png" alt="Expression Selector Browser">
-</div>
-
-### Prompt Browser — one place to edit every prompt type
-The new **Prompt Browser** lets you create and edit all three prompt libraries from a single interface: **Prompt Manager prompts** (your saved user prompts), **Compose prompts** (Prompt Composer fragments), and **System prompts** (the instructions that steer the Prompt Generator's LLM).
-
-System prompts now feed straight into the **Prompt Generator**, so you can author your own and pick them right in the node. Sample system prompts ship in the node's `/prompts` folder to get you started, and the original built-in prompts are always restored automatically if they're ever missing — they're sourced from `basic_system_prompts.json`, so your edits never cost you the defaults.
+[See latest update](#latest-update)
 
 ## What This Provides
 
@@ -138,6 +119,27 @@ Version 2.x introduces an optional Recipe toolset that can be used on its own, o
 ## Workflow Examples
 
 Workflow examples are provided to help understand the basics.
+
+## Latest update
+- First draft of a new Prompt Compose system is now included.
+- This first draft is functional and usable today, though the provided default prompts still need refinement.
+- Prompt Compose replaces the Expression Selector node and expands on it significantly: it still handles expression-style prompt appending, but also adds a broader prompt composition workflow with category/prompt management and editing tools.  Prompt Compose also support random generation, selecting multiple prompts with randomly select one.
+- New Prompt Compose Manager is provided to add new prompts and categories.
+
+<div align="center">
+  <figcaption>Use Prompt Compose to generate Prompt from preset fragments</figcaption>
+  <img src="docs/images/prompt_compose.png" alt="Expression Selector Example">
+</div>
+
+<div align="center">
+  <figcaption>Prompt Browser now allows for direct Editing</figcaption>
+  <img src="docs/images/prompt_browser_edit_mode.png" alt="Expression Selector Browser">
+</div>
+
+### Prompt Browser — one place to edit every prompt type
+The new **Prompt Browser** lets you create and edit all three prompt libraries from a single interface: **Prompt Manager prompts** (your saved user prompts), **Compose prompts** (Prompt Composer fragments), and **System prompts** (the instructions that steer the Prompt Generator's LLM).
+
+System prompts now feed straight into the **Prompt Generator**, so you can author your own and pick them right in the node. Sample system prompts ship in the node's `/prompts` folder to get you started, and the original built-in prompts are always restored automatically if they're ever missing — they're sourced from `basic_system_prompts.json`, so your edits never cost you the defaults.
 
 ## Documentation
 
