@@ -178,8 +178,10 @@ def _probe_media_meta(file_path, ext):
 # Add keywords that identify non-style LoRAs (e.g., distillation, optimization LoRAs)
 LORA_BLACKLIST = [
     'lightx2v',                 # Distillation LoRAs
-    ['4steps', 'seko'],         # Fast sampling LoRAs - requires BOTH keywords
-    ['4steps', 'lightning']]    # Fast sampling LoRAs - requires BOTH keywords
+    ['minimax', 'turbo'],       # Minimax Turbo LoRAs - requires BOTH keywords
+    ['ltx', 'distilled'],       # LTX Distilled LoRAs - requires BOTH keywords
+    ['4step', 'seko'],          # Fast sampling LoRAs - requires BOTH keywords
+    ['4step', 'lightning']]     # Fast sampling LoRAs - requires BOTH keywords
 
 def is_lora_blacklisted(lora_name):
     """Check if a LoRA name contains any blacklisted keywords (case-insensitive)"""
