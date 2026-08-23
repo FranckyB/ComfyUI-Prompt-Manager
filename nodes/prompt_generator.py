@@ -954,6 +954,9 @@ class PromptGenerator:
                     "default": "(use default)",
                     "tooltip": "Model to use. Leave on '(use default)' to fall back to the preferred-model setting."
                 })
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
             }
         }
 
@@ -1389,13 +1392,23 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, prompt_input=None, model="(use default)", **kwargs) -> str:
+    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, prompt_input=None, model="(use default)", unique_id=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 
-        # A connected prompt_input overrides the prompt widget.
-        if isinstance(prompt_input, str) and prompt_input.strip():
+        # A connected prompt_input overrides the prompt widget. Broadcast the
+        # received value to the frontend immediately, before any LLM work starts,
+        # so the user can see what is being sent.
+        has_prompt_input = isinstance(prompt_input, str) and bool(prompt_input.strip())
+        if has_prompt_input:
             prompt = prompt_input
+
+        if unique_id is not None:
+            server.PromptServer.instance.send_sync("prompt-generator-update-text", {
+                "node_id": unique_id,
+                "prompt": prompt,
+                "has_prompt_input": bool(has_prompt_input),
+            })
 
         # A model selected on the base node overrides the Options node's model.
         # "(use default)" (the default) means defer to options/settings.
