@@ -1085,7 +1085,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         : null;
     const selectTitle = typeof options?.title === "string" ? options.title : null;
     const multiSelect = options?.multiSelect === true;
-    const supportsMultiSelect = mode !== "save";
+    const allowMultiSelect = options?.allowMultiSelect !== false;
+    const supportsMultiSelect = mode !== "save" && allowMultiSelect;
     const startInMultiSelect = multiSelect && options?.startInMultiSelect !== false;
     const multiCategorySelect = multiSelect && options?.multiCategorySelect === true;
     const clearSelectionOnCategorySwitch = options?.clearSelectionOnCategorySwitch === true;

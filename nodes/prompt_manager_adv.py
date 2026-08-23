@@ -66,7 +66,6 @@ def _patch_runtime_prompt_metadata(unique_id, output_text, extra_pnginfo=None, a
         widgets = workflow_node.get("widgets_values")
         if isinstance(widgets, list):
             # PromptManagerAdvanced widgets order:
-            # [category, name, use_prompt_input, use_lora_input, text, swap_lora_outputs]
             if len(widgets) > 2:
                 widgets[2] = False
             if len(widgets) > 4:
@@ -392,12 +391,6 @@ class PromptManagerAdvanced:
                     "dynamicPrompts": False,
                     "tooltip": "Enter prompt text directly"
                 }),
-                "swap_lora_outputs": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "swapped",
-                    "label_off": "normal",
-                    "tooltip": "Swap the lora_stack_a and lora_stack_b outputs."
-                }),
             },
             "optional": {
                 "prompt": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
@@ -456,8 +449,7 @@ class PromptManagerAdvanced:
         return PromptManagerAdvanced._normalize_lora_input_mode(mode_value) == _LORA_INPUT_MODE_INPUT_ONLY
 
     @classmethod
-    def IS_CHANGED(cls, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", swap_lora_outputs=False,
-                   **kwargs):
+    def IS_CHANGED(cls, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", **kwargs):
         """
         Track changes to the node's inputs to determine if re-execution is needed.
         Returns a tuple of relevant values that should trigger re-execution when changed.
@@ -475,7 +467,6 @@ class PromptManagerAdvanced:
             use_prompt_input,
             cls._normalize_lora_input_mode(use_lora_input),
             text,
-            swap_lora_outputs,
             str(prompt_input) if prompt_input else None,
             str(lora_stack_a) if lora_stack_a else None,
             str(lora_stack_b) if lora_stack_b else None,
@@ -692,8 +683,8 @@ class PromptManagerAdvanced:
         # Not found
         return lora_path, False
 
-    def get_prompt(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", swap_lora_outputs=False,
-                   prompt=None, lora_stack_a=None, lora_stack_b=None,
+    def get_prompt(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
+                   text="", prompt=None, lora_stack_a=None, lora_stack_b=None,
                    trigger_words=None, thumbnail_image=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None, trigger_words_toggle=None,
                    extra_pnginfo=None, api_prompt=None,
@@ -1102,8 +1093,6 @@ class PromptManagerAdvanced:
         out_stack_b = processed_stack_b if processed_stack_b else []
         out_stack_c = processed_stack_c if processed_stack_c else []
         out_stack_d = processed_stack_d if processed_stack_d else []
-        if swap_lora_outputs:
-            out_stack_a, out_stack_b = out_stack_b, out_stack_a
 
         neg_prompt = str(workflow_fields.get('negative_prompt', '') or '')
         out_workflow_data = build_v2_recipe_data_from_prompt(
@@ -1126,8 +1115,8 @@ class PromptManagerAdvanced:
 
         return (final_output, out_stack_a, out_stack_b, out_workflow_data, out_multi_stack)
 
-    def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", swap_lora_outputs=False,
-                          prompt=None, lora_stack_a=None, lora_stack_b=None,
+    def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
+                          text="", prompt=None, lora_stack_a=None, lora_stack_b=None,
                           trigger_words=None, thumbnail_image=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None,
                           trigger_words_toggle=None, extra_pnginfo=None, api_prompt=None,

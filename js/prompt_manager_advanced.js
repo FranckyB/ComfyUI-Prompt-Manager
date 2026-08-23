@@ -8092,22 +8092,25 @@ function createPromptSelectorWidget(node) {
     nameDisplay.style.cssText = `
         flex: 1;
         text-align: center;
-        color: #ddd;
+        color: #dbeafe;
         font-size: 13px;
         padding: 0 10px;
         cursor: pointer;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        background: #1a1a1a;
+        background: rgba(56, 130, 246, 0.22);
+        border: 1px solid rgba(56, 130, 246, 0.85);
+        border-radius: 4px;
         height: 100%;
         display: flex;
         align-items: center;
         justify-content: center;
         transition: background 0.15s ease;
+        box-sizing: border-box;
     `;
-    nameDisplay.onmouseover = () => nameDisplay.style.background = '#252525';
-    nameDisplay.onmouseout = () => nameDisplay.style.background = '#1a1a1a';
+    nameDisplay.onmouseover = () => nameDisplay.style.background = 'rgba(56, 130, 246, 0.32)';
+    nameDisplay.onmouseout = () => nameDisplay.style.background = 'rgba(56, 130, 246, 0.22)';
 
     // Thumbnail preview tooltip (screen-fixed, not affected by canvas zoom)
     const thumbnailPreview = document.createElement("div");
@@ -8480,6 +8483,7 @@ function createPromptSelectorWidget(node) {
 
             const selection = await showThumbnailBrowser(node, category, currentPrompt, {
                 workflowOnly: node?._isWorkflowManager === true,
+                allowMultiSelect: false,
             });
 
             if (selection) {
