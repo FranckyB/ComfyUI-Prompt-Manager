@@ -102,10 +102,10 @@ If a person, object, scene, action, or effect from a reference video is reused a
 - Using dialogue, lyrics, or sound effects from the original audio
 - Referencing beat, rhythm, or audio continuity
 
-When an `<Audio N>` explicitly corresponds to a target speaker, cite the speaker's `<Subject N>` label in the definition when the speaker maps to a defined subject, or use a stable voice description otherwise. See Section 5.4 for the speaker-label rules:
+When an `<Audio N>` explicitly corresponds to a target speaker, write `<Subject N> (Sx)` when the speaker maps to a defined subject, or use a stable voice description followed by `(Sx)` otherwise. The ID `(Sx)` comes from the target video's global speaker order and is not independently assigned or renumbered in the audio definition. See Section 5.4 for the speaker-label rules:
 
 ```text
-<Audio 1> is the voice-timbre reference for <Subject 1>.
+<Audio 1> is the voice-timbre reference for <Subject 1> (S1).
 ```
 
 When one audio asset serves multiple roles, describe those roles in one natural sentence rather than creating additional subsections.
@@ -257,25 +257,25 @@ The camera holds a static shot as the runner exits the frame.
 
 #### Speakers, Dialogue, and Singing
 
-When a speaker first appears, establish a stable identity from the visual and audio context, such as character type, age, gender, whether the person is on-screen, pitch, timbre, speaking rate, or accent. Place the speaker's `<Subject N>` label, identifying phrase, action, and delivery outside `<d>`. Inside `<d>`, include only the language tag and the actual spoken content.
+When a speaker first appears, establish a stable identity from the visual and audio context, such as character type, age, gender, whether the person is on-screen, pitch, timbre, speaking rate, or accent. Place the speaker's `<Subject N> (Sx)` label, identifying phrase, action, and delivery outside `<d>`. Inside `<d>`, include only the language tag and the actual spoken content.
 
-A speaker keeps the same `<Subject N>` label across all shots; characters who never vocalize receive no speaker label in dialogue contexts.
+A speaker keeps the same `<Subject N> (Sx)` form across all shots; characters who never vocalize receive no speaker label in dialogue contexts. The S-ID is the order in which vocal events actually occur in the target video, not the subject number: `<Subject 2>` can be `(S1)` if that character speaks first.
 
 ```text
-<Subject 1>, the young woman with a quiet, breathy voice, says: <d>[English] I get off at the next station.</d>
-<Subject 1> and <Subject 2>, the two children, shout together, <d>[English] Wait for us!</d>
+<Subject 1> (S1), the young woman with a quiet, breathy voice, says: <d>[English] I get off at the next station.</d>
+<Subject 1> (S1) and <Subject 2> (S2), the two children, shout together, <d>[English] Wait for us!</d>
 ```
 
 For voiceover, use the exact phrase `says in an off-screen voiceover`. Immediately after every voiceover `<d>` block, state that the corresponding on-screen character's lips remain closed:
 
 ```text
-<Subject 1>, the man, says in an off-screen voiceover: <d>[English] I still remember that road.</d> while his lips remain completely closed.
+<Subject 1> (S1), the man, says in an off-screen voiceover: <d>[English] I still remember that road.</d> while his lips remain completely closed.
 ```
 
 You can use <> to add non-verbal sound in a given part of the phrase. Example words could be <cough>, <exhales deeply>, <laugh>, etc.
 
 ```text
-<Subject 1>, the man, says: <d>[English] It sure is <cough> dusty in here.</d>
+<Subject 1> (S1), the man, says: <d>[English] It sure is <cough> dusty in here.</d>
 ```
 
 When the same line of dialogue or lyrics crosses a cut, use `<scenetrans>` at the connecting points in both parts and explicitly state that the audio continues across the cut. Use `<cutoff>` when speech is truncated by the end of the video. Continuity may be expressed with `continues seamlessly across the cut`, `continues uninterrupted into the next shot`, `carries over from the previous shot`, or `remains audible across the transition`.
@@ -317,15 +317,15 @@ When editing or continuing an original video, cite `<Video N>` naturally where i
 
 ### 5.4 Speakers, Audio Sources, and Dialogue
 
-The basic speaker-label and `<d>` formats follow Section 5.1. When a referenced subject physically speaks, use the `<Subject N>` label directly:
+The basic speaker-ID and `<d>` formats follow Section 5.1, with one addition for full-reference mode: when a referenced subject physically speaks, retain both the visual reference label and the speaker ID:
 
 ```text
-<Subject 2> turns toward the woman and says, <d>[English] Last summer, I went to my grandfather's house. He talked about you.</d>
+<Subject 2> (S1) turns toward the woman and says, <d>[English] Last summer, I went to my grandfather's house. He talked about you.</d>
 ```
 
-`<Subject N>` identifies both the referenced subject and the actual speaker — one label covers both roles. If the same subject speaks off-screen, keep the same label and mark it as `off-screen`. When the speaker does not correspond to a defined subject, use a stable voice description.
+`<Subject N>` identifies the referenced subject, while `(Sx)` identifies the actual speaker. Assign `(Sx)` once according to the order of actual vocal events in the target video and reuse it at every actual vocal event for that source. If the same subject speaks off-screen, keep the same `<Subject N> (Sx)` form and mark it as `off-screen`. When the speaker does not correspond to a defined subject, use a stable voice description followed by `(Sx)`.
 
-When verbal content is only a cue within a directly reused BGM or complete soundtrack, and no person, character, narrator, or other independent vocal source physically produces it, use `<Audio N>` as the audible source and do not invent an additional speaker label. If a concrete person, character, narrator, or other independent vocal source produces the voice, use their `<Subject N>` label:
+When verbal content is only a cue within a directly reused BGM or complete soundtrack, and no person, character, narrator, or other independent vocal source physically produces it, use `<Audio N>` as the audible source and do not invent an additional speaker label. If a concrete person, character, narrator, or other independent vocal source produces the voice, use `<Subject N> (Sx)`:
 
 ```text
 When <Audio 1> reaches the phrase <d>[English] I'm lonely lonely lonely lonely lonely I'm lonely</d>, <Subject 1> performs the corresponding hand gesture without becoming a separate speaker source.
@@ -335,7 +335,7 @@ When dialogue, narration, or lyrics from reference audio are directly reused, or
 
 When only timbre, rhythm, emotion, or delivery is referenced, do not carry the original dialogue from the reference audio into the target video.
 
-Use each speaker's `<Subject N>` label at every actual vocal event in `detailed_description`; an `<Audio N>` definition bound to a target speaker in `subject_definitions` also cites the same `<Subject N>` label but never assigns a new one. Verbal cues that exist only within a directly reused BGM or complete soundtrack use `<Audio N>`; voices physically produced by a concrete person, character, narrator, or other independent vocal source use their `<Subject N>` label.
+Reuse the corresponding `(Sx)` at every actual vocal event in `detailed_description`; an `<Audio N>` definition bound to a target speaker in `subject_definitions` also reuses the same `(Sx)` but never assigns a new one independently. Do not write `(Sx)` in `retention_analysis`. Verbal cues that exist only within a directly reused BGM or complete soundtrack use `<Audio N>`; voices physically produced by a concrete person, character, narrator, or other independent vocal source use `<Subject N> (Sx)`.
 
 ## 6. `overall_soundscape` and `non_diegetic_music`
 
@@ -368,7 +368,7 @@ subject_definitions:
 <Subject 2> is the fluffy white Samoyed in <Picture 2>, <Picture 3>, and <Picture 4>, with thick white fur, pointed ears, a dark nose, and a curved tail.
 <Subject 3> is the young blonde woman in <Video 1>, with long blonde hair and a light-pink button-down shirt with rolled-up sleeves.
 <Subject 4> is the young man in <Video 2>, with short wavy brown hair and a dark-grey hoodie with drawstrings.
-<Audio 1> is the voice-timbre reference for <Subject 3>, containing a spoken English vocal layer.
+<Audio 1> is the voice-timbre reference for <Subject 3> (S1), containing a spoken English vocal layer.
 
 
 summary:
@@ -385,11 +385,11 @@ retention_analysis:
 
 detailed_description:
 The target video uses a realistic multi-camera sitcom style with warm indoor lighting.
-[Shot 1] A medium shot establishes <Subject 1>, the coffee shop with its exposed brick wall, orange tufted sofa, patterned pillows, neon sign, and wooden coffee table. <Subject 3>, the young woman with long blonde hair and a light-pink button-down shirt with rolled-up sleeves, sits on the sofa holding a chocolate-chip cookie. From the left, <Subject 4>, the young man with short wavy brown hair and a dark-grey hoodie with drawstrings, enters holding the leash of <Subject 2>, the thick-furred white Samoyed with pointed ears, a dark nose, and a curved tail. The dog lunges toward the cookie and pulls the leash taut. <Subject 3> jerks her hand back and, using the clear youthful voice timbre referenced from <Audio 1>, exclaims with light annoyance, <d>[English] Hey! Watch your dog!</d> She closes her lips and guards the cookie while <Subject 4> pulls the dog back.
+[Shot 1] A medium shot establishes <Subject 1>, the coffee shop with its exposed brick wall, orange tufted sofa, patterned pillows, neon sign, and wooden coffee table. <Subject 3>, the young woman with long blonde hair and a light-pink button-down shirt with rolled-up sleeves, sits on the sofa holding a chocolate-chip cookie. From the left, <Subject 4>, the young man with short wavy brown hair and a dark-grey hoodie with drawstrings, enters holding the leash of <Subject 2>, the thick-furred white Samoyed with pointed ears, a dark nose, and a curved tail. The dog lunges toward the cookie and pulls the leash taut. <Subject 3> (S1) jerks her hand back and, using the clear youthful voice timbre referenced from <Audio 1>, exclaims with light annoyance, <d>[English] Hey! Watch your dog!</d> She closes her lips and guards the cookie while <Subject 4> pulls the dog back.
 
-[Shot 2] At 00:03.000, the shot cuts to a close-up of <Subject 4>, the young man in the dark-grey hoodie from Shot 1, sitting beside <Subject 3> on the sofa and holding <Subject 2> securely in his arms. <Subject 4> says in a casual young male voice with a playful tone and an easy conversational pace, <d>[English] He just likes cookies more than me.</d> He closes his mouth into an apologetic smile and strokes the dog's thick white fur.
+[Shot 2] At 00:03.000, the shot cuts to a close-up of <Subject 4>, the young man in the dark-grey hoodie from Shot 1, sitting beside <Subject 3> on the sofa and holding <Subject 2> securely in his arms. <Subject 4> (S2) says in a casual young male voice with a playful tone and an easy conversational pace, <d>[English] He just likes cookies more than me.</d> He closes his mouth into an apologetic smile and strokes the dog's thick white fur.
 
-[Shot 3] At 00:05.000, the shot cuts to a close-up of <Subject 3>, the blonde woman in the light-pink shirt from Shot 1. Her annoyance softens as she looks toward the Samoyed. <Subject 3> replies in the same clear youthful voice referenced from <Audio 1> with an amused cadence, <d>[English] Well, he has good taste at least.</d> She smiles and raises the cookie in a small toast-like gesture. A classic canned audience laugh begins immediately after the line and continues through the final frame.
+[Shot 3] At 00:05.000, the shot cuts to a close-up of <Subject 3>, the blonde woman in the light-pink shirt from Shot 1. Her annoyance softens as she looks toward the Samoyed. <Subject 3> (S1) replies in the same clear youthful voice referenced from <Audio 1> with an amused cadence, <d>[English] Well, he has good taste at least.</d> She smiles and raises the cookie in a small toast-like gesture. A classic canned audience laugh begins immediately after the line and continues through the final frame.
 
 
 overall_soundscape:

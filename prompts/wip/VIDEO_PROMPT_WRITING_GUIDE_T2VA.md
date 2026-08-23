@@ -129,27 +129,27 @@ The camera holds a static shot as the runner exits the frame.
 
 ### 3.4 Speakers, Dialogue, and Singing
 
-Subjects who speak, sing, or produce an off-screen human voice use stable IDs such as `<Subject 1>` and `<Subject 2>`. When multiple already-numbered speakers speak or sing together, use a compound ID such as `<Subject 1>, <Subject 2>`. A speaker keeps the same ID across shots; characters who never vocalize receive no speaker ID.
+Subjects who speak, sing, or produce an off-screen human voice use stable speaker IDs `(S1)`, `(S2)`, etc., assigned in order of their first actual vocal event in the target video. When multiple already-numbered speakers speak or sing together, use a compound ID such as `(S1,S2)`. A speaker keeps the same `(Sx)` ID across shots; characters who never vocalize receive no speaker ID.
 
-When a speaker first appears, establish a stable identity from the visual and audio context, such as character type, age, gender, whether the person is on-screen, pitch, timbre, speaking rate, or accent. Place the speaker's `<Subject N>` label, identifying phrase, action, and delivery outside `<d>`. Inside `<d>`, include only the language tag and the actual spoken content. Dialogue provided by the user must be preserved. Dialogue you generate must fit the described story and the speaker's established mood and emotional state.
+When a speaker first appears, establish a stable identity from the visual and audio context, such as character type, age, gender, whether the person is on-screen, pitch, timbre, speaking rate, or accent. Place the speaker's `<Subject N> (Sx)` label, identifying phrase, action, and delivery outside `<d>`. Inside `<d>`, include only the language tag and the actual spoken content. Dialogue provided by the user must be preserved. Dialogue you generate must fit the described story and the speaker's established mood and emotional state.
 
-A speaker keeps the same `<Subject N>` label across all shots; characters who never vocalize receive no speaker label in dialogue contexts.
+A speaker keeps the same `<Subject N> (Sx)` form across all shots; characters who never vocalize receive no speaker label in dialogue contexts. The S-ID is the order in which vocal events actually occur in the target video, not the subject number: `<Subject 2>` can be `(S1)` if that character speaks first. Non-verbal sounds such as gasps, coughs, or cries are not separate speakers; describe them without assigning an `(Sx)`.
 
 ```text
-<Subject 1>, the young woman with a quiet, breathy voice, says: <d>[English] I get off at the next station.</d>
-<Subject 1> and <Subject 2>, the two children, shout together, <d>[English] Wait for us!</d>
+<Subject 1> (S1), the young woman with a quiet, breathy voice, says: <d>[English] I get off at the next station.</d>
+<Subject 1> (S1) and <Subject 2> (S2), the two children, shout together, <d>[English] Wait for us!</d>
 ```
 
 For voiceover, use the exact phrase `says in an off-screen voiceover`. Immediately after every voiceover `<d>` block, state that the corresponding on-screen character's lips remain closed:
 
 ```text
-<Subject 1>, the man, says in an off-screen voiceover: <d>[English] I still remember that road.</d> while his lips remain completely closed.
+<Subject 1> (S1), the man, says in an off-screen voiceover: <d>[English] I still remember that road.</d> while his lips remain completely closed.
 ```
 
 You can use <> to add non-verbal sound in a given part of the phrase. Example words could be <cough>, <exhales deeply>, <laugh>, etc.
 
 ```text
-<Subject 1>, the man, says: <d>[English] It sure is <cough> dusty in here.</d>
+<Subject 1> (S1), the man, says: <d>[English] It sure is <cough> dusty in here.</d>
 ```
 
 When the same line of dialogue or lyrics crosses a cut, use `<scenetrans>` at the connecting points in both parts and explicitly state that the audio continues across the cut. Use `<cutoff>` when speech is truncated by the end of the video. Continuity may be expressed with `continues seamlessly across the cut`, `continues uninterrupted into the next shot`, `carries over from the previous shot`, or `remains audible across the transition`.
@@ -175,7 +175,7 @@ summary:
 The target video shows <Subject 1> opening <Subject 2> before sunrise and slicing the first loaf of the morning, moving from a medium-wide establishing shot to a close-up of the steaming bread.
 
 detailed_description:
-[Shot 1] Live-action, cinematic, a medium-wide shot frames <Subject 1> opening the wooden shutters of <Subject 2> before sunrise. The camera pushes in with small amplitude at slow speed as <Subject 1> places a fresh loaf on the wooden counter and says: <d>[English] First batch of the morning.</d>
+[Shot 1] Live-action, cinematic, a medium-wide shot frames <Subject 1> opening the wooden shutters of <Subject 2> before sunrise. The camera pushes in with small amplitude at slow speed as <Subject 1> places a fresh loaf on the wooden counter and <Subject 1> (S1) says: <d>[English] First batch of the morning.</d>
 
 [Shot 2] At 00:05.000, the camera cuts to a close-up of steam rising from the sliced bread while the baker's final words carry over from the previous shot.
 
