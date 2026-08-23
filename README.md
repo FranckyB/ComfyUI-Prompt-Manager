@@ -11,15 +11,23 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, gener
 
 ## What This Provides
 
-- **Prompt authoring and management**: Prompt Manager (Advanced + Basic) for prompt save/load workflows, LoRA stacks or Multi Lora Stacks, trigger words, expressions, and reusable prompt libraries.
-- **Prompt generation**: Prompt Generator + Prompt Generator Options can run through a local LLM (llama.cpp or Ollama), or directly through a connected ComfyUI CLIP/text encoder. Supports text enhancement and image-based analysis (Qwen3.5 vision models when using the LLM backend).
-- **Prompt and metadata extraction**: Prompt Extractor reads metadata from images/videos/JSON and can output prompt, LoRA, and recipe context.
-- **Prompt browsing utilities**: Browser tools to quickly find and load saved prompts or recipes, with Grid, Icon, and List views.
-- **LoRA workflow support**: Multi-LoRA stack tooling and editable LoRA data when reusing saved entries.
-- **Optional full Recipe toolkit**: Recipe Builder, Recipe Extractor, Recipe Relay, Recipe Renderer, Recipe Model Loader/Picker, and Recipe Manager for complete generation pipelines.
-- **Model-aware recipe rendering**: Recipe Renderer supports Flux 1/2, Ernie, SDXL, Wan, Qwen, Z-Image, Krea2, Wan Image, and Wan Video (I2V/T2V).
-- **Lora Preview integration**: When [Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager) is installed, LoRAs can be previewed on hover.
-- **Advanced media loading**: Extractor nodes can also act as advanced image loaders from Input and Output folders.
+- **Prompt Manager**:
+  - For saving and loading Prompts.
+  - These saved prompts can include, LoRA stacks, trigger words as well as Thumbnails.
+- **Prompt Generator**:
+  - To run a local LLM (llama.cpp or Ollama), or directly use ComfyUI's CLIP/text encoders.
+  - Also supports image analysis when using Vision Capable models.
+- **Prompt Browser**:
+  - For viewing or editing all data types used by the add-on.
+  - This node is how one modifies System Prompts used by **Prompt Generator**.
+- **Prompt Extractor**:
+  - Read metadata from images/videos/JSON and output the prompt and LoRAs they use.
+- **Lora Preview integration**:
+  - When [Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager) is installed, LoRAs can be previewed on hover.
+- **Advanced media loading**:
+  - Extractor nodes can also act as advanced image loader, but I'd recommend [FBNodes](https://github.com/FranckyB/ComfyUI-FBnodes) for better solutions.
+- **And more**:
+  - See the [Reference guide](docs/feature-reference.md) for a complete list.
 ---
 
 <div align="center">
