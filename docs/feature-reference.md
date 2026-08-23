@@ -41,7 +41,7 @@ Allows for Saving and Loading prompts quickly using the Prompt Browser UI.
 ### Prompt Manager (Basic)
 A simpler no frills version that supports only Prompts. (This is the OG node)
 - Select category and prompt using a purely comfy UI.
-- If saving over an exising prompt, Loras and Thumbails will be preserved.
+- If saving over an existing prompt, LoRAs and Thumbnails will be preserved.
 - If NSFW filtering is enabled, NSFW Prompts will be hidden.
 - LLM input toggle works similar to full node.
 
@@ -58,10 +58,10 @@ Allows downloading of 3 different sizes of Unsloth's Qwen 3.5, but users are fre
   - Kills Llama.cpp after generating the prompt
   - Tries to force Ollama to unload the current model
 - The clear_vram_on_run toggle:
-  - Unloads Comfys model from memory before generating the prompt
+  - Unloads Comfy's model from memory before generating the prompt
   - Clears Vram again once the prompt is generated.
-  - It's is recommended to leave on, unless you are using small models
-- Both Stop_server and clear_vram are ignored when using Text encoders, as we instead let's Comfy manages the Vram.
+  - It is recommended to leave on, unless you are using small models
+- Both Stop_server and clear_vram are ignored when using Text encoders, as we instead let Comfy manage the VRAM.
 - Lastly, the **Model Selection**:
   - (Use Default): Uses the default model set in preferences, or the first found, if not set.
   - 3 Different Quant size of Qwen 3.5 can be automatically downloaded.
@@ -71,7 +71,7 @@ Allows downloading of 3 different sizes of Unsloth's Qwen 3.5, but users are fre
 
 ### Prompt Generator Options
 This node provides extra control to **Prompt Generator** and is NOT mandatory.  
-- Modify the selected system prompt, by either appending extra instructions or replacing it entirerly.
+- Modify the selected system prompt, by either appending extra instructions or replacing it entirely.
 - Provides extra images input for a Total of 5.
 - Change the System settings for the model
 - Change the GPU used by the LLM
@@ -92,7 +92,7 @@ Extract prompt, model, and LoRA info out of images, videos, and JSON workflow fi
 - Supports ComfyUI, A1111/Forge, and WebP metadata formats.
 - Grabs the frame of your choice from videos using a time slider.
 - Dual LoRA stack extraction for compatible workflows.
-- Can browse from tiehr the input or output folders directly.
+- Can browse from either the input or output folders directly.
 - Can also be used as an advanced media loader with metadata awareness
 
 ## Recipe Toolset (Experimental)
