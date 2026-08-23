@@ -2309,10 +2309,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         rebuildCategoryList();
 
         // When the caller locks the browser to a single category, hide the whole bar.
-        // Also hidden for the System Prompts source: that data has no real
-        // categories (a single "System Prompts" bucket), so the bar is noise.
-        const hideCategoryBar = (allowedCategories && allowedCategories.length === 1)
-            || endpointPrefix === "/prompt-generator";
+        const hideCategoryBar = allowedCategories && allowedCategories.length === 1;
         if (hideCategoryBar) {
             categoryBar.style.display = "none";
         }

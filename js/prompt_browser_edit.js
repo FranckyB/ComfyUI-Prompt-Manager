@@ -438,39 +438,16 @@ export function createPromptBrowserEditPanel(options) {
     const promptNameInput = createInput("", "Prompt name");
     promptBody.appendChild(promptNameInput);
 
-    // Per-prompt category selector (system prompts only). Placed directly
-    // under the prompt name; saved on the prompt entry as "category".
+    // Per-prompt category selector is intentionally hidden for system prompts.
+    // With the category-bucket model, the category is the bucket itself, so a
+    // separate per-prompt category field is no longer needed.
     const promptCategoryWrap = el("div", {
-        display: isSystemPromptsSource ? "flex" : "none",
+        display: "none",
         flexDirection: "column",
         gap: "4px",
     });
     const promptCategoryLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prompt Category");
     const promptCategorySelect = createSelect("Other", SYSTEM_PROMPT_CATEGORIES.map((c) => ({ value: c, label: c })));
-    promptCategorySelect.title = "What this prompt generates. The Prompt Generator uses it to pick the JSON-format instructions.";
-    promptCategorySelect.addEventListener("change", async () => {
-        if (!isSystemPromptsSource) return;
-        const category = currentCategory;
-        const name = String(promptNameInput.value || "").trim();
-        if (!category || !name) return;  // new unsaved prompt: value is used on Save
-        const entry = node?.prompts?.[category]?.[name];
-        if (!entry || typeof entry !== "object") return;  // not saved yet — fail silently
-        if (String(entry.category || "Other") === promptCategorySelect.value) return;
-        try {
-            const resp = await fetch(`${endpointPrefix}/set-prompt-category`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ category, name, prompt_category: promptCategorySelect.value }),
-            });
-            const result = await resp.json();
-            if (result?.success) {
-                node.prompts = result.prompts;
-                _onChange();
-            }
-        } catch (err) {
-            console.warn("[PromptBrowserEdit] Failed to update prompt category:", err);
-        }
-    });
     promptCategoryWrap.appendChild(promptCategoryLabel);
     promptCategoryWrap.appendChild(promptCategorySelect);
     promptBody.appendChild(promptCategoryWrap);
@@ -617,9 +594,6 @@ export function createPromptBrowserEditPanel(options) {
 
         const thumbnail = pendingThumbnail || loadedThumbnail;
         const savePayload = { category, name, text, thumbnail };
-        if (isSystemPromptsSource) {
-            savePayload.prompt_category = promptCategorySelect.value;
-        }
         const result = await _savePrompt(savePayload);
         if (result?.success) {
             await _loadPrompts(node);
@@ -695,14 +669,11 @@ export function createPromptBrowserEditPanel(options) {
             loadedPromptText = entry.prompt || "";
             loadedThumbnail = entry.thumbnail || null;
             updateThumbnailDisplay(loadedThumbnail);
-            const entryCategory = String(entry.category || "");
-            promptCategorySelect.value = SYSTEM_PROMPT_CATEGORIES.includes(entryCategory) ? entryCategory : "Other";
         } else {
             promptTextArea.value = "";
             loadedPromptText = "";
             loadedThumbnail = null;
             updateThumbnailDisplay(null);
-            promptCategorySelect.value = "Other";
         }
 
         loadCategorySettings(category);

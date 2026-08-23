@@ -18,6 +18,7 @@ import folder_paths
 from PIL import Image
 from io import BytesIO
 from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
+from ..py.system_prompt_converter import convert_system_prompts, ensure_category_buckets
 
 # ComfyUI-style ANSI console colors (matches app/logger.py)
 RESET       = "\033[0m"
@@ -217,13 +218,25 @@ def reload_prompts():
 
 SYSTEM_PROMPT_CATEGORIES = ("Image", "Video", "Audio", "Other")
 
-# Map legacy mode names to their seeded default entries (Category / Name).
+
+def _is_system_prompt_category(category):
+    """Return True if the string looks like a user-defined category name.
+
+    Hidden metadata keys (e.g. __meta__) are not categories.
+    """
+    cat = str(category or "").strip()
+    return bool(cat) and not cat.startswith("_") and cat.lower() != "__meta__"
+
+# Map legacy mode names (old single-dropdown values) to their current
+# "Category / Name" entries. These are the names actually stored in
+# default_system_prompts.json so old workflows resolve correctly instead
+# of being redirected to non-existent prompts.
 LEGACY_MODE_TO_ENTRY = {
-    "Enhance Prompt (Image)": ("Image", "Enhance Prompt (Image)"),
-    "Enhance Prompt (Video)": ("Video", "Enhance Prompt (Video)"),
-    "Enhance Prompt (Audio)": ("Audio", "Enhance Prompt (Audio)"),
-    "Analyze Image": ("Image", "Analyze Image"),
-    "Analyze Image with Prompt": ("Image", "Analyze Image with Prompt"),
+    "Enhance Prompt (Image)": ("Image", "Enhance Prompt"),
+    "Enhance Prompt (Video)": ("Video", "Enhance Prompt"),
+    "Enhance Prompt (Audio)": ("Audio", "Enhance Prompt"),
+    "Analyze Image": ("Other", "Analyze Image"),
+    "Analyze Image with Prompt": ("Other", "Analyze Image with Prompt"),
 }
 
 
@@ -233,10 +246,6 @@ def _get_prompt_generator_data_path():
 
 def _get_default_system_prompts_path():
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "default_system_prompts.json")
-
-
-def _get_basic_system_prompts_path():
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "basic_system_prompts.json")
 
 
 def _read_json_file(path):
@@ -249,9 +258,21 @@ def _read_json_file(path):
 
 
 def _ensure_prompt_generator_data():
-    """Ensure prompt_generator_data.json exists in user/default, seeding from default_system_prompts.json."""
+    """Ensure prompt_generator_data.json exists in user/default, seeding from default_system_prompts.json.
+
+    If the seed file (or an existing user file) is in the old single-bucket
+    format, it is converted to category buckets before it is copied/used.
+    """
     data_path = _get_prompt_generator_data_path()
     if os.path.exists(data_path):
+        data = _read_json_file(data_path)
+        converted = convert_system_prompts(data)
+        if converted is not data:
+            try:
+                atomic_save(data_path, converted, "PromptGenerator")
+                print_pg(f"Converted {data_path} from legacy system-prompt format.")
+            except Exception as e:
+                print_pg(f"Warning: Failed to convert legacy system prompts: {e}", RED)
         return data_path
 
     default_path = _get_default_system_prompts_path()
@@ -259,7 +280,9 @@ def _ensure_prompt_generator_data():
 
     if os.path.exists(default_path):
         try:
-            shutil.copy2(default_path, data_path)
+            default_data = _read_json_file(default_path)
+            converted_default = convert_system_prompts(default_data)
+            atomic_save(data_path, converted_default, "PromptGenerator")
             print_pg(f"Created {data_path} from default system prompts.")
             return data_path
         except Exception as e:
@@ -267,44 +290,12 @@ def _ensure_prompt_generator_data():
     return data_path
 
 
-def _merge_missing_basic_system_prompts(data):
-    """Merge any missing basic system prompts into the loaded data.
-
-    Basic prompts are the built-in defaults the node cannot function without
-    (the Image/Video/Audio enhancement prompts and the image-analysis prompts).
-    Missing entries are re-added on every load so the node never ends up broken
-    if the user deletes them. Returns a new data dict; caller decides whether
-    to persist.
-    """
-    basic = _read_json_file(_get_basic_system_prompts_path())
-    if not basic:
-        return data
-
-    merged = dict(data) if isinstance(data, dict) else {}
-    changed = False
-    for category, bucket in basic.items():
-        if not isinstance(bucket, dict):
-            continue
-        target = merged.setdefault(category, {})
-        if not isinstance(target, dict):
-            target = {}
-            merged[category] = target
-        for name, entry in bucket.items():
-            if name == "__meta__" or name in target:
-                continue
-            target[name] = entry
-            changed = True
-    return merged if changed else data
-
-
 def _load_system_prompt_entries():
-    """Load all saved system prompts as {name: {category, prompt}} across every bucket.
+    """Load all saved system prompts as {'Category / Name': {category, name, prompt}}.
 
-    Each prompt entry carries its own "category" field (Audio/Image/Video/Other);
-    the JSON bucket it is stored under is just an organizational group and its
-    name is NOT used as the prompt's category. Category-level metadata keys
-    (__meta__, _prompt_type_, ...) are skipped. Missing basic prompts are
-    re-seeded and persisted so the node stays usable.
+    Prompts are keyed by their full display label so that the same prompt name
+    can exist in multiple categories without overwriting each other. Category-
+    level metadata keys (__meta__, _prompt_type_, ...) are skipped.
     """
     entries = {}
     data_path = _ensure_prompt_generator_data()
@@ -315,31 +306,26 @@ def _load_system_prompt_entries():
     if not data:
         return entries
 
-    merged = _merge_missing_basic_system_prompts(data)
-    if merged is not data:
-        try:
-            atomic_save(data_path, merged, "PromptGenerator")
-            print_pg("Seeding:", "Re-added missing basic system prompts to prompt_generator_data.json")
-        except Exception as e:
-            print_pg(f"Warning: Failed to persist basic system prompts: {e}", RED)
-        data = merged
-
     for category, bucket in data.items():
         if not isinstance(bucket, dict):
             continue
+        # New bucket format uses the top-level key as the category.
+        bucket_category = category if _is_system_prompt_category(category) else None
         for name, entry in bucket.items():
             if str(name).startswith("_"):
                 continue
             if isinstance(entry, dict):
                 text = str(entry.get("prompt", "") or "").strip()
+                # Prefer legacy per-entry category when present; otherwise use bucket name.
                 entry_category = str(entry.get("category", "") or "").strip()
-                if entry_category not in SYSTEM_PROMPT_CATEGORIES:
-                    entry_category = "Other"
+                if not _is_system_prompt_category(entry_category):
+                    entry_category = bucket_category if bucket_category else "Other"
             else:
                 text = str(entry or "").strip()
-                entry_category = "Other"
+                entry_category = bucket_category if bucket_category else "Other"
             if text:
-                entries[str(name)] = {"category": entry_category, "prompt": text}
+                label = f"{entry_category} / {name}"
+                entries[label] = {"category": entry_category, "name": str(name), "prompt": text}
 
     return entries
 
@@ -347,24 +333,28 @@ def _load_system_prompt_entries():
 def _system_prompt_choices():
     """Widget choices for the system_prompt picker: 'Category / Name' entries.
 
-    Ordered by category (Image, Video, Audio, Other), then by prompt name.
+    Sorted alphabetically by category, then by prompt name. Any category
+    bucket in prompt_generator_data.json is included.
     """
     entries = _load_system_prompt_entries()
-    category_order = {cat: idx for idx, cat in enumerate(SYSTEM_PROMPT_CATEGORIES)}
+    labels = sorted(entries.keys(), key=lambda s: s.lower())
+    return labels or ["Image / Enhance Prompt"]
 
-    def sort_key(item):
-        name, entry = item
-        return (category_order.get(entry["category"], len(SYSTEM_PROMPT_CATEGORIES)), name.lower())
 
-    labels = [f"{e['category']} / {name}" for name, e in sorted(entries.items(), key=sort_key)]
-    return labels or ["Other / Enhance Prompt (Image)"]
+def _default_system_prompt():
+    """Default value for the combined system prompt widget."""
+    choices = _system_prompt_choices()
+    for choice in choices:
+        if choice.lower().startswith("image / ") and "enhance prompt" in choice.lower():
+            return choice
+    return choices[0] if choices else "Image / Enhance Prompt"
 
 
 def _parse_system_prompt_choice(value):
     """Parse a widget value into (category, name).
 
     Accepts 'Category / Name' and tolerates legacy/unknown values by falling
-    back to the first seeded Image default.
+    back to the first available default.
     """
     value = str(value or "").strip()
     if "/" in value:
@@ -372,10 +362,14 @@ def _parse_system_prompt_choice(value):
         category = category.strip()
         name = name.strip()
         if name:
-            return (category if category in SYSTEM_PROMPT_CATEGORIES else "Other", name)
+            return (category, name)
     if value in LEGACY_MODE_TO_ENTRY:
         return LEGACY_MODE_TO_ENTRY[value]
-    return ("Image", "Enhance Prompt (Image)")
+    default = _default_system_prompt()
+    if "/" in default:
+        category, _, name = default.partition("/")
+        return (category.strip(), name.strip())
+    return ("Image", "Enhance Prompt")
 
 
 class PromptGeneratorDataStore:
@@ -390,7 +384,14 @@ class PromptGeneratorDataStore:
         data_path = _ensure_prompt_generator_data()
         check_backup(data_path)
         data = load_with_fallback(data_path, "PromptGeneratorDataStore")
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        # Auto-migrate legacy single-bucket format on every load.
+        converted = convert_system_prompts(data)
+        if converted is not data:
+            atomic_save(data_path, converted, "PromptGeneratorDataStore")
+            data = converted
+        return data
 
     @staticmethod
     def save(data):
@@ -420,6 +421,54 @@ async def generator_get_prompts(request):
     except Exception as e:
         print_pg(f"[PromptGenerator] Error in get_prompts API: {e}", RED)
         return server.web.json_response({"error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/reimport-default-prompts")
+async def generator_reimport_default_prompts(request):
+    """Re-import built-in default system prompts into the user's data file.
+
+    Missing entries are added; existing entries are left untouched so the user
+    does not lose custom edits. This is a manual action triggered from the
+    Prompt Browser node.
+    """
+    try:
+        data_path = _ensure_prompt_generator_data()
+        data = _read_json_file(data_path)
+        default_data = _read_json_file(_get_default_system_prompts_path())
+        if not default_data:
+            return server.web.json_response({"success": False, "error": "Default system prompts not found"})
+
+        merged = dict(data) if isinstance(data, dict) else {}
+        changed = False
+        for category, bucket in default_data.items():
+            if not isinstance(bucket, dict):
+                continue
+            target = merged.setdefault(category, {})
+            if not isinstance(target, dict):
+                target = {}
+                merged[category] = target
+            for name, entry in bucket.items():
+                if str(name).startswith("_") or name in target:
+                    continue
+                target[name] = entry
+                changed = True
+
+        if not changed:
+            return server.web.json_response({"success": True, "added": 0, "prompts": data})
+        if atomic_save(data_path, merged, "PromptGenerator"):
+            added = sum(
+                1
+                for category, bucket in merged.items()
+                if isinstance(bucket, dict)
+                for name in bucket.keys()
+                if category not in data or name not in data.get(category, {})
+            )
+            print_pg("Re-import:", f"Added {added} missing default system prompts.")
+            return server.web.json_response({"success": True, "added": added, "prompts": merged})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in reimport_default_prompts API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 @server.PromptServer.instance.routes.post("/prompt-generator/save-category")
@@ -535,7 +584,7 @@ async def generator_set_prompt_category(request):
         category = data.get("category", "").strip()
         name = data.get("name", "").strip()
         prompt_category = str(data.get("prompt_category", "") or "").strip()
-        if prompt_category not in SYSTEM_PROMPT_CATEGORIES:
+        if not _is_system_prompt_category(prompt_category):
             prompt_category = "Other"
 
         if not category or not name:
@@ -555,6 +604,39 @@ async def generator_set_prompt_category(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-generator/rename-prompt")
+async def generator_rename_prompt(request):
+    """Rename or move a system prompt between category buckets."""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        old_name = data.get("old_name", "").strip()
+        new_name = data.get("new_name", "").strip()
+        new_category = data.get("new_category", "").strip() or category
+
+        if not category or not old_name or not new_name:
+            return server.web.json_response({"success": False, "error": "Category, old name, and new name are required"})
+
+        prompts = PromptGeneratorDataStore.load()
+        if category not in prompts or old_name not in prompts[category]:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        if new_category not in prompts:
+            prompts[new_category] = {}
+
+        entry = prompts[category][old_name]
+        prompts[new_category][new_name] = entry
+        del prompts[category][old_name]
+
+        prompts = _generator_sort_prompts_data(prompts)
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({"success": True, "prompts": prompts, "new_name": new_name, "new_category": new_category})
+        return server.web.json_response({"success": False, "error": "Failed to save data"})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in rename_prompt API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-generator/save-prompt")
 async def generator_save_prompt(request):
     try:
@@ -569,7 +651,7 @@ async def generator_save_prompt(request):
         text = text.strip()
         thumbnail = data.get("thumbnail")
         prompt_category = str(data.get("prompt_category", "") or "").strip()
-        if prompt_category not in SYSTEM_PROMPT_CATEGORIES:
+        if not _is_system_prompt_category(prompt_category):
             prompt_category = ""
 
         if not category or not name:
@@ -589,7 +671,7 @@ async def generator_save_prompt(request):
         }
         if prompt_category:
             entry["category"] = prompt_category
-        elif isinstance(existing_data, dict) and existing_data.get("category") in SYSTEM_PROMPT_CATEGORIES:
+        elif isinstance(existing_data, dict) and _is_system_prompt_category(existing_data.get("category")):
             entry["category"] = existing_data["category"]
         prompts[category][name] = entry
         if isinstance(existing_data, dict) and existing_data.get("nsfw"):
@@ -760,23 +842,39 @@ class PromptGenerator:
         """
         category, name = _parse_system_prompt_choice(system_prompt)
         entries = _load_system_prompt_entries()
-        entry = entries.get(name)
-        if entry:
-            return {"category": entry["category"], "name": name, "prompt": entry["prompt"]}
 
-        # Name lookup failed: use the mapped default entry for this category.
-        default_name = None
+        # Exact match by full label first.
+        exact_label = f"{category} / {name}"
+        entry = entries.get(exact_label)
+        if entry:
+            return {"category": entry["category"], "name": entry["name"], "prompt": entry["prompt"]}
+
+        # Prefer an entry in the same category (same name or any other prompt there).
+        same_category = [e for e in entries.values() if e["category"] == category]
+        for e in same_category:
+            if e["name"] == name:
+                return {"category": e["category"], "name": e["name"], "prompt": e["prompt"]}
+
+        # Use the default entry for this category if one exists.
+        default_label = None
         for mode, (cat, entry_name) in LEGACY_MODE_TO_ENTRY.items():
             if cat == category:
-                default_name = entry_name
+                default_label = f"{cat} / {entry_name}"
                 break
-        if default_name and default_name in entries:
-            return {"category": entries[default_name]["category"], "name": default_name, "prompt": entries[default_name]["prompt"]}
+        if default_label and default_label in entries:
+            entry = entries[default_label]
+            return {"category": entry["category"], "name": entry["name"], "prompt": entry["prompt"]}
+
+        # Fallback: match by prompt name alone (legacy / ambiguous values).
+        for e in entries.values():
+            if e["name"] == name:
+                return {"category": e["category"], "name": e["name"], "prompt": e["prompt"]}
 
         # Last resort: any available entry, else a bundled prompt file.
         if entries:
-            any_name = sorted(entries.keys(), key=lambda s: s.lower())[0]
-            return {"category": entries[any_name]["category"], "name": any_name, "prompt": entries[any_name]["prompt"]}
+            any_label = sorted(entries.keys(), key=lambda s: s.lower())[0]
+            entry = entries[any_label]
+            return {"category": entry["category"], "name": entry["name"], "prompt": entry["prompt"]}
         return {"category": category, "name": name, "prompt": load_prompt("text_image_system_prompt.txt")}
 
     @staticmethod
@@ -912,8 +1010,8 @@ class PromptGenerator:
             },
             "optional": {
                 "system_prompt": (_system_prompt_choices(), {
-                    "default": "Image / Enhance Prompt (Image)",
-                    "tooltip": "System prompt to use. Prompts are grouped by category (Audio / Image / Video / Other) and managed via the Prompt Browser 'System Prompts' source."
+                    "default": _default_system_prompt(),
+                    "tooltip": "System prompt to use. Prompts are grouped by category and managed via the Prompt Browser 'System Prompts' source."
                 }),
                 "prompt": ("STRING", {
                     "multiline": True,
@@ -1392,7 +1490,7 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt (Image)", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, prompt_input=None, model="(use default)", unique_id=None, **kwargs) -> str:
+    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, prompt_input=None, model="(use default)", unique_id=None, **kwargs) -> str:
         """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
         global _current_model
 

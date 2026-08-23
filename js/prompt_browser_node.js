@@ -285,35 +285,39 @@ function createComposerDropdownButton(text, items) {
     `;
     document.body.appendChild(dropdown);
 
-    items.forEach((item) => {
-        if (item.divider) {
-            const divider = document.createElement("div");
-            divider.style.cssText = `height: 1px; background: ${PMA_THEME.sectionBorder}; margin: 4px 0;`;
-            dropdown.appendChild(divider);
-        } else {
-            const menuItem = document.createElement("div");
-            menuItem.textContent = item.label;
-            menuItem.style.cssText = `
-                padding: 8px 12px;
-                cursor: pointer;
-                font-size: 11px;
-                color: ${PMA_THEME.textPrimary};
-                white-space: nowrap;
-            `;
-            menuItem.addEventListener("mouseenter", () => {
-                menuItem.style.backgroundColor = PMA_THEME.accentSoft;
-            });
-            menuItem.addEventListener("mouseleave", () => {
-                menuItem.style.backgroundColor = "transparent";
-            });
-            menuItem.addEventListener("click", (e) => {
-                e.stopPropagation();
-                dropdown.style.display = "none";
-                item.action();
-            });
-            dropdown.appendChild(menuItem);
-        }
-    });
+    function buildItems() {
+        dropdown.innerHTML = "";
+        const resolved = typeof items === "function" ? items() : items;
+        resolved.forEach((item) => {
+            if (item.divider) {
+                const divider = document.createElement("div");
+                divider.style.cssText = `height: 1px; background: ${PMA_THEME.sectionBorder}; margin: 4px 0;`;
+                dropdown.appendChild(divider);
+            } else {
+                const menuItem = document.createElement("div");
+                menuItem.textContent = item.label;
+                menuItem.style.cssText = `
+                    padding: 8px 12px;
+                    cursor: pointer;
+                    font-size: 11px;
+                    color: ${PMA_THEME.textPrimary};
+                    white-space: nowrap;
+                `;
+                menuItem.addEventListener("mouseenter", () => {
+                    menuItem.style.backgroundColor = PMA_THEME.accentSoft;
+                });
+                menuItem.addEventListener("mouseleave", () => {
+                    menuItem.style.backgroundColor = "transparent";
+                });
+                menuItem.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    dropdown.style.display = "none";
+                    item.action();
+                });
+                dropdown.appendChild(menuItem);
+            }
+        });
+    }
 
     button.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -321,6 +325,7 @@ function createComposerDropdownButton(text, items) {
         if (isVisible) {
             dropdown.style.display = "none";
         } else {
+            buildItems();
             const rect = button.getBoundingClientRect();
             dropdown.style.left = rect.left + "px";
             dropdown.style.top = (rect.bottom + 2) + "px";
@@ -1582,45 +1587,55 @@ function buildComposerButtonBar(node) {
         app.graph.setDirtyCanvas(true, true);
     });
 
-    const moreBtn = createComposerDropdownButton("More ▼", [
-        {
-            label: "Delete Prompt",
-            action: async () => {
-                const category = categoryWidget.value;
-                const name = nameWidget.value;
-                if (!name) {
-                    await showInfo("Error", "No prompt selected to delete.");
-                    return;
-                }
-                const confirmed = await showConfirm(
-                    "Delete Prompt",
-                    `Are you sure you want to delete "${name}" from "${category}"? This cannot be undone.`,
-                    "Delete",
-                    "#c00"
-                );
-                if (confirmed) {
-                    await deleteComposerPrompt(node, getEndpointPrefixForSource(getSourceValue(node)), category, name);
-                    nameWidget.value = "";
-                    textWidget.value = "";
-                    setSelectedPrompts(node, []);
-                    if (typeof node.updateComposerSelectorDisplay === "function") {
-                        node.updateComposerSelectorDisplay();
+    const moreBtn = createComposerDropdownButton("More ▼", () => {
+        const items = [
+            {
+                label: "Delete Prompt",
+                action: async () => {
+                    const category = categoryWidget.value;
+                    const name = nameWidget.value;
+                    if (!name) {
+                        await showInfo("Error", "No prompt selected to delete.");
+                        return;
                     }
-                    refreshComposerMultiUiState(node);
-                    app.graph.setDirtyCanvas(true, true);
+                    const confirmed = await showConfirm(
+                        "Delete Prompt",
+                        `Are you sure you want to delete "${name}" from "${category}"? This cannot be undone.`,
+                        "Delete",
+                        "#c00"
+                    );
+                    if (confirmed) {
+                        await deleteComposerPrompt(node, getEndpointPrefixForSource(getSourceValue(node)), category, name);
+                        nameWidget.value = "";
+                        textWidget.value = "";
+                        setSelectedPrompts(node, []);
+                        if (typeof node.updateComposerSelectorDisplay === "function") {
+                            node.updateComposerSelectorDisplay();
+                        }
+                        refreshComposerMultiUiState(node);
+                        app.graph.setDirtyCanvas(true, true);
+                    }
                 }
-            }
-        },
-        { divider: true },
-        {
-            label: "Export JSON",
-            action: () => exportComposerJSON(node),
-        },
-        {
-            label: "Import JSON",
-            action: () => importComposerJSON(node),
-        },
-    ]);
+            },
+            { divider: true },
+            {
+                label: "Export JSON",
+                action: () => exportComposerJSON(node),
+            },
+            {
+                label: "Import JSON",
+                action: () => importComposerJSON(node),
+            },
+        ];
+        if (getSourceValue(node) === SOURCE_SYSTEM_PROMPTS) {
+            items.push({ divider: true });
+            items.push({
+                label: "Re-Import Default System Prompts",
+                action: () => reimportBasicSystemPrompts(node),
+            });
+        }
+        return items;
+    });
 
     buttonContainer.appendChild(saveBtn);
     buttonContainer.appendChild(newBtn);
@@ -1711,6 +1726,45 @@ function exportComposerJSON(node) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+async function reimportBasicSystemPrompts(node) {
+    const source = getSourceValue(node);
+    if (source !== SOURCE_SYSTEM_PROMPTS) {
+        await showInfo("Re-Import", "This action is only available for System Prompts.");
+        return;
+    }
+    const confirmed = await showConfirm(
+        "Re-Import Default System Prompts",
+        "This will add any missing built-in system prompts without overwriting your custom ones. Continue?",
+        "Re-Import",
+        PMA_THEME.accent
+    );
+    if (!confirmed) return;
+    try {
+        const resp = await api.fetchApi("/prompt-generator/reimport-default-prompts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            await showInfo("Re-Import Complete", "Added back missing system prompts.");
+            await loadActivePrompts(node);
+            if (typeof node.updateComposerSelectorDisplay === "function") {
+                node.updateComposerSelectorDisplay();
+            }
+            if (typeof node.updateComposerPreview === "function") {
+                node.updateComposerPreview();
+            }
+            app.graph.setDirtyCanvas(true, true);
+        } else {
+            await showInfo("Re-Import Failed", data.error || "Failed to re-import default system prompts.");
+        }
+    } catch (err) {
+        console.error("[PromptBrowser] Error re-importing basic system prompts:", err);
+        await showInfo("Re-Import Failed", err.message || "Unknown error");
+    }
 }
 
 async function importComposerJSON(node) {

@@ -38,23 +38,53 @@ Allows for Saving and Loading prompts quickly using the Prompt Browser UI.
 - The New Prompt Button is practical when you want to clear everything, including LoRAs, and start fresh.
 - The More button allows access to Exporting your Saved Prompt, but also merging another JSON. Be careful.
 
-
-### Prompt Generator
-Generates and tweaks prompts using a local LLM.
-- Works with llama.cpp or Ollama or Comfy's Text encoders, uing the clip input.
-- Text enhancement and image analysis modes.
-- Optional JSON output mode.
-- Thinking mode support.
-- Multi-image support (up to 5 images total with the options node).
-- Use the Prompt Generator Options node for controlling model parameters.
-
-
 ### Prompt Manager (Basic)
 A simpler no frills version that supports only Prompts. (This is the OG node)
 - Select category and prompt using a purely comfy UI.
 - If saving over an exising prompt, Loras and Thumbails will be preserved.
 - If NSFW filtering is enabled, NSFW Prompts will be hidden.
 - LLM input toggle works similar to full node.
+
+
+### Prompt Generator
+Generates prompts using a local LLM. Supports either Llama.cpp or Ollama, but can also be used directly with Comfy's Text encoders.
+Allows downloading of 3 different sizes of Unsloth's Qwen 3.5, but users are free to add more models in models/gguf. If found, the add-on will list them. (Refresh when adding new ones)
+
+- Comes with a bundle of pre-made System Prompts. 
+- Create your own system prompts, using the **Prompt Browser** node
+- I highly recommend using the **rgthree add-on** and enable *"Auto Nest Subdirectories in Menus"*. This will display categories as submenus.
+- Options to output in JSON format and enable Thinking mode.
+- The stop_server_after toggle:
+  - Kills Llama.cpp after generating the prompt
+  - Tries to force Ollama to unload the current model
+- The clear_vram_on_run toggle:
+  - Unloads Comfys model from memory before generating the prompt
+  - Clears Vram again once the prompt is generated.
+  - It's is recommended to leave on, unless you are using small models
+- Both Stop_server and clear_vram are ignored when using Text encoders, as we instead let's Comfy manages the Vram.
+- Lastly, the **Model Selection**:
+  - (Use Default): Uses the default model set in preferences, or the first found, if not set.
+  - 3 Different Quant size of Qwen 3.5 can be automatically downloaded.
+  - Any models you add in models/gguf, or any custom folder if set in preferences.
+- For Multi-image support, connect the Generator Option node.
+- Use the Prompt Generator Options node for controlling model parameters.
+
+### Prompt Generator Options
+This node provides extra control to **Prompt Generator** and is NOT mandatory.  
+- Modify the selected system prompt, by either appending extra instructions or replacing it entirerly.
+- Provides extra images input for a Total of 5.
+- Change the System settings for the model
+- Change the GPU used by the LLM
+
+### Prompt Browser
+Prompt Browser lets you create and edit all 3 prompt libraries from a single interface:
+- System prompts: The System Prompts used by Prompt Generator.
+- Compose prompts: Snippets used by Prompt Composer
+- Prompt Manager prompts: Our saved workflow prompts
+
+Prompt Generator now uses a *prompt_generator_data.json*, so you can author your own prompts instead of being limited to the previous simple presets. The add-on also comes with new default prompt, these can be imported back into your saved user system prompts by using the **More** button in the Prompt Browser Node.  
+
+New Prompts may be added from time to time, so this is an easy way to import them back in.
 
 
 ### Prompt Extractor
