@@ -4,7 +4,9 @@
 ComfyUI Prompt Manager is a prompt toolkit for ComfyUI focused on writing, generating, extracting, organizing, and reusing prompts with LoRA-aware workflows. It includes prompt generation powered by local LLM (llama.cpp or Ollama) or direct generation using ComfyUI's own CLIP/text encoders, automatic download of Qwen3.5 models, metadata extraction from images/videos/JSON, prompt browser tooling, and advanced prompt save/load flows. 
 
 [See Installation Guide](#installation)
+
 [See Node Reference](docs/feature-reference.md)
+
 [See latest update](#latest-update)
 
 ## What This Provides
