@@ -829,11 +829,6 @@ class PromptGenerator:
     # instruction files, which are appended when format_as_json is enabled.
 
     @staticmethod
-    def get_image_action_prompt():
-        """Load the default image description action prompt."""
-        return load_prompt("image_action_prompt.txt")
-
-    @staticmethod
     def get_system_prompt_entry(system_prompt):
         """Resolve the selected system prompt to its {category, name, prompt} entry.
 
@@ -1577,16 +1572,11 @@ class PromptGenerator:
         if format_as_json:
             system_prompt = system_prompt + self.get_json_system_prompt_for_category(prompt_category)
 
-        # Determine user content: combine image analysis action with optional
-        # user text when both are present.
-        if has_image:
-            image_action = self.get_image_action_prompt()
-            if has_prompt:
-                user_content = f"{prompt.strip()}\n\n{image_action}"
-            else:
-                user_content = image_action
-        else:
-            user_content = prompt
+        # Determine user content: the user's prompt text is sent as-is.
+        # System prompts are now managed centrally in prompt_generator_data.json,
+        # so any image-analysis or enhancement instruction belongs in the chosen
+        # system prompt rather than being appended here.
+        user_content = prompt
 
         # === CLIP text-encoder generation path ===
         # If a CLIP/text encoder is connected, bypass llama.cpp/Ollama entirely.
