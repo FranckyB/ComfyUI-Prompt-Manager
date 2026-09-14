@@ -50,6 +50,7 @@ class PromptGenOptions:
     def INPUT_TYPES(cls):
         backend = _preferences_cache.get("llm_backend", "llama.cpp")
         preferred_model = str(_preferences_cache.get("preferred_model", "") or "").strip()
+        hide_downloadable_models = _preferences_cache.get("hide_downloadable_models", False) is True
 
         if backend == "ollama":
             # Discover models from Ollama
@@ -61,17 +62,27 @@ class PromptGenOptions:
         else:
             available_models = get_all_models()
             if not available_models:
-                available_models = ["No models found - check HuggingFace"]
+                if hide_downloadable_models:
+                    available_models = ["No local models found - add a .gguf or disable 'Hide downloadable built-in models'"]
+                else:
+                    available_models = ["No models found - check HuggingFace"]
 
         default_model = available_models[0] if available_models else ""
         if preferred_model and preferred_model in available_models:
             default_model = preferred_model
 
+        if backend == "ollama":
+            model_tooltip = "Select the Ollama model to use."
+        elif hide_downloadable_models:
+            model_tooltip = "Select a locally available model. Built-in HuggingFace download entries are hidden by the Prompt Manager preference."
+        else:
+            model_tooltip = "Select model to use (local models listed first, then HuggingFace models)\nDownload sizes: UD-Q4_K_XL ~6GB | Q8_0 ~9.5GB | UD-Q8_K_XL ~13GB"
+
         return {
             "optional": {
                 "model": (available_models, {
                     "default": default_model,
-                    "tooltip": "Select model to use (local models listed first, then HuggingFace models)\nDownload sizes: UD-Q4_K_XL ~6GB | Q8_0 ~9.5GB | UD-Q8_K_XL ~13GB"
+                    "tooltip": model_tooltip
                 }),
                 "image2": ("IMAGE", {
                     "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"

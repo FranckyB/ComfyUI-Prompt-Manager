@@ -88,6 +88,7 @@ Workflow examples are provided to help understand the basics.
 
 - Addon settings are available in ComfyUI Preferences (Settings) under Prompt Manager.
 - This is where you set model/backend defaults, NSFW visibility defaults, view preferences, and more.
+- If you want the Prompt Generator dropdowns to show only your local models, enable `Hide downloadable built-in models` in these settings.
 - Prompt Generator backend choices (llama.cpp, Ollama) and related options are configured there.
 - The Prompt Generator's system prompts are fully user-customizable. They're stored in `user/default/prompt_generator_data.json` and can be created and edited with the **Prompt Browser** — your custom prompts then show up directly in the Prompt Generator node. (Press r for refresh if not visible)
 

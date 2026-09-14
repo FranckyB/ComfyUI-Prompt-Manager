@@ -12,6 +12,7 @@ import requests
 # Add preference cache and API endpoints for preferences
 _preferences_cache = {
     "preferred_model": "",
+    "hide_downloadable_models": False,
     "custom_llama_path": "",
     "custom_llama_model_path": "",
     "close_llama_on_exit": True,
@@ -59,6 +60,7 @@ async def save_preference(request):
         value = data.get("value", "")
 
         if key not in ["preferred_model",
+                       "hide_downloadable_models",
                        "custom_llama_path",
                        "custom_llama_model_path",
                        "close_llama_on_exit",
@@ -145,18 +147,23 @@ def get_local_models():
 
 def get_huggingface_models():
     """Get list of predefined Qwen models available for download"""
+    if _preferences_cache.get("hide_downloadable_models", False):
+        return []
     return list(QWEN_MODELS.keys())
 
 def get_all_models():
     """Get combined list of local and HuggingFace models, excluding already downloaded ones and mmproj files"""
     local_models = get_local_models()  # Already filtered
-    models_dir   = get_models_directory()
 
     # List all known filenames, local ones first
     all_models = []
     # Add local models first (already filtered by get_local_models)
     if local_models:
         all_models.extend(local_models)
+
+    if _preferences_cache.get("hide_downloadable_models", False):
+        return all_models
+
     # Add remote models (not present locally), excluding mmproj files
     for filename in QWEN_MODELS.keys():
         if filename not in all_models and 'mmproj' not in filename.lower():

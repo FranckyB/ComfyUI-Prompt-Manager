@@ -66,6 +66,7 @@ Allows downloading of 3 different sizes of Unsloth's Qwen 3.5, but users are fre
   - (Use Default): Uses the default model set in preferences, or the first found, if not set.
   - 3 Different Quant size of Qwen 3.5 can be automatically downloaded.
   - Any models you add in models/gguf, or any custom folder if set in preferences.
+  - If you no longer want to see the built-in download entries, enable the `Hide downloadable built-in models` preference under Prompt Manager settings.
 - For Multi-image support, connect the Generator Option node.
 - Use the Prompt Generator Options node for controlling model parameters.
 

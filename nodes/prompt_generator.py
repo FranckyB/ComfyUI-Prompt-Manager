@@ -1186,6 +1186,17 @@ class PromptGenerator:
                 "-c", str(context_size),
             ]
 
+            # Last-resort fallback for cases where the aggressive GPU launch
+            # fails even though the model can load with conservative settings.
+            cmd_args_cpu_safe = [
+                server_cmd,
+                "-m", model_path,
+                "--port", str(PromptGenerator.get_server_port()),
+                "--no-warmup",
+                "-ngl", "0",
+                "-c", str(min(context_size, 2048)),
+            ]
+
             # Add vision flags for models with mmproj
             if use_vision_model:
                 mmproj_path = get_mmproj_path(model_name)
@@ -1193,6 +1204,7 @@ class PromptGenerator:
                     print_pg("Vision model:", f"using mmproj: {os.path.basename(mmproj_path)}")
                     cmd_args.extend(["--mmproj", mmproj_path])
                     cmd_args_fallback.extend(["--mmproj", mmproj_path])
+                    cmd_args_cpu_safe.extend(["--mmproj", mmproj_path])
                 else:
                     error_msg = f"Error: Vision mode requires an mmproj file for '{model_name}' but none was found.\nPlease ensure an mmproj file exists, or use the Generator Options node to download a vision-capable model."
                     print_pg(error_msg, RED)
@@ -1296,6 +1308,21 @@ class PromptGenerator:
                 ]
                 return any(m in text for m in markers)
 
+            def _is_model_load_failure(stderr_output):
+                text = (stderr_output or "").lower()
+                if not text:
+                    return False
+                markers = [
+                    "failed to load model",
+                    "cuda error",
+                    "hip error",
+                    "vulkan",
+                    "out of memory",
+                    "not enough memory",
+                    "failed to allocate",
+                ]
+                return any(m in text for m in markers)
+
             success, error_msg, stderr_output = _launch_and_wait(cmd_args)
             if success:
                 return (True, None)
@@ -1304,6 +1331,16 @@ class PromptGenerator:
             if _is_unsupported_flag_error(stderr_output):
                 print_pg("Warning: llama-server rejected one or more advanced launch flags. Retrying with compatibility mode.", YELLOW)
                 success, fallback_error, _ = _launch_and_wait(cmd_args_fallback)
+                if success:
+                    return (True, None)
+                print_pg(fallback_error, RED)
+                return (False, fallback_error)
+
+            # Some models fail under full GPU offload or large default cache
+            # settings but load fine with a CPU-safe startup.
+            if _is_model_load_failure(stderr_output):
+                print_pg("Warning: llama-server failed to load the model with the current GPU/memory settings. Retrying with conservative CPU-safe settings.", YELLOW)
+                success, fallback_error, _ = _launch_and_wait(cmd_args_cpu_safe)
                 if success:
                     return (True, None)
                 print_pg(fallback_error, RED)

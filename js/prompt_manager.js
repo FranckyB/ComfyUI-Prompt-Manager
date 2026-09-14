@@ -66,6 +66,23 @@ app.registerExtension({
             }
         },
         {
+            id: "PromptManager.HideDownloadableModels",
+            category: ["Prompt Manager", "1. Model Preferences", "Hide Downloadable Models"],
+            name: "Hide downloadable built-in models",
+            tooltip: "When enabled, Prompt Generator dropdowns only show locally available models instead of also listing the built-in HuggingFace download options.",
+            type: "boolean",
+            defaultValue: false,
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "hide_downloadable_models", value: value })
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving hide-downloadable-models preference:", error);
+                });
+            }
+        },
+        {
             id: "PromptManager.LlamaPath",
             category: ["Prompt Manager", "2. Llama Preferences", "Custom Llama Path"],
             name: "Custom Llama Path",
@@ -257,6 +274,7 @@ app.registerExtension({
         try {
             // Sync current values to Python cache first
             const preferredModel = app.ui.settings.getSettingValue("PromptManager.PreferredModel");
+            const hideDownloadableModels = app.ui.settings.getSettingValue("PromptManager.HideDownloadableModels");
             const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath");
             const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath");
             const port = app.ui.settings.getSettingValue("PromptManager.Port");
@@ -265,11 +283,16 @@ app.registerExtension({
             const ollamaUrl = app.ui.settings.getSettingValue("PromptManager.OllamaUrl");
             const ollamaKeepAlive = app.ui.settings.getSettingValue("PromptManager.OllamaKeepAlive");
             
-            console.log("[PromptManager] Syncing preferences:", { preferredModel, llamaPath, modelPath, port, CloseLlama, llmBackend, ollamaUrl, ollamaKeepAlive });
+            console.log("[PromptManager] Syncing preferences:", { preferredModel, hideDownloadableModels, llamaPath, modelPath, port, CloseLlama, llmBackend, ollamaUrl, ollamaKeepAlive });
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "preferred_model", value: preferredModel })
+            });
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "hide_downloadable_models", value: hideDownloadableModels === true })
             });
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
