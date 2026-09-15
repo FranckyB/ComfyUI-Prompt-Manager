@@ -536,6 +536,7 @@ app.registerExtension({
                             // Set current trigger words from connected input
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             this.currentTriggerWords = newConnectedTriggers;
+                            reconcileSavedTriggerWords(this, newConnectedTriggers);
 
                             // Refresh displays
                             updateLoraDisplays(this);
@@ -548,8 +549,9 @@ app.registerExtension({
                             const lorasDChanged = normalizedLoraListSig(effectiveInputLorasD) !== normalizedLoraListSig(this.currentLorasD || []);
                             const newConnectedTriggers = newTriggerWords.filter(t => t.source === 'connected');
                             const triggerWordsChanged = JSON.stringify(newConnectedTriggers) !== JSON.stringify(this.currentTriggerWords);
+                            const staleTriggerWordsRemoved = reconcileSavedTriggerWords(this, newConnectedTriggers);
 
-                            if (lorasAChanged || lorasBChanged || lorasCChanged || lorasDChanged || triggerWordsChanged) {
+                            if (lorasAChanged || lorasBChanged || lorasCChanged || lorasDChanged || triggerWordsChanged || staleTriggerWordsRemoved) {
                                 this.currentLorasA = effectiveInputLorasA.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
                                 this.currentLorasB = effectiveInputLorasB.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
                                 this.currentLorasC = effectiveInputLorasC.map(l => ({ ...l, source: shouldIngestWorkflowExecution ? 'workflow' : 'current' }));
@@ -1027,8 +1029,52 @@ function getSerializedSavedTriggerWords(node) {
     return parseSerializedWidgetValue(node.triggerWordsToggleWidget, []).map(word => ({
         text: word.text,
         active: word.active !== false,
-        source: 'saved'
+        source: word.fromInput ? 'connected' : 'saved',
+        fromInput: word.fromInput === true
     }));
+}
+
+function reconcileSavedTriggerWords(node, currentWords) {
+    const previousWords = Array.isArray(node.savedTriggerWords) ? node.savedTriggerWords : [];
+    const previousState = new Map();
+    previousWords.forEach(word => {
+        const text = String(word?.text || '').trim();
+        if (!text) return;
+        previousState.set(text.toLowerCase(), word);
+    });
+
+    const nextWords = [];
+    (currentWords || []).forEach(word => {
+        const text = String(word?.text || '').trim();
+        if (!text) return;
+
+        const key = text.toLowerCase();
+        const previousWord = previousState.get(key);
+        nextWords.push({
+            text: previousWord?.text || text,
+            active: previousWord ? previousWord.active !== false : false,
+            source: previousWord?.source || 'saved',
+            fromInput: previousWord?.fromInput === true || word?.fromInput === true || word?.source === 'current' || word?.source === 'connected'
+        });
+    });
+
+    const beforeSig = JSON.stringify(
+        previousWords.map(word => ({
+            text: String(word?.text || '').trim().toLowerCase(),
+            active: word?.active !== false,
+            fromInput: word?.fromInput === true,
+        }))
+    );
+    const afterSig = JSON.stringify(
+        nextWords.map(word => ({
+            text: String(word?.text || '').trim().toLowerCase(),
+            active: word?.active !== false,
+            fromInput: word?.fromInput === true,
+        }))
+    );
+
+    node.savedTriggerWords = nextWords;
+    return beforeSig !== afterSig;
 }
 
 function enforceWorkflowManagerCompactMode(node) {
@@ -2971,7 +3017,8 @@ function updateToggleWidgets(node) {
     if (node.triggerWordsToggleWidget) {
         node.triggerWordsToggleWidget.value = JSON.stringify(triggerWords.map(tw => ({
             text: tw.text,
-            active: tw.active !== false
+            active: tw.active !== false,
+            fromInput: tw.fromInput === true
         })));
     }
 }
@@ -3162,13 +3209,14 @@ function mergeTriggerWordLists(currentWords, savedWords) {
         if (savedWord) {
             // Word exists in both - use saved state
             merged.push({
-                text: savedWord.text,
+                text: savedWord.text || word.text,
                 active: savedWord.active,
-                source: 'saved'
+                source: word.source || (savedWord.fromInput === true ? 'connected' : 'saved'),
+                fromInput: savedWord.fromInput === true || word.fromInput === true || word.source === 'current' || word.source === 'connected'
             });
         } else {
             // New trigger word from connected input — default to OFF
-            merged.push({ ...word, source: 'current', active: false });
+            merged.push({ ...word, source: 'current', active: false, fromInput: true });
         }
         seen.add(wordLower);
     });
@@ -3177,7 +3225,7 @@ function mergeTriggerWordLists(currentWords, savedWords) {
     (savedWords || []).forEach(word => {
         const wordLower = word.text.toLowerCase();
         if (!seen.has(wordLower)) {
-            merged.push({ ...word, source: 'saved' });
+            merged.push({ ...word, source: word.fromInput === true ? 'connected' : 'saved' });
             seen.add(wordLower);
         }
     });
@@ -3316,13 +3364,17 @@ function toggleTriggerWordActive(node, index) {
 
         if (savedIndex >= 0) {
             node.savedTriggerWords[savedIndex].active = triggerWords[index].active;
+            if (word.source === 'current' || word.source === 'connected') {
+                node.savedTriggerWords[savedIndex].fromInput = true;
+            }
         } else {
             // Add to saved with current state
             if (!node.savedTriggerWords) node.savedTriggerWords = [];
             node.savedTriggerWords.push({
                 text: word.text,
                 active: triggerWords[index].active,
-                source: 'saved'
+                source: 'saved',
+                fromInput: word.source === 'current' || word.source === 'connected'
             });
         }
 
@@ -3353,12 +3405,16 @@ function toggleAllTriggerWords(node) {
 
         if (savedIndex >= 0) {
             node.savedTriggerWords[savedIndex].active = newState;
+            if (word.source === 'current' || word.source === 'connected') {
+                node.savedTriggerWords[savedIndex].fromInput = true;
+            }
         } else {
             if (!node.savedTriggerWords) node.savedTriggerWords = [];
             node.savedTriggerWords.push({
                 text: word.text,
                 active: newState,
-                source: 'saved'
+                source: 'saved',
+                fromInput: word.source === 'current' || word.source === 'connected'
             });
         }
     });
@@ -5023,7 +5079,8 @@ async function loadPromptData(node, category, promptName) {
     const triggerWords = (promptData.trigger_words || []).map(word => ({
         text: word.text,
         active: word.active !== false,
-        source: 'saved'
+        source: 'saved',
+        fromInput: word.fromInput === true
     }));
 
     // Check availability of all loras
@@ -5653,7 +5710,10 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, lorasC, lo
             node.savedLorasB = lorasForSaveB;
             node.savedLorasC = lorasForSaveC;
             node.savedLorasD = lorasForSaveD;
-            node.savedTriggerWords = triggerWords || [];
+            node.savedTriggerWords = (triggerWords || []).map(tw => ({
+                ...tw,
+                source: tw.fromInput === true ? 'connected' : 'saved'
+            }));
 
             // Update original strengths to match saved values (Reset now resets to saved state)
             node.originalLorasA = lorasForSaveA.map(l => ({

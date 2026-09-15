@@ -1314,8 +1314,14 @@ class PromptManagerAdvanced:
     def _process_trigger_words(self, connected_trigger_words, toggle_data):
         """
         Process trigger words from connected input and saved toggle states.
-        Returns list of trigger word objects for display.
+        The connected list is authoritative; words not currently offered are dropped.
         """
+        connected_words = []
+        connected_word_set = set()
+        if connected_trigger_words and isinstance(connected_trigger_words, str):
+            connected_words = [w.strip() for w in connected_trigger_words.split(',,') if w.strip()]
+            connected_word_set = {w.lower() for w in connected_words}
+
         # Parse saved toggle data
         saved_words = {}
         if toggle_data:
@@ -1326,17 +1332,17 @@ class PromptManagerAdvanced:
                     for item in toggle_data:
                         if isinstance(item, dict) and item.get('text'):
                             word = item['text'].strip()
+                            word_lower = word.lower()
+                            from_input = item.get('fromInput') is True
+                            if word_lower not in connected_word_set:
+                                continue
                             saved_words[word.lower()] = {
                                 'text': word,
-                                'active': item.get('active', True)
+                                'active': item.get('active', True),
+                                'fromInput': from_input,
                             }
             except (json.JSONDecodeError, TypeError):
                 pass
-
-        # Parse connected trigger words (LoRA Manager uses double-comma separators)
-        connected_words = []
-        if connected_trigger_words and isinstance(connected_trigger_words, str):
-            connected_words = [w.strip() for w in connected_trigger_words.split(',,') if w.strip()]
 
         # Merge: saved words + new connected words (no duplicates)
         result = []
@@ -1348,7 +1354,8 @@ class PromptManagerAdvanced:
                 result.append({
                     'text': data['text'],
                     'active': data['active'],
-                    'source': 'saved'
+                    'source': 'connected' if data.get('fromInput') else 'saved',
+                    'fromInput': data.get('fromInput', False),
                 })
                 seen.add(word_lower)
 
@@ -1359,7 +1366,8 @@ class PromptManagerAdvanced:
                 result.append({
                     'text': word,
                     'active': True,
-                    'source': 'connected'
+                    'source': 'connected',
+                    'fromInput': True,
                 })
                 seen.add(word_lower)
 
@@ -1368,13 +1376,20 @@ class PromptManagerAdvanced:
     def _get_active_trigger_words(self, toggle_data, connected_trigger_words=None):
         """
         Get list of active trigger word strings from toggle data and connected input.
-        Connected words are auto-added only when toggle_data is truly missing.
-        If toggle_data is present (even an empty list), it is treated as authoritative.
+        The connected list is authoritative; words not currently offered are dropped.
         """
         active_words = []
         active_seen = set()
         saved_seen = set()
         has_authoritative_toggle_data = False
+        connected_word_set = set()
+
+        if connected_trigger_words and isinstance(connected_trigger_words, str):
+            connected_word_set = {
+                word.strip().lower()
+                for word in connected_trigger_words.split(',,')
+                if word.strip()
+            }
 
         # First, get active words from saved toggle data
         if toggle_data is not None:
@@ -1391,6 +1406,8 @@ class PromptManagerAdvanced:
                             continue
 
                         word_lower = word.lower()
+                        if word_lower not in connected_word_set:
+                            continue
                         saved_seen.add(word_lower)
 
                         if item.get('active', True) and word_lower not in active_seen:
