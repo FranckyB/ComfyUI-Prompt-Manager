@@ -1314,7 +1314,7 @@ class PromptManagerAdvanced:
     def _process_trigger_words(self, connected_trigger_words, toggle_data):
         """
         Process trigger words from connected input and saved toggle states.
-        The connected list is authoritative; words not currently offered are dropped.
+        Connected-origin words are pruned when missing, while prompt-saved words remain.
         """
         connected_words = []
         connected_word_set = set()
@@ -1334,7 +1334,7 @@ class PromptManagerAdvanced:
                             word = item['text'].strip()
                             word_lower = word.lower()
                             from_input = item.get('fromInput') is True
-                            if word_lower not in connected_word_set:
+                            if from_input and word_lower not in connected_word_set:
                                 continue
                             saved_words[word.lower()] = {
                                 'text': word,
@@ -1376,7 +1376,7 @@ class PromptManagerAdvanced:
     def _get_active_trigger_words(self, toggle_data, connected_trigger_words=None):
         """
         Get list of active trigger word strings from toggle data and connected input.
-        The connected list is authoritative; words not currently offered are dropped.
+        Connected-origin words are pruned when missing, while prompt-saved words remain.
         """
         active_words = []
         active_seen = set()
@@ -1406,7 +1406,7 @@ class PromptManagerAdvanced:
                             continue
 
                         word_lower = word.lower()
-                        if word_lower not in connected_word_set:
+                        if item.get('fromInput') is True and word_lower not in connected_word_set:
                             continue
                         saved_seen.add(word_lower)
 

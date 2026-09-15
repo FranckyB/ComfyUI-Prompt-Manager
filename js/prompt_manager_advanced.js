@@ -1044,17 +1044,35 @@ function reconcileSavedTriggerWords(node, currentWords) {
     });
 
     const nextWords = [];
+    const seen = new Set();
     (currentWords || []).forEach(word => {
         const text = String(word?.text || '').trim();
         if (!text) return;
 
         const key = text.toLowerCase();
         const previousWord = previousState.get(key);
+        seen.add(key);
         nextWords.push({
             text: previousWord?.text || text,
             active: previousWord ? previousWord.active !== false : false,
-            source: previousWord?.source || 'saved',
+            source: previousWord?.fromInput === true ? 'connected' : (previousWord?.source || 'saved'),
             fromInput: previousWord?.fromInput === true || word?.fromInput === true || word?.source === 'current' || word?.source === 'connected'
+        });
+    });
+
+    previousWords.forEach(word => {
+        const text = String(word?.text || '').trim();
+        if (!text) return;
+
+        const key = text.toLowerCase();
+        if (seen.has(key)) return;
+        if (word?.fromInput === true) return;
+
+        nextWords.push({
+            text: word.text,
+            active: word.active !== false,
+            source: 'saved',
+            fromInput: false,
         });
     });
 
