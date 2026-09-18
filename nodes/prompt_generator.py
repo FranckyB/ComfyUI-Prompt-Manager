@@ -809,6 +809,95 @@ def resolve_llama_server_command(custom_llama_path=""):
     # 3) Fall back to command name (PATH resolution by subprocess).
     return server_name
 
+
+def detect_llama_gpu_support(server_cmd):
+    """Check whether the resolved llama-server binary supports GPU offload.
+
+    Recent llama.cpp builds no longer always print the backend in
+    `--version`, so this checks three sources: the version string, the
+    linked shared libraries, and the available CLI options.
+
+    Returns a tuple (has_gpu: bool, backends: list of str, error: str or None).
+    Backends detected include: CUDA/cuBLAS, HIP/hipBLAS, Vulkan, SYCL, CLBlast.
+    """
+    backends = set()
+    errors = []
+
+    # 1) Try parsing --version output.
+    try:
+        result = subprocess.run(
+            [server_cmd, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        text = (result.stdout or "") + "\n" + (result.stderr or "")
+        text_lower = text.lower()
+        if any(k in text_lower for k in ("cuda", "cublas")):
+            backends.add("CUDA")
+        if any(k in text_lower for k in ("hip", "hipblas", "rocm")):
+            backends.add("HIP")
+        if "vulkan" in text_lower:
+            backends.add("Vulkan")
+        if "sycl" in text_lower:
+            backends.add("SYCL")
+        if "clblast" in text_lower:
+            backends.add("CLBlast")
+    except FileNotFoundError:
+        return (False, [], f"llama-server not found: {server_cmd}")
+    except Exception as e:
+        errors.append(str(e))
+
+    # 2) Inspect linked libraries (handles builds where version hides backend).
+    try:
+        ldd_result = subprocess.run(
+            ["ldd", server_cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        ldd_text = (ldd_result.stdout or "").lower()
+        if "libggml-cuda" in ldd_text or "libcublas" in ldd_text:
+            backends.add("CUDA")
+        if "libggml-hip" in ldd_text or "libhipblas" in ldd_text:
+            backends.add("HIP")
+        if "libggml-vulkan" in ldd_text:
+            backends.add("Vulkan")
+        if "libggml-sycl" in ldd_text:
+            backends.add("SYCL")
+        if "libclblast" in ldd_text:
+            backends.add("CLBlast")
+    except Exception as e:
+        errors.append(str(e))
+
+    # 3) Check that --help exposes GPU offload flags.
+    try:
+        help_result = subprocess.run(
+            [server_cmd, "-h"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        help_text = (help_result.stdout or "") + (help_result.stderr or "")
+        help_lower = help_text.lower()
+        if not (
+            "--n-gpu-layers" in help_lower
+            or "-ngl" in help_lower
+            or "--gpu-layers" in help_lower
+        ):
+            # No GPU offload CLI option means the binary is effectively CPU-only
+            # from the caller's point of view, even if it links some backend stub.
+            backends.clear()
+    except Exception as e:
+        errors.append(str(e))
+
+    backend_list = sorted(backends)
+    return (len(backend_list) > 0, backend_list, "; ".join(errors) if errors else None)
+
+
 class PromptGenerator:
     """Node that generates enhanced prompts using a llama.cpp server"""
 
@@ -1137,6 +1226,26 @@ class PromptGenerator:
             if custom_llama_path:
                 print_pg("llama-server:", f"{server_cmd}")
 
+            # Detect whether the resolved binary actually supports GPU offload.
+            has_binary_gpu, gpu_backends, gpu_detect_error = detect_llama_gpu_support(server_cmd)
+            if gpu_detect_error:
+                print_pg("Warning:", f"Could not detect llama-server GPU support: {gpu_detect_error}", YELLOW)
+            elif gpu_backends:
+                print_pg("llama-server backends:", ", ".join(gpu_backends))
+
+            torch_cuda = torch.cuda.is_available()
+            if torch_cuda and not has_binary_gpu:
+                print_pg(
+                    "ERROR:",
+                    f"PyTorch sees a CUDA GPU, but the resolved llama-server binary ({server_cmd}) "
+                    "is a CPU-only build. GPU offload flags will be ignored and inference will run on CPU. "
+                    "To use your GPU, install or configure a CUDA-enabled llama.cpp build.",
+                    RED,
+                )
+
+            # Only request GPU offload when both PyTorch sees CUDA *and* the binary supports it.
+            use_gpu_offload = torch_cuda and has_binary_gpu
+
             # Build command arguments
             cmd_args = [
                 server_cmd,
@@ -1152,7 +1261,7 @@ class PromptGenerator:
             ]
 
             # GPU-specific tuning flags
-            if torch.cuda.is_available():
+            if use_gpu_offload:
                 cmd_args.extend([
                     "--n-gpu-layers", "999",
                     "--flash-attn", "on",
@@ -1182,7 +1291,7 @@ class PromptGenerator:
                 "-m", model_path,
                 "--port", str(PromptGenerator.get_server_port()),
                 "--no-warmup",
-                "-ngl", "100",
+                "-ngl", "100" if use_gpu_offload else "0",
                 "-c", str(context_size),
             ]
 
@@ -1247,6 +1356,7 @@ class PromptGenerator:
             def _launch_and_wait(args):
                 global _server_process, _current_model, _current_context_size, _current_gpu_device
 
+                print_pg("Launching:", " ".join(str(a) for a in args))
                 _server_process = subprocess.Popen(args, **popen_kwargs)
 
                 # On Windows attach process to Job Object so children die if parent exits
