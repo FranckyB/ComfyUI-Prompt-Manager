@@ -301,6 +301,10 @@ async def compose_save_prompt(request):
         thumbnail = data.get("thumbnail")
         lora = data.get("lora", None)
         lora_strength = data.get("lora_strength", None)
+        lora_image = data.get("lora_image", None)
+        lora_image_strength = data.get("lora_image_strength", None)
+        lora_video = data.get("lora_video", None)
+        lora_video_strength = data.get("lora_video_strength", None)
         refmod = data.get("refmod", None)
         refmod_weight = data.get("refmod_weight", None)
 
@@ -330,16 +334,35 @@ async def compose_save_prompt(request):
             entry["thumbnail"] = thumbnail
         elif existing_prompt.get("thumbnail"):
             entry["thumbnail"] = existing_prompt["thumbnail"]
-        if lora is None:
-            if existing_prompt.get("lora"):
-                entry["lora"] = existing_prompt["lora"]
-            if "lora_strength" in existing_prompt:
-                entry["lora_strength"] = existing_prompt["lora_strength"]
+        if lora_image is None:
+            if existing_prompt.get("lora_image"):
+                entry["lora_image"] = existing_prompt["lora_image"]
+            elif existing_prompt.get("lora"):
+                entry["lora_image"] = existing_prompt["lora"]
+            if "lora_image_strength" in existing_prompt:
+                entry["lora_image_strength"] = existing_prompt["lora_image_strength"]
+            elif "lora_strength" in existing_prompt:
+                entry["lora_image_strength"] = existing_prompt["lora_strength"]
         else:
-            normalized_lora = _normalize_optional_string(lora)
-            if normalized_lora:
-                entry["lora"] = normalized_lora
-                entry["lora_strength"] = _normalize_optional_float(lora_strength, default=1.0)
+            normalized_lora_image = _normalize_optional_string(lora_image)
+            if normalized_lora_image:
+                entry["lora_image"] = normalized_lora_image
+                entry["lora_image_strength"] = _normalize_optional_float(lora_image_strength, default=1.0)
+        if lora_video is None:
+            if existing_prompt.get("lora_video"):
+                entry["lora_video"] = existing_prompt["lora_video"]
+            if "lora_video_strength" in existing_prompt:
+                entry["lora_video_strength"] = existing_prompt["lora_video_strength"]
+        else:
+            normalized_lora_video = _normalize_optional_string(lora_video)
+            if normalized_lora_video:
+                entry["lora_video"] = normalized_lora_video
+                entry["lora_video_strength"] = _normalize_optional_float(lora_video_strength, default=1.0)
+        if lora is not None and lora_image is None:
+            normalized_legacy_lora = _normalize_optional_string(lora)
+            if normalized_legacy_lora and not entry.get("lora_image"):
+                entry["lora_image"] = normalized_legacy_lora
+                entry["lora_image_strength"] = _normalize_optional_float(lora_strength, default=1.0)
         if refmod is None:
             if existing_prompt.get("refmod"):
                 entry["refmod"] = existing_prompt["refmod"]

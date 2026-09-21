@@ -8,9 +8,11 @@ const PARTS_PROP_KEY = "prompt_composer_parts";
 const THUMB_ZOOM_PROP_KEY = "prompt_composer_thumb_zoom";
 const OUTPUT_FORMAT_PROP_KEY = "prompt_composer_output_format";
 const COMPOSE_POSITION_PROP_KEY = "prompt_composer_compose_position";
+const GENERATION_MODE_PROP_KEY = "prompt_composer_generation_mode";
 const PARTS_WIDGET_NAME = "parts_data";
 const OUTPUT_FORMAT_WIDGET_NAME = "output_format";
 const COMPOSE_POSITION_WIDGET_NAME = "compose_position";
+const GENERATION_MODE_WIDGET_NAME = "generation_mode";
 const MIN_NODE_WIDTH = 500;
 const MIN_NODE_HEIGHT = 600;
 const HOLD_TO_DRAG_MS = 140;
@@ -71,6 +73,14 @@ function readComposePosition(node) {
 
 function writeComposePosition(node, value) {
     writeToggleValue(node, COMPOSE_POSITION_WIDGET_NAME, COMPOSE_POSITION_PROP_KEY, value);
+}
+
+function readGenerationMode(node) {
+    return readToggleValue(node, GENERATION_MODE_WIDGET_NAME, GENERATION_MODE_PROP_KEY, "image");
+}
+
+function writeGenerationMode(node, value) {
+    writeToggleValue(node, GENERATION_MODE_WIDGET_NAME, GENERATION_MODE_PROP_KEY, value);
 }
 
 function snapThumbZoom(value) {
@@ -255,6 +265,7 @@ function ensureHiddenComposerWidgets(node) {
     hideWidget(getPartsWidget(node));
     hideWidget(getWidgetByName(node, OUTPUT_FORMAT_WIDGET_NAME));
     hideWidget(getWidgetByName(node, COMPOSE_POSITION_WIDGET_NAME));
+    hideWidget(getWidgetByName(node, GENERATION_MODE_WIDGET_NAME));
 }
 
 function ensureComposerUi(node) {
@@ -291,7 +302,7 @@ function ensureComposerUi(node) {
         flex: 0 0 auto;
     `;
 
-    const createInlineSwitch = ({ title, leftLabel, rightLabel, getValue, onToggle }) => {
+    const createInlineSwitch = ({ title, leftLabel, rightLabel, getValue, onToggle, isRightActive }) => {
         const group = document.createElement("div");
         group.style.cssText = `
             display: flex;
@@ -341,7 +352,7 @@ function ensureComposerUi(node) {
 
         const sync = () => {
             const current = getValue();
-            const active = current === "json" || current === "after";
+            const active = typeof isRightActive === "function" ? !!isRightActive(current) : false;
             button.dataset.active = active ? "1" : "0";
             button.style.background = active ? "#2f6f92" : "transparent";
             knob.style.transform = active ? "translateX(16px)" : "translateX(0)";
@@ -369,6 +380,7 @@ function ensureComposerUi(node) {
         rightLabel: "JSON",
         getValue: () => readOutputFormat(node),
         onToggle: (current) => writeOutputFormat(node, current === "json" ? "text" : "json"),
+        isRightActive: (current) => current === "json",
     });
     const positionSwitch = createInlineSwitch({
         title: "Switch whether composed parts go before or after the incoming prompt",
@@ -376,10 +388,20 @@ function ensureComposerUi(node) {
         rightLabel: "After",
         getValue: () => readComposePosition(node),
         onToggle: (current) => writeComposePosition(node, current === "after" ? "before" : "after"),
+        isRightActive: (current) => current === "after",
+    });
+    const generationModeSwitch = createInlineSwitch({
+        title: "Switch whether Prompt Composer uses Image or Video LoRAs",
+        leftLabel: "Image",
+        rightLabel: "Video",
+        getValue: () => readGenerationMode(node),
+        onToggle: (current) => writeGenerationMode(node, current === "video" ? "image" : "video"),
+        isRightActive: (current) => current === "video",
     });
 
     switchRow.appendChild(formatSwitch.group);
     switchRow.appendChild(positionSwitch.group);
+    switchRow.appendChild(generationModeSwitch.group);
     root.appendChild(switchRow);
     let scroller = null;
     const absorbWheel = (evt) => {
@@ -988,6 +1010,7 @@ function ensureComposerUi(node) {
     node._composerUiSyncSwitches = () => {
         formatSwitch.sync();
         positionSwitch.sync();
+        generationModeSwitch.sync();
     };
 
     refreshComposerHeight();
@@ -1016,6 +1039,9 @@ app.registerExtension({
             }
             if (node.properties[COMPOSE_POSITION_PROP_KEY] === undefined) {
                 node.properties[COMPOSE_POSITION_PROP_KEY] = readComposePosition(node);
+            }
+            if (node.properties[GENERATION_MODE_PROP_KEY] === undefined) {
+                node.properties[GENERATION_MODE_PROP_KEY] = readGenerationMode(node);
             }
 
             node.setSize([
@@ -1051,6 +1077,7 @@ app.registerExtension({
             node.properties = node.properties || {};
             node.properties[OUTPUT_FORMAT_PROP_KEY] = readOutputFormat(node);
             node.properties[COMPOSE_POSITION_PROP_KEY] = readComposePosition(node);
+            node.properties[GENERATION_MODE_PROP_KEY] = readGenerationMode(node);
 
             node._composerUiSyncSwitches?.();
             node._composerUiRefreshHeight?.();

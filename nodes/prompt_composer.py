@@ -3,15 +3,16 @@ Prompt Composer - build a prompt from multiple selectable prompt parts.
 
 Each part stores category, selected prompt names (multi-select), and strength.
 """
+import importlib
 import importlib.util
 import json
 import math
 import os
 import random
+import sys
 import time
+from copy import copy
 from pathlib import Path
-
-import folder_paths
 
 from ..py.prompt_composer_store import (
     PromptComposerStore,
@@ -73,6 +74,7 @@ PROMPT_TYPE_CHOICES = [
 
 OUTPUT_FORMAT_CHOICES = ["text", "json"]
 COMPOSE_POSITION_CHOICES = ["after", "before"]
+GENERATION_MODE_CHOICES = ["image", "video"]
 REFMOD_MAX_WEIGHT = 10.0
 _REFMOD_CORE_MODULE = None
 _REFMOD_CORE_IMPORT_ERROR = None
@@ -244,12 +246,6 @@ def _merge_lora_stacks(base_stack, additions):
     return merged
 
 
-def _refmods_dir():
-    path = os.path.join(folder_paths.models_dir, "refmods")
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 def _normalize_refmod_name(value):
     normalized = str(value or "").strip().replace("\\", "/")
     if not normalized or normalized.lower() == "(none)":
@@ -287,36 +283,83 @@ def _resolve_refmod_path_no_ext(mod_name):
     normalized = _normalize_refmod_name(mod_name)
     if not normalized:
         return ""
-    candidate = os.path.join(_refmods_dir(), normalized)
+    backend_kind, backend_module = _load_refmod_backend_module()
+    if backend_kind == "official":
+        return backend_module._find_mod_path(normalized)
+    candidate = os.path.join(Path(__file__).resolve().parents[3], "models", "refmods", normalized)
     if os.path.isfile(candidate + ".safetensors"):
         return candidate
     raise FileNotFoundError(f"RefMod '{normalized}' not found in models/refmods")
 
 
-def _load_refmod_core_module():
+def _load_python_package(package_dir, package_name):
+    package_dir = Path(package_dir)
+    init_path = package_dir / "__init__.py"
+    if not init_path.is_file():
+        raise RuntimeError(f"RefMod support unavailable: {init_path} not found")
+
+    existing = sys.modules.get(package_name)
+    if existing is not None:
+        return existing
+
+    spec = importlib.util.spec_from_file_location(
+        package_name,
+        init_path,
+        submodule_search_locations=[str(package_dir)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"RefMod support unavailable: could not load {init_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[package_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(package_name, None)
+        raise
+    return module
+
+
+def _load_refmod_backend_module():
     global _REFMOD_CORE_MODULE, _REFMOD_CORE_IMPORT_ERROR
     if _REFMOD_CORE_MODULE is not None:
         return _REFMOD_CORE_MODULE
     if _REFMOD_CORE_IMPORT_ERROR is not None:
         raise RuntimeError(_REFMOD_CORE_IMPORT_ERROR)
 
-    core_path = Path(__file__).resolve().parents[2] / "ComfyUI-H3RefModPicker" / "py" / "refmod_core.py"
-    if not core_path.is_file():
-        _REFMOD_CORE_IMPORT_ERROR = f"RefMod support unavailable: {core_path} not found"
-        raise RuntimeError(_REFMOD_CORE_IMPORT_ERROR)
-
-    spec = importlib.util.spec_from_file_location("prompt_composer_refmod_core", core_path)
-    if spec is None or spec.loader is None:
-        _REFMOD_CORE_IMPORT_ERROR = f"RefMod support unavailable: could not load {core_path}"
-        raise RuntimeError(_REFMOD_CORE_IMPORT_ERROR)
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    _REFMOD_CORE_MODULE = module
-    return module
+    try:
+        package_name = "prompt_composer_minimax_h3mod"
+        package_dir = Path(__file__).resolve().parents[2] / "ComfyUI-MiniMaxH3Mod"
+        _load_python_package(package_dir, package_name)
+        module = importlib.import_module(f"{package_name}.nodes")
+        _REFMOD_CORE_MODULE = ("official", module)
+        return _REFMOD_CORE_MODULE
+    except Exception as official_exc:
+        try:
+            core_path = Path(__file__).resolve().parents[2] / "ComfyUI-H3RefModPicker" / "py" / "refmod_core.py"
+            if not core_path.is_file():
+                raise RuntimeError(f"RefMod support unavailable: {core_path} not found")
+            spec = importlib.util.spec_from_file_location("prompt_composer_refmod_core", core_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"RefMod support unavailable: could not load {core_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _REFMOD_CORE_MODULE = ("legacy", module)
+            return _REFMOD_CORE_MODULE
+        except Exception as legacy_exc:
+            _REFMOD_CORE_IMPORT_ERROR = (
+                "RefMod support unavailable: official ComfyUI-MiniMaxH3Mod import failed "
+                f"({official_exc}); fallback import failed ({legacy_exc})"
+            )
+            raise RuntimeError(_REFMOD_CORE_IMPORT_ERROR)
 
 
 def _refmod_asset_key(mod):
+    if isinstance(mod, str):
+        normalized = mod.replace("\\", "/").strip().lower()
+        leaf = os.path.basename(normalized)
+        stem, _ext = os.path.splitext(leaf)
+        return stem or leaf
     name = getattr(mod, "name", None)
     if name is None and isinstance(mod, dict):
         name = mod.get("name") or mod.get("path")
@@ -340,21 +383,59 @@ def _merge_refmod_rows(base_rows, additions):
     return merged
 
 
+def _override_refmod_row_descriptions(rows, description):
+    normalized_description = str(description or "").strip()
+    if not normalized_description:
+        return list(rows or [])
+
+    overridden = []
+    for item in rows or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        mod = item[0]
+        strength = item[1]
+        mod_copy = copy(mod)
+        try:
+            mod_copy.description = normalized_description
+        except Exception:
+            pass
+        if len(item) == 2:
+            overridden.append((mod_copy, strength))
+        else:
+            overridden.append((mod_copy, strength, *item[2:]))
+    return overridden
+
+
 def _load_prompt_refmods(mod_name, weight):
     normalized_name = _normalize_refmod_name(mod_name)
     if not normalized_name:
         return []
 
-    core = _load_refmod_core_module()
+    clipped_weight = _normalize_scalar(weight, default=1.0, minimum=0.0, maximum=REFMOD_MAX_WEIGHT)
+    if clipped_weight <= 0.0:
+        return []
+
+    backend_kind, backend_module = _load_refmod_backend_module()
     path_no_ext = _resolve_refmod_path_no_ext(normalized_name)
-    loaded = list(core.load_refmods_from_file(path_no_ext, device="cpu"))
+
+    if backend_kind == "official":
+        meta = backend_module.read_refmod_meta(path_no_ext)
+        if isinstance(meta, dict) and meta.get("kind") == "bundle":
+            return list(backend_module.load_bundle(path_no_ext, "All", clipped_weight, clipped_weight))
+
+        loaded = [(backend_module._load_mod(normalized_name), clipped_weight)]
+        if not any(getattr(mod, "kind", None) == "audio" for mod, _strength in loaded):
+            paired_audio = _paired_refmod_path(path_no_ext, "audio")
+            if paired_audio:
+                loaded.append((backend_module.H3RefMod.load(paired_audio[:-len(".safetensors")], device="cpu"), clipped_weight))
+        return loaded
+
+    loaded = list(backend_module.load_refmods_from_file(path_no_ext, device="cpu"))
     if not any(getattr(mod, "kind", None) == "audio" for mod in loaded):
         paired_audio = _paired_refmod_path(path_no_ext, "audio")
         if paired_audio:
-            loaded.extend(core.load_refmods_from_file(paired_audio[:-len(".safetensors")], device="cpu"))
-
-    clipped_weight = _normalize_scalar(weight, default=1.0, minimum=0.0, maximum=REFMOD_MAX_WEIGHT)
-    return [(mod, clipped_weight) for mod in loaded if clipped_weight > 0.0]
+            loaded.extend(backend_module.load_refmods_from_file(paired_audio[:-len(".safetensors")], device="cpu"))
+    return [(mod, clipped_weight) for mod in loaded]
 
 
 class PromptComposer:
@@ -377,6 +458,10 @@ class PromptComposer:
                 "compose_position": (COMPOSE_POSITION_CHOICES, {
                     "default": "before",
                     "tooltip": "Place composed prompt fragments before or after the incoming prompt.",
+                }),
+                "generation_mode": (GENERATION_MODE_CHOICES, {
+                    "default": "image",
+                    "tooltip": "Choose whether Prompt Composer emits Image or Video LoRAs for this run.",
                 }),
             },
             "optional": {
@@ -416,16 +501,17 @@ class PromptComposer:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", lora_stack=None, mods=None, **kwargs):
+    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", lora_stack=None, mods=None, **kwargs):
         parts = _parse_parts(parts_data)
         if _has_multi_part_selection(parts):
             dynamic_seed = time.time_ns()
-            return (parts_data, dynamic_seed, prompt, output_format, compose_position, lora_stack, mods)
-        return (parts_data, seed, prompt, output_format, compose_position, lora_stack, mods)
+            return (parts_data, dynamic_seed, prompt, output_format, compose_position, generation_mode, lora_stack, mods)
+        return (parts_data, seed, prompt, output_format, compose_position, generation_mode, lora_stack, mods)
 
-    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", lora_stack=None, mods=None):
+    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", lora_stack=None, mods=None):
         prompts_data = PromptComposerStore.load_prompts()
         parts = _parse_parts(parts_data)
+        selected_generation_mode = str(generation_mode or "image").strip().lower()
 
         run_seed = _resolve_run_seed(seed)
         rng = random.Random(run_seed)
@@ -458,9 +544,13 @@ class PromptComposer:
                 if key:
                     json_sections.setdefault(key, []).append(text)
 
-            lora_name = _normalize_lora_path(entry.get("lora") or "")
+            if selected_generation_mode == "video":
+                lora_name = _normalize_lora_path(entry.get("lora_video") or "")
+                lora_strength = _normalize_scalar(entry.get("lora_video_strength", 1.0), default=1.0)
+            else:
+                lora_name = _normalize_lora_path(entry.get("lora_image") or entry.get("lora") or "")
+                lora_strength = _normalize_scalar(entry.get("lora_image_strength", entry.get("lora_strength", 1.0)), default=1.0)
             if lora_name:
-                lora_strength = _normalize_scalar(entry.get("lora_strength", 1.0), default=1.0)
                 prompt_lora_stack = _merge_lora_stacks(
                     prompt_lora_stack,
                     [(lora_name, lora_strength, lora_strength)],
@@ -470,7 +560,9 @@ class PromptComposer:
             if refmod_name:
                 refmod_weight = _normalize_scalar(entry.get("refmod_weight", 1.0), default=1.0, minimum=0.0, maximum=REFMOD_MAX_WEIGHT)
                 try:
-                    prompt_mods = _merge_refmod_rows(prompt_mods, _load_prompt_refmods(refmod_name, refmod_weight))
+                    loaded_prompt_mods = _load_prompt_refmods(refmod_name, refmod_weight)
+                    loaded_prompt_mods = _override_refmod_row_descriptions(loaded_prompt_mods, text)
+                    prompt_mods = _merge_refmod_rows(prompt_mods, loaded_prompt_mods)
                 except Exception as exc:
                     print(f"[PromptComposer] Skipping RefMod '{refmod_name}': {exc}")
 

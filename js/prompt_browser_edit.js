@@ -546,6 +546,7 @@ export function createPromptBrowserEditPanel(options) {
         generateThumbnail,
         savePrompt,
         loadPrompts,
+        syncPromptSelection,
         onChange,
         compact,
     } = options || {};
@@ -560,6 +561,7 @@ export function createPromptBrowserEditPanel(options) {
     const _generateThumbnail = typeof generateThumbnail === "function" ? generateThumbnail : async () => {};
     const _savePrompt = typeof savePrompt === "function" ? savePrompt : async () => ({ success: false });
     const _loadPrompts = typeof loadPrompts === "function" ? loadPrompts : async () => {};
+    const _syncPromptSelection = typeof syncPromptSelection === "function" ? syncPromptSelection : () => {};
     const _selectPrompt = typeof options?.selectPrompt === "function" ? options.selectPrompt : null;
     const _onChange = typeof onChange === "function" ? onChange : () => {};
 
@@ -568,8 +570,10 @@ export function createPromptBrowserEditPanel(options) {
     let pendingThumbnail = null;
     let loadedThumbnail = null;
     let loadedPromptText = "";
-    let loadedLora = "";
-    let loadedLoraStrength = 1.0;
+    let loadedImageLora = "";
+    let loadedImageLoraStrength = 1.0;
+    let loadedVideoLora = "";
+    let loadedVideoLoraStrength = 1.0;
     let loadedRefMod = "";
     let loadedRefModWeight = 1.0;
 
@@ -809,6 +813,10 @@ export function createPromptBrowserEditPanel(options) {
     // Prompt editor section
     const promptNameInput = createInput("", "Prompt name");
     promptBody.appendChild(promptNameInput);
+    promptNameInput.addEventListener("input", () => {
+        _syncPromptSelection(currentCategory, String(promptNameInput.value || "").trim());
+        _onChange();
+    });
 
     // Per-prompt category selector is intentionally hidden for system prompts.
     // With the category-bucket model, the category is the bucket itself, so a
@@ -829,34 +837,63 @@ export function createPromptBrowserEditPanel(options) {
     promptTextArea.style.flex = "1";
     promptBody.appendChild(promptTextArea);
 
-    const loraRow = el("div", {
+    const imageLoraRow = el("div", {
         display: isComposerSource ? "flex" : "none",
         flexDirection: "column",
         gap: "4px",
     });
-    const loraLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "LoRA");
-    const loraControls = el("div", { display: "flex", gap: "8px", alignItems: "center" });
-    const loraTrigger = createPickerTrigger("(None)", { flex: "1" });
-    loraTrigger.addEventListener("click", async () => {
+    const imageLoraLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Image LoRA");
+    const imageLoraControls = el("div", { display: "flex", gap: "8px", alignItems: "center" });
+    const imageLoraTrigger = createPickerTrigger("(None)", { flex: "1" });
+    imageLoraTrigger.addEventListener("click", async () => {
         const loras = await fetchAvailableComposerLoras();
         const selected = await showTextAssetPicker({
-            title: "Select LoRA",
+            title: "Select Image LoRA",
             items: loras,
-            initialValue: loraTrigger.getSelectedValue(),
+            initialValue: imageLoraTrigger.getSelectedValue(),
             emptyLabel: "(None)",
             filterPlaceholder: "Filter LoRAs by one or more keywords...",
         });
         if (selected !== null) {
-            loraTrigger.setSelectedItem(findPickerItemByValue(loras, selected));
+            imageLoraTrigger.setSelectedItem(findPickerItemByValue(loras, selected));
             _onChange();
         }
     });
-    const loraStrengthInput = createNumberInput(1.0, { step: 0.05 }, { width: "72px" });
-    loraStrengthInput.title = "LoRA strength";
-    loraStrengthInput.addEventListener("input", () => _onChange());
-    loraControls.append(loraTrigger, loraStrengthInput);
-    loraRow.append(loraLabel, loraControls);
-    promptBody.appendChild(loraRow);
+    const imageLoraStrengthInput = createNumberInput(1.0, { step: 0.05 }, { width: "72px" });
+    imageLoraStrengthInput.title = "Image LoRA strength";
+    imageLoraStrengthInput.addEventListener("input", () => _onChange());
+    imageLoraControls.append(imageLoraTrigger, imageLoraStrengthInput);
+    imageLoraRow.append(imageLoraLabel, imageLoraControls);
+    promptBody.appendChild(imageLoraRow);
+
+    const videoLoraRow = el("div", {
+        display: isComposerSource ? "flex" : "none",
+        flexDirection: "column",
+        gap: "4px",
+    });
+    const videoLoraLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Video LoRA");
+    const videoLoraControls = el("div", { display: "flex", gap: "8px", alignItems: "center" });
+    const videoLoraTrigger = createPickerTrigger("(None)", { flex: "1" });
+    videoLoraTrigger.addEventListener("click", async () => {
+        const loras = await fetchAvailableComposerLoras();
+        const selected = await showTextAssetPicker({
+            title: "Select Video LoRA",
+            items: loras,
+            initialValue: videoLoraTrigger.getSelectedValue(),
+            emptyLabel: "(None)",
+            filterPlaceholder: "Filter LoRAs by one or more keywords...",
+        });
+        if (selected !== null) {
+            videoLoraTrigger.setSelectedItem(findPickerItemByValue(loras, selected));
+            _onChange();
+        }
+    });
+    const videoLoraStrengthInput = createNumberInput(1.0, { step: 0.05 }, { width: "72px" });
+    videoLoraStrengthInput.title = "Video LoRA strength";
+    videoLoraStrengthInput.addEventListener("input", () => _onChange());
+    videoLoraControls.append(videoLoraTrigger, videoLoraStrengthInput);
+    videoLoraRow.append(videoLoraLabel, videoLoraControls);
+    promptBody.appendChild(videoLoraRow);
 
     const refModRow = el("div", {
         display: isComposerSource ? "flex" : "none",
@@ -887,18 +924,21 @@ export function createPromptBrowserEditPanel(options) {
     refModRow.append(refModLabel, refModControls);
     promptBody.appendChild(refModRow);
 
-    const readCurrentLoraStrength = () => normalizeAssetWeight(loraStrengthInput.value, 1.0);
+    const readCurrentImageLoraStrength = () => normalizeAssetWeight(imageLoraStrengthInput.value, 1.0);
+    const readCurrentVideoLoraStrength = () => normalizeAssetWeight(videoLoraStrengthInput.value, 1.0);
     const readCurrentRefModWeight = () => normalizeAssetWeight(refModWeightInput.value, 1.0, 0.0, 10.0);
 
     async function refreshComposerAssetChoices(nextValues = null) {
         if (!isComposerSource) return;
-        const currentLoraValue = String(nextValues?.lora ?? loraTrigger.getSelectedValue() ?? loadedLora ?? "").trim();
+        const currentImageLoraValue = String(nextValues?.loraImage ?? imageLoraTrigger.getSelectedValue() ?? loadedImageLora ?? "").trim();
+        const currentVideoLoraValue = String(nextValues?.loraVideo ?? videoLoraTrigger.getSelectedValue() ?? loadedVideoLora ?? "").trim();
         const currentRefModValue = String(nextValues?.refmod ?? refModTrigger.getSelectedValue() ?? loadedRefMod ?? "").trim();
         const [loras, refmods] = await Promise.all([
             fetchAvailableComposerLoras(),
             fetchAvailableComposerRefMods(),
         ]);
-        loraTrigger.setSelectedItem(findPickerItemByValue(loras, currentLoraValue));
+        imageLoraTrigger.setSelectedItem(findPickerItemByValue(loras, currentImageLoraValue));
+        videoLoraTrigger.setSelectedItem(findPickerItemByValue(loras, currentVideoLoraValue));
         refModTrigger.setSelectedItem(findPickerItemByValue(refmods, currentRefModValue));
     }
 
@@ -957,15 +997,36 @@ export function createPromptBrowserEditPanel(options) {
     const generateBtn = createButton("Generate Thumbnail", async () => {
         const category = currentCategory;
         const name = String(promptNameInput.value || "").trim();
+        const text = String(promptTextArea.value || "").trim();
         if (!category || !name) {
             await _showInfo("Missing Prompt", "Please enter a category and prompt name first.");
+            return;
+        }
+        if (!text) {
+            await _showInfo("Missing Prompt Text", "Please enter prompt text before generating a thumbnail.");
+            promptTextArea.focus();
             return;
         }
 
         generateBtn.disabled = true;
         generateBtn.textContent = "Generating...";
         try {
-            const thumbnail = await _generateThumbnail(category, name);
+            const draftPromptData = {
+                prompt: text,
+            };
+            const savedEntry = node?.prompts?.[category]?.[name];
+            if (savedEntry && typeof savedEntry === "object" && savedEntry.workflow_data) {
+                draftPromptData.workflow_data = savedEntry.workflow_data;
+            }
+            if (isComposerSource) {
+                draftPromptData.lora_image = String(imageLoraTrigger.getSelectedValue() || "").trim();
+                draftPromptData.lora_image_strength = readCurrentImageLoraStrength();
+                draftPromptData.lora_video = String(videoLoraTrigger.getSelectedValue() || "").trim();
+                draftPromptData.lora_video_strength = readCurrentVideoLoraStrength();
+                draftPromptData.refmod = String(refModTrigger.getSelectedValue() || "").trim();
+                draftPromptData.refmod_weight = readCurrentRefModWeight();
+            }
+            const thumbnail = await _generateThumbnail(category, name, draftPromptData);
             pendingThumbnail = thumbnail || null;
             updateThumbnailDisplay(pendingThumbnail);
             _onChange();
@@ -1040,8 +1101,10 @@ export function createPromptBrowserEditPanel(options) {
         const thumbnail = pendingThumbnail || loadedThumbnail;
         const savePayload = { category, name, text, thumbnail };
         if (isComposerSource) {
-            savePayload.lora = String(loraTrigger.getSelectedValue() || "").trim();
-            savePayload.lora_strength = readCurrentLoraStrength();
+            savePayload.lora_image = String(imageLoraTrigger.getSelectedValue() || "").trim();
+            savePayload.lora_image_strength = readCurrentImageLoraStrength();
+            savePayload.lora_video = String(videoLoraTrigger.getSelectedValue() || "").trim();
+            savePayload.lora_video_strength = readCurrentVideoLoraStrength();
             savePayload.refmod = String(refModTrigger.getSelectedValue() || "").trim();
             savePayload.refmod_weight = readCurrentRefModWeight();
         }
@@ -1052,13 +1115,16 @@ export function createPromptBrowserEditPanel(options) {
             pendingThumbnail = null;
             const entry = node?.prompts?.[category]?.[name];
             loadedPromptText = entry?.prompt || "";
-            loadedLora = String(entry?.lora || "").trim();
-            loadedLoraStrength = normalizeAssetWeight(entry?.lora_strength, 1.0);
+            loadedImageLora = String(entry?.lora_image || entry?.lora || "").trim();
+            loadedImageLoraStrength = normalizeAssetWeight(entry?.lora_image_strength ?? entry?.lora_strength, 1.0);
+            loadedVideoLora = String(entry?.lora_video || "").trim();
+            loadedVideoLoraStrength = normalizeAssetWeight(entry?.lora_video_strength, 1.0);
             loadedRefMod = String(entry?.refmod || "").trim();
             loadedRefModWeight = normalizeAssetWeight(entry?.refmod_weight, 1.0, 0.0, 10.0);
-            loraStrengthInput.value = String(loadedLoraStrength);
+            imageLoraStrengthInput.value = String(loadedImageLoraStrength);
+            videoLoraStrengthInput.value = String(loadedVideoLoraStrength);
             refModWeightInput.value = String(loadedRefModWeight);
-            await refreshComposerAssetChoices({ lora: loadedLora, refmod: loadedRefMod });
+            await refreshComposerAssetChoices({ loraImage: loadedImageLora, loraVideo: loadedVideoLora, refmod: loadedRefMod });
             updateThumbnailDisplay(entry?.thumbnail || null);
             _onChange();
         } else {
@@ -1084,8 +1150,10 @@ export function createPromptBrowserEditPanel(options) {
             if (currentName !== currentPromptName) return true;
             if (currentText !== originalText) return true;
             if (isComposerSource) {
-                if (String(loraTrigger.getSelectedValue() || "").trim() !== String(entry.lora || "").trim()) return true;
-                if (readCurrentLoraStrength() !== normalizeAssetWeight(entry.lora_strength, 1.0)) return true;
+                if (String(imageLoraTrigger.getSelectedValue() || "").trim() !== String(entry.lora_image || entry.lora || "").trim()) return true;
+                if (readCurrentImageLoraStrength() !== normalizeAssetWeight(entry.lora_image_strength ?? entry.lora_strength, 1.0)) return true;
+                if (String(videoLoraTrigger.getSelectedValue() || "").trim() !== String(entry.lora_video || "").trim()) return true;
+                if (readCurrentVideoLoraStrength() !== normalizeAssetWeight(entry.lora_video_strength, 1.0)) return true;
                 if (String(refModTrigger.getSelectedValue() || "").trim() !== String(entry.refmod || "").trim()) return true;
                 if (readCurrentRefModWeight() !== normalizeAssetWeight(entry.refmod_weight, 1.0, 0.0, 10.0)) return true;
             }
@@ -1094,9 +1162,11 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         if (isComposerSource) {
-            if (String(loraTrigger.getSelectedValue() || "").trim()) return true;
+            if (String(imageLoraTrigger.getSelectedValue() || "").trim()) return true;
+            if (String(videoLoraTrigger.getSelectedValue() || "").trim()) return true;
             if (String(refModTrigger.getSelectedValue() || "").trim()) return true;
-            if (readCurrentLoraStrength() !== 1.0) return true;
+            if (readCurrentImageLoraStrength() !== 1.0) return true;
+            if (readCurrentVideoLoraStrength() !== 1.0) return true;
             if (readCurrentRefModWeight() !== 1.0) return true;
         }
         if (currentName || currentText || pendingThumbnail !== null) {
@@ -1138,25 +1208,31 @@ export function createPromptBrowserEditPanel(options) {
             promptTextArea.value = entry.prompt || "";
             loadedPromptText = entry.prompt || "";
             loadedThumbnail = entry.thumbnail || null;
-            loadedLora = String(entry.lora || "").trim();
-            loadedLoraStrength = normalizeAssetWeight(entry.lora_strength, 1.0);
+            loadedImageLora = String(entry.lora_image || entry.lora || "").trim();
+            loadedImageLoraStrength = normalizeAssetWeight(entry.lora_image_strength ?? entry.lora_strength, 1.0);
+            loadedVideoLora = String(entry.lora_video || "").trim();
+            loadedVideoLoraStrength = normalizeAssetWeight(entry.lora_video_strength, 1.0);
             loadedRefMod = String(entry.refmod || "").trim();
             loadedRefModWeight = normalizeAssetWeight(entry.refmod_weight, 1.0, 0.0, 10.0);
-            loraStrengthInput.value = String(loadedLoraStrength);
+            imageLoraStrengthInput.value = String(loadedImageLoraStrength);
+            videoLoraStrengthInput.value = String(loadedVideoLoraStrength);
             refModWeightInput.value = String(loadedRefModWeight);
-            await refreshComposerAssetChoices({ lora: loadedLora, refmod: loadedRefMod });
+            await refreshComposerAssetChoices({ loraImage: loadedImageLora, loraVideo: loadedVideoLora, refmod: loadedRefMod });
             updateThumbnailDisplay(loadedThumbnail);
         } else {
             promptTextArea.value = "";
             loadedPromptText = "";
             loadedThumbnail = null;
-            loadedLora = "";
-            loadedLoraStrength = 1.0;
+            loadedImageLora = "";
+            loadedImageLoraStrength = 1.0;
+            loadedVideoLora = "";
+            loadedVideoLoraStrength = 1.0;
             loadedRefMod = "";
             loadedRefModWeight = 1.0;
-            loraStrengthInput.value = "1";
+            imageLoraStrengthInput.value = "1";
+            videoLoraStrengthInput.value = "1";
             refModWeightInput.value = "1";
-            await refreshComposerAssetChoices({ lora: "", refmod: "" });
+            await refreshComposerAssetChoices({ loraImage: "", loraVideo: "", refmod: "" });
             updateThumbnailDisplay(null);
         }
 
@@ -1201,14 +1277,17 @@ export function createPromptBrowserEditPanel(options) {
         loadedPromptText = "";
         pendingThumbnail = null;
         loadedThumbnail = null;
-        loadedLora = "";
-        loadedLoraStrength = 1.0;
+        loadedImageLora = "";
+        loadedImageLoraStrength = 1.0;
+        loadedVideoLora = "";
+        loadedVideoLoraStrength = 1.0;
         loadedRefMod = "";
         loadedRefModWeight = 1.0;
-        loraStrengthInput.value = "1";
+        imageLoraStrengthInput.value = "1";
+        videoLoraStrengthInput.value = "1";
         refModWeightInput.value = "1";
         if (isComposerSource) {
-            await refreshComposerAssetChoices({ lora: "", refmod: "" });
+            await refreshComposerAssetChoices({ loraImage: "", loraVideo: "", refmod: "" });
         }
         updateThumbnailDisplay(null);
         currentPromptName = "";

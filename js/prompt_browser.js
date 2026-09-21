@@ -61,6 +61,74 @@ function _syncThumbnailRenderState() {
     _thumbnailRenderLora2 = state.lora2 || null;
 }
 
+function _getComposerImageThumbnailLoras(promptData) {
+    const loraName = String(promptData?.lora_image || promptData?.lora || "").trim();
+    if (!loraName) return [];
+    const strength = Number(promptData?.lora_image_strength ?? promptData?.lora_strength ?? 1.0);
+    const safeStrength = Number.isFinite(strength) ? strength : 1.0;
+    return [{
+        name: loraName,
+        path: loraName,
+        model_strength: safeStrength,
+        clip_strength: safeStrength,
+        active: true,
+        available: true,
+    }];
+}
+
+function _mergeThumbnailWorkflowLoras(baseLoras, extraLoras) {
+    const base = Array.isArray(baseLoras) ? baseLoras : [];
+    const extras = Array.isArray(extraLoras) ? extraLoras : [];
+    if (!extras.length) return [...base];
+    const extraKeys = new Set(extras.map((lora) => String(lora?.name || lora?.path || "").trim().toLowerCase()).filter(Boolean));
+    const merged = base.filter((lora) => !extraKeys.has(String(lora?.name || lora?.path || "").trim().toLowerCase()));
+    merged.push(...extras);
+    return merged;
+}
+
+function _applyPromptImageLoraToThumbnailWorkflow(workflowData, promptData, slot = "model_a") {
+    const extraLoras = _getComposerImageThumbnailLoras(promptData);
+    if (!extraLoras.length || !workflowData || typeof workflowData !== "object") {
+        return workflowData;
+    }
+
+    const wf = workflowData;
+    const targetSlot = String(slot || "model_a").trim().toLowerCase();
+    if (Number(wf.version || 0) >= 2 && wf.models && typeof wf.models === "object") {
+        const block = (wf.models[targetSlot] && typeof wf.models[targetSlot] === "object")
+            ? wf.models[targetSlot]
+            : (wf.models[targetSlot] = {});
+        block.loras = _mergeThumbnailWorkflowLoras(Array.isArray(block.loras) ? block.loras : [], extraLoras);
+        return wf;
+    }
+
+    const legacyKey = (targetSlot === "model_b" || targetSlot === "model_d") ? "loras_b" : "loras_a";
+    wf[legacyKey] = _mergeThumbnailWorkflowLoras(Array.isArray(wf[legacyKey]) ? wf[legacyKey] : [], extraLoras);
+    return wf;
+}
+
+function _resolveThumbnailWorkflowSlot(workflowData) {
+    const modelKeys = ["model_a", "model_b", "model_c", "model_d"];
+    const explicitSlot = String(workflowData?.model_slot || "").trim().toLowerCase();
+    if (modelKeys.includes(explicitSlot)) {
+        return explicitSlot;
+    }
+
+    const models = workflowData?.models;
+    if (models && typeof models === "object") {
+        for (const slot of modelKeys) {
+            const block = models[slot];
+            if (!block || typeof block !== "object") continue;
+            const modelName = String(block.model || "").trim();
+            if (modelName) {
+                return slot;
+            }
+        }
+    }
+
+    return "model_a";
+}
+
 export function configurePromptBrowserDeps(deps = {}) {
     if (deps.app) app = deps.app;
     if (deps.UI) UI = deps.UI;
@@ -188,6 +256,8 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         renderSelection: providedRenderSelection = null,
         fallbackBase = null,
         endpointPrefix = "/prompt-manager-advanced",
+        draftPromptData = null,
+        persistThumbnail = true,
     } = options || {};
 
     // If browser has not been wired with low-level generation helpers yet,
@@ -205,7 +275,10 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         });
     }
 
-    const promptData = node?.prompts?.[category]?.[promptName];
+    const savedPromptData = node?.prompts?.[category]?.[promptName];
+    const promptData = draftPromptData && typeof draftPromptData === "object"
+        ? { ...(savedPromptData && typeof savedPromptData === "object" ? savedPromptData : {}), ...draftPromptData }
+        : savedPromptData;
     if (!promptData) return;
 
     const categoryBasePrompt = getCategoryBasePrompt(node, category);
@@ -252,16 +325,19 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
 
     if (parsedWorkflowData) {
         const effectivePrompt = String(promptText || "").trim();
+        const thumbnailSlot = _resolveThumbnailWorkflowSlot(parsedWorkflowData);
         if (Number(parsedWorkflowData.version || 0) >= 2 && parsedWorkflowData.models && typeof parsedWorkflowData.models === "object") {
-            const modelA = parsedWorkflowData.models.model_a;
-            if (modelA && typeof modelA === "object") {
-                modelA.positive_prompt = effectivePrompt;
+            const targetModel = parsedWorkflowData.models[thumbnailSlot] || parsedWorkflowData.models.model_a;
+            if (targetModel && typeof targetModel === "object") {
+                targetModel.positive_prompt = effectivePrompt;
             }
         } else {
             parsedWorkflowData.positive_prompt = effectivePrompt;
         }
+        _applyPromptImageLoraToThumbnailWorkflow(parsedWorkflowData, promptData, thumbnailSlot);
         thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection, {
             staticSeed: staticSeedForRun,
+            promptData,
         });
     }
 
@@ -277,13 +353,16 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         );
         thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection, {
             staticSeed: staticSeedForRun,
+            promptData,
         });
     }
 
-    if (thumbnail) {
+    if (thumbnail && persistThumbnail) {
         await saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix);
         onUpdate?.();
     }
+
+    return thumbnail;
 }
 
 function getThumbnailComposerSeedFromSettings() {
@@ -1123,6 +1202,19 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let selectedCategory = currentCategory;
         let lastSelectedName = currentPrompt;
         let blankPromptExplicitSelection = false;
+        const findMatchingPromptName = (category, name) => {
+            const normalizedName = String(name || "").trim().toLowerCase();
+            if (!category || !normalizedName) return "";
+            const categoryPrompts = node?.prompts?.[category];
+            if (!categoryPrompts || typeof categoryPrompts !== "object") return "";
+            for (const promptName of Object.keys(categoryPrompts)) {
+                if (_isHiddenPromptEntryKey(promptName)) continue;
+                if (String(promptName || "").trim().toLowerCase() === normalizedName) {
+                    return promptName;
+                }
+            }
+            return "";
+        };
         const setCurrentPromptSelection = (name) => {
             currentPrompt = name;
             blankPromptExplicitSelection = false;
@@ -1523,6 +1615,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // Edit mode toggle
         let editModeBtn = null;
+        const syncEditPanelSelection = async () => {
+            if (!editPanel) return;
+            if (currentPrompt || blankPromptExplicitSelection) {
+                await editPanel.loadPrompt(selectedCategory, currentPrompt);
+                return;
+            }
+            editPanel.loadCategorySettings(selectedCategory);
+        };
         const updateEditModeLayout = () => {
             if (!editPanel) return;
             browserLayout = editMode ? editBrowserLayout : normalBrowserLayout;
@@ -1530,7 +1630,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             gridContainer.style.height = `${browserLayout.height}px`;
             if (editMode) {
                 editPanel.element.style.display = "flex";
-                editPanel.loadCategorySettings(selectedCategory);
+                void syncEditPanelSelection();
             } else {
                 editPanel.element.style.display = "none";
             }
@@ -2368,6 +2468,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         if (payload && Object.prototype.hasOwnProperty.call(payload, "prompt_category")) body.prompt_category = payload.prompt_category;
                         if (payload && Object.prototype.hasOwnProperty.call(payload, "lora")) body.lora = payload.lora;
                         if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_strength")) body.lora_strength = payload.lora_strength;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_image")) body.lora_image = payload.lora_image;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_image_strength")) body.lora_image_strength = payload.lora_image_strength;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_video")) body.lora_video = payload.lora_video;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_video_strength")) body.lora_video_strength = payload.lora_video_strength;
                         if (payload && Object.prototype.hasOwnProperty.call(payload, "refmod")) body.refmod = payload.refmod;
                         if (payload && Object.prototype.hasOwnProperty.call(payload, "refmod_weight")) body.refmod_weight = payload.refmod_weight;
                         const resp = await fetch(`${endpointPrefix}/save-prompt`, {
@@ -2393,9 +2497,19 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     setCurrentPromptSelection(name);
                     renderContent(searchInput.value);
                 },
-                generateThumbnail: async (category, promptName) => {
+                syncPromptSelection: (category, name) => {
+                    const matchedName = findMatchingPromptName(category || selectedCategory, name);
+                    if (matchedName) {
+                        setCurrentPromptSelection(matchedName);
+                    } else {
+                        setBlankPromptSelection();
+                    }
+                    renderContent(searchInput.value);
+                },
+                generateThumbnail: async (category, promptName, draftPromptData = null) => {
                     return new Promise((resolve, reject) => {
                         const queuedName = promptName;
+                        const isDraftGeneration = draftPromptData && typeof draftPromptData === "object";
                         _thumbQueueTotal++;
                         _ensureThumbQueueProgress();
                         _updateThumbQueueProgress(queuedName);
@@ -2411,10 +2525,18 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             }
                             _updateThumbQueueProgress(queuedName);
                             try {
-                                await _generateThumbnailForBrowserCategory(node, category, queuedName, () => {
+                                const generatedThumbnail = await _generateThumbnailForBrowserCategory(node, category, queuedName, () => {
                                     renderContent(searchInput.value);
-                                }, { endpointPrefix });
+                                }, {
+                                    endpointPrefix,
+                                    draftPromptData,
+                                    persistThumbnail: !isDraftGeneration,
+                                });
                                 _thumbQueueDone++;
+                                if (isDraftGeneration) {
+                                    resolve(generatedThumbnail || null);
+                                    return;
+                                }
                             } catch (e) {
                                 console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
                                 _thumbQueueFailed++;
@@ -2424,6 +2546,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                 if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
                                     _finishThumbQueueProgress();
                                 }
+                            }
+                            if (isDraftGeneration) {
+                                return;
                             }
                             await loadPromptsFn(node);
                             resolve(node?.prompts?.[category]?.[queuedName]?.thumbnail || null);
@@ -2895,7 +3020,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            resolve({ category: selectedCategory, prompt: promptName });
+                            resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -2935,7 +3060,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     currentPrompt = promptName;
 
-                    resolve({ category: selectedCategory, prompt: promptName });
+                    resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -3260,7 +3385,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            resolve({ category: selectedCategory, prompt: promptName });
+                            resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -3300,7 +3425,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     setCurrentPromptSelection(promptName);
 
-                    resolve({ category: selectedCategory, prompt: promptName });
+                    resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -3844,7 +3969,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 1000) {
-                            resolve({ category: selectedCategory, prompt: promptName });
+                            resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -3884,7 +4009,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     setCurrentPromptSelection(promptName);
 
-                    resolve({ category: selectedCategory, prompt: promptName });
+                    resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 

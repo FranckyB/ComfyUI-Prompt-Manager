@@ -126,9 +126,22 @@ def get_lora_relative_path(lora_name):
     """
     lora_files = get_available_loras()
 
-    lora_name_lower = lora_name.lower()
+    normalized_name = normalize_path_separators(str(lora_name or "").strip())
+    lora_name_lower = normalized_name.lower()
 
-    # Try exact match first
+    # Try exact relative path match first (with extension, as provided by ComfyUI pickers).
+    for lora_file in lora_files:
+        normalized_file = normalize_path_separators(lora_file)
+        if normalized_file.lower() == lora_name_lower:
+            return lora_file, True
+
+    # Try matching by full relative path without extension.
+    for lora_file in lora_files:
+        normalized_file_no_ext = strip_lora_extension(normalize_path_separators(lora_file))
+        if normalized_file_no_ext.lower() == lora_name_lower:
+            return lora_file, True
+
+    # Try basename match without extension.
     for lora_file in lora_files:
         file_name_no_ext = strip_lora_extension(os.path.basename(lora_file))
         if file_name_no_ext.lower() == lora_name_lower:
@@ -150,14 +163,22 @@ def resolve_lora_path(lora_name):
     Returns (full_path_or_name, available) tuple.
     """
     lora_files = get_available_loras()
+    normalized_name = normalize_path_separators(str(lora_name or "").strip())
+    lora_name_lower = normalized_name.lower()
 
     # Try exact match first (with extension, as-is from workflow)
     for lora_file in lora_files:
-        if lora_file == lora_name:
+        normalized_file = normalize_path_separators(lora_file)
+        if normalized_file.lower() == lora_name_lower:
             return folder_paths.get_full_path("loras", lora_file), True
 
-    # Try matching by name without extension
-    lora_name_lower = lora_name.lower()
+    # Try matching by full relative path without extension.
+    for lora_file in lora_files:
+        normalized_file_no_ext = strip_lora_extension(normalize_path_separators(lora_file))
+        if normalized_file_no_ext.lower() == lora_name_lower:
+            return folder_paths.get_full_path("loras", lora_file), True
+
+    # Try matching by basename without extension.
     for lora_file in lora_files:
         file_name_no_ext = strip_lora_extension(os.path.basename(lora_file))
         if file_name_no_ext.lower() == lora_name_lower:

@@ -7044,6 +7044,59 @@ function normalizeLorasForRenderer(loraList) {
         .filter((lora) => lora.name.length > 0);
 }
 
+function getComposerThumbnailImageLoras(promptData) {
+    const loraName = String(promptData?.lora_image || promptData?.lora || "").trim();
+    if (!loraName) return [];
+    const strength = Number(promptData?.lora_image_strength ?? promptData?.lora_strength ?? 1.0);
+    const safeStrength = Number.isFinite(strength) ? strength : 1.0;
+    return [{
+        name: loraName,
+        path: loraName,
+        model_strength: safeStrength,
+        clip_strength: safeStrength,
+        active: true,
+    }];
+}
+
+function mergeRendererLoras(baseLoras, extraLoras) {
+    const base = Array.isArray(baseLoras) ? baseLoras : [];
+    const extras = Array.isArray(extraLoras) ? extraLoras : [];
+    if (!extras.length) return [...base];
+
+    const extraKeys = new Set(extras.map((lora) => String(lora?.name || lora?.path || "").trim().toLowerCase()).filter(Boolean));
+    const merged = base.filter((lora) => !extraKeys.has(String(lora?.name || lora?.path || "").trim().toLowerCase()));
+    merged.push(...extras);
+    return merged;
+}
+
+function getThumbnailPromptLorasA(promptData) {
+    return mergeRendererLoras(
+        normalizeLorasForRenderer(promptData?.loras_a),
+        getComposerThumbnailImageLoras(promptData)
+    );
+}
+
+function applyPromptThumbnailImageLora(workflowData, promptData, slot = "model_a") {
+    const extraLoras = getComposerThumbnailImageLoras(promptData);
+    if (!extraLoras.length || !workflowData || typeof workflowData !== "object") {
+        return workflowData;
+    }
+
+    const wf = workflowData;
+    const targetSlot = String(slot || "model_a").trim().toLowerCase();
+    if (Number(wf.version || 0) >= 2 && wf.models && typeof wf.models === "object") {
+        const block = (wf.models[targetSlot] && typeof wf.models[targetSlot] === "object")
+            ? wf.models[targetSlot]
+            : (wf.models[targetSlot] = {});
+        block.loras = mergeRendererLoras(Array.isArray(block.loras) ? block.loras : [], extraLoras);
+        return wf;
+    }
+
+    const legacyKey = (targetSlot === "model_b" || targetSlot === "model_d") ? "loras_b" : "loras_a";
+    wf[legacyKey] = mergeRendererLoras(Array.isArray(wf[legacyKey]) ? wf[legacyKey] : [], extraLoras);
+    return wf;
+}
+
 function getThumbnailFamilySamplerDefaults(familyKey) {
     const key = String(familyKey || "").trim().toLowerCase();
     const byFamily = {
@@ -7078,7 +7131,7 @@ async function buildRendererFallbackWorkflowData(promptText, promptData, renderS
         model_b: "",
         positive_prompt: String(finalPromptText || ""),
         negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
-        loras_a: normalizeLorasForRenderer(promptData?.loras_a),
+        loras_a: getThumbnailPromptLorasA(promptData),
         loras_b: normalizeLorasForRenderer(promptData?.loras_b),
         vae: { name: "", source: "unknown" },
         clip: { names: [], type: "", source: "unknown" },
@@ -7194,7 +7247,7 @@ async function buildRendererFallbackWorkflowDataWithBase(promptText, promptData,
         model_b: normalized?.model_b || "",
         positive_prompt: String(finalPromptText || ""),
         negative_prompt: String(promptData?.negative_prompt || THUMB_DEFAULT_NEGATIVE),
-        loras_a: normalizeLorasForRenderer(promptData?.loras_a),
+        loras_a: getThumbnailPromptLorasA(promptData),
         loras_b: normalizeLorasForRenderer(promptData?.loras_b),
         vae: String(normalized?.vae?.name || ""),
         clip: clipNames,
@@ -7703,6 +7756,9 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     const modelSlot = resolveThumbnailModelSlot(wfForThumb);
     const seedUsed = applyThumbnailSeeds(wfForThumb, modelSlot, { staticSeed: options?.staticSeed });
     applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);
+    if (options?.promptData && typeof options.promptData === "object") {
+        applyPromptThumbnailImageLora(wfForThumb, options.promptData, modelSlot);
+    }
 
     const thumbPositive = getThumbnailPositivePrompt(wfForThumb, modelSlot);
     console.log(`[ThumbnailGen] Workflow queued | slot=${modelSlot} | seed=${seedUsed} | prompt=${thumbPositive || "(not resolved)"}`);
@@ -7767,6 +7823,29 @@ async function queueThumbnailPrompt(workflow, options = {}) {
     }
 }
 
+async function fetchThumbnailResultFromHistory(promptId, saveNodeId) {
+    if (!promptId) return null;
+
+    try {
+        const resp = await fetch(`/history/${encodeURIComponent(promptId)}`);
+        if (!resp.ok) return null;
+
+        const data = await resp.json();
+        const entry = data?.[promptId] || data;
+        const outputs = entry?.outputs;
+        if (!outputs || typeof outputs !== "object") return null;
+
+        const saveOutput = outputs?.[String(saveNodeId)];
+        const image = saveOutput?.images?.[0];
+        if (!image) return null;
+
+        return await fetchThumbnailImage(image.filename, image.subfolder, image.type);
+    } catch (e) {
+        console.warn("[ThumbnailGen] Failed to read history result:", e);
+        return null;
+    }
+}
+
 /**
  * Wait for a queued prompt to complete and return the generated image as base64 thumbnail
  * @param {string} promptId - The prompt_id from queueing
@@ -7776,6 +7855,24 @@ async function queueThumbnailPrompt(workflow, options = {}) {
 function waitForThumbnailResult(promptId, saveNodeId) {
     return new Promise((resolve) => {
         let timeout = null;
+        let pollTimer = null;
+        let settled = false;
+
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(value);
+        };
+
+        const tryResolveFromHistory = async () => {
+            const thumbnail = await fetchThumbnailResultFromHistory(promptId, saveNodeId);
+            if (thumbnail) {
+                finish(thumbnail);
+                return true;
+            }
+            return false;
+        };
 
         const onExecuted = (event) => {
             const detail = event.detail;
@@ -7784,34 +7881,59 @@ function waitForThumbnailResult(promptId, saveNodeId) {
             // Check for our save node's output
             const output = detail?.output;
             if (output?.images?.[0]) {
-                cleanup();
                 const img = output.images[0];
-                fetchThumbnailImage(img.filename, img.subfolder, img.type).then(resolve);
+                fetchThumbnailImage(img.filename, img.subfolder, img.type).then(finish);
+                return;
+            }
+
+            void tryResolveFromHistory();
+        };
+
+        const onExecutionCached = (event) => {
+            const detail = event?.detail || {};
+            if (detail?.prompt_id && detail.prompt_id !== promptId) return;
+            void tryResolveFromHistory();
+        };
+
+        const onExecuting = (event) => {
+            const detail = event?.detail || {};
+            if (detail?.prompt_id && detail.prompt_id !== promptId) return;
+            if (detail?.node == null) {
+                void tryResolveFromHistory();
             }
         };
 
         const onError = (event) => {
             if (event.detail?.prompt_id !== promptId) return;
-            cleanup();
             console.error("[ThumbnailGen] Execution error:", event.detail);
-            resolve(null);
+            finish(null);
         };
 
         const cleanup = () => {
             clearTimeout(timeout);
+            clearInterval(pollTimer);
             api.removeEventListener("executed", onExecuted);
+            api.removeEventListener("execution_cached", onExecutionCached);
+            api.removeEventListener("executing", onExecuting);
             api.removeEventListener("execution_error", onError);
         };
 
+        pollTimer = setInterval(() => {
+            void tryResolveFromHistory();
+        }, 1000);
+
         // Timeout after 120 seconds
         timeout = setTimeout(() => {
-            cleanup();
             console.warn("[ThumbnailGen] Timed out waiting for result");
-            resolve(null);
+            finish(null);
         }, 120000);
 
         api.addEventListener("executed", onExecuted);
+        api.addEventListener("execution_cached", onExecutionCached);
+        api.addEventListener("executing", onExecuting);
         api.addEventListener("execution_error", onError);
+
+        void tryResolveFromHistory();
     });
 }
 
@@ -8016,16 +8138,19 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
         if (parsedWorkflowData) {
             try {
                 const effectivePrompt = String(promptText || "").trim();
+                const thumbnailSlot = resolveThumbnailModelSlot(parsedWorkflowData);
                 if (Number(parsedWorkflowData.version || 0) >= 2 && parsedWorkflowData.models && typeof parsedWorkflowData.models === "object") {
-                    const modelA = parsedWorkflowData.models.model_a;
-                    if (modelA && typeof modelA === "object") {
-                        modelA.positive_prompt = effectivePrompt;
+                    const targetModel = parsedWorkflowData.models[thumbnailSlot] || parsedWorkflowData.models.model_a;
+                    if (targetModel && typeof targetModel === "object") {
+                        targetModel.positive_prompt = effectivePrompt;
                     }
                 } else {
                     parsedWorkflowData.positive_prompt = effectivePrompt;
                 }
+                applyPromptThumbnailImageLora(parsedWorkflowData, promptData, thumbnailSlot);
                 thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection, {
                     staticSeed: staticSeedForRun,
+                    promptData,
                 });
             } catch (e) {
                 console.warn("[ThumbnailGen] RecipeRenderer thumbnail path failed, falling back:", e);
@@ -8046,6 +8171,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
             );
             thumbnail = await generateThumbnailWorkflowFromWorkflowData(fallbackWorkflowData, renderSelection, {
                 staticSeed: staticSeedForRun,
+                promptData,
             });
         }
 
