@@ -28,6 +28,8 @@ const CARD_META_HEIGHT = 62;
 const NODE_CHROME_HEIGHT = 86;
 const SCROLLER_PADDING_TOP = 8;
 const SCROLLER_PADDING_BOTTOM = 24;
+const SUBJECT_MIN = 1;
+const SUBJECT_MAX = 99;
 
 function getWidgetByName(node, name) {
     return node.widgets?.find((w) => w.name === name) || null;
@@ -207,6 +209,27 @@ function clampStrength(value) {
     return Math.max(0, Math.min(5, numeric));
 }
 
+function clampSubjectNumber(value, fallback = SUBJECT_MIN) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return Math.max(SUBJECT_MIN, Math.min(SUBJECT_MAX, Math.round(numeric)));
+}
+
+function padSubjectNumber(value) {
+    return String(clampSubjectNumber(value)).padStart(2, "0");
+}
+
+function getSubjectAccent(subjectNumber) {
+    const normalized = clampSubjectNumber(subjectNumber);
+    const hue = (normalized * 47) % 360;
+    return {
+        border: `hsla(${hue}, 76%, 62%, 0.92)`,
+        soft: `hsla(${hue}, 76%, 62%, 0.16)`,
+        strong: `hsla(${hue}, 76%, 46%, 0.92)`,
+        text: `hsl(${hue}, 88%, 92%)`,
+    };
+}
+
 function normalizePart(part) {
     const category = String(part?.category || "").trim();
     const promptsInput = Array.isArray(part?.prompts) ? part.prompts : [];
@@ -217,7 +240,46 @@ function normalizePart(part) {
         category,
         prompts,
         strength: clampStrength(part?.strength ?? 1.0),
+        subject_number: clampSubjectNumber(part?.subject_number ?? part?.subject ?? SUBJECT_MIN),
+        subject_locked: !!(part?.subject_locked ?? part?.subject_manual ?? false),
     };
+}
+
+function resolveSubjectAssignments(parts) {
+    const normalizedParts = Array.isArray(parts) ? parts.map((part) => normalizePart(part)) : [];
+    let currentSubject = SUBJECT_MIN;
+    return normalizedParts.map((part) => {
+        if (part.subject_locked) {
+            currentSubject = clampSubjectNumber(part.subject_number, currentSubject);
+        }
+        const effectiveSubjectNumber = clampSubjectNumber(
+            part.subject_locked ? part.subject_number : currentSubject,
+            currentSubject,
+        );
+        currentSubject = effectiveSubjectNumber;
+        return {
+            ...part,
+            effective_subject_number: effectiveSubjectNumber,
+        };
+    });
+}
+
+function getInheritedSubjectDefaults(parts) {
+    const resolved = resolveSubjectAssignments(parts);
+    if (!resolved.length) {
+        return { subject_number: SUBJECT_MIN, subject_locked: false };
+    }
+    return {
+        subject_number: resolved[resolved.length - 1].effective_subject_number,
+        subject_locked: false,
+    };
+}
+
+function nextSubjectNumber(value, delta) {
+    const current = clampSubjectNumber(value);
+    const span = SUBJECT_MAX - SUBJECT_MIN + 1;
+    const offset = ((current - SUBJECT_MIN + delta) % span + span) % span;
+    return SUBJECT_MIN + offset;
 }
 
 function parseParts(raw) {
@@ -526,6 +588,50 @@ function ensureComposerUi(node) {
         };
 
         const parts = readParts(node);
+        const resolvedParts = resolveSubjectAssignments(parts);
+        const resolvedPart = resolvedParts[partIndex] || null;
+
+        addItem(
+            resolvedPart?.subject_locked
+                ? `Subject #${padSubjectNumber(resolvedPart.subject_number)} (custom)`
+                : `Subject #${padSubjectNumber(resolvedPart?.effective_subject_number ?? SUBJECT_MIN)} (auto)`,
+            () => {},
+            true,
+        );
+        addItem("Subject +1", () => {
+            const next = [...parts];
+            if (!next[partIndex]) return;
+            const baseSubject = resolvedPart?.effective_subject_number ?? SUBJECT_MIN;
+            next[partIndex] = normalizePart({
+                ...next[partIndex],
+                subject_number: nextSubjectNumber(baseSubject, 1),
+                subject_locked: true,
+            });
+            writeParts(node, next);
+            render();
+        });
+        addItem("Subject -1", () => {
+            const next = [...parts];
+            if (!next[partIndex]) return;
+            const baseSubject = resolvedPart?.effective_subject_number ?? SUBJECT_MIN;
+            next[partIndex] = normalizePart({
+                ...next[partIndex],
+                subject_number: nextSubjectNumber(baseSubject, -1),
+                subject_locked: true,
+            });
+            writeParts(node, next);
+            render();
+        });
+        addItem("Subject Auto", () => {
+            const next = [...parts];
+            if (!next[partIndex]) return;
+            next[partIndex] = normalizePart({
+                ...next[partIndex],
+                subject_locked: false,
+            });
+            writeParts(node, next);
+            render();
+        }, !resolvedPart?.subject_locked);
         addItem("Delete", () => {
             const next = parts.filter((_, idx) => idx !== partIndex);
             writeParts(node, next);
@@ -551,7 +657,7 @@ function ensureComposerUi(node) {
 
     const openBrowserForPart = async (index) => {
         const parts = readParts(node);
-        const part = parts[index] || { category: "", prompts: [], strength: 1.0 };
+        const part = parts[index] || { category: "", prompts: [], strength: 1.0, subject_number: SUBJECT_MIN, subject_locked: false };
         const currentPrompt = part.prompts[0] || "";
         const hasMultiSelection = Array.isArray(part.prompts) && part.prompts.length > 1;
         const selection = await showThumbnailBrowser(node, part.category || "", currentPrompt, {
@@ -578,6 +684,8 @@ function ensureComposerUi(node) {
                     category: originalCategory,
                     prompts: selection.selectionsByCategory[originalCategory],
                     strength: part.strength,
+                    subject_number: part.subject_number,
+                    subject_locked: part.subject_locked,
                 });
             } else {
                 const firstCat = selectedCats[0];
@@ -585,6 +693,8 @@ function ensureComposerUi(node) {
                     category: firstCat,
                     prompts: selection.selectionsByCategory[firstCat],
                     strength: part.strength,
+                    subject_number: part.subject_number,
+                    subject_locked: part.subject_locked,
                 });
             }
 
@@ -595,6 +705,8 @@ function ensureComposerUi(node) {
                     category: cat,
                     prompts: selection.selectionsByCategory[cat],
                     strength: part.strength,
+                    subject_number: part.subject_number,
+                    subject_locked: part.subject_locked,
                 }));
             }
         } else {
@@ -602,6 +714,8 @@ function ensureComposerUi(node) {
                 category: selection.category || part.category || "",
                 prompts: selection.prompts,
                 strength: part.strength,
+                subject_number: part.subject_number,
+                subject_locked: part.subject_locked,
             });
         }
 
@@ -630,6 +744,7 @@ function ensureComposerUi(node) {
 
     const render = () => {
         const parts = readParts(node);
+        const resolvedParts = resolveSubjectAssignments(parts);
         const thumbZoom = readThumbZoom(node);
         zoomSlider.value = String(Math.round(thumbZoom * 100));
         syncZoomLabel();
@@ -640,22 +755,23 @@ function ensureComposerUi(node) {
         grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${minCardWidth}px, 1fr))`;
         grid.innerHTML = "";
 
-        parts.forEach((part, index) => {
+        resolvedParts.forEach((part, index) => {
             const entry = part.prompts.length > 0
                 ? getComposerEntry(node, part.category, part.prompts[0])
                 : null;
             const thumb = entry?.thumbnail || DEFAULT_THUMBNAIL;
             const multiCount = part.prompts.length;
+            const subjectAccent = getSubjectAccent(part.effective_subject_number);
 
             const card = document.createElement("div");
-            const cardBorderColor = UI.inputBorder || "#3e495b";
+            const cardBorderColor = subjectAccent.border;
             card.style.cssText = `
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
                 border: 1px solid ${cardBorderColor};
                 border-radius: 6px;
-                background: ${UI.cardBg || "#2b3340"};
+                background: linear-gradient(180deg, ${subjectAccent.soft}, ${UI.cardBg || "#2b3340"} 42%);
                 padding: 4px;
                 box-sizing: border-box;
                 min-height: ${tileMinHeight}px;
@@ -712,7 +828,7 @@ function ensureComposerUi(node) {
             thumbBtn.style.cssText = `
                 width: 100%;
                 aspect-ratio: 3 / 4;
-                border: 1px solid ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"};
+                border: 1px solid ${subjectAccent.border};
                 border-radius: 4px;
                 background-image: url(${thumb});
                 background-size: contain;
@@ -724,6 +840,64 @@ function ensureComposerUi(node) {
                 display: block;
             `;
             thumbBtn.title = "Click to select prompt fragment(s)";
+
+            const subjectBadge = document.createElement("button");
+            subjectBadge.type = "button";
+            subjectBadge.textContent = `#${padSubjectNumber(part.effective_subject_number)}`;
+            subjectBadge.title = part.subject_locked
+                ? "Custom subject. Click to advance, Shift-click to go back, right-click for auto mode."
+                : "Auto subject. Click to create a custom subject, right-click for options.";
+            subjectBadge.style.cssText = `
+                position: absolute;
+                left: 4px;
+                top: 4px;
+                min-width: 26px;
+                height: 18px;
+                border-radius: 9px;
+                background: ${part.subject_locked ? subjectAccent.strong : "rgba(15,23,42,0.82)"};
+                border: 1px solid ${subjectAccent.border};
+                color: ${subjectAccent.text};
+                font-size: 10px;
+                line-height: 16px;
+                text-align: center;
+                font-weight: 700;
+                padding: 0 5px;
+                box-sizing: border-box;
+                cursor: pointer;
+            `;
+            subjectBadge.addEventListener("mousedown", (evt) => {
+                evt.stopPropagation();
+            });
+            subjectBadge.addEventListener("mouseup", (evt) => {
+                evt.stopPropagation();
+            });
+            subjectBadge.addEventListener("click", (evt) => {
+                evt.preventDefault();
+                evt.stopPropagation();
+                const delta = evt.shiftKey ? -1 : 1;
+                const next = [...readParts(node)];
+                if (!next[index]) return;
+                next[index] = normalizePart({
+                    ...next[index],
+                    subject_number: nextSubjectNumber(part.effective_subject_number, delta),
+                    subject_locked: true,
+                });
+                writeParts(node, next);
+                render();
+            });
+            subjectBadge.addEventListener("contextmenu", (evt) => {
+                evt.preventDefault();
+                evt.stopPropagation();
+                const next = [...readParts(node)];
+                if (!next[index]) return;
+                next[index] = normalizePart({
+                    ...next[index],
+                    subject_locked: false,
+                });
+                writeParts(node, next);
+                render();
+            });
+            thumbBtn.appendChild(subjectBadge);
 
             if (multiCount > 1) {
                 const badge = document.createElement("div");
@@ -754,7 +928,7 @@ function ensureComposerUi(node) {
                 ? `${part.category || "Category"}: (Multi)`
                 : `${part.category || "Category"}: ${primaryName}`;
             label.title = multiCount > 1
-                ? `${part.category || ""}\n${part.prompts.join("\n")}`
+                ? `Subject #${padSubjectNumber(part.effective_subject_number)}\n${part.category || ""}\n${part.prompts.join("\n")}`
                 : label.textContent;
             label.style.cssText = `
                 font-size: 10px;
@@ -928,6 +1102,7 @@ function ensureComposerUi(node) {
         addCard.title = "Add prompt part";
         addCard.onclick = async () => {
             const parts = readParts(node);
+            const inheritedSubject = getInheritedSubjectDefaults(parts);
             const selection = await showThumbnailBrowser(node, "", "", {
                 title: "Add Prompt Composer Part",
                 multiSelect: true,
@@ -950,6 +1125,8 @@ function ensureComposerUi(node) {
                         category: cat,
                         prompts: catPrompts,
                         strength: 1.0,
+                        subject_number: inheritedSubject.subject_number,
+                        subject_locked: inheritedSubject.subject_locked,
                     }));
                 }
             } else {
@@ -957,6 +1134,8 @@ function ensureComposerUi(node) {
                     category: selection.category || "",
                     prompts: selection.prompts,
                     strength: 1.0,
+                    subject_number: inheritedSubject.subject_number,
+                    subject_locked: inheritedSubject.subject_locked,
                 }));
             }
             writeParts(node, next);
