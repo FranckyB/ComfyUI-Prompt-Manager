@@ -6,7 +6,11 @@ import { loadComposerPrompts, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from 
 
 const PARTS_PROP_KEY = "prompt_composer_parts";
 const THUMB_ZOOM_PROP_KEY = "prompt_composer_thumb_zoom";
+const OUTPUT_FORMAT_PROP_KEY = "prompt_composer_output_format";
+const COMPOSE_POSITION_PROP_KEY = "prompt_composer_compose_position";
 const PARTS_WIDGET_NAME = "parts_data";
+const OUTPUT_FORMAT_WIDGET_NAME = "output_format";
+const COMPOSE_POSITION_WIDGET_NAME = "compose_position";
 const MIN_NODE_WIDTH = 500;
 const MIN_NODE_HEIGHT = 600;
 const HOLD_TO_DRAG_MS = 140;
@@ -22,6 +26,52 @@ const CARD_META_HEIGHT = 62;
 const NODE_CHROME_HEIGHT = 86;
 const SCROLLER_PADDING_TOP = 8;
 const SCROLLER_PADDING_BOTTOM = 24;
+
+function getWidgetByName(node, name) {
+    return node.widgets?.find((w) => w.name === name) || null;
+}
+
+function hideWidget(widget) {
+    if (!widget) return;
+    widget.type = "converted-widget";
+    widget.computeSize = () => [0, -4];
+    widget.hidden = true;
+    widget.draw = function () {};
+}
+
+function readToggleValue(node, widgetName, propKey, fallbackValue) {
+    const propValue = String(node.properties?.[propKey] ?? "").trim();
+    if (propValue) return propValue;
+    const widgetValue = String(getWidgetByName(node, widgetName)?.value ?? "").trim();
+    return widgetValue || fallbackValue;
+}
+
+function writeToggleValue(node, widgetName, propKey, value) {
+    const normalized = String(value || "").trim();
+    const widget = getWidgetByName(node, widgetName);
+    if (widget) {
+        widget.value = normalized;
+    }
+    node.properties = node.properties || {};
+    node.properties[propKey] = normalized;
+    app.graph.setDirtyCanvas(true, true);
+}
+
+function readOutputFormat(node) {
+    return readToggleValue(node, OUTPUT_FORMAT_WIDGET_NAME, OUTPUT_FORMAT_PROP_KEY, "text");
+}
+
+function writeOutputFormat(node, value) {
+    writeToggleValue(node, OUTPUT_FORMAT_WIDGET_NAME, OUTPUT_FORMAT_PROP_KEY, value);
+}
+
+function readComposePosition(node) {
+    return readToggleValue(node, COMPOSE_POSITION_WIDGET_NAME, COMPOSE_POSITION_PROP_KEY, "before");
+}
+
+function writeComposePosition(node, value) {
+    writeToggleValue(node, COMPOSE_POSITION_WIDGET_NAME, COMPOSE_POSITION_PROP_KEY, value);
+}
 
 function snapThumbZoom(value) {
     const numeric = Number(value);
@@ -180,7 +230,7 @@ function serializeParts(parts) {
 }
 
 function getPartsWidget(node) {
-    return node.widgets?.find((w) => w.name === PARTS_WIDGET_NAME) || null;
+    return getWidgetByName(node, PARTS_WIDGET_NAME);
 }
 
 function readParts(node) {
@@ -201,13 +251,10 @@ function writeParts(node, parts) {
     app.graph.setDirtyCanvas(true, true);
 }
 
-function ensureHiddenPartsWidget(node) {
-    const widget = getPartsWidget(node);
-    if (!widget) return;
-    widget.type = "converted-widget";
-    widget.computeSize = () => [0, -4];
-    widget.hidden = true;
-    widget.draw = function () {};
+function ensureHiddenComposerWidgets(node) {
+    hideWidget(getPartsWidget(node));
+    hideWidget(getWidgetByName(node, OUTPUT_FORMAT_WIDGET_NAME));
+    hideWidget(getWidgetByName(node, COMPOSE_POSITION_WIDGET_NAME));
 }
 
 function ensureComposerUi(node) {
@@ -227,6 +274,113 @@ function ensureComposerUi(node) {
         overflow: hidden;
         position: relative;
     `;
+
+    const switchRow = document.createElement("div");
+    switchRow.style.cssText = `
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 24px;
+        margin: 0 0 8px 0;
+        padding: 0 10px;
+        border: 1px solid rgba(78, 90, 108, 0.72);
+        border-radius: 10px;
+        background: rgba(34, 39, 48, 0.98);
+        box-sizing: border-box;
+        flex: 0 0 auto;
+    `;
+
+    const createInlineSwitch = ({ title, leftLabel, rightLabel, getValue, onToggle }) => {
+        const group = document.createElement("div");
+        group.style.cssText = `
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-width: 0;
+            flex: 1 1 0;
+        `;
+        group.title = title;
+
+        const left = document.createElement("span");
+        left.textContent = leftLabel;
+        left.style.cssText = "font-size: 12px; color: #b9c2ce; white-space: nowrap; user-select: none;";
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.style.cssText = `
+            position: relative;
+            width: 34px;
+            height: 18px;
+            border: 1px solid rgba(116, 131, 154, 0.7);
+            border-radius: 999px;
+            background: transparent;
+            cursor: pointer;
+            padding: 0;
+            flex: 0 0 auto;
+        `;
+
+        const knob = document.createElement("span");
+        knob.style.cssText = `
+            position: absolute;
+            top: 1px;
+            left: 1px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #f3f4f6;
+            transition: transform 0.16s ease, background 0.16s ease;
+            pointer-events: none;
+        `;
+        button.appendChild(knob);
+
+        const right = document.createElement("span");
+        right.textContent = rightLabel;
+        right.style.cssText = "font-size: 12px; color: #b9c2ce; white-space: nowrap; user-select: none;";
+
+        const sync = () => {
+            const current = getValue();
+            const active = current === "json" || current === "after";
+            button.dataset.active = active ? "1" : "0";
+            button.style.background = active ? "#2f6f92" : "transparent";
+            knob.style.transform = active ? "translateX(16px)" : "translateX(0)";
+            left.style.color = active ? "#8d97a5" : "#f3f4f6";
+            right.style.color = active ? "#f3f4f6" : "#8d97a5";
+        };
+
+        button.onclick = (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            onToggle(getValue());
+            sync();
+            node._composerUiRender?.();
+        };
+
+        group.appendChild(left);
+        group.appendChild(button);
+        group.appendChild(right);
+        return { group, sync };
+    };
+
+    const formatSwitch = createInlineSwitch({
+        title: "Switch Prompt output between text and JSON",
+        leftLabel: "TXT",
+        rightLabel: "JSON",
+        getValue: () => readOutputFormat(node),
+        onToggle: (current) => writeOutputFormat(node, current === "json" ? "text" : "json"),
+    });
+    const positionSwitch = createInlineSwitch({
+        title: "Switch whether composed parts go before or after the incoming prompt",
+        leftLabel: "Before",
+        rightLabel: "After",
+        getValue: () => readComposePosition(node),
+        onToggle: (current) => writeComposePosition(node, current === "after" ? "before" : "after"),
+    });
+
+    switchRow.appendChild(formatSwitch.group);
+    switchRow.appendChild(positionSwitch.group);
+    root.appendChild(switchRow);
     let scroller = null;
     const absorbWheel = (evt) => {
         evt.preventDefault();
@@ -377,10 +531,11 @@ function ensureComposerUi(node) {
         const parts = readParts(node);
         const part = parts[index] || { category: "", prompts: [], strength: 1.0 };
         const currentPrompt = part.prompts[0] || "";
+        const hasMultiSelection = Array.isArray(part.prompts) && part.prompts.length > 1;
         const selection = await showThumbnailBrowser(node, part.category || "", currentPrompt, {
             title: "Select Prompt Composer Part",
-            multiSelect: true,
-            multiCategorySelect: true,
+            multiSelect: hasMultiSelection,
+            multiCategorySelect: hasMultiSelection,
             endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
             promptOnly: true,
             selectedPrompts: part.prompts,
@@ -830,8 +985,13 @@ function ensureComposerUi(node) {
     node._composerUiAttached = true;
     node._composerUiRender = render;
     node._composerUiRefreshHeight = refreshComposerHeight;
+    node._composerUiSyncSwitches = () => {
+        formatSwitch.sync();
+        positionSwitch.sync();
+    };
 
     refreshComposerHeight();
+    node._composerUiSyncSwitches();
     render();
 }
 
@@ -845,11 +1005,17 @@ app.registerExtension({
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
 
-            ensureHiddenPartsWidget(node);
+            ensureHiddenComposerWidgets(node);
             if (!node.properties) node.properties = {};
             if (node.properties[PARTS_PROP_KEY] === undefined) {
                 const existing = getPartsWidget(node)?.value || "[]";
                 node.properties[PARTS_PROP_KEY] = String(existing || "[]");
+            }
+            if (node.properties[OUTPUT_FORMAT_PROP_KEY] === undefined) {
+                node.properties[OUTPUT_FORMAT_PROP_KEY] = readOutputFormat(node);
+            }
+            if (node.properties[COMPOSE_POSITION_PROP_KEY] === undefined) {
+                node.properties[COMPOSE_POSITION_PROP_KEY] = readComposePosition(node);
             }
 
             node.setSize([
@@ -860,6 +1026,7 @@ app.registerExtension({
             ensureComposerUi(node);
 
             loadComposerPrompts(node).then(() => {
+                node._composerUiSyncSwitches?.();
                 node._composerUiRefreshHeight?.();
                 node._composerUiRender?.();
                 app.graph.setDirtyCanvas(true, true);
@@ -873,7 +1040,7 @@ app.registerExtension({
             const result = onConfigure?.apply(this, arguments);
             const node = this;
 
-            ensureHiddenPartsWidget(node);
+            ensureHiddenComposerWidgets(node);
             ensureComposerUi(node);
 
             const widget = getPartsWidget(node);
@@ -881,7 +1048,11 @@ app.registerExtension({
                 node.properties = node.properties || {};
                 node.properties[PARTS_PROP_KEY] = widget.value;
             }
+            node.properties = node.properties || {};
+            node.properties[OUTPUT_FORMAT_PROP_KEY] = readOutputFormat(node);
+            node.properties[COMPOSE_POSITION_PROP_KEY] = readComposePosition(node);
 
+            node._composerUiSyncSwitches?.();
             node._composerUiRefreshHeight?.();
             node._composerUiRender?.();
             return result;

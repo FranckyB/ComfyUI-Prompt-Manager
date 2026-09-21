@@ -1162,7 +1162,7 @@ class PromptGenerator:
             return False
 
     @staticmethod
-    def start_server(model_name, context_size=2048, use_vision_model=False, gpu_device=None):
+    def start_server(model_name, context_size=2048, use_vision_model=False, gpu_device=None, clear_vram_on_run=True):
         """Start llama.cpp server with specified model
 
         Args:
@@ -1170,6 +1170,7 @@ class PromptGenerator:
             context_size: Context size (default 2048)
             use_vision_model: Whether to use the vision model's mmproj
             gpu_device: GPU device index (e.g. "0", "1"), or None for system default
+            clear_vram_on_run: Whether VRAM cleanup is enabled (used for hints on GPU OOM)
 
         Returns:
             tuple: (success: bool, error_message: str or None)
@@ -1295,17 +1296,6 @@ class PromptGenerator:
                 "-c", str(context_size),
             ]
 
-            # Last-resort fallback for cases where the aggressive GPU launch
-            # fails even though the model can load with conservative settings.
-            cmd_args_cpu_safe = [
-                server_cmd,
-                "-m", model_path,
-                "--port", str(PromptGenerator.get_server_port()),
-                "--no-warmup",
-                "-ngl", "0",
-                "-c", str(min(context_size, 2048)),
-            ]
-
             # Add vision flags for models with mmproj
             if use_vision_model:
                 mmproj_path = get_mmproj_path(model_name)
@@ -1313,7 +1303,6 @@ class PromptGenerator:
                     print_pg("Vision model:", f"using mmproj: {os.path.basename(mmproj_path)}")
                     cmd_args.extend(["--mmproj", mmproj_path])
                     cmd_args_fallback.extend(["--mmproj", mmproj_path])
-                    cmd_args_cpu_safe.extend(["--mmproj", mmproj_path])
                 else:
                     error_msg = f"Error: Vision mode requires an mmproj file for '{model_name}' but none was found.\nPlease ensure an mmproj file exists, or use the Generator Options node to download a vision-capable model."
                     print_pg(error_msg, RED)
@@ -1446,15 +1435,17 @@ class PromptGenerator:
                 print_pg(fallback_error, RED)
                 return (False, fallback_error)
 
-            # Some models fail under full GPU offload or large default cache
-            # settings but load fine with a CPU-safe startup.
+            # Model load failure while GPU offload was requested: do NOT silently
+            # fall back to CPU. CPU inference is too slow for this node, so we
+            # surface the failure and let the user decide (smaller model, lower
+            # quantization, less layers, or CPU-only node).
             if _is_model_load_failure(stderr_output):
-                print_pg("Warning: llama-server failed to load the model with the current GPU/memory settings. Retrying with conservative CPU-safe settings.", YELLOW)
-                success, fallback_error, _ = _launch_and_wait(cmd_args_cpu_safe)
-                if success:
-                    return (True, None)
-                print_pg(fallback_error, RED)
-                return (False, fallback_error)
+                hint = ""
+                if not clear_vram_on_run:
+                    hint = " 'Clear VRAM on run' is disabled; enabling it may free enough GPU memory to load this model."
+                print_pg("ERROR:", f"llama-server failed to load the model with GPU offload enabled. Try a smaller model, lower quantization, or reduce --n-gpu-layers.{hint}", RED)
+                print_pg(error_msg, RED)
+                return (False, error_msg)
 
             print_pg(error_msg, RED)
             return (False, error_msg)
@@ -1859,7 +1850,7 @@ class PromptGenerator:
             if _current_model != model_to_use or _current_context_size != context_size or _current_gpu_device != gpu_device or not self.is_server_alive():
                 self.stop_server()
                 # Get context_size and gpu_device from options or use defaults
-                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device)
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device, clear_vram_on_run=clear_vram_on_run)
                 if not success:
                     raise RuntimeError(error_msg)
 
@@ -1981,7 +1972,7 @@ class PromptGenerator:
             if response.status_code == 500:
                 print_pg("Error:", "Server error 500, restarting server and retrying...", RED)
                 self.stop_server()
-                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device)
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device, clear_vram_on_run=clear_vram_on_run)
                 if success:
                     response = requests.post(
                         full_url,

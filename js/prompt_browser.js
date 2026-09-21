@@ -2357,18 +2357,27 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 showInfo,
                 showConfirm,
                 loadPrompts: loadPromptsFn,
-                savePrompt: async ({ category, name, text, thumbnail, overwrite, prompt_category }) => {
+                savePrompt: async (payload) => {
                     try {
-                        const payload = { category, name, text, thumbnail };
-                        if (prompt_category) payload.prompt_category = prompt_category;
+                        const body = {
+                            category: payload?.category,
+                            name: payload?.name,
+                            text: payload?.text,
+                            thumbnail: payload?.thumbnail,
+                        };
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "prompt_category")) body.prompt_category = payload.prompt_category;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora")) body.lora = payload.lora;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_strength")) body.lora_strength = payload.lora_strength;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "refmod")) body.refmod = payload.refmod;
+                        if (payload && Object.prototype.hasOwnProperty.call(payload, "refmod_weight")) body.refmod_weight = payload.refmod_weight;
                         const resp = await fetch(`${endpointPrefix}/save-prompt`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(payload),
+                            body: JSON.stringify(body),
                         });
                         const result = await resp.json();
                         if (result?.success) {
-                            setCurrentPromptSelection(name);
+                            setCurrentPromptSelection(body.name);
                         }
                         return result;
                     } catch (err) {

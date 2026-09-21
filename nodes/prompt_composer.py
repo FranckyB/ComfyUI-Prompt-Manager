@@ -3,16 +3,22 @@ Prompt Composer - build a prompt from multiple selectable prompt parts.
 
 Each part stores category, selected prompt names (multi-select), and strength.
 """
+import importlib.util
 import json
 import math
+import os
 import random
 import time
+from pathlib import Path
+
+import folder_paths
 
 from ..py.prompt_composer_store import (
     PromptComposerStore,
     _find_category_case_insensitive,
     _find_prompt_case_insensitive,
 )
+from ..py.lora_utils import get_lora_relative_path
 
 
 def _normalize_strength(strength):
@@ -64,6 +70,16 @@ PROMPT_TYPE_CHOICES = [
     "soundscape",
     "dialogue",
 ]
+
+OUTPUT_FORMAT_CHOICES = ["text", "json"]
+COMPOSE_POSITION_CHOICES = ["after", "before"]
+REFMOD_MAX_WEIGHT = 10.0
+_REFMOD_CORE_MODULE = None
+_REFMOD_CORE_IMPORT_ERROR = None
+_VISUAL_SUFFIXES = ("_visual", "_video")
+_AUDIO_SUFFIXES = ("_audio",)
+_VISUAL_FILE_SUFFIXES = ("_visual", "_Visual", "_video", "_Video")
+_AUDIO_FILE_SUFFIXES = ("_audio", "_Audio")
 
 
 def _resolve_prompt_type(category_data, fallback_category):
@@ -150,6 +166,197 @@ def _resolve_run_seed(seed):
     return random.SystemRandom().randrange(0, 0xFFFFFFFFFFFFFFFF)
 
 
+def _normalize_scalar(value, default=1.0, minimum=None, maximum=None):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = float(default)
+    if not math.isfinite(numeric):
+        numeric = float(default)
+    if minimum is not None:
+        numeric = max(float(minimum), numeric)
+    if maximum is not None:
+        numeric = min(float(maximum), numeric)
+    return numeric
+
+
+def _normalize_lora_path(value):
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+
+    for probe in (candidate, os.path.basename(candidate.replace("\\", "/")), os.path.splitext(candidate)[0]):
+        rel_path, found = get_lora_relative_path(probe)
+        if found and rel_path:
+            return str(rel_path).replace("\\", "/")
+
+    return candidate.replace("\\", "/")
+
+
+def _coerce_lora_stack(raw_stack):
+    if raw_stack is None:
+        return []
+
+    if isinstance(raw_stack, dict) and "__value__" in raw_stack:
+        raw_stack = raw_stack.get("__value__")
+
+    if not isinstance(raw_stack, list):
+        return []
+
+    out = []
+    for item in raw_stack:
+        if isinstance(item, (list, tuple)) and len(item) >= 1:
+            path = _normalize_lora_path(item[0])
+            if not path:
+                continue
+            model_strength = _normalize_scalar(item[1] if len(item) >= 2 else 1.0, default=1.0)
+            clip_strength = _normalize_scalar(item[2] if len(item) >= 3 else model_strength, default=model_strength)
+            out.append((path, model_strength, clip_strength))
+            continue
+
+        if isinstance(item, dict):
+            path = _normalize_lora_path(item.get("path") or item.get("name") or "")
+            if not path:
+                continue
+            model_strength = _normalize_scalar(item.get("model_strength", item.get("strength", 1.0)), default=1.0)
+            clip_strength = _normalize_scalar(item.get("clip_strength", model_strength), default=model_strength)
+            out.append((path, model_strength, clip_strength))
+
+    return out
+
+
+def _lora_asset_key(path):
+    normalized = str(path or "").replace("\\", "/").strip().lower()
+    leaf = os.path.basename(normalized)
+    stem, _ext = os.path.splitext(leaf)
+    return stem or leaf
+
+
+def _merge_lora_stacks(base_stack, additions):
+    merged = list(_coerce_lora_stack(base_stack))
+    seen = {_lora_asset_key(item[0]) for item in merged if item and item[0]}
+    for path, model_strength, clip_strength in _coerce_lora_stack(additions):
+        key = _lora_asset_key(path)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append((path, model_strength, clip_strength))
+    return merged
+
+
+def _refmods_dir():
+    path = os.path.join(folder_paths.models_dir, "refmods")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _normalize_refmod_name(value):
+    normalized = str(value or "").strip().replace("\\", "/")
+    if not normalized or normalized.lower() == "(none)":
+        return ""
+    if normalized.lower().endswith(".safetensors"):
+        normalized = normalized[:-len(".safetensors")]
+    return normalized.lstrip("/")
+
+
+def _strip_known_refmod_suffix(path_no_ext):
+    lower_name = os.path.basename(path_no_ext).lower()
+    for suffix in _VISUAL_SUFFIXES:
+        if lower_name.endswith(suffix):
+            return (path_no_ext[:-len(suffix)], "visual", suffix)
+    for suffix in _AUDIO_SUFFIXES:
+        if lower_name.endswith(suffix):
+            return (path_no_ext[:-len(suffix)], "audio", suffix)
+    return (path_no_ext, None, None)
+
+
+def _paired_refmod_path(path_no_ext, target_kind):
+    base, current_kind, _suffix = _strip_known_refmod_suffix(path_no_ext)
+    if current_kind is None:
+        return None
+    current_path = path_no_ext + ".safetensors"
+    suffixes = _VISUAL_FILE_SUFFIXES if target_kind == "visual" else _AUDIO_FILE_SUFFIXES
+    for suffix in suffixes:
+        candidate = base + suffix + ".safetensors"
+        if candidate != current_path and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _resolve_refmod_path_no_ext(mod_name):
+    normalized = _normalize_refmod_name(mod_name)
+    if not normalized:
+        return ""
+    candidate = os.path.join(_refmods_dir(), normalized)
+    if os.path.isfile(candidate + ".safetensors"):
+        return candidate
+    raise FileNotFoundError(f"RefMod '{normalized}' not found in models/refmods")
+
+
+def _load_refmod_core_module():
+    global _REFMOD_CORE_MODULE, _REFMOD_CORE_IMPORT_ERROR
+    if _REFMOD_CORE_MODULE is not None:
+        return _REFMOD_CORE_MODULE
+    if _REFMOD_CORE_IMPORT_ERROR is not None:
+        raise RuntimeError(_REFMOD_CORE_IMPORT_ERROR)
+
+    core_path = Path(__file__).resolve().parents[2] / "ComfyUI-H3RefModPicker" / "py" / "refmod_core.py"
+    if not core_path.is_file():
+        _REFMOD_CORE_IMPORT_ERROR = f"RefMod support unavailable: {core_path} not found"
+        raise RuntimeError(_REFMOD_CORE_IMPORT_ERROR)
+
+    spec = importlib.util.spec_from_file_location("prompt_composer_refmod_core", core_path)
+    if spec is None or spec.loader is None:
+        _REFMOD_CORE_IMPORT_ERROR = f"RefMod support unavailable: could not load {core_path}"
+        raise RuntimeError(_REFMOD_CORE_IMPORT_ERROR)
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _REFMOD_CORE_MODULE = module
+    return module
+
+
+def _refmod_asset_key(mod):
+    name = getattr(mod, "name", None)
+    if name is None and isinstance(mod, dict):
+        name = mod.get("name") or mod.get("path")
+    normalized = str(name or "").replace("\\", "/").strip().lower()
+    leaf = os.path.basename(normalized)
+    stem, _ext = os.path.splitext(leaf)
+    return stem or leaf
+
+
+def _merge_refmod_rows(base_rows, additions):
+    merged = list(base_rows) if isinstance(base_rows, (list, tuple)) else []
+    seen = {_refmod_asset_key(item[0]) for item in merged if isinstance(item, (list, tuple)) and item}
+    for item in additions or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        key = _refmod_asset_key(item[0])
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def _load_prompt_refmods(mod_name, weight):
+    normalized_name = _normalize_refmod_name(mod_name)
+    if not normalized_name:
+        return []
+
+    core = _load_refmod_core_module()
+    path_no_ext = _resolve_refmod_path_no_ext(normalized_name)
+    loaded = list(core.load_refmods_from_file(path_no_ext, device="cpu"))
+    if not any(getattr(mod, "kind", None) == "audio" for mod in loaded):
+        paired_audio = _paired_refmod_path(path_no_ext, "audio")
+        if paired_audio:
+            loaded.extend(core.load_refmods_from_file(paired_audio[:-len(".safetensors")], device="cpu"))
+
+    clipped_weight = _normalize_scalar(weight, default=1.0, minimum=0.0, maximum=REFMOD_MAX_WEIGHT)
+    return [(mod, clipped_weight) for mod in loaded if clipped_weight > 0.0]
+
+
 class PromptComposer:
     """Compose prompt fragments from multiple parts in one node."""
 
@@ -163,12 +370,28 @@ class PromptComposer:
                     "dynamicPrompts": False,
                     "tooltip": "Internal: JSON list of prompt composer parts",
                 }),
+                "output_format": (OUTPUT_FORMAT_CHOICES, {
+                    "default": "text",
+                    "tooltip": "Choose whether the node outputs plain text or structured JSON.",
+                }),
+                "compose_position": (COMPOSE_POSITION_CHOICES, {
+                    "default": "before",
+                    "tooltip": "Place composed prompt fragments before or after the incoming prompt.",
+                }),
             },
             "optional": {
                 "prompt": ("STRING", {
                     "multiline": True,
                     "forceInput": True,
-                    "tooltip": "Optional base prompt. Composed parts are appended after it.",
+                    "tooltip": "Optional incoming prompt. Composed parts can be placed before or after it.",
+                }),
+                "lora_stack": ("LORA_STACK", {
+                    "forceInput": True,
+                    "tooltip": "Optional incoming LoRA stack. Prompt Composer appends per-prompt LoRAs to it.",
+                }),
+                "mods": ("H3_REF_MODS", {
+                    "forceInput": True,
+                    "tooltip": "Optional incoming RefMod bundle. Prompt Composer appends per-prompt RefMods to it.",
                 }),
 
             },
@@ -183,8 +406,8 @@ class PromptComposer:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Compose multiple prompt fragments with per-part strength in one node."
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("json_prompt", "text_prompt")
+    RETURN_TYPES = ("STRING", "LORA_STACK", "H3_REF_MODS")
+    RETURN_NAMES = ("Prompt", "lora_stack", "mods")
     FUNCTION = "compose"
     OUTPUT_NODE = True
 
@@ -193,14 +416,14 @@ class PromptComposer:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", **kwargs):
+    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", lora_stack=None, mods=None, **kwargs):
         parts = _parse_parts(parts_data)
         if _has_multi_part_selection(parts):
             dynamic_seed = time.time_ns()
-            return (parts_data, dynamic_seed, prompt)
-        return (parts_data, seed, prompt)
+            return (parts_data, dynamic_seed, prompt, output_format, compose_position, lora_stack, mods)
+        return (parts_data, seed, prompt, output_format, compose_position, lora_stack, mods)
 
-    def compose(self, parts_data="[]", seed=0, prompt=""):
+    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", lora_stack=None, mods=None):
         prompts_data = PromptComposerStore.load_prompts()
         parts = _parse_parts(parts_data)
 
@@ -209,6 +432,8 @@ class PromptComposer:
 
         fragments = []
         json_sections = {}
+        prompt_lora_stack = []
+        prompt_mods = []
         for part in parts:
             raw_category = part.get("category") or ""
             category = _find_category_case_insensitive(prompts_data, raw_category) or raw_category
@@ -233,19 +458,48 @@ class PromptComposer:
                 if key:
                     json_sections.setdefault(key, []).append(text)
 
+            lora_name = _normalize_lora_path(entry.get("lora") or "")
+            if lora_name:
+                lora_strength = _normalize_scalar(entry.get("lora_strength", 1.0), default=1.0)
+                prompt_lora_stack = _merge_lora_stacks(
+                    prompt_lora_stack,
+                    [(lora_name, lora_strength, lora_strength)],
+                )
+
+            refmod_name = _normalize_refmod_name(entry.get("refmod") or "")
+            if refmod_name:
+                refmod_weight = _normalize_scalar(entry.get("refmod_weight", 1.0), default=1.0, minimum=0.0, maximum=REFMOD_MAX_WEIGHT)
+                try:
+                    prompt_mods = _merge_refmod_rows(prompt_mods, _load_prompt_refmods(refmod_name, refmod_weight))
+                except Exception as exc:
+                    print(f"[PromptComposer] Skipping RefMod '{refmod_name}': {exc}")
+
         base = str(prompt or "").strip() if isinstance(prompt, str) else ""
-        if base and fragments:
-            output = f"{base}\n" + "\n".join(fragments)
+        fragments_text = "\n".join(fragments)
+        position = str(compose_position or "after").strip().lower()
+        format_name = str(output_format or "text").strip().lower()
+
+        if base and fragments_text:
+            if position == "before":
+                text_output = f"{fragments_text}\n{base}"
+            else:
+                text_output = f"{base}\n{fragments_text}"
         elif base:
-            output = base
+            text_output = base
         else:
-            output = "\n".join(fragments)
+            text_output = fragments_text
 
         structured = {}
-        if base:
+        if position != "before" and base:
             structured["scene"] = base
         for key, values in json_sections.items():
             structured[key] = [{"description": v} for v in values]
-        json_output = json.dumps(structured, indent=2, ensure_ascii=False) if structured else ""
+        if position == "before" and base:
+            structured["scene"] = base
 
-        return (json_output, output)
+        json_output = json.dumps(structured, indent=2, ensure_ascii=False) if structured else ""
+        final_output = json_output if format_name == "json" else text_output
+        merged_lora_stack = _merge_lora_stacks(lora_stack, prompt_lora_stack)
+        merged_mods = _merge_refmod_rows(mods, prompt_mods)
+
+        return (final_output, merged_lora_stack, merged_mods)
