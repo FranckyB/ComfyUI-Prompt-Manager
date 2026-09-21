@@ -1171,6 +1171,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const clearSelectionOnCategorySwitch = options?.clearSelectionOnCategorySwitch === true;
     const endpointPrefix = typeof options?.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
     const showCategoryTypeFilter = endpointPrefix === "/prompt-manager/compose";
+    const initialCategoryTypeFilter = showCategoryTypeFilter
+        ? (String(options?.initialCategoryTypeFilter || "__all__").trim() || "__all__")
+        : "__all__";
     const promptOnly = options?.promptOnly === true;
     const browserPrefScope = normalizeBrowserPrefScope(
         options?.preferenceScope || (promptOnly ? "composer" : "manager")
@@ -1845,12 +1848,18 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         categoryBar.appendChild(categoryContainer);
 
         let allCategories = [];
-        let categoryTypeFilter = "__all__";
+        let categoryTypeFilter = initialCategoryTypeFilter;
         let categories = [];
         let selectedSaveName = initialSaveName;
         let categoryButtons = [];
         let editModeLastClickPrompt = "";
         let editModeLastClickAt = 0;
+
+        if (showCategoryTypeFilter) {
+            const hasMatchingTypeOption = [...typeFilterSelect.options].some((option) => option.value === categoryTypeFilter);
+            typeFilterSelect.value = hasMatchingTypeOption ? categoryTypeFilter : "__all__";
+            categoryTypeFilter = typeFilterSelect.value || "__all__";
+        }
 
         const isCategoryNSFW = (cat) => {
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;

@@ -150,6 +150,7 @@ def _parse_parts(parts_data):
             "strength": strength,
             "subject_number": _normalize_subject_number(part.get("subject_number", part.get("subject", SUBJECT_MIN)), default=SUBJECT_MIN),
             "subject_locked": bool(part.get("subject_locked", part.get("subject_manual", False))),
+            "muted": bool(part.get("muted", False)),
         })
     return normalized
 
@@ -169,6 +170,12 @@ def _resolve_subject_parts(parts):
         if not isinstance(part, dict):
             continue
         normalized = dict(part)
+        if bool(normalized.get("muted", False)):
+            normalized["subject_number"] = _normalize_subject_number(normalized.get("subject_number", SUBJECT_MIN), default=current_subject)
+            normalized["subject_locked"] = bool(normalized.get("subject_locked", False))
+            normalized["effective_subject_number"] = current_subject
+            resolved.append(normalized)
+            continue
         subject_number = _normalize_subject_number(normalized.get("subject_number", SUBJECT_MIN), default=current_subject)
         subject_locked = bool(normalized.get("subject_locked", False))
         if subject_locked and subject_number != SUBJECT_NONE:
@@ -187,6 +194,8 @@ def _resolve_subject_parts(parts):
 
 def _has_multi_part_selection(parts):
     for part in parts:
+        if bool(part.get("muted", False)):
+            continue
         names = part.get("prompts") or []
         if len(names) > 1:
             return True
@@ -583,6 +592,8 @@ class PromptComposer:
         prompt_lora_stack = []
         prompt_mods = []
         for part in parts:
+            if bool(part.get("muted", False)):
+                continue
             raw_category = part.get("category") or ""
             category = _find_category_case_insensitive(prompts_data, raw_category) or raw_category
             category_data = prompts_data.get(category, {})

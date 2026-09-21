@@ -1,7 +1,8 @@
 import { app } from "../../scripts/app.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
-import { DEFAULT_THUMBNAIL } from "./prompt_manager_advanced.js";
+import { DEFAULT_THUMBNAIL, forwardWheelToCanvas } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
+import { getPromptTypeChoices } from "./prompt_browser_edit.js";
 import { loadComposerPrompts, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
 
 const PARTS_PROP_KEY = "prompt_composer_parts";
@@ -65,6 +66,94 @@ function hideWidget(widget) {
     widget.computeSize = () => [0, -4];
     widget.hidden = true;
     widget.draw = function () {};
+}
+
+function showComposerTypePicker(anchorEvent, anchorElement = null) {
+    return new Promise((resolve) => {
+        const existing = document.querySelector('.pm-composer-type-picker');
+        if (existing) existing.remove();
+
+        const menu = document.createElement('div');
+        menu.className = 'pm-composer-type-picker';
+        menu.style.cssText = `
+            position: fixed;
+            background: ${UI.panel || "#1f2937"};
+            border: 1px solid ${UI.inputBorder || "#445064"};
+            border-radius: 8px;
+            padding: 6px 0;
+            z-index: 10001;
+            min-width: 180px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+        `;
+
+        const addItem = (value, label) => {
+            const item = document.createElement('div');
+            item.textContent = label;
+            item.style.cssText = `
+                padding: 8px 14px;
+                color: ${UI.textPrimary || "#d1d5db"};
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+            `;
+            item.onmouseover = () => {
+                item.style.background = UI.accentSoft || 'rgba(56, 130, 246, 0.16)';
+            };
+            item.onmouseout = () => {
+                item.style.background = 'transparent';
+            };
+            item.onclick = () => {
+                cleanup();
+                resolve(value);
+            };
+            menu.appendChild(item);
+        };
+
+        addItem('__all__', 'All');
+        for (const choice of getPromptTypeChoices()) {
+            if (!choice?.value) continue;
+            addItem(choice.value, choice.label || choice.value);
+        }
+
+        const clickX = Number(anchorEvent?.clientX);
+        const clickY = Number(anchorEvent?.clientY);
+        const hasPointerPosition = Number.isFinite(clickX) && Number.isFinite(clickY);
+        const rect = anchorElement?.getBoundingClientRect?.();
+        const left = hasPointerPosition
+            ? Math.min(clickX + 4, window.innerWidth - 200)
+            : (rect ? Math.min(rect.left, window.innerWidth - 200) : Math.max(16, (window.innerWidth - 180) / 2));
+        const top = hasPointerPosition
+            ? Math.min(clickY + 4, window.innerHeight - 320)
+            : (rect ? Math.min(rect.bottom + 6, window.innerHeight - 320) : Math.max(16, (window.innerHeight - 320) / 2));
+        menu.style.left = `${Math.max(8, left)}px`;
+        menu.style.top = `${Math.max(8, top)}px`;
+        document.body.appendChild(menu);
+
+        const onPointerDown = (event) => {
+            if (!menu.contains(event.target)) {
+                cleanup();
+                resolve(null);
+            }
+        };
+
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                cleanup();
+                resolve(null);
+            }
+        };
+
+        const cleanup = () => {
+            document.removeEventListener('mousedown', onPointerDown, true);
+            document.removeEventListener('keydown', onKeyDown, true);
+            if (menu.parentNode) menu.parentNode.removeChild(menu);
+        };
+
+        setTimeout(() => {
+            document.addEventListener('mousedown', onPointerDown, true);
+            document.addEventListener('keydown', onKeyDown, true);
+        }, 0);
+    });
 }
 
 function readToggleValue(node, widgetName, propKey, fallbackValue) {
@@ -269,6 +358,7 @@ function normalizePart(part) {
         strength: clampStrength(part?.strength ?? 1.0),
         subject_number: clampSubjectNumber(part?.subject_number ?? part?.subject ?? SUBJECT_MIN),
         subject_locked: !!(part?.subject_locked ?? part?.subject_manual ?? false),
+        muted: part?.muted === true,
     };
 }
 
@@ -276,6 +366,12 @@ function resolveSubjectAssignments(parts) {
     const normalizedParts = Array.isArray(parts) ? parts.map((part) => normalizePart(part)) : [];
     let currentSubject = SUBJECT_MIN;
     return normalizedParts.map((part) => {
+        if (part.muted) {
+            return {
+                ...part,
+                effective_subject_number: clampSubjectNumber(currentSubject, SUBJECT_MIN),
+            };
+        }
         if (part.subject_locked && part.subject_number !== SUBJECT_NONE) {
             currentSubject = clampSubjectNumber(part.subject_number, currentSubject);
         }
@@ -534,17 +630,12 @@ function ensureComposerUi(node) {
     switchRow.appendChild(positionSwitch.group);
     switchRow.appendChild(generationModeSwitch.group);
     root.appendChild(switchRow);
-    let scroller = null;
-    const absorbWheel = (evt) => {
-        evt.preventDefault();
-        evt.stopPropagation();
-        if (scroller) {
-            scroller.scrollTop += evt.deltaY;
-        }
-    };
-    root.addEventListener("wheel", absorbWheel, { passive: false });
 
-    scroller = document.createElement("div");
+    // Let wheel events reach the LiteGraph canvas so zoom/scroll keeps working
+    // while hovering the Prompt Composer node UI.
+    forwardWheelToCanvas(root);
+
+    const scroller = document.createElement("div");
     scroller.style.cssText = `
         flex: 1;
         min-height: 0;
@@ -556,7 +647,6 @@ function ensureComposerUi(node) {
         box-sizing: border-box;
         scrollbar-width: thin;
     `;
-    scroller.addEventListener("wheel", absorbWheel, { passive: false });
 
     const grid = document.createElement("div");
     grid.style.cssText = `
@@ -669,6 +759,16 @@ function ensureComposerUi(node) {
             () => {},
             true,
         );
+        addItem(resolvedPart?.muted ? "Unmute Prompt" : "Mute Prompt", () => {
+            const next = [...parts];
+            if (!next[partIndex]) return;
+            next[partIndex] = normalizePart({
+                ...next[partIndex],
+                muted: !resolvedPart?.muted,
+            });
+            writeParts(node, next);
+            render();
+        });
         addItem("Subject +1", () => {
             const next = [...parts];
             if (!next[partIndex]) return;
@@ -746,6 +846,7 @@ function ensureComposerUi(node) {
         const inheritedSubject = getInheritedSubjectDefaults(parts.slice(0, index));
         const currentPrompt = part.prompts[0] || "";
         const hasMultiSelection = Array.isArray(part.prompts) && part.prompts.length > 1;
+        const initialCategoryTypeFilter = getCategoryPromptType(node, part.category) || "__all__";
         const selection = await showThumbnailBrowser(node, part.category || "", currentPrompt, {
             title: "Select Prompt Composer Part",
             multiSelect: hasMultiSelection,
@@ -755,6 +856,7 @@ function ensureComposerUi(node) {
             selectedPrompts: part.prompts,
             loadPromptsFn: loadComposerPrompts,
             preferenceScope: "composer",
+            initialCategoryTypeFilter,
         });
 
         if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) return;
@@ -857,6 +959,7 @@ function ensureComposerUi(node) {
             const multiCount = part.prompts.length;
             const subjectAccent = getSubjectAccent(part.effective_subject_number);
             const isSubjectAnchor = !!part.subject_locked && part.effective_subject_number !== SUBJECT_NONE;
+            const isMuted = part.muted === true;
 
             const card = document.createElement("div");
             const cardBorderColor = subjectAccent.border;
@@ -871,6 +974,8 @@ function ensureComposerUi(node) {
                 box-sizing: border-box;
                 min-height: ${tileMinHeight}px;
                 box-shadow: ${isSubjectAnchor ? `0 0 0 1px ${subjectAccent.soft}` : "none"};
+                opacity: ${isMuted ? "0.5" : "1"};
+                filter: ${isMuted ? "grayscale(0.45)" : "none"};
             `;
             card.oncontextmenu = (evt) => showPartContextMenu(evt, index);
             card.draggable = false;
@@ -937,6 +1042,25 @@ function ensureComposerUi(node) {
             `;
             thumbBtn.title = "Click to select prompt fragment(s)";
 
+            const togglePartMuted = () => {
+                const next = [...readParts(node)];
+                if (!next[index]) return;
+                next[index] = normalizePart({
+                    ...next[index],
+                    muted: !(next[index]?.muted === true),
+                });
+                writeParts(node, next);
+                render();
+            };
+
+            const handleAuxClick = (evt) => {
+                if (evt.button !== 1) return;
+                evt.preventDefault();
+                evt.stopPropagation();
+                togglePartMuted();
+            };
+            card.addEventListener("auxclick", handleAuxClick);
+
             const subjectBadge = document.createElement("button");
             subjectBadge.type = "button";
             subjectBadge.textContent = `#${padSubjectNumber(part.effective_subject_number)}`;
@@ -998,6 +1122,30 @@ function ensureComposerUi(node) {
             });
             thumbBtn.appendChild(subjectBadge);
 
+            if (isMuted) {
+                const mutedBadge = document.createElement("div");
+                mutedBadge.textContent = "MUTED";
+                mutedBadge.style.cssText = `
+                    position: absolute;
+                    right: 4px;
+                    bottom: 4px;
+                    min-width: 40px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: rgba(15,23,42,0.88);
+                    border: 1px solid rgba(148, 163, 184, 0.75);
+                    color: #e5e7eb;
+                    font-size: 9px;
+                    line-height: 16px;
+                    text-align: center;
+                    font-weight: 700;
+                    padding: 0 6px;
+                    box-sizing: border-box;
+                    letter-spacing: 0.05em;
+                `;
+                thumbBtn.appendChild(mutedBadge);
+            }
+
             if (multiCount > 1) {
                 const badge = document.createElement("div");
                 badge.textContent = `+${multiCount - 1}`;
@@ -1031,13 +1179,14 @@ function ensureComposerUi(node) {
                 : label.textContent;
             label.style.cssText = `
                 font-size: 10px;
-                color: ${UI.textPrimary || "#d1d5db"};
+                color: ${isMuted ? (UI.textMuted || "#9ca3af") : (UI.textPrimary || "#d1d5db")};
                 line-height: 1.2;
                 text-align: center;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 cursor: pointer;
+                text-decoration: ${isMuted ? "line-through" : "none"};
             `;
             const strengthRow = document.createElement("div");
             strengthRow.style.cssText = `
@@ -1199,9 +1348,13 @@ function ensureComposerUi(node) {
         `;
         addCard.textContent = "+";
         addCard.title = "Add prompt part";
-        addCard.onclick = async () => {
+        addCard.onclick = async (evt) => {
             const parts = readParts(node);
             const inheritedSubject = getInheritedSubjectDefaults(parts);
+            const selectedType = await showComposerTypePicker(evt, evt.currentTarget);
+            if (selectedType === null) {
+                return;
+            }
             const selection = await showThumbnailBrowser(node, "", "", {
                 title: "Add Prompt Composer Part",
                 multiSelect: true,
@@ -1211,6 +1364,7 @@ function ensureComposerUi(node) {
                 selectedPrompts: [],
                 loadPromptsFn: loadComposerPrompts,
                 preferenceScope: "composer",
+                initialCategoryTypeFilter: selectedType,
             });
 
             if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) {
