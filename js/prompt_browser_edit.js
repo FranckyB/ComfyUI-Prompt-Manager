@@ -25,8 +25,10 @@ const PROMPT_TYPE_CHOICES = [
     { value: "background", label: "Background" },
     { value: "camera", label: "Camera" },
     { value: "character", label: "Character" },
+    { value: "characteristic", label: "Characteristic" },
     { value: "composition", label: "Composition" },
     { value: "dialogue", label: "Dialogue" },
+    { value: "expression", label: "Expression" },
     { value: "lighting", label: "Lighting" },
     { value: "scene", label: "Scene" },
     { value: "soundscape", label: "Soundscape" },
@@ -543,9 +545,13 @@ export function createPromptBrowserEditPanel(options) {
         syncPromptSelection,
         onChange,
         compact,
+        width,
     } = options || {};
     const isCompact = Boolean(compact);
-    const EDIT_PANEL_WIDTH = isCompact ? 280 : 320;
+    const requestedWidth = Number(width);
+    const EDIT_PANEL_WIDTH = Number.isFinite(requestedWidth) && requestedWidth > 0
+        ? Math.round(requestedWidth)
+        : (isCompact ? 280 : 320);
     const isSystemPromptsSource = String(endpointPrefix) === "/prompt-generator";
     const isPromptManagerSource = String(endpointPrefix) === "/prompt-manager" || String(endpointPrefix) === "/prompt-manager-advanced";
     const isComposerSource = !isSystemPromptsSource && !isPromptManagerSource;
@@ -1267,8 +1273,9 @@ export function createPromptBrowserEditPanel(options) {
         syncSectionVisibility();
     }
 
-    async function clearPrompt() {
-        const canProceed = await confirmDiscardChanges();
+    async function clearPrompt(options = {}) {
+        const skipConfirm = options?.skipConfirm === true;
+        const canProceed = skipConfirm ? true : await confirmDiscardChanges();
         if (!canProceed) return false;
         promptNameInput.value = "";
         promptTextArea.value = "";

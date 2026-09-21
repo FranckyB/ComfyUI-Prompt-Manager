@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
-import { DEFAULT_THUMBNAIL, forwardWheelToCanvas } from "./prompt_manager_advanced.js";
+import { DEFAULT_THUMBNAIL } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
 import { getPromptTypeChoices } from "./prompt_browser_edit.js";
 import { loadComposerPrompts, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
@@ -488,6 +488,81 @@ function writeParts(node, parts) {
     app.graph.setDirtyCanvas(true, true);
 }
 
+function getSelectedPartIndices(node, partCount = null) {
+    const raw = node?._composerSelectedPartIndices;
+    const values = raw instanceof Set ? Array.from(raw) : (Array.isArray(raw) ? raw : []);
+    return values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value >= 0 && (partCount === null || value < partCount))
+        .sort((a, b) => a - b);
+}
+
+function setSelectedPartIndices(node, indices, partCount = null) {
+    const next = new Set(
+        (Array.isArray(indices) ? indices : [])
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value) && value >= 0 && (partCount === null || value < partCount))
+    );
+    node._composerSelectedPartIndices = next;
+}
+
+function clearSelectedPartIndices(node) {
+    node._composerSelectedPartIndices = new Set();
+}
+
+function toggleSelectedPartIndex(node, index, partCount = null) {
+    const next = new Set(getSelectedPartIndices(node, partCount));
+    if (next.has(index)) {
+        next.delete(index);
+    } else {
+        next.add(index);
+    }
+    node._composerSelectedPartIndices = next;
+    return next;
+}
+
+function buildPartsFromBrowserSelection(node, selection, inheritedSubject, basePart = null, preferredCategory = "") {
+    if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) {
+        return [];
+    }
+
+    const normalizedBasePart = basePart ? normalizePart(basePart) : null;
+    const selectionMode = String(selection.selectionMode || "combine").trim().toLowerCase();
+    const buildPart = (category, prompts) => {
+        const subjectState = inferPartSubjectState(node, category, normalizedBasePart, inheritedSubject);
+        return normalizePart({
+            category,
+            prompts,
+            strength: normalizedBasePart?.strength ?? 1.0,
+            muted: normalizedBasePart?.muted === true,
+            subject_number: subjectState.subject_number,
+            subject_locked: subjectState.subject_locked,
+        });
+    };
+
+    if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
+        const entries = Object.entries(selection.selectionsByCategory)
+            .filter(([, prompts]) => Array.isArray(prompts) && prompts.length > 0)
+            .sort((a, b) => {
+                if (!preferredCategory) return 0;
+                if (a[0] === preferredCategory) return -1;
+                if (b[0] === preferredCategory) return 1;
+                return 0;
+            });
+        if (selectionMode === "split") {
+            return entries.flatMap(([category, prompts]) => prompts.map((promptName) => buildPart(category, [promptName])));
+        }
+        return entries.map(([category, prompts]) => buildPart(category, prompts));
+    }
+
+    const category = selection.category || normalizedBasePart?.category || "";
+    const prompts = selection.prompts.filter((name) => String(name || "").trim());
+    if (selectionMode === "split") {
+        return prompts.map((promptName) => buildPart(category, [promptName]));
+    }
+    return [buildPart(category, prompts)];
+}
+
 function ensureHiddenComposerWidgets(node) {
     hideWidget(getPartsWidget(node));
     hideWidget(getWidgetByName(node, OUTPUT_FORMAT_WIDGET_NAME));
@@ -631,10 +706,6 @@ function ensureComposerUi(node) {
     switchRow.appendChild(generationModeSwitch.group);
     root.appendChild(switchRow);
 
-    // Let wheel events reach the LiteGraph canvas so zoom/scroll keeps working
-    // while hovering the Prompt Composer node UI.
-    forwardWheelToCanvas(root);
-
     const scroller = document.createElement("div");
     scroller.style.cssText = `
         flex: 1;
@@ -702,6 +773,72 @@ function ensureComposerUi(node) {
         node._composerContextMenu = null;
     };
 
+    const mergeSelectedPromptParts = (indices = null) => {
+        const parts = readParts(node);
+        const selectedIndices = Array.isArray(indices) && indices.length > 0
+            ? indices.filter((value) => Number.isInteger(value) && value >= 0 && value < parts.length).sort((a, b) => a - b)
+            : getSelectedPartIndices(node, parts.length);
+        if (selectedIndices.length < 2) return false;
+
+        const selectedParts = selectedIndices.map((index) => normalizePart(parts[index]));
+        const category = selectedParts[0]?.category || "";
+        if (!selectedParts.every((part) => part.category === category)) {
+            return false;
+        }
+
+        const seenPrompts = new Set();
+        const mergedPrompts = [];
+        selectedParts.forEach((part) => {
+            part.prompts.forEach((promptName) => {
+                const key = String(promptName || "").trim().toLowerCase();
+                if (!key || seenPrompts.has(key)) return;
+                seenPrompts.add(key);
+                mergedPrompts.push(promptName);
+            });
+        });
+        if (!mergedPrompts.length) return false;
+
+        const mergedPart = normalizePart({
+            ...selectedParts[0],
+            prompts: mergedPrompts,
+        });
+
+        const selectedIndexSet = new Set(selectedIndices);
+        const insertionIndex = selectedIndices[0];
+        const next = [];
+        parts.forEach((part, index) => {
+            if (index === insertionIndex) {
+                next.push(mergedPart);
+                return;
+            }
+            if (selectedIndexSet.has(index)) {
+                return;
+            }
+            next.push(part);
+        });
+
+        writeParts(node, next);
+        setSelectedPartIndices(node, [insertionIndex], next.length);
+        render();
+        return true;
+    };
+
+    const splitPromptPart = (partIndex) => {
+        const parts = readParts(node);
+        const part = normalizePart(parts[partIndex]);
+        if (!part || part.prompts.length < 2) return false;
+        const splitParts = part.prompts.map((promptName) => normalizePart({
+            ...part,
+            prompts: [promptName],
+        }));
+        const next = [...parts];
+        next.splice(partIndex, 1, ...splitParts);
+        writeParts(node, next);
+        setSelectedPartIndices(node, splitParts.map((_, offset) => partIndex + offset), next.length);
+        render();
+        return true;
+    };
+
     const showPartContextMenu = (evt, partIndex) => {
         evt.preventDefault();
         evt.stopPropagation();
@@ -749,6 +886,14 @@ function ensureComposerUi(node) {
         const parts = readParts(node);
         const resolvedParts = resolveSubjectAssignments(parts);
         const resolvedPart = resolvedParts[partIndex] || null;
+        const selectedIndices = getSelectedPartIndices(node, parts.length);
+        const contextIndices = selectedIndices.length > 1 && selectedIndices.includes(partIndex)
+            ? selectedIndices
+            : [partIndex];
+        const canMergeContextParts = contextIndices.length > 1 && contextIndices.every((index) => {
+            const current = normalizePart(parts[index]);
+            return current.category === normalizePart(parts[contextIndices[0]]).category;
+        });
 
         addItem(
             resolvedPart?.effective_subject_number === SUBJECT_NONE
@@ -769,6 +914,14 @@ function ensureComposerUi(node) {
             writeParts(node, next);
             render();
         });
+        if (contextIndices.length > 1) {
+            addItem(`Merge Prompts (${contextIndices.length})`, () => {
+                mergeSelectedPromptParts(contextIndices);
+            }, !canMergeContextParts);
+        }
+        addItem("Split Prompts", () => {
+            splitPromptPart(partIndex);
+        }, (resolvedPart?.prompts?.length || 0) < 2);
         addItem("Subject +1", () => {
             const next = [...parts];
             if (!next[partIndex]) return;
@@ -846,7 +999,7 @@ function ensureComposerUi(node) {
         const inheritedSubject = getInheritedSubjectDefaults(parts.slice(0, index));
         const currentPrompt = part.prompts[0] || "";
         const hasMultiSelection = Array.isArray(part.prompts) && part.prompts.length > 1;
-        const initialCategoryTypeFilter = getCategoryPromptType(node, part.category) || "__all__";
+        const initialCategoryTypeFilter = getCategoryPromptType(node, part.category) || "__none__";
         const selection = await showThumbnailBrowser(node, part.category || "", currentPrompt, {
             title: "Select Prompt Composer Part",
             multiSelect: hasMultiSelection,
@@ -857,62 +1010,18 @@ function ensureComposerUi(node) {
             loadPromptsFn: loadComposerPrompts,
             preferenceScope: "composer",
             initialCategoryTypeFilter,
+            multiSelectActionMode: "composer-add",
         });
 
         if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) return;
 
+        const replacementParts = buildPartsFromBrowserSelection(node, selection, inheritedSubject, part, part.category || "");
+        if (!replacementParts.length) return;
+
         const next = [...parts];
-        const originalCategory = part.category || "";
+        next.splice(index, 1, ...replacementParts);
 
-        if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
-            const selectedCats = Object.keys(selection.selectionsByCategory);
-
-            if (selection.selectionsByCategory[originalCategory]) {
-                const nextCategory = originalCategory;
-                const subjectState = inferPartSubjectState(node, nextCategory, part, inheritedSubject);
-                next[index] = normalizePart({
-                    category: nextCategory,
-                    prompts: selection.selectionsByCategory[originalCategory],
-                    strength: part.strength,
-                    subject_number: subjectState.subject_number,
-                    subject_locked: subjectState.subject_locked,
-                });
-            } else {
-                const firstCat = selectedCats[0];
-                const subjectState = inferPartSubjectState(node, firstCat, part, inheritedSubject);
-                next[index] = normalizePart({
-                    category: firstCat,
-                    prompts: selection.selectionsByCategory[firstCat],
-                    strength: part.strength,
-                    subject_number: subjectState.subject_number,
-                    subject_locked: subjectState.subject_locked,
-                });
-            }
-
-            const usedCategory = next[index].category;
-            for (const cat of selectedCats) {
-                if (cat === usedCategory) continue;
-                const subjectState = inferPartSubjectState(node, cat, next[index], inheritedSubject);
-                next.push(normalizePart({
-                    category: cat,
-                    prompts: selection.selectionsByCategory[cat],
-                    strength: part.strength,
-                    subject_number: subjectState.subject_number,
-                    subject_locked: subjectState.subject_locked,
-                }));
-            }
-        } else {
-            const nextCategory = selection.category || part.category || "";
-            const subjectState = inferPartSubjectState(node, nextCategory, part, inheritedSubject);
-            next[index] = normalizePart({
-                category: nextCategory,
-                prompts: selection.prompts,
-                strength: part.strength,
-                subject_number: subjectState.subject_number,
-                subject_locked: subjectState.subject_locked,
-            });
-        }
-
+        clearSelectedPartIndices(node);
         writeParts(node, next);
         render();
     };
@@ -939,6 +1048,7 @@ function ensureComposerUi(node) {
     const render = () => {
         const parts = readParts(node);
         const resolvedParts = resolveSubjectAssignments(parts);
+        const selectedPartIndexSet = new Set(getSelectedPartIndices(node, resolvedParts.length));
         const isVideoMode = readGenerationMode(node) === "video";
         const thumbZoom = readThumbZoom(node);
         zoomSlider.value = String(Math.round(thumbZoom * 100));
@@ -960,9 +1070,17 @@ function ensureComposerUi(node) {
             const subjectAccent = getSubjectAccent(part.effective_subject_number);
             const isSubjectAnchor = !!part.subject_locked && part.effective_subject_number !== SUBJECT_NONE;
             const isMuted = part.muted === true;
+            const isSelectedPart = selectedPartIndexSet.has(index);
 
             const card = document.createElement("div");
             const cardBorderColor = subjectAccent.border;
+            const cardShadowParts = [];
+            if (isSubjectAnchor) {
+                cardShadowParts.push(`0 0 0 1px ${subjectAccent.soft}`);
+            }
+            if (isSelectedPart) {
+                cardShadowParts.push(`0 0 0 2px ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"} inset`);
+            }
             card.style.cssText = `
                 display: flex;
                 flex-direction: column;
@@ -973,7 +1091,7 @@ function ensureComposerUi(node) {
                 padding: 4px;
                 box-sizing: border-box;
                 min-height: ${tileMinHeight}px;
-                box-shadow: ${isSubjectAnchor ? `0 0 0 1px ${subjectAccent.soft}` : "none"};
+                box-shadow: ${cardShadowParts.length ? cardShadowParts.join(", ") : "none"};
                 opacity: ${isMuted ? "0.5" : "1"};
                 filter: ${isMuted ? "grayscale(0.45)" : "none"};
             `;
@@ -1040,7 +1158,7 @@ function ensureComposerUi(node) {
                 position: relative;
                 display: block;
             `;
-            thumbBtn.title = "Click to select prompt fragment(s)";
+            thumbBtn.title = "Click to select prompt fragment(s)\nMiddle click to mute";
 
             const togglePartMuted = () => {
                 const next = [...readParts(node)];
@@ -1148,7 +1266,7 @@ function ensureComposerUi(node) {
 
             if (multiCount > 1) {
                 const badge = document.createElement("div");
-                badge.textContent = `+${multiCount - 1}`;
+                badge.textContent = `+${multiCount}`;
                 badge.style.cssText = `
                     position: absolute;
                     right: 4px;
@@ -1289,6 +1407,11 @@ function ensureComposerUi(node) {
             };
 
             const onPressStart = (evt) => {
+                if (evt.button === 1) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    return;
+                }
                 if (evt.button !== 0) return;
                 dragArmed = false;
                 clearHoldTimer();
@@ -1316,6 +1439,17 @@ function ensureComposerUi(node) {
                 window.removeEventListener("mouseup", onGlobalMouseUp, true);
                 if (!dragArmed) {
                     evt.stopPropagation();
+                    if (evt.ctrlKey || evt.metaKey) {
+                        toggleSelectedPartIndex(node, index, resolvedParts.length);
+                        render();
+                        return;
+                    }
+                    if (isMuted) {
+                        clearSelectedPartIndices(node);
+                        togglePartMuted();
+                        return;
+                    }
+                    clearSelectedPartIndices(node);
                     await openBrowserForPart(index);
                 } else if (!node._composerIsDragging) {
                     disarmDrag();
@@ -1326,6 +1460,7 @@ function ensureComposerUi(node) {
                 el.addEventListener("mousedown", onPressStart);
                 el.addEventListener("mouseleave", onPressCancel);
                 el.addEventListener("mouseup", onPressEnd);
+                el.addEventListener("auxclick", handleAuxClick);
             });
 
             card.appendChild(thumbBtn);
@@ -1365,6 +1500,7 @@ function ensureComposerUi(node) {
                 loadPromptsFn: loadComposerPrompts,
                 preferenceScope: "composer",
                 initialCategoryTypeFilter: selectedType,
+                multiSelectActionMode: "composer-add",
             });
 
             if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) {
@@ -1372,28 +1508,12 @@ function ensureComposerUi(node) {
             }
 
             const next = [...parts];
-            if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
-                for (const [cat, catPrompts] of Object.entries(selection.selectionsByCategory)) {
-                    const subjectState = inferPartSubjectState(node, cat, null, inheritedSubject);
-                    next.push(normalizePart({
-                        category: cat,
-                        prompts: catPrompts,
-                        strength: 1.0,
-                        subject_number: subjectState.subject_number,
-                        subject_locked: subjectState.subject_locked,
-                    }));
-                }
-            } else {
-                const nextCategory = selection.category || "";
-                const subjectState = inferPartSubjectState(node, nextCategory, null, inheritedSubject);
-                next.push(normalizePart({
-                    category: nextCategory,
-                    prompts: selection.prompts,
-                    strength: 1.0,
-                    subject_number: subjectState.subject_number,
-                    subject_locked: subjectState.subject_locked,
-                }));
+            const addedParts = buildPartsFromBrowserSelection(node, selection, inheritedSubject, null, "");
+            if (!addedParts.length) {
+                return;
             }
+            next.push(...addedParts);
+            clearSelectedPartIndices(node);
             writeParts(node, next);
             render();
         };

@@ -7,7 +7,7 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
 
 [See Node Reference](docs/feature-reference.md)
 
-[See latest update](#latest-update)
+[See Prompt Composer](#prompt-composer)
 
 ## What This Provides
 
@@ -20,6 +20,9 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
 - **Prompt Browser**:
   - For viewing or editing all data types used by the add-on.
   - This node is how one modifies System Prompts used by **Prompt Generator**.
+- **Prompt Composer**:
+  - For building prompts from reusable prompt fragments such as attire, expression, action, style, ambience, and more.
+  - Supports prompt fragment libraries with thumbnails, types, LoRAs, RefMods, random multi-prompt selection, subject grouping, and video/image composition modes.
 - **Prompt Extractor**:
   - Read metadata from images/videos/JSON and output the prompt and LoRAs they use.
 - **Lora Preview integration**:
@@ -64,10 +67,10 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
 - Prompt Manager (Basic): Simple no-frills basic version (The OG).
 - Prompt Generator: prompt creation and enhancement using llama.cpp, Ollama, or a connected ComfyUI CLIP/text encoder.
 - Prompt Extractor: Reads metadata from images/videos/JSON and outputs prompt + LoRA + recipe context.
-- Prompt Compose: A tool to apply re-usable prompts to your prompts, be it expressions, actions, etc.
+- Prompt Composer: Build prompts from reusable fragments, with random prompt groups, subject-aware composition, LoRA/RefMod support, and image/video generation modes.
 - Prompt Browser: A node meant to allow access and write prompts for:
   - System Prompts used by Prompt Generator.
-  - Compose Data used by the Prompt Compose.
+  - Compose Data used by Prompt Composer.
   - Prompt Data used by our Prompt Manager.
 
 ### Recipe Toolset (Experimental)
@@ -96,14 +99,33 @@ Workflow examples are provided to help understand the basics.
 
 - Detailed node reference: [docs/feature-reference.md](docs/feature-reference.md)
 
-## Latest update
-- First draft of a new Prompt Compose system is now included.
-- This first draft is functional and usable today, though the provided default prompts still need refinement.
-- Prompt Compose replaces the Expression Selector node and expands on it significantly: it still handles expression-style prompt appending, but also adds a broader prompt composition workflow with category/prompt management and editing tools. Prompt Compose also supports random generation, letting you select multiple prompts or randomly select one.
-- New Prompt Compose Manager is provided to add new prompts and categories.
+## Prompt Composer
+
+Prompt Composer replaces the older Expression Selector style workflow with a broader prompt-fragment composition system. It is built for assembling prompts from reusable category-based fragments while keeping those fragments easy to browse, edit, and randomize.
+
+- Compose output can be inserted before or after an incoming prompt.
+- Output can be returned as plain text or JSON.
+- Supports both image and video composition modes.
+- Prompt fragments can carry LoRAs and RefMods, not just text.
+- Categories can be typed for cleaner browsing, with dedicated filtering in the Prompt Browser.
+- Multi-select can be added either as one random-choice fragment or as separate prompt parts.
+- Existing multi-prompt parts can be merged or split directly on the node.
+- Parts support subject-aware assignment so character-related fragments can stay grouped while non-subject fragments remain shared.
+- Parts can be muted temporarily from the node UI without deleting them.
+- Prompt Browser integration supports direct editing, thumbnails, category creation, and type-aware reopen behavior from the node.
+- Prompt Browser state such as expanded type filtering is preserved across reopenings.
+
+Node-side Prompt Composer controls include:
+
+- Click a fragment to edit or replace it.
+- Middle click to mute or unmute a fragment.
+- Ctrl-click to select multiple parts, then right-click to merge compatible selections.
+- Right-click a merged part to split it back into separate prompts.
+- Drag and drop parts to reorder them.
+- Adjust fragment strength directly on the card.
 
 <div align="center">
-  <figcaption>Use Prompt Compose to generate Prompts from preset fragments</figcaption>
+  <figcaption>Use Prompt Composer to generate prompts from preset fragments</figcaption>
   <img src="docs/images/prompt_compose.png" alt="Expression Selector Example">
 </div>
 
@@ -115,7 +137,7 @@ Workflow examples are provided to help understand the basics.
 
 The new **Prompt Browser** lets you create and edit all three prompt libraries from a single interface:
   - **System prompts**: the instructions that steer the Prompt Generator's LLM
-  - **Compose prompts**: Prompt Composer fragments
+  - **Compose prompts**: Prompt Composer fragment libraries, including category types, thumbnails, LoRAs, and RefMods
   - **Prompt Manager prompts**: your saved user prompts
 
 System prompts now feed straight into the **Prompt Generator**, so you can author your own and pick them right in the node. Sample system prompts ship in the node's `/prompts` folder to get you started. If new prompts are added and you don't have them, you can use the Prompt Browser's Import JSON feature to add them.

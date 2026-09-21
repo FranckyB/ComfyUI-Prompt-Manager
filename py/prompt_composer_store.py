@@ -162,6 +162,9 @@ async def compose_save_category(request):
         cat_data = {}
         if data.get("nsfw"):
             cat_data["__meta__"] = {"nsfw": True}
+        prompt_type = str(data.get("prompt_type", "")).strip()
+        if prompt_type:
+            cat_data["_prompt_type_"] = prompt_type
         prompts[category_name] = cat_data
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})

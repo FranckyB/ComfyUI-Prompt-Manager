@@ -110,7 +110,7 @@ function forwardWheelToCanvas(element) {
             });
             canvas.dispatchEvent(newEvent);
         }
-    }, { passive: true });
+    }, { passive: true, capture: true });
 }
 
 // ========================
