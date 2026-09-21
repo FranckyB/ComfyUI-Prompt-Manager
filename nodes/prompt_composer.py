@@ -56,18 +56,17 @@ def _prefix_with_category(category, text):
 
 PROMPT_TYPE_CHOICES = [
     "scene",
-    "subject",
     "character",
     "animal",
-    "style",
-    "color_palette",
-    "lighting",
-    "mood",
+    "accessory",
+    "ambience",
+    "attire",
     "background",
+    "style",
+    "lighting",
     "composition",
     "camera",
     "motion",
-    "temporal_flow",
     "soundscape",
     "dialogue",
 ]
@@ -76,8 +75,9 @@ OUTPUT_FORMAT_CHOICES = ["text", "json"]
 COMPOSE_POSITION_CHOICES = ["after", "before"]
 GENERATION_MODE_CHOICES = ["image", "video"]
 REFMOD_MAX_WEIGHT = 10.0
+SUBJECT_NONE = 0
 SUBJECT_MIN = 1
-SUBJECT_MAX = 99
+SUBJECT_MAX = 16
 _REFMOD_CORE_MODULE = None
 _REFMOD_CORE_IMPORT_ERROR = None
 _VISUAL_SUFFIXES = ("_visual", "_video")
@@ -159,7 +159,7 @@ def _normalize_subject_number(value, default=SUBJECT_MIN):
         numeric = int(round(float(value)))
     except (TypeError, ValueError):
         numeric = int(default)
-    return max(SUBJECT_MIN, min(SUBJECT_MAX, numeric))
+    return max(SUBJECT_NONE, min(SUBJECT_MAX, numeric))
 
 
 def _resolve_subject_parts(parts):
@@ -171,10 +171,13 @@ def _resolve_subject_parts(parts):
         normalized = dict(part)
         subject_number = _normalize_subject_number(normalized.get("subject_number", SUBJECT_MIN), default=current_subject)
         subject_locked = bool(normalized.get("subject_locked", False))
-        if subject_locked:
+        if subject_locked and subject_number != SUBJECT_NONE:
             current_subject = subject_number
-        effective_subject_number = current_subject if not subject_locked else subject_number
-        current_subject = effective_subject_number
+        if subject_locked and subject_number == SUBJECT_NONE:
+            effective_subject_number = SUBJECT_NONE
+        else:
+            effective_subject_number = current_subject if not subject_locked else subject_number
+            current_subject = effective_subject_number
         normalized["subject_number"] = subject_number
         normalized["subject_locked"] = subject_locked
         normalized["effective_subject_number"] = effective_subject_number
@@ -439,6 +442,8 @@ def _override_refmod_row_descriptions(rows, description):
 
 
 def _subject_label(subject_number):
+    if int(subject_number) <= 0:
+        return "Not Subject"
     return f"Subject {int(subject_number)}"
 
 
@@ -453,6 +458,12 @@ def _get_subject_group(subject_groups, subject_number):
     }
     subject_groups.append(group)
     return group
+
+
+def _format_json_description(text, strength, use_strength=True):
+    if not use_strength:
+        return str(text or "").strip()
+    return _format_fragment(text, strength)
 
 
 def _load_prompt_refmods(mod_name, weight):
@@ -567,6 +578,8 @@ class PromptComposer:
 
         fragments = []
         subject_groups = []
+        non_subject_fragments = []
+        non_subject_sections = []
         prompt_lora_stack = []
         prompt_mods = []
         for part in parts:
@@ -586,16 +599,25 @@ class PromptComposer:
             text = entry.get("prompt", "") or ""
             prompt_prefix = _resolve_prompt_prefix(category_data, category)
             labeled = _prefix_with_category(prompt_prefix, text)
-            formatted_labeled = _format_fragment(labeled, part.get("strength", 1.0))
-            formatted_plain = _format_fragment(text, part.get("strength", 1.0))
-            subject_group = _get_subject_group(subject_groups, part.get("effective_subject_number", SUBJECT_MIN))
+            use_strength = selected_generation_mode != "video"
+            formatted_labeled = _format_fragment(labeled, part.get("strength", 1.0)) if use_strength else labeled
+            formatted_plain = _format_fragment(text, part.get("strength", 1.0)) if use_strength else str(text or "").strip()
+            formatted_json = _format_json_description(text, part.get("strength", 1.0), use_strength=use_strength)
             if formatted_labeled:
                 fragments.append(formatted_labeled)
-            if formatted_plain:
-                subject_group["fragments"].append(formatted_plain)
-            key = _json_section_key(category, prompt_prefix)
-            if key:
-                subject_group["sections"].setdefault(key, []).append(text)
+            subject_number = part.get("effective_subject_number", SUBJECT_MIN)
+            if subject_number == SUBJECT_NONE:
+                if formatted_labeled:
+                    non_subject_fragments.append(formatted_labeled)
+                if formatted_json:
+                    non_subject_sections.append(formatted_json)
+            else:
+                subject_group = _get_subject_group(subject_groups, subject_number)
+                if formatted_plain:
+                    subject_group["fragments"].append(formatted_plain)
+                key = _json_section_key(category, prompt_prefix)
+                if key:
+                    subject_group["sections"].setdefault(key, []).append(formatted_json)
 
             if selected_generation_mode == "video":
                 lora_name = _normalize_lora_path(entry.get("lora_video") or "")
@@ -633,6 +655,8 @@ class PromptComposer:
                 for key, values in group["sections"].items():
                     subject_entry[key] = [{"description": value} for value in values]
                 structured["subjects"].append(subject_entry)
+            if non_subject_sections:
+                structured["notes"] = [{"description": value} for value in non_subject_sections]
             if position == "before" and base:
                 structured["scene"] = base
             json_output = json.dumps(structured, indent=2, ensure_ascii=False) if structured else ""
@@ -645,7 +669,12 @@ class PromptComposer:
                     if not body:
                         continue
                     subject_blocks.append(f"<{_subject_label(group['number'])}>\n{body}")
-                fragments_text = "\n\n".join(subject_blocks)
+                sections = []
+                if subject_blocks:
+                    sections.append("subject_definitions:\n" + "\n\n".join(subject_blocks))
+                if non_subject_fragments:
+                    sections.append("\n".join(non_subject_fragments))
+                fragments_text = "\n\n".join(section for section in sections if section)
             else:
                 fragments_text = "\n".join(fragments)
 

@@ -25,11 +25,35 @@ const MAX_THUMB_ZOOM = 1.5;
 const THUMB_ZOOM_STEPS = [0.75, 1.0, 1.25, 1.5];
 const GRID_GAP = 8;
 const CARD_META_HEIGHT = 62;
+const CARD_META_HEIGHT_VIDEO = 36;
 const NODE_CHROME_HEIGHT = 86;
 const SCROLLER_PADDING_TOP = 8;
 const SCROLLER_PADDING_BOTTOM = 24;
+const SUBJECT_NONE = 0;
 const SUBJECT_MIN = 1;
-const SUBJECT_MAX = 99;
+const SUBJECT_MAX = 16;
+const NON_SUBJECT_PROMPT_TYPES = new Set([
+    "style",
+    "motion",
+    "lighting",
+    "ambience",
+    "composition",
+    "camera",
+    "motion",
+    "soundscape",
+    "dialogue",
+    "weather",
+]);
+const SUBJECT_ACCENTS = [
+    { border: "hsla(8, 84%, 64%, 0.95)", soft: "hsla(8, 84%, 64%, 0.18)", strong: "hsla(8, 84%, 48%, 0.95)", text: "hsl(8, 100%, 96%)" },
+    { border: "hsla(40, 92%, 60%, 0.95)", soft: "hsla(40, 92%, 60%, 0.18)", strong: "hsla(40, 92%, 44%, 0.95)", text: "hsl(48, 100%, 96%)" },
+    { border: "hsla(92, 72%, 56%, 0.95)", soft: "hsla(92, 72%, 56%, 0.18)", strong: "hsla(92, 72%, 40%, 0.95)", text: "hsl(92, 100%, 96%)" },
+    { border: "hsla(155, 72%, 48%, 0.95)", soft: "hsla(155, 72%, 48%, 0.18)", strong: "hsla(155, 72%, 34%, 0.95)", text: "hsl(155, 100%, 96%)" },
+    { border: "hsla(205, 88%, 60%, 0.95)", soft: "hsla(205, 88%, 60%, 0.18)", strong: "hsla(205, 88%, 44%, 0.95)", text: "hsl(205, 100%, 96%)" },
+    { border: "hsla(248, 80%, 68%, 0.95)", soft: "hsla(248, 80%, 68%, 0.18)", strong: "hsla(248, 80%, 52%, 0.95)", text: "hsl(248, 100%, 97%)" },
+    { border: "hsla(294, 72%, 64%, 0.95)", soft: "hsla(294, 72%, 64%, 0.18)", strong: "hsla(294, 72%, 48%, 0.95)", text: "hsl(294, 100%, 97%)" },
+    { border: "hsla(332, 78%, 62%, 0.95)", soft: "hsla(332, 78%, 62%, 0.18)", strong: "hsla(332, 78%, 46%, 0.95)", text: "hsl(332, 100%, 97%)" },
+];
 
 function getWidgetByName(node, name) {
     return node.widgets?.find((w) => w.name === name) || null;
@@ -212,22 +236,25 @@ function clampStrength(value) {
 function clampSubjectNumber(value, fallback = SUBJECT_MIN) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
-    return Math.max(SUBJECT_MIN, Math.min(SUBJECT_MAX, Math.round(numeric)));
+    return Math.max(SUBJECT_NONE, Math.min(SUBJECT_MAX, Math.round(numeric)));
 }
 
 function padSubjectNumber(value) {
+    if (clampSubjectNumber(value) === SUBJECT_NONE) return "NS";
     return String(clampSubjectNumber(value)).padStart(2, "0");
 }
 
 function getSubjectAccent(subjectNumber) {
     const normalized = clampSubjectNumber(subjectNumber);
-    const hue = (normalized * 47) % 360;
-    return {
-        border: `hsla(${hue}, 76%, 62%, 0.92)`,
-        soft: `hsla(${hue}, 76%, 62%, 0.16)`,
-        strong: `hsla(${hue}, 76%, 46%, 0.92)`,
-        text: `hsl(${hue}, 88%, 92%)`,
-    };
+    if (normalized === SUBJECT_NONE) {
+        return {
+            border: "rgba(122, 131, 148, 0.88)",
+            soft: "rgba(122, 131, 148, 0.12)",
+            strong: "rgba(80, 88, 104, 0.95)",
+            text: "#eef2f7",
+        };
+    }
+    return SUBJECT_ACCENTS[(normalized - SUBJECT_MIN) % SUBJECT_ACCENTS.length];
 }
 
 function normalizePart(part) {
@@ -249,14 +276,18 @@ function resolveSubjectAssignments(parts) {
     const normalizedParts = Array.isArray(parts) ? parts.map((part) => normalizePart(part)) : [];
     let currentSubject = SUBJECT_MIN;
     return normalizedParts.map((part) => {
-        if (part.subject_locked) {
+        if (part.subject_locked && part.subject_number !== SUBJECT_NONE) {
             currentSubject = clampSubjectNumber(part.subject_number, currentSubject);
         }
-        const effectiveSubjectNumber = clampSubjectNumber(
-            part.subject_locked ? part.subject_number : currentSubject,
-            currentSubject,
-        );
-        currentSubject = effectiveSubjectNumber;
+        const effectiveSubjectNumber = part.subject_locked && part.subject_number === SUBJECT_NONE
+            ? SUBJECT_NONE
+            : clampSubjectNumber(
+                part.subject_locked ? part.subject_number : currentSubject,
+                currentSubject,
+            );
+        if (effectiveSubjectNumber !== SUBJECT_NONE) {
+            currentSubject = effectiveSubjectNumber;
+        }
         return {
             ...part,
             effective_subject_number: effectiveSubjectNumber,
@@ -280,6 +311,44 @@ function nextSubjectNumber(value, delta) {
     const span = SUBJECT_MAX - SUBJECT_MIN + 1;
     const offset = ((current - SUBJECT_MIN + delta) % span + span) % span;
     return SUBJECT_MIN + offset;
+}
+
+function getCategoryPromptType(node, category) {
+    const raw = node?.prompts?.[category]?._prompt_type_;
+    return String(raw || "").trim().toLowerCase();
+}
+
+function categoryShouldBeNonSubject(node, category) {
+    return NON_SUBJECT_PROMPT_TYPES.has(getCategoryPromptType(node, category));
+}
+
+function inferPartSubjectState(node, category, basePart = null, inheritedDefaults = null) {
+    if (categoryShouldBeNonSubject(node, category)) {
+        return {
+            subject_number: SUBJECT_NONE,
+            subject_locked: true,
+        };
+    }
+
+    if (basePart && basePart.subject_locked && basePart.subject_number !== SUBJECT_NONE) {
+        return {
+            subject_number: clampSubjectNumber(basePart.subject_number),
+            subject_locked: true,
+        };
+    }
+
+    if (basePart && !basePart.subject_locked && basePart.subject_number !== SUBJECT_NONE) {
+        return {
+            subject_number: clampSubjectNumber(basePart.subject_number),
+            subject_locked: false,
+        };
+    }
+
+    const inherited = inheritedDefaults || { subject_number: SUBJECT_MIN, subject_locked: false };
+    return {
+        subject_number: clampSubjectNumber(inherited.subject_number ?? SUBJECT_MIN),
+        subject_locked: false,
+    };
 }
 
 function parseParts(raw) {
@@ -592,7 +661,9 @@ function ensureComposerUi(node) {
         const resolvedPart = resolvedParts[partIndex] || null;
 
         addItem(
-            resolvedPart?.subject_locked
+            resolvedPart?.effective_subject_number === SUBJECT_NONE
+                ? "Not Subject"
+                : resolvedPart?.subject_locked
                 ? `Subject #${padSubjectNumber(resolvedPart.subject_number)} (custom)`
                 : `Subject #${padSubjectNumber(resolvedPart?.effective_subject_number ?? SUBJECT_MIN)} (auto)`,
             () => {},
@@ -627,11 +698,25 @@ function ensureComposerUi(node) {
             if (!next[partIndex]) return;
             next[partIndex] = normalizePart({
                 ...next[partIndex],
+                subject_number: resolvedPart?.effective_subject_number === SUBJECT_NONE
+                    ? SUBJECT_MIN
+                    : resolvedPart?.effective_subject_number,
                 subject_locked: false,
             });
             writeParts(node, next);
             render();
-        }, !resolvedPart?.subject_locked);
+        }, !resolvedPart?.subject_locked || resolvedPart?.effective_subject_number === SUBJECT_NONE);
+        addItem("Not Subject", () => {
+            const next = [...parts];
+            if (!next[partIndex]) return;
+            next[partIndex] = normalizePart({
+                ...next[partIndex],
+                subject_number: SUBJECT_NONE,
+                subject_locked: true,
+            });
+            writeParts(node, next);
+            render();
+        }, resolvedPart?.effective_subject_number === SUBJECT_NONE);
         addItem("Delete", () => {
             const next = parts.filter((_, idx) => idx !== partIndex);
             writeParts(node, next);
@@ -658,6 +743,7 @@ function ensureComposerUi(node) {
     const openBrowserForPart = async (index) => {
         const parts = readParts(node);
         const part = parts[index] || { category: "", prompts: [], strength: 1.0, subject_number: SUBJECT_MIN, subject_locked: false };
+        const inheritedSubject = getInheritedSubjectDefaults(parts.slice(0, index));
         const currentPrompt = part.prompts[0] || "";
         const hasMultiSelection = Array.isArray(part.prompts) && part.prompts.length > 1;
         const selection = await showThumbnailBrowser(node, part.category || "", currentPrompt, {
@@ -680,42 +766,48 @@ function ensureComposerUi(node) {
             const selectedCats = Object.keys(selection.selectionsByCategory);
 
             if (selection.selectionsByCategory[originalCategory]) {
+                const nextCategory = originalCategory;
+                const subjectState = inferPartSubjectState(node, nextCategory, part, inheritedSubject);
                 next[index] = normalizePart({
-                    category: originalCategory,
+                    category: nextCategory,
                     prompts: selection.selectionsByCategory[originalCategory],
                     strength: part.strength,
-                    subject_number: part.subject_number,
-                    subject_locked: part.subject_locked,
+                    subject_number: subjectState.subject_number,
+                    subject_locked: subjectState.subject_locked,
                 });
             } else {
                 const firstCat = selectedCats[0];
+                const subjectState = inferPartSubjectState(node, firstCat, part, inheritedSubject);
                 next[index] = normalizePart({
                     category: firstCat,
                     prompts: selection.selectionsByCategory[firstCat],
                     strength: part.strength,
-                    subject_number: part.subject_number,
-                    subject_locked: part.subject_locked,
+                    subject_number: subjectState.subject_number,
+                    subject_locked: subjectState.subject_locked,
                 });
             }
 
             const usedCategory = next[index].category;
             for (const cat of selectedCats) {
                 if (cat === usedCategory) continue;
+                const subjectState = inferPartSubjectState(node, cat, next[index], inheritedSubject);
                 next.push(normalizePart({
                     category: cat,
                     prompts: selection.selectionsByCategory[cat],
                     strength: part.strength,
-                    subject_number: part.subject_number,
-                    subject_locked: part.subject_locked,
+                    subject_number: subjectState.subject_number,
+                    subject_locked: subjectState.subject_locked,
                 }));
             }
         } else {
+            const nextCategory = selection.category || part.category || "";
+            const subjectState = inferPartSubjectState(node, nextCategory, part, inheritedSubject);
             next[index] = normalizePart({
-                category: selection.category || part.category || "",
+                category: nextCategory,
                 prompts: selection.prompts,
                 strength: part.strength,
-                subject_number: part.subject_number,
-                subject_locked: part.subject_locked,
+                subject_number: subjectState.subject_number,
+                subject_locked: subjectState.subject_locked,
             });
         }
 
@@ -745,11 +837,13 @@ function ensureComposerUi(node) {
     const render = () => {
         const parts = readParts(node);
         const resolvedParts = resolveSubjectAssignments(parts);
+        const isVideoMode = readGenerationMode(node) === "video";
         const thumbZoom = readThumbZoom(node);
         zoomSlider.value = String(Math.round(thumbZoom * 100));
         syncZoomLabel();
         const minCardWidth = Math.round(THUMB_BASE_WIDTH * thumbZoom);
-        const tileMinHeight = Math.round(minCardWidth * (4 / 3)) + CARD_META_HEIGHT;
+        const metaHeight = isVideoMode ? CARD_META_HEIGHT_VIDEO : CARD_META_HEIGHT;
+        const tileMinHeight = Math.round(minCardWidth * (4 / 3)) + metaHeight;
 
         // Flexible tracks keep rows filled while min width controls scale steps.
         grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${minCardWidth}px, 1fr))`;
@@ -762,6 +856,7 @@ function ensureComposerUi(node) {
             const thumb = entry?.thumbnail || DEFAULT_THUMBNAIL;
             const multiCount = part.prompts.length;
             const subjectAccent = getSubjectAccent(part.effective_subject_number);
+            const isSubjectAnchor = !!part.subject_locked && part.effective_subject_number !== SUBJECT_NONE;
 
             const card = document.createElement("div");
             const cardBorderColor = subjectAccent.border;
@@ -769,12 +864,13 @@ function ensureComposerUi(node) {
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
-                border: 1px solid ${cardBorderColor};
+                border: ${isSubjectAnchor ? 2 : 1}px solid ${cardBorderColor};
                 border-radius: 6px;
                 background: linear-gradient(180deg, ${subjectAccent.soft}, ${UI.cardBg || "#2b3340"} 42%);
                 padding: 4px;
                 box-sizing: border-box;
                 min-height: ${tileMinHeight}px;
+                box-shadow: ${isSubjectAnchor ? `0 0 0 1px ${subjectAccent.soft}` : "none"};
             `;
             card.oncontextmenu = (evt) => showPartContextMenu(evt, index);
             card.draggable = false;
@@ -828,7 +924,7 @@ function ensureComposerUi(node) {
             thumbBtn.style.cssText = `
                 width: 100%;
                 aspect-ratio: 3 / 4;
-                border: 1px solid ${subjectAccent.border};
+                border: 1px solid ${UI.inputBorder || "#445064"};
                 border-radius: 4px;
                 background-image: url(${thumb});
                 background-size: contain;
@@ -844,7 +940,9 @@ function ensureComposerUi(node) {
             const subjectBadge = document.createElement("button");
             subjectBadge.type = "button";
             subjectBadge.textContent = `#${padSubjectNumber(part.effective_subject_number)}`;
-            subjectBadge.title = part.subject_locked
+            subjectBadge.title = part.effective_subject_number === SUBJECT_NONE
+                ? "Not a subject. Click to assign Subject 01, right-click for options."
+                : part.subject_locked
                 ? "Custom subject. Click to advance, Shift-click to go back, right-click for auto mode."
                 : "Auto subject. Click to create a custom subject, right-click for options.";
             subjectBadge.style.cssText = `
@@ -877,9 +975,10 @@ function ensureComposerUi(node) {
                 const delta = evt.shiftKey ? -1 : 1;
                 const next = [...readParts(node)];
                 if (!next[index]) return;
+                const baseSubject = part.effective_subject_number === SUBJECT_NONE ? SUBJECT_MIN : part.effective_subject_number;
                 next[index] = normalizePart({
                     ...next[index],
-                    subject_number: nextSubjectNumber(part.effective_subject_number, delta),
+                    subject_number: nextSubjectNumber(baseSubject, delta),
                     subject_locked: true,
                 });
                 writeParts(node, next);
@@ -942,7 +1041,7 @@ function ensureComposerUi(node) {
             `;
             const strengthRow = document.createElement("div");
             strengthRow.style.cssText = `
-                display: flex;
+                display: ${isVideoMode ? "none" : "flex"};
                 align-items: center;
                 gap: 4px;
             `;
@@ -1121,21 +1220,24 @@ function ensureComposerUi(node) {
             const next = [...parts];
             if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
                 for (const [cat, catPrompts] of Object.entries(selection.selectionsByCategory)) {
+                    const subjectState = inferPartSubjectState(node, cat, null, inheritedSubject);
                     next.push(normalizePart({
                         category: cat,
                         prompts: catPrompts,
                         strength: 1.0,
-                        subject_number: inheritedSubject.subject_number,
-                        subject_locked: inheritedSubject.subject_locked,
+                        subject_number: subjectState.subject_number,
+                        subject_locked: subjectState.subject_locked,
                     }));
                 }
             } else {
+                const nextCategory = selection.category || "";
+                const subjectState = inferPartSubjectState(node, nextCategory, null, inheritedSubject);
                 next.push(normalizePart({
-                    category: selection.category || "",
+                    category: nextCategory,
                     prompts: selection.prompts,
                     strength: 1.0,
-                    subject_number: inheritedSubject.subject_number,
-                    subject_locked: inheritedSubject.subject_locked,
+                    subject_number: subjectState.subject_number,
+                    subject_locked: subjectState.subject_locked,
                 }));
             }
             writeParts(node, next);

@@ -1556,9 +1556,25 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         // Multi-select toggle
         let multiSelectBtn = null;
         let enableMultiSelect = () => {};
+        let updateMultiSelectBtn = () => {};
+        const disableMultiSelect = () => {
+            if (!multiSelectMode) return;
+            multiSelectMode = false;
+            selectedNames.clear();
+            if (multiCategorySelect) {
+                Object.keys(selectedByCategory).forEach((cat) => {
+                    selectedByCategory[cat].clear();
+                });
+            }
+            multiSelectAnchorName = "";
+            updateMultiSelectBtn();
+            updateSelectButton();
+            updateFooterText();
+            updateSelectionToolbar();
+        };
         if (supportsMultiSelect) {
             multiSelectBtn = document.createElement("button");
-            const updateMultiSelectBtn = () => {
+            updateMultiSelectBtn = () => {
                 if (multiSelectMode) {
                     multiSelectBtn.textContent = "☑ Multi: On";
                     multiSelectBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.22); border-color: rgba(56, 130, 246, 0.85); color: #dbeafe;`;
@@ -1576,8 +1592,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 updateMultiSelectBtn();
             };
             multiSelectBtn.onclick = () => {
-                multiSelectMode = !multiSelectMode;
-                if (!multiSelectMode) {
+                if (multiSelectMode) {
+                    disableMultiSelect();
+                } else {
+                    multiSelectMode = true;
                     selectedNames.clear();
                     if (multiCategorySelect) {
                         Object.keys(selectedByCategory).forEach((cat) => {
@@ -1585,12 +1603,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         });
                     }
                     multiSelectAnchorName = "";
+                    updateMultiSelectBtn();
+                    updateSelectButton();
+                    updateFooterText();
+                    updateSelectionToolbar();
+                    updateEditModeLayout();
                 }
-                updateMultiSelectBtn();
-                updateSelectButton();
-                updateFooterText();
-                updateSelectionToolbar();
-                updateEditModeLayout();
                 renderContent(searchInput.value);
             };
             updateMultiSelectBtn();
@@ -1615,6 +1633,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // Edit mode toggle
         let editModeBtn = null;
+        let updateEditModeBtn = () => {};
         const syncEditPanelSelection = async () => {
             if (!editPanel) return;
             if (currentPrompt || blankPromptExplicitSelection) {
@@ -1638,7 +1657,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
         if (allowEditMode && mode !== "save") {
             editModeBtn = document.createElement("button");
-            const updateEditModeBtn = () => {
+            updateEditModeBtn = () => {
                 if (editMode) {
                     editModeBtn.textContent = "✎ Edit: On";
                     editModeBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.22); border-color: rgba(56, 130, 246, 0.85); color: #dbeafe;`;
@@ -1656,7 +1675,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 updateEditModeBtn();
             };
             editModeBtn.onclick = () => {
-                editMode = !editMode;
+                const nextEditMode = !editMode;
+                if (nextEditMode && multiSelectMode) {
+                    disableMultiSelect();
+                }
+                editMode = nextEditMode;
+                updateMultiSelectBtn();
                 updateEditModeBtn();
                 updateEditModeLayout();
                 requestAnimationFrame(() => {
@@ -2481,6 +2505,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         });
                         const result = await resp.json();
                         if (result?.success) {
+                            if (result?.prompts && typeof result.prompts === "object") {
+                                node.prompts = result.prompts;
+                            }
                             setCurrentPromptSelection(body.name);
                         }
                         return result;

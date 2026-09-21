@@ -4,7 +4,9 @@ const COMPOSER_ENDPOINT_PREFIX = "/prompt-manager/compose";
 
 export async function loadComposerPrompts(node) {
     try {
-        const resp = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/get-prompts`);
+        const resp = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/get-prompts`, {
+            cache: "no-store",
+        });
         node.composerPrompts = await resp.json();
         // Make the shared browser see composer data instead of prompt_manager_data.json.
         node.prompts = node.composerPrompts;

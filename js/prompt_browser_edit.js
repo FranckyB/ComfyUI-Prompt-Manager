@@ -17,26 +17,20 @@ const SYSTEM_PROMPT_CATEGORIES = ["Audio", "Image", "Video", "Other"];
 
 const PROMPT_TYPE_CHOICES = [
     { value: "", label: "None" },
+    { value: "action", label: "Action" },
+    { value: "accessory", label: "Accessory" },
+    { value: "ambience", label: "Ambience" },
     { value: "animal", label: "Animal" },
     { value: "attire", label: "Attire" },
     { value: "background", label: "Background" },
     { value: "camera", label: "Camera" },
     { value: "character", label: "Character" },
-    { value: "color_palette", label: "Color Palette" },
     { value: "composition", label: "Composition" },
     { value: "dialogue", label: "Dialogue" },
-    { value: "expression", label: "Expression" },
-    { value: "lens_artifact", label: "Lens Artifact" },
     { value: "lighting", label: "Lighting" },
-    { value: "mood", label: "Mood" },
-    { value: "motion", label: "Motion" },
-    { value: "pose", label: "Pose" },
     { value: "scene", label: "Scene" },
     { value: "soundscape", label: "Soundscape" },
     { value: "style", label: "Style" },
-    { value: "subject", label: "Subject" },
-    { value: "temporal_flow", label: "Temporal Flow" },
-    { value: "weather", label: "Weather" },
 ];
 
 export function getPromptTypeChoices() {
@@ -1110,7 +1104,11 @@ export function createPromptBrowserEditPanel(options) {
         }
         const result = await _savePrompt(savePayload);
         if (result?.success) {
-            await _loadPrompts(node);
+            if (result?.prompts && typeof result.prompts === "object") {
+                node.prompts = result.prompts;
+            } else {
+                await _loadPrompts(node);
+            }
             currentPromptName = name;
             pendingThumbnail = null;
             const entry = node?.prompts?.[category]?.[name];
