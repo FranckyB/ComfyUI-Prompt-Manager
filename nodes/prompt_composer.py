@@ -462,11 +462,52 @@ def _get_subject_group(subject_groups, subject_number):
             return group
     group = {
         "number": subject_number,
-        "fragments": [],
+        "text_sections": {},
         "sections": {},
     }
     subject_groups.append(group)
     return group
+
+
+def _append_text_section(sections, section_key, section_label, text):
+    key = str(section_key or "").strip()
+    fragment_text = str(text or "").strip()
+    if not fragment_text:
+        return
+    bucket = sections.get(key)
+    if bucket is None:
+        bucket = {
+            "label": str(section_label or "").strip(),
+            "descriptions": [],
+        }
+        sections[key] = bucket
+    bucket["descriptions"].append(fragment_text)
+
+
+def _render_text_sections(sections):
+    fragments = []
+    for bucket in sections.values():
+        descriptions = [str(value or "").strip() for value in bucket.get("descriptions", []) if str(value or "").strip()]
+        if not descriptions:
+            continue
+        joined = ", ".join(descriptions)
+        fragments.append(joined)
+    return ", ".join(fragment for fragment in fragments if fragment)
+
+
+def _append_json_section(sections, section_key, text):
+    key = str(section_key or "").strip()
+    description = str(text or "").strip()
+    if not key or not description:
+        return
+    sections.setdefault(key, []).append(description)
+
+
+def _render_json_section_value(values):
+    descriptions = [str(value or "").strip() for value in (values or []) if str(value or "").strip()]
+    if not descriptions:
+        return ""
+    return ", ".join(descriptions)
 
 
 def _format_json_description(text, strength, use_strength=True):
@@ -585,10 +626,9 @@ class PromptComposer:
         run_seed = _resolve_run_seed(seed)
         rng = random.Random(run_seed)
 
-        fragments = []
         subject_groups = []
-        non_subject_fragments = []
-        non_subject_sections = []
+        non_subject_text_sections = {}
+        non_subject_sections = {}
         prompt_lora_stack = []
         prompt_mods = []
         for part in parts:
@@ -609,26 +649,36 @@ class PromptComposer:
 
             text = entry.get("prompt", "") or ""
             prompt_prefix = _resolve_prompt_prefix(category_data, category)
-            labeled = _prefix_with_category(prompt_prefix, text)
             use_strength = selected_generation_mode != "video"
-            formatted_labeled = _format_fragment(labeled, part.get("strength", 1.0)) if use_strength else labeled
             formatted_plain = _format_fragment(text, part.get("strength", 1.0)) if use_strength else str(text or "").strip()
             formatted_json = _format_json_description(text, part.get("strength", 1.0), use_strength=use_strength)
-            if formatted_labeled:
-                fragments.append(formatted_labeled)
             subject_number = part.get("effective_subject_number", SUBJECT_MIN)
             if subject_number == SUBJECT_NONE:
-                if formatted_labeled:
-                    non_subject_fragments.append(formatted_labeled)
+                if formatted_plain:
+                    _append_text_section(
+                        non_subject_text_sections,
+                        _json_section_key(category, prompt_prefix),
+                        prompt_prefix,
+                        formatted_plain,
+                    )
                 if formatted_json:
-                    non_subject_sections.append(formatted_json)
+                    _append_json_section(
+                        non_subject_sections,
+                        _json_section_key(category, prompt_prefix),
+                        formatted_json,
+                    )
             else:
                 subject_group = _get_subject_group(subject_groups, subject_number)
                 if formatted_plain:
-                    subject_group["fragments"].append(formatted_plain)
+                    _append_text_section(
+                        subject_group["text_sections"],
+                        _json_section_key(category, prompt_prefix),
+                        prompt_prefix,
+                        formatted_plain,
+                    )
                 key = _json_section_key(category, prompt_prefix)
                 if key:
-                    subject_group["sections"].setdefault(key, []).append(formatted_json)
+                    _append_json_section(subject_group["sections"], key, formatted_json)
 
             if selected_generation_mode == "video":
                 lora_name = _normalize_lora_path(entry.get("lora_video") or "")
@@ -664,10 +714,18 @@ class PromptComposer:
             for group in subject_groups:
                 subject_entry = {"name": _subject_label(group["number"])}
                 for key, values in group["sections"].items():
-                    subject_entry[key] = [{"description": value} for value in values]
+                    rendered_value = _render_json_section_value(values)
+                    if rendered_value:
+                        subject_entry[key] = rendered_value
                 structured["subjects"].append(subject_entry)
             if non_subject_sections:
-                structured["notes"] = [{"description": value} for value in non_subject_sections]
+                note_entries = []
+                for values in non_subject_sections.values():
+                    rendered_value = _render_json_section_value(values)
+                    if rendered_value:
+                        note_entries.append(rendered_value)
+                if note_entries:
+                    structured["notes"] = ", ".join(note_entries)
             if position == "before" and base:
                 structured["scene"] = base
             json_output = json.dumps(structured, indent=2, ensure_ascii=False) if structured else ""
@@ -676,18 +734,27 @@ class PromptComposer:
             if selected_generation_mode == "video":
                 subject_blocks = []
                 for group in subject_groups:
-                    body = "\n".join(group["fragments"])
+                    body = _render_text_sections(group.get("text_sections", {}))
                     if not body:
                         continue
                     subject_blocks.append(f"<{_subject_label(group['number'])}>\n{body}")
                 sections = []
                 if subject_blocks:
                     sections.append("subject_definitions:\n" + "\n\n".join(subject_blocks))
-                if non_subject_fragments:
-                    sections.append("\n".join(non_subject_fragments))
+                non_subject_text = _render_text_sections(non_subject_text_sections)
+                if non_subject_text:
+                    sections.append(non_subject_text)
                 fragments_text = "\n\n".join(section for section in sections if section)
             else:
-                fragments_text = "\n".join(fragments)
+                sections = []
+                for group in subject_groups:
+                    body = _render_text_sections(group.get("text_sections", {}))
+                    if body:
+                        sections.append(body)
+                non_subject_text = _render_text_sections(non_subject_text_sections)
+                if non_subject_text:
+                    sections.append(non_subject_text)
+                fragments_text = "\n\n".join(section for section in sections if section)
 
             if base and fragments_text:
                 if position == "before":
