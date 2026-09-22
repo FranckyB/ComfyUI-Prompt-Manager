@@ -30,7 +30,6 @@ const PROMPT_TYPE_CHOICES = [
     { value: "dialogue", label: "Dialogue" },
     { value: "expression", label: "Expression" },
     { value: "lighting", label: "Lighting" },
-    { value: "scene", label: "Scene" },
     { value: "soundscape", label: "Soundscape" },
     { value: "style", label: "Style" },
 ];
