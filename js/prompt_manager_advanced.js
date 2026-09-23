@@ -6733,11 +6733,19 @@ function getThumbnailRenderState() {
 try {
     const savedFamily = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderFamily");
     const savedModel = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderModel");
+    const savedLora1 = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderLora1");
+    const savedLora2 = app.ui.settings.getSettingValue("PromptManager.ThumbnailRenderLora2");
     if (typeof savedFamily === "string" && savedFamily.trim()) {
         _thumbnailRenderFamily = savedFamily;
     }
     if (typeof savedModel === "string" && savedModel.trim()) {
         _thumbnailRenderModel = savedModel;
+    }
+    if (typeof savedLora1 === "string" && savedLora1.trim()) {
+        _thumbnailRenderLora1 = savedLora1;
+    }
+    if (typeof savedLora2 === "string" && savedLora2.trim()) {
+        _thumbnailRenderLora2 = savedLora2;
     }
     _thumbnailShowAllModels = app.ui.settings.getSettingValue("PromptManager.ThumbnailShowAllModels") === true;
 
@@ -7004,12 +7012,6 @@ function prependCategoryBasePrompt(promptText, basePrompt) {
 function getCategoryBasePrompt(node, category) {
     const raw = node?.prompts?.[category]?._base_prompt_;
     return typeof raw === "string" ? raw : "";
-}
-
-function getThumbnailComposerSeed() {
-    const rawSeed = app.ui.settings.getSettingValue("PromptManager.ThumbnailComposerSeed");
-    const parsed = Number(rawSeed);
-    return Number.isFinite(parsed) ? parsed : 42;
 }
 
 function applyThumbnailResolution(workflowData) {
@@ -7335,6 +7337,8 @@ function saveThumbnailRenderSelection(selection) {
     try {
         app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderFamily", selection.family);
         app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderModel", selection.model);
+        app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderLora1", _thumbnailRenderLora1 || "");
+        app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderLora2", _thumbnailRenderLora2 || "");
     } catch (e) {
         console.warn("[ThumbnailGen] Could not persist thumbnail render selection:", e);
     }
@@ -8078,11 +8082,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
         promptData.category = category;
     }
 
-    const isComposerManager = endpointPrefix === "/prompt-manager/compose";
-    const composerSeed = getThumbnailComposerSeed();
-    const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
-        ? composerSeed
-        : null;
+    const staticSeedForRun = null;
 
     const categoryBasePrompt = getCategoryBasePrompt(node, category);
     const promptText = prependCategoryBasePrompt(promptData.prompt || promptName, categoryBasePrompt);

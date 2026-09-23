@@ -7,7 +7,18 @@ import {
     DEFAULT_THUMBNAIL,
 } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
-import { COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
+import { saveComposerCategorySettings } from "./prompt_composer_common.js";
+import {
+    buildSavePromptRequestBodyForSource,
+    COMPOSER_ENDPOINT_PREFIX,
+    getCategoryPromptEntriesForSource,
+    getEndpointPrefixForSource,
+    PROMPT_ENDPOINT_PREFIX,
+    SOURCE_COMPOSE,
+    SOURCE_PROMPT,
+    SOURCE_SYSTEM_PROMPTS,
+    SYSTEM_PROMPTS_ENDPOINT_PREFIX,
+} from "./prompt_store_adapters.js";
 
 const PMA_THEME = {
     panel: UI.panel || "hsl(216 11% 15%)",
@@ -25,11 +36,6 @@ const PMA_THEME = {
     accentBorder: UI.accentBorder || "hsl(208 73% 57% / 0.65)",
 };
 
-const PROMPT_ENDPOINT_PREFIX = "/prompt-manager";
-const SYSTEM_PROMPTS_ENDPOINT_PREFIX = "/prompt-generator";
-const SOURCE_COMPOSE = "Compose Data";
-const SOURCE_PROMPT = "Prompt Data";
-const SOURCE_SYSTEM_PROMPTS = "System Prompts";
 const NODE_CHROME_HEIGHT = 86;
 const PROMPT_BROWSER_MIN_EXTRA_HEIGHT = 500;
 const PROMPT_BROWSER_DEFAULT_PREVIEW_HEIGHT = 200;
@@ -44,9 +50,138 @@ function computePromptBrowserUiHeight(node) {
     return Math.max(220, nodeHeight - NODE_CHROME_HEIGHT);
 }
 
-function _isHiddenPromptEntryKey(name) {
-    const normalized = String(name || "").trim().toLowerCase();
-    return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_prefix_" || normalized === "_prompt_type_";
+function getComposerImportPromptEntries(categoryData) {
+    return getCategoryPromptEntriesForSource(categoryData, SOURCE_COMPOSE);
+}
+
+function findExistingCategoryName(node, category) {
+    const normalized = String(category || "").trim().toLowerCase();
+    if (!normalized) return null;
+    return getNodeCategories(node).find((existing) => String(existing || "").trim().toLowerCase() === normalized) || null;
+}
+
+function findExistingPromptName(node, category, promptName) {
+    const canonicalCategory = findExistingCategoryName(node, category);
+    if (!canonicalCategory) return null;
+    const normalized = String(promptName || "").trim().toLowerCase();
+    if (!normalized) return null;
+    return getNodeNames(node, canonicalCategory).find((existing) => String(existing || "").trim().toLowerCase() === normalized) || null;
+}
+
+function analyzeComposerImportConflicts(node, importedData) {
+    const conflicts = {
+        duplicatePrompts: [],
+        duplicateCategorySettings: [],
+    };
+
+    for (const [category, entries] of Object.entries(importedData || {})) {
+        if (category === "__meta__" || !entries || typeof entries !== "object") continue;
+        const existingCategory = findExistingCategoryName(node, category);
+        const basePrompt = typeof entries?._base_prompt_ === "string" ? entries._base_prompt_.trim() : "";
+        const promptType = typeof entries?._prompt_type_ === "string" ? entries._prompt_type_.trim() : "";
+        const promptPrefix = typeof entries?._prompt_prefix_ === "string" ? entries._prompt_prefix_.trim() : "";
+
+        if (existingCategory && (basePrompt || promptType || promptPrefix)) {
+            conflicts.duplicateCategorySettings.push({
+                category,
+                existingCategory,
+            });
+        }
+
+        for (const [name] of Object.entries(getComposerImportPromptEntries(entries))) {
+            const existingPrompt = findExistingPromptName(node, category, name);
+            if (existingPrompt) {
+                conflicts.duplicatePrompts.push({
+                    category,
+                    existingCategory: existingCategory || category,
+                    name,
+                    existingPrompt,
+                });
+            }
+        }
+    }
+
+    return conflicts;
+}
+
+function showComposerImportModeDialog({ duplicatePromptCount = 0, duplicateCategorySettingsCount = 0 }) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(640px, calc(100vw - 48px));
+            background: ${PMA_THEME.panel};
+            border: 1px solid ${PMA_THEME.panelBorder};
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 10px 32px rgba(0,0,0,0.45);
+            color: ${PMA_THEME.textPrimary};
+            z-index: 10000;
+            box-sizing: border-box;
+        `;
+
+        const summaryLines = [];
+        if (duplicatePromptCount > 0) {
+            summaryLines.push(`${duplicatePromptCount} duplicate prompt${duplicatePromptCount === 1 ? "" : "s"}`);
+        }
+        if (duplicateCategorySettingsCount > 0) {
+            summaryLines.push(`${duplicateCategorySettingsCount} existing categor${duplicateCategorySettingsCount === 1 ? "y" : "ies"} with settings`);
+        }
+
+        dialog.innerHTML = `
+            <div style="font-size: 16px; font-weight: 700; margin-bottom: 10px;">Import Duplicates</div>
+            <div style="color: ${PMA_THEME.textMuted}; line-height: 1.45; margin-bottom: 14px; white-space: normal; word-break: break-word;">
+                The imported file contains entries that already exist.<br><br>
+                ${summaryLines.join("<br>")}
+            </div>
+            <div style="color: ${PMA_THEME.textHint}; line-height: 1.45; margin-bottom: 18px;">
+                Choose how duplicate entries should be handled.
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;">
+                <button class="cancel-btn" style="padding: 8px 14px; background: ${PMA_THEME.buttonBg}; color: ${PMA_THEME.textPrimary}; border: 1px solid ${PMA_THEME.inputBorder}; border-radius: 6px; cursor: pointer;">Cancel</button>
+                <button class="skip-btn" style="padding: 8px 14px; background: ${PMA_THEME.buttonBg}; color: ${PMA_THEME.textPrimary}; border: 1px solid ${PMA_THEME.inputBorder}; border-radius: 6px; cursor: pointer;">Skip Existing</button>
+                <button class="replace-btn" style="padding: 8px 14px; background: #c77dff; color: #fff; border: 1px solid transparent; border-radius: 6px; cursor: pointer;">Replace Existing</button>
+            </div>
+        `;
+
+        const cleanup = () => {
+            if (overlay.parentNode) document.body.removeChild(overlay);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+            document.removeEventListener("keydown", onKeyDown, true);
+        };
+
+        const finish = (result) => {
+            cleanup();
+            resolve(result);
+        };
+
+        const onKeyDown = (event) => {
+            if (event.key === "Escape") {
+                finish("cancel");
+            }
+        };
+
+        dialog.querySelector(".cancel-btn").onclick = () => finish("cancel");
+        dialog.querySelector(".skip-btn").onclick = () => finish("skip_existing");
+        dialog.querySelector(".replace-btn").onclick = () => finish("replace_existing");
+        overlay.onclick = () => finish("cancel");
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        document.addEventListener("keydown", onKeyDown, true);
+        dialog.querySelector(".skip-btn")?.focus();
+    });
 }
 
 function getSourceWidget(node) {
@@ -100,12 +235,6 @@ function restorePromptBrowserSource(node, sourceWidget, info = null, options = {
     return effective;
 }
 
-function getEndpointPrefixForSource(source) {
-    if (source === SOURCE_PROMPT) return PROMPT_ENDPOINT_PREFIX;
-    if (source === SOURCE_SYSTEM_PROMPTS) return SYSTEM_PROMPTS_ENDPOINT_PREFIX;
-    return COMPOSER_ENDPOINT_PREFIX;
-}
-
 function getPreferenceScopeForSource(source) {
     if (source === SOURCE_PROMPT) return "manager";
     if (source === SOURCE_SYSTEM_PROMPTS) return "system";
@@ -152,12 +281,16 @@ function getNodeCategories(node) {
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
+function getNodePromptEntries(node, categoryData) {
+    const source = getSourceValue(node);
+    return getCategoryPromptEntriesForSource(categoryData, source);
+}
+
 function getNodeNames(node, category) {
     const data = getNodePromptsData(node);
     const categoryData = data?.[category];
     if (!categoryData || typeof categoryData !== "object") return [];
-    return Object.keys(categoryData)
-        .filter((name) => !_isHiddenPromptEntryKey(name))
+    return Object.keys(getNodePromptEntries(node, categoryData))
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
@@ -165,8 +298,25 @@ function getNodeEntry(node, category, name) {
     const data = getNodePromptsData(node);
     const categoryData = data?.[category];
     if (!categoryData || typeof categoryData !== "object") return null;
-    if (_isHiddenPromptEntryKey(name)) return null;
-    return categoryData[name] || null;
+    if (name && getNodePromptEntries(node, categoryData)[name] === undefined) return null;
+    return getNodePromptEntries(node, categoryData)[name] || null;
+}
+
+async function saveComposerCategory(category, promptType = "") {
+    try {
+        const resp = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/save-category`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                category_name: category,
+                prompt_type: promptType || "",
+            }),
+        });
+        return await resp.json();
+    } catch (err) {
+        console.error("[PromptBrowser] Error saving composer category:", err);
+        return { success: false, error: String(err) };
+    }
 }
 
 function getSelectedPrompts(node) {
@@ -187,10 +337,16 @@ function setSelectedPrompts(node, names) {
     widget.value = JSON.stringify(normalized);
 }
 
-async function saveComposerPrompt(node, endpointPrefix, category, name, text, thumbnail = null, promptCategory = null) {
+async function saveSourcePrompt(node, source, category, name, text, thumbnail = null, promptCategory = null) {
     try {
-        const payload = { category, name, text, thumbnail };
-        if (promptCategory) payload.prompt_category = promptCategory;
+        const endpointPrefix = getEndpointPrefixForSource(source);
+        const payload = buildSavePromptRequestBodyForSource(source, {
+            category,
+            name,
+            text,
+            thumbnail,
+            prompt_category: promptCategory,
+        });
         const resp = await fetch(`${endpointPrefix}/save-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -208,8 +364,9 @@ async function saveComposerPrompt(node, endpointPrefix, category, name, text, th
     }
 }
 
-async function deleteComposerPrompt(node, endpointPrefix, category, name) {
+async function deleteSourcePrompt(node, source, category, name) {
     try {
+        const endpointPrefix = getEndpointPrefixForSource(source);
         const resp = await fetch(`${endpointPrefix}/delete-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1512,7 +1669,7 @@ function buildComposerButtonBar(node) {
                 const existing = getNodeEntry(node, category, name);
                 const selectedEntry = getNodeEntry(node, currentCategory, currentName);
                 const thumbnailToSave = existing?.thumbnail || selectedEntry?.thumbnail || null;
-                const result = await saveComposerPrompt(node, endpointPrefix, category, name, text, thumbnailToSave);
+                const result = await saveSourcePrompt(node, source, category, name, text, thumbnailToSave);
                 if (result?.success) {
                     categoryWidget.value = category;
                     if (typeof categoryWidget.callback === "function") {
@@ -1605,7 +1762,7 @@ function buildComposerButtonBar(node) {
                         "#c00"
                     );
                     if (confirmed) {
-                        await deleteComposerPrompt(node, getEndpointPrefixForSource(getSourceValue(node)), category, name);
+                        await deleteSourcePrompt(node, getSourceValue(node), category, name);
                         nameWidget.value = "";
                         textWidget.value = "";
                         setSelectedPrompts(node, []);
@@ -1781,18 +1938,51 @@ async function importComposerJSON(node) {
                 await showInfo("Import Failed", "Invalid JSON file.");
                 return;
             }
-            // Bulk import via category-by-category save.
-            let imported = 0;
-            for (const [category, entries] of Object.entries(data)) {
-                if (category === "__meta__" || typeof entries !== "object") continue;
-                for (const [name, entry] of Object.entries(entries)) {
-                    if (name === "__meta__") continue;
-                    const promptText = typeof entry === "string" ? entry : (entry?.prompt || "");
-                    await saveComposerPrompt(node, getEndpointPrefixForSource(getSourceValue(node)), category, name, promptText, entry?.thumbnail || null);
-                    imported++;
+            const conflicts = analyzeComposerImportConflicts(node, data);
+            const duplicatePromptCount = conflicts.duplicatePrompts.length;
+            const duplicateCategorySettingsCount = conflicts.duplicateCategorySettings.length;
+            let importMode = "skip_existing";
+            if (duplicatePromptCount || duplicateCategorySettingsCount) {
+                importMode = await showComposerImportModeDialog({
+                    duplicatePromptCount,
+                    duplicateCategorySettingsCount,
+                });
+                if (importMode === "cancel") {
+                    return;
                 }
             }
-            await showInfo("Import Complete", `Imported ${imported} prompts.`);
+            const resp = await api.fetchApi(`${COMPOSER_ENDPOINT_PREFIX}/import-prompts`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ data, mode: importMode }),
+            });
+            const result = await resp.json();
+            if (!result?.success) {
+                await showInfo("Import Failed", result?.error || "Failed to import composer prompts.");
+                return;
+            }
+            if (result?.prompts && typeof result.prompts === "object") {
+                node.composerPrompts = result.prompts;
+                node.prompts = result.prompts;
+            }
+            const imported = Number(result?.imported_prompts || 0);
+            const skippedPrompts = Number(result?.skipped_prompts || 0);
+            const importedCategorySettings = Number(result?.imported_category_settings || 0);
+            const skippedCategorySettings = Number(result?.skipped_category_settings || 0);
+            const categoriesCreated = Number(result?.created_categories || 0);
+            const summaryParts = [`Imported ${imported} prompt${imported === 1 ? "" : "s"}`];
+            if (categoriesCreated > 0) {
+                summaryParts.push(`created ${categoriesCreated} categor${categoriesCreated === 1 ? "y" : "ies"}`);
+            }
+            if (importedCategorySettings > 0) {
+                summaryParts.push(`updated ${importedCategorySettings} category setting${importedCategorySettings === 1 ? "" : "s"}`);
+            }
+            if (skippedPrompts > 0 || skippedCategorySettings > 0) {
+                const skippedTotal = skippedPrompts + skippedCategorySettings;
+                summaryParts.push(`kept ${skippedTotal} existing item${skippedTotal === 1 ? "" : "s"}`);
+            }
+            const summary = `${summaryParts.join(", ")}.`;
+            await showInfo("Import Complete", summary);
             // Reload the active source so the imported prompts appear in the UI.
             await loadActivePrompts(node);
             if (typeof node.updateComposerSelectorDisplay === "function") {

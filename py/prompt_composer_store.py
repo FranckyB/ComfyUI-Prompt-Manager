@@ -37,13 +37,21 @@ class PromptComposerStore:
                 with open(user_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    return data
+                    normalized = _normalize_prompts_data(data)
+                    if normalized != data:
+                        print("[PromptComposerStore] Migrating prompt_composer_data.json to nested _prompts_ schema")
+                        cls.save_prompts(normalized)
+                    return normalized
             except Exception as e:
                 print(f"[PromptComposerStore] Error loading data: {e}")
                 check_backup(user_path)
                 data = load_with_fallback(user_path, "PromptComposerStore")
                 if isinstance(data, dict):
-                    return data
+                    normalized = _normalize_prompts_data(data)
+                    if normalized != data:
+                        print("[PromptComposerStore] Migrating recovered prompt_composer_data.json to nested _prompts_ schema")
+                        cls.save_prompts(normalized)
+                    return normalized
                 print("[PromptComposerStore] User data file exists but could not be parsed; not overwriting.")
                 return {}
 
@@ -53,8 +61,9 @@ class PromptComposerStore:
                 with open(default_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    cls.save_prompts(data)
-                    return data
+                    normalized = _normalize_prompts_data(data)
+                    cls.save_prompts(normalized)
+                    return normalized
             except Exception as e:
                 print(f"[PromptComposerStore] Error loading default prompts: {e}")
 
@@ -62,18 +71,40 @@ class PromptComposerStore:
 
     @staticmethod
     def sort_prompts_data(data):
-        """Sort categories and prompt names alphabetically while preserving __meta__."""
+        """Sort categories and nested prompt names alphabetically while preserving metadata."""
         sorted_data = {}
+        top_level_meta = data.get("__meta__") if isinstance(data, dict) else None
+        if top_level_meta is not None:
+            sorted_data["__meta__"] = top_level_meta
         for category in sorted(data.keys(), key=str.lower):
+            if category == "__meta__":
+                continue
             cat_data = data[category]
-            meta = cat_data.get("__meta__") if isinstance(cat_data, dict) else None
-            sorted_prompts = dict(sorted(
-                ((k, v) for k, v in cat_data.items() if k != "__meta__"),
+            normalized_category = _normalize_category_data(cat_data)
+            sorted_category = {}
+
+            meta = normalized_category.get("__meta__")
+            if meta is not None:
+                sorted_category["__meta__"] = meta
+
+            base_prompt = normalized_category.get("_base_prompt_")
+            if isinstance(base_prompt, str) and base_prompt.strip():
+                sorted_category["_base_prompt_"] = base_prompt
+
+            prompt_type = normalized_category.get("_prompt_type_")
+            if isinstance(prompt_type, str) and prompt_type.strip():
+                sorted_category["_prompt_type_"] = prompt_type
+
+            prompt_prefix = normalized_category.get("_prompt_prefix_")
+            if isinstance(prompt_prefix, str) and prompt_prefix.strip():
+                sorted_category["_prompt_prefix_"] = prompt_prefix
+
+            prompt_entries = _get_category_prompts_map(normalized_category)
+            sorted_category["_prompts_"] = dict(sorted(
+                prompt_entries.items(),
                 key=lambda item: item[0].lower(),
             ))
-            if meta is not None:
-                sorted_prompts["__meta__"] = meta
-            sorted_data[category] = sorted_prompts
+            sorted_data[category] = sorted_category
         return sorted_data
 
     @classmethod
@@ -96,7 +127,106 @@ def _find_category_case_insensitive(prompts_data, category):
 
 def _is_hidden_category_entry_key(name):
     normalized = str(name or "").strip().lower()
-    return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_", "_prompt_type_"}
+    return normalized in {"__meta__", "_base_prompt_", "_prompt_prefix_", "_prompt_type_", "_prompts_"}
+
+
+def _normalize_prompt_entry(entry):
+    if isinstance(entry, dict):
+        normalized = dict(entry)
+        if "prompt" in normalized:
+            normalized["prompt"] = str(normalized.get("prompt", "") or "")
+        return normalized
+    return {"prompt": str(entry or "")}
+
+
+def _get_category_prompts_map(category_data):
+    if not isinstance(category_data, dict):
+        return {}
+    prompt_entries = category_data.get("_prompts_")
+    if isinstance(prompt_entries, dict):
+        return prompt_entries
+    return {
+        key: value
+        for key, value in category_data.items()
+        if not _is_hidden_category_entry_key(key)
+    }
+
+
+def _ensure_category_prompts_map(category_data):
+    if not isinstance(category_data, dict):
+        category_data = {}
+    prompt_entries = category_data.get("_prompts_")
+    if not isinstance(prompt_entries, dict):
+        prompt_entries = {
+            key: _normalize_prompt_entry(value)
+            for key, value in category_data.items()
+            if not _is_hidden_category_entry_key(key)
+        }
+        category_data["_prompts_"] = prompt_entries
+        for key in list(category_data.keys()):
+            if key != "_prompts_" and not _is_hidden_category_entry_key(key):
+                category_data.pop(key, None)
+    return prompt_entries
+
+
+def _normalize_category_data(category_data):
+    if not isinstance(category_data, dict):
+        category_data = {}
+
+    normalized = {"_prompts_": {}}
+
+    meta = category_data.get("__meta__")
+    if meta is not None:
+        normalized["__meta__"] = meta
+
+    base_prompt = category_data.get("_base_prompt_")
+    if isinstance(base_prompt, str):
+        if base_prompt.strip():
+            normalized["_base_prompt_"] = base_prompt
+    else:
+        base_prompt_text = str(base_prompt or "")
+        if base_prompt_text.strip():
+            normalized["_base_prompt_"] = base_prompt_text
+
+    prompt_type = str(category_data.get("_prompt_type_") or "").strip()
+    if prompt_type:
+        normalized["_prompt_type_"] = prompt_type
+
+    prompt_prefix = category_data.get("_prompt_prefix_")
+    if isinstance(prompt_prefix, str):
+        if prompt_prefix.strip():
+            normalized["_prompt_prefix_"] = prompt_prefix
+    else:
+        prompt_prefix_text = str(prompt_prefix or "")
+        if prompt_prefix_text.strip():
+            normalized["_prompt_prefix_"] = prompt_prefix_text
+
+    for name, entry in _get_category_prompts_map(category_data).items():
+        normalized["_prompts_"][str(name)] = _normalize_prompt_entry(entry)
+
+    return normalized
+
+
+def _normalize_prompts_data(data):
+    if not isinstance(data, dict):
+        return {}
+
+    normalized = {}
+    top_level_meta = data.get("__meta__")
+    if top_level_meta is not None:
+        normalized["__meta__"] = top_level_meta
+
+    for category, category_data in data.items():
+        if category == "__meta__":
+            continue
+        normalized[str(category)] = _normalize_category_data(category_data)
+    return normalized
+
+
+def _ensure_category_data(prompts, category):
+    category_data = _normalize_category_data(prompts.get(category, {}))
+    prompts[category] = category_data
+    return category_data
 
 
 def _normalize_optional_string(value):
@@ -119,16 +249,15 @@ def _normalize_optional_float(value, default=1.0, minimum=None, maximum=None):
 
 def _find_prompt_case_insensitive(category_data, name):
     """Return entry dict and canonical name for a prompt in a category."""
-    if not isinstance(category_data, dict):
+    prompt_entries = _get_category_prompts_map(category_data)
+    if not isinstance(prompt_entries, dict):
         return None, None
-    if _is_hidden_category_entry_key(name):
+    if str(name or "").strip().lower() == "__meta__":
         return None, None
-    if name in category_data and not _is_hidden_category_entry_key(name):
-        return category_data[name], name
+    if name in prompt_entries:
+        return prompt_entries[name], name
     name_lower = str(name or "").lower()
-    for entry_name, entry in category_data.items():
-        if _is_hidden_category_entry_key(entry_name):
-            continue
+    for entry_name, entry in prompt_entries.items():
         if entry_name.lower() == name_lower:
             return entry, entry_name
     return None, None
@@ -165,6 +294,7 @@ async def compose_save_category(request):
         prompt_type = str(data.get("prompt_type", "")).strip()
         if prompt_type:
             cat_data["_prompt_type_"] = prompt_type
+        cat_data["_prompts_"] = {}
         prompts[category_name] = cat_data
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
@@ -188,9 +318,7 @@ async def compose_save_category_base_prompt(request):
         if canonical_category is None:
             return server.web.json_response({"success": False, "error": "Category not found"})
 
-        cat_data = prompts.get(canonical_category)
-        if not isinstance(cat_data, dict):
-            cat_data = {}
+        cat_data = _ensure_category_data(prompts, canonical_category)
 
         trimmed = base_prompt.strip()
         if trimmed:
@@ -219,9 +347,7 @@ async def compose_save_category_settings(request):
         if canonical_category is None:
             return server.web.json_response({"success": False, "error": "Category not found"})
 
-        cat_data = prompts.get(canonical_category)
-        if not isinstance(cat_data, dict):
-            cat_data = {}
+        cat_data = _ensure_category_data(prompts, canonical_category)
 
         base_prompt = str(data.get("base_prompt", ""))
         trimmed_base = base_prompt.strip()
@@ -236,8 +362,11 @@ async def compose_save_category_settings(request):
         else:
             cat_data.pop("_prompt_type_", None)
 
-        # _prompt_prefix_ is replaced by _prompt_type_; remove legacy prefix.
-        cat_data.pop("_prompt_prefix_", None)
+        prompt_prefix = str(data.get("prompt_prefix", ""))
+        if prompt_prefix.strip():
+            cat_data["_prompt_prefix_"] = prompt_prefix
+        else:
+            cat_data.pop("_prompt_prefix_", None)
 
         prompts[canonical_category] = cat_data
         PromptComposerStore.save_prompts(prompts)
@@ -294,6 +423,87 @@ async def compose_delete_category(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/import-prompts")
+async def compose_import_prompts(request):
+    try:
+        data = await request.json()
+        imported_data = _normalize_prompts_data(data.get("data", {}))
+        mode = str(data.get("mode", "skip_existing") or "skip_existing").strip().lower()
+        if mode not in {"skip_existing", "replace_existing"}:
+            mode = "skip_existing"
+
+        if not isinstance(imported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        prompts = PromptComposerStore.load_prompts()
+        imported_prompts = 0
+        skipped_prompts = 0
+        imported_category_settings = 0
+        skipped_category_settings = 0
+        created_categories = 0
+
+        for category, imported_category in imported_data.items():
+            if category == "__meta__" or not isinstance(imported_category, dict):
+                continue
+
+            canonical_category = _find_category_case_insensitive(prompts, category)
+            is_new_category = canonical_category is None
+            if is_new_category:
+                canonical_category = str(category)
+                prompts[canonical_category] = {"_prompts_": {}}
+                created_categories += 1
+
+            category_data = _ensure_category_data(prompts, canonical_category)
+            normalized_imported_category = _normalize_category_data(imported_category)
+
+            imported_meta = normalized_imported_category.get("__meta__")
+            if imported_meta is not None and (mode == "replace_existing" or is_new_category):
+                category_data["__meta__"] = imported_meta
+
+            imported_base_prompt = normalized_imported_category.get("_base_prompt_")
+            imported_prompt_type = normalized_imported_category.get("_prompt_type_")
+            has_category_settings = bool(
+                (isinstance(imported_base_prompt, str) and imported_base_prompt.strip()) or
+                (isinstance(imported_prompt_type, str) and imported_prompt_type.strip())
+            )
+            if has_category_settings:
+                if mode == "replace_existing" or is_new_category:
+                    if isinstance(imported_base_prompt, str) and imported_base_prompt.strip():
+                        category_data["_base_prompt_"] = imported_base_prompt
+                    if isinstance(imported_prompt_type, str) and imported_prompt_type.strip():
+                        category_data["_prompt_type_"] = imported_prompt_type
+                    imported_category_settings += 1
+                else:
+                    skipped_category_settings += 1
+
+            prompt_entries = _ensure_category_prompts_map(category_data)
+            for prompt_name, imported_entry in _get_category_prompts_map(normalized_imported_category).items():
+                existing_entry, existing_name = _find_prompt_case_insensitive(category_data, prompt_name)
+                if existing_entry is not None and mode != "replace_existing":
+                    skipped_prompts += 1
+                    continue
+                if existing_name and existing_name != prompt_name:
+                    del prompt_entries[existing_name]
+                prompt_entries[prompt_name] = _normalize_prompt_entry(imported_entry)
+                imported_prompts += 1
+
+            prompts[canonical_category] = category_data
+
+        PromptComposerStore.save_prompts(prompts)
+        return server.web.json_response({
+            "success": True,
+            "prompts": prompts,
+            "imported_prompts": imported_prompts,
+            "skipped_prompts": skipped_prompts,
+            "imported_category_settings": imported_category_settings,
+            "skipped_category_settings": skipped_category_settings,
+            "created_categories": created_categories,
+        })
+    except Exception as e:
+        print(f"[PromptComposerStore] Error in import-prompts: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/save-prompt")
 async def compose_save_prompt(request):
     try:
@@ -316,21 +526,23 @@ async def compose_save_prompt(request):
 
         prompts = PromptComposerStore.load_prompts()
         if category not in prompts:
-            prompts[category] = {}
+            prompts[category] = {"_prompts_": {}}
+
+        category_data = _ensure_category_data(prompts, category)
+        prompt_entries = _ensure_category_prompts_map(category_data)
 
         # Case-insensitive prompt replacement.
         existing_lower = {
             k.lower(): k
-            for k in prompts[category].keys()
-            if not _is_hidden_category_entry_key(k)
+            for k in prompt_entries.keys()
         }
         existing_prompt = {}
         if name.lower() in existing_lower:
             old_name = existing_lower[name.lower()]
-            existing_prompt = prompts[category].get(old_name, {})
+            existing_prompt = prompt_entries.get(old_name, {})
             if old_name != name:
                 print(f"[PromptComposerStore] Removing old casing '{old_name}' before saving as '{name}'")
-                del prompts[category][old_name]
+                del prompt_entries[old_name]
 
         entry = {"prompt": text}
         if thumbnail is not None:
@@ -379,7 +591,8 @@ async def compose_save_prompt(request):
         if existing_prompt.get("nsfw"):
             entry["nsfw"] = existing_prompt["nsfw"]
 
-        prompts[category][name] = entry
+        prompt_entries[name] = entry
+        prompts[category] = category_data
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
@@ -397,8 +610,12 @@ async def compose_delete_prompt(request):
             return server.web.json_response({"success": False, "error": "Category and name are required"})
 
         prompts = PromptComposerStore.load_prompts()
-        if category in prompts and name in prompts[category]:
-            del prompts[category][name]
+        if category in prompts:
+            category_data = _ensure_category_data(prompts, category)
+            prompt_entries = _ensure_category_prompts_map(category_data)
+            if name in prompt_entries:
+                del prompt_entries[name]
+                prompts[category] = category_data
             PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
@@ -419,14 +636,24 @@ async def compose_rename_prompt(request):
             return server.web.json_response({"success": False, "error": "Missing required fields"})
 
         prompts = PromptComposerStore.load_prompts()
-        if old_category not in prompts or old_name not in prompts[old_category]:
+        if old_category not in prompts:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        old_category_data = _ensure_category_data(prompts, old_category)
+        old_prompt_entries = _ensure_category_prompts_map(old_category_data)
+        if old_name not in old_prompt_entries:
             return server.web.json_response({"success": False, "error": "Prompt not found"})
 
         if new_category not in prompts:
-            prompts[new_category] = {}
+            prompts[new_category] = {"_prompts_": {}}
 
-        entry = prompts[old_category].pop(old_name)
-        prompts[new_category][new_name] = entry
+        new_category_data = _ensure_category_data(prompts, new_category)
+        new_prompt_entries = _ensure_category_prompts_map(new_category_data)
+
+        entry = old_prompt_entries.pop(old_name)
+        new_prompt_entries[new_name] = entry
+        prompts[old_category] = old_category_data
+        prompts[new_category] = new_category_data
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
@@ -446,15 +673,22 @@ async def compose_toggle_nsfw(request):
         if toggle_type == "category":
             if category not in prompts:
                 return server.web.json_response({"success": False, "error": "Category not found"})
-            meta = prompts[category].get("__meta__", {})
+            category_data = _ensure_category_data(prompts, category)
+            meta = category_data.get("__meta__", {})
             meta["nsfw"] = not meta.get("nsfw", False)
-            prompts[category]["__meta__"] = meta
+            category_data["__meta__"] = meta
+            prompts[category] = category_data
         else:
-            if category not in prompts or name not in prompts[category]:
+            if category not in prompts:
                 return server.web.json_response({"success": False, "error": "Prompt not found"})
-            entry = prompts[category][name]
+            category_data = _ensure_category_data(prompts, category)
+            prompt_entries = _ensure_category_prompts_map(category_data)
+            if name not in prompt_entries:
+                return server.web.json_response({"success": False, "error": "Prompt not found"})
+            entry = prompt_entries[name]
             if isinstance(entry, dict):
                 entry["nsfw"] = not entry.get("nsfw", False)
+            prompts[category] = category_data
 
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
@@ -476,20 +710,24 @@ async def compose_save_thumbnail(request):
 
         prompts = PromptComposerStore.load_prompts()
         if category not in prompts:
-            prompts[category] = {}
-        if name not in prompts[category]:
-            prompts[category][name] = {"prompt": ""}
+            prompts[category] = {"_prompts_": {}}
 
-        entry = prompts[category][name]
+        category_data = _ensure_category_data(prompts, category)
+        prompt_entries = _ensure_category_prompts_map(category_data)
+        if name not in prompt_entries:
+            prompt_entries[name] = {"prompt": ""}
+
+        entry = prompt_entries[name]
         if not isinstance(entry, dict):
             entry = {"prompt": str(entry)}
-            prompts[category][name] = entry
+            prompt_entries[name] = entry
 
         if thumbnail:
             entry["thumbnail"] = thumbnail
         else:
             entry.pop("thumbnail", None)
 
+        prompts[category] = category_data
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:

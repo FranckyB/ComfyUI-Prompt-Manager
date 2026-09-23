@@ -1,4 +1,10 @@
 import { createPromptBrowserEditPanel, getPromptTypeChoices } from "./prompt_browser_edit.js";
+import {
+    buildSavePromptRequestBodyForEndpoint,
+    getCategoryPromptEntriesForEndpoint,
+    getCategoryPromptEntryForEndpoint,
+    isHiddenPromptEntryKey,
+} from "./prompt_store_adapters.js";
 
 let app = null;
 let UI = {
@@ -35,6 +41,22 @@ let _thumbnailRenderModel = null;
 let _thumbnailRenderLora1 = null;
 let _thumbnailRenderLora2 = null;
 
+function _normalizeThumbnailPromptStrength(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 1.0;
+    return Math.max(0.0, Math.min(5.0, numeric));
+}
+
+function _formatThumbnailPromptText(text, promptData) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) return "";
+    const generationMode = String(promptData?.__pm_generation_mode || "image").trim().toLowerCase();
+    if (generationMode === "video") return trimmed;
+    const strength = _normalizeThumbnailPromptStrength(promptData?.__pm_part_strength);
+    if (strength === 1.0) return trimmed;
+    return `(${trimmed}:${strength.toFixed(15).replace(/\.?0+$/, "")})`;
+}
+
 let _thumbQueueTotal = 0;
 let _thumbQueueDone = 0;
 let _thumbQueueFailed = 0;
@@ -65,7 +87,8 @@ function _getComposerImageThumbnailLoras(promptData) {
     const loraName = String(promptData?.lora_image || promptData?.lora || "").trim();
     if (!loraName) return [];
     const strength = Number(promptData?.lora_image_strength ?? promptData?.lora_strength ?? 1.0);
-    const safeStrength = Number.isFinite(strength) ? strength : 1.0;
+    const baseStrength = Number.isFinite(strength) ? strength : 1.0;
+    const safeStrength = baseStrength * _normalizeThumbnailPromptStrength(promptData?.__pm_part_strength);
     return [{
         name: loraName,
         path: loraName,
@@ -231,6 +254,7 @@ function _finishThumbQueueProgress() {
     _thumbQueueDone = 0;
     _thumbQueueFailed = 0;
     _thumbQueueCancelled = false;
+    _thumbQueuePromiseChain = Promise.resolve();
 }
 
 async function logThumbnailToServer(category, name, seed, prompt, mode) {
@@ -258,6 +282,8 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         endpointPrefix = "/prompt-manager-advanced",
         draftPromptData = null,
         persistThumbnail = true,
+        promptStrength = 1.0,
+        generationMode = "image",
     } = options || {};
 
     // If browser has not been wired with low-level generation helpers yet,
@@ -275,22 +301,29 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         });
     }
 
-    const savedPromptData = node?.prompts?.[category]?.[promptName];
+    const savedPromptData = getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix);
     const promptData = draftPromptData && typeof draftPromptData === "object"
         ? { ...(savedPromptData && typeof savedPromptData === "object" ? savedPromptData : {}), ...draftPromptData }
-        : savedPromptData;
+        : (savedPromptData && typeof savedPromptData === "object" ? { ...savedPromptData } : savedPromptData);
     if (!promptData) return;
 
+    if (promptData && typeof promptData === "object") {
+        promptData.__pm_part_strength = _normalizeThumbnailPromptStrength(promptStrength);
+        promptData.__pm_generation_mode = String(generationMode || "image").trim().toLowerCase() || "image";
+    }
+
     const categoryBasePrompt = getCategoryBasePrompt(node, category);
-    const promptText = [String(categoryBasePrompt || "").trim(), String(promptData.prompt || promptName || "").trim()]
+    const categoryPromptPrefix = getCategoryPromptPrefix(node, category);
+    const prefixedPromptText = prependCategoryPromptPrefix(
+        categoryPromptPrefix,
+        _formatThumbnailPromptText(promptData.prompt || promptName || "", promptData)
+    );
+    const promptText = [String(categoryBasePrompt || "").trim(), prefixedPromptText]
         .filter(Boolean)
         .join(" ");
 
     const isComposerManager = endpointPrefix === "/prompt-manager/compose";
-    const composerSeed = Number(getThumbnailComposerSeedFromSettings());
-    const staticSeedForRun = (isComposerManager && Number.isFinite(composerSeed) && composerSeed > 0)
-        ? composerSeed
-        : null;
+    const staticSeedForRun = null;
 
     console.log(`[ThumbnailGen] Preparing thumbnail for "${category}/${promptName}" | seed=${staticSeedForRun ?? "random"}`);
     console.log(`[ThumbnailGen] Effective prompt text: ${promptText}`);
@@ -365,16 +398,9 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
     return thumbnail;
 }
 
-function getThumbnailComposerSeedFromSettings() {
-    const rawSeed = app?.ui?.settings?.getSettingValue?.("PromptManager.ThumbnailComposerSeed");
-    const parsed = Number(rawSeed);
-    return Number.isFinite(parsed) ? parsed : 42;
-}
-
 async function saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix = "/prompt-manager-advanced") {
     try {
         const url = `${endpointPrefix}/save-thumbnail`;
-        console.log("[PromptBrowser] save-thumbnail request:", url, "method=POST", "prefix=", endpointPrefix);
         const response = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -394,11 +420,12 @@ async function saveThumbnailEntry(node, category, promptName, thumbnail, endpoin
             throw parseErr;
         }
         if (data.success) {
-            if (node?.prompts?.[category]?.[promptName]) {
+            const entry = getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix);
+            if (entry) {
                 if (thumbnail) {
-                    node.prompts[category][promptName].thumbnail = thumbnail;
+                    entry.thumbnail = thumbnail;
                 } else {
-                    delete node.prompts[category][promptName].thumbnail;
+                    delete entry.thumbnail;
                 }
             }
         } else {
@@ -486,7 +513,7 @@ function _attachThumbnailDropHandlers(element, node, category, promptName, onUpd
         const imageFile = files.find((f) => f.type?.startsWith("image/"));
         if (!imageFile) return;
 
-        const existing = node.prompts?.[category]?.[promptName]?.thumbnail;
+        const existing = getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix)?.thumbnail;
         if (existing) {
             const confirmed = await showConfirm(
                 "Replace Thumbnail",
@@ -782,7 +809,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
         }
     }));
 
-    const promptData = node.prompts?.[category]?.[promptName];
+    const promptData = getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix);
     if (promptData?.thumbnail) {
         const divider = document.createElement("div");
         divider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
@@ -895,13 +922,29 @@ function normalizeBrowserPrefScope(scope) {
 }
 
 function isHiddenCategoryEntryKey(key) {
-    const normalized = String(key || "").toLowerCase();
-    return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_type_";
+    return isHiddenPromptEntryKey(key);
+}
+
+function getCategoryPromptEntries(categoryPrompts, endpointPrefix = "/prompt-manager-advanced") {
+    return getCategoryPromptEntriesForEndpoint(categoryPrompts, endpointPrefix);
 }
 
 function getCategoryBasePrompt(node, category) {
     const raw = node?.prompts?.[category]?._base_prompt_;
     return typeof raw === "string" ? raw : "";
+}
+
+function getCategoryPromptPrefix(node, category) {
+    const raw = node?.prompts?.[category]?._prompt_prefix_;
+    return typeof raw === "string" ? raw : "";
+}
+
+function prependCategoryPromptPrefix(prefix, promptText) {
+    const normalizedPromptText = String(promptText || "").trim();
+    if (!normalizedPromptText) return "";
+    const normalizedPrefix = String(prefix || "").trim();
+    if (!normalizedPrefix) return normalizedPromptText;
+    return `${normalizedPrefix} ${normalizedPromptText}`;
 }
 
 function getCategoryPromptType(node, category) {
@@ -915,9 +958,10 @@ const PROMPT_TYPE_ICON_URLS = {
     action: new URL("./icons/action.png", import.meta.url).href,
     accessory: new URL("./icons/accessory.png", import.meta.url).href,
     ambience: new URL("./icons/ambience.png", import.meta.url).href,
-    animal: new URL("./icons/animal.png", import.meta.url).href,
     attire: new URL("./icons/attire.png", import.meta.url).href,
-    background: new URL("./icons/background.png", import.meta.url).href,
+    hairstyle: new URL("./icons/hairstyle.png", import.meta.url).href,
+    environment: new URL("./icons/environment.png", import.meta.url).href,
+    effect: new URL("./icons/effect.png", import.meta.url).href,
     camera: new URL("./icons/camera.png", import.meta.url).href,
     character: new URL("./icons/character.png", import.meta.url).href,
     characteristic: new URL("./icons/characteristic.png", import.meta.url).href,
@@ -934,7 +978,7 @@ function getPromptTypeIconUrl(typeValue) {
     return PROMPT_TYPE_ICON_URLS[key] || PROMPT_TYPE_ICON_URLS.__all__;
 }
 
-function showCategoryBasePromptDialog(categoryName, currentValue = "") {
+function showEditBasePromptDialog(categoryName, currentValue) {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -1144,24 +1188,29 @@ export function hasPromptPresetPayload(promptData) {
     return promptText.length > 0 || negativeText.length > 0 || hasLorasA || hasLorasB || hasLorasC || hasLorasD;
 }
 
+function getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix = "/prompt-manager-advanced") {
+    return getCategoryPromptEntryForEndpoint(categoryPrompts, promptName, endpointPrefix);
+}
+
 export function getPromptNamesForCategory(node, category, options = {}) {
     const hideNSFW = options.hideNSFW === true;
     const workflowOnly = options.workflowOnly === true;
     const contentFilter = String(options.contentFilter || "all").toLowerCase();
+    const endpointPrefix = typeof options.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
     const categoryPrompts = node?.prompts?.[category];
     if (!categoryPrompts || typeof categoryPrompts !== "object") return [];
+    const promptEntries = getCategoryPromptEntries(categoryPrompts, endpointPrefix);
 
-    let promptNames = Object.keys(categoryPrompts)
-        .filter((k) => !isHiddenCategoryEntryKey(k))
+    let promptNames = Object.keys(promptEntries)
         .sort((a, b) => a.localeCompare(b));
 
     if (hideNSFW) {
-        promptNames = promptNames.filter((name) => categoryPrompts?.[name]?.nsfw !== true);
+        promptNames = promptNames.filter((name) => promptEntries?.[name]?.nsfw !== true);
     }
 
     if (workflowOnly || contentFilter !== "all") {
         promptNames = promptNames.filter((name) => {
-            const entry = categoryPrompts?.[name];
+            const entry = promptEntries?.[name];
             const hasRecipeData = hasWorkflowDataPayload(entry?.workflow_data);
             const hasPromptData = hasPromptPresetPayload(entry);
 
@@ -1181,6 +1230,7 @@ export function getVisibleCategories(node, options = {}) {
     const contentFilter = String(options.contentFilter || "all").toLowerCase();
     const filterEmptyCategories = options.filterEmptyCategories === true;
     const keepCategory = String(options.keepCategory || "");
+    const endpointPrefix = typeof options.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
 
     const categories = Object.keys(node?.prompts || {})
         .filter((c) => c !== "__meta__")
@@ -1190,7 +1240,7 @@ export function getVisibleCategories(node, options = {}) {
 
     return categories.filter((category) => {
         if (keepCategory && category === keepCategory) return true;
-        const names = getPromptNamesForCategory(node, category, { hideNSFW, workflowOnly, contentFilter });
+        const names = getPromptNamesForCategory(node, category, { hideNSFW, workflowOnly, contentFilter, endpointPrefix });
         return names.length > 0;
     });
 }
@@ -1222,6 +1272,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const clearSelectionOnCategorySwitch = options?.clearSelectionOnCategorySwitch === true;
     const multiSelectActionMode = String(options?.multiSelectActionMode || "select").trim().toLowerCase();
     const endpointPrefix = typeof options?.endpointPrefix === "string" ? options.endpointPrefix : "/prompt-manager-advanced";
+    const promptStrength = _normalizeThumbnailPromptStrength(options?.promptStrength);
+    const thumbnailGenerationMode = String(options?.thumbnailGenerationMode || "image").trim().toLowerCase() || "image";
     const showCategoryTypeFilter = endpointPrefix === "/prompt-manager/compose";
     const initialCategoryTypeFilter = showCategoryTypeFilter
         ? (String(options?.initialCategoryTypeFilter || "__all__").trim() || "__all__")
@@ -1263,8 +1315,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             if (!category || !normalizedName) return "";
             const categoryPrompts = node?.prompts?.[category];
             if (!categoryPrompts || typeof categoryPrompts !== "object") return "";
-            for (const promptName of Object.keys(categoryPrompts)) {
-                if (_isHiddenPromptEntryKey(promptName)) continue;
+            for (const promptName of Object.keys(getCategoryPromptEntries(categoryPrompts, endpointPrefix))) {
                 if (String(promptName || "").trim().toLowerCase() === normalizedName) {
                     return promptName;
                 }
@@ -1333,6 +1384,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         };
 
+        const canChangeEditorContext = async () => {
+            if (!editMode || !editPanel || typeof editPanel.confirmDiscardChanges !== "function") {
+                return true;
+            }
+            return await editPanel.confirmDiscardChanges();
+        };
+
         const overlay = document.createElement("div");
         overlay.style.cssText = `
             position: fixed;
@@ -1371,14 +1429,26 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const baseNormalBrowserLayout = compactBrowser
             ? { width: 654, height: 680, cols: 5, itemWidth: 120, gap: 4, thumbWidth: 100, thumbHeight: 132 }
             : {
-                width: 1400, height: 985, iconHeight: 1185,
-                cols: 6, itemWidth: 220, gap: 8, thumbWidth: 200, thumbHeight: 264,
-                iconCols: 11, iconItemWidth: 120, iconGap: 4, iconThumbWidth: 100, iconThumbHeight: 132,
+                width: 1400,
+                height: 985,
+                iconHeight: 1185,
+                cols: 6,
+                itemWidth: 220,
+                gap: 8,
+                thumbWidth: 200,
+                thumbHeight: 264,
+                iconCols: 11,
+                iconItemWidth: 120,
+                iconGap: 4,
+                iconThumbWidth: 100,
+                iconThumbHeight: 132,
             };
         const baseEditBrowserLayout = compactBrowser
-            ? { ...baseNormalBrowserLayout,
+            ? {
+                ...baseNormalBrowserLayout,
                 cols: 3,
                 itemWidth: 110,
+                gap: 4,
                 thumbWidth: 100,
                 thumbHeight: 132,
             }
@@ -1437,8 +1507,21 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             -webkit-user-select: none;
         `;
 
-        // Prevent default context menu on dialog (thumbnail cards have their own)
-        dialog.addEventListener("contextmenu", (e) => e.preventDefault());
+        // Keep native text editing context menus for input fields while preserving
+        // custom right-click handling elsewhere in the browser.
+        dialog.addEventListener("contextmenu", (e) => {
+            const target = e.target;
+            if (
+                target instanceof HTMLInputElement
+                || target instanceof HTMLTextAreaElement
+                || target instanceof HTMLSelectElement
+                || target?.isContentEditable
+            ) {
+                e.stopPropagation();
+                return;
+            }
+            e.preventDefault();
+        });
 
         // Header with close button
         const header = document.createElement("div");
@@ -1542,6 +1625,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             searchInput.value = "";
             clearBtn.style.display = "none";
             searchInput.focus();
+            rebuildCategoryList();
             renderContent("");
         };
         const origOninput = searchInput.oninput;
@@ -1854,6 +1938,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const data = await resp.json();
                     if (data.success) {
                         node.prompts = data.prompts;
+                        const canProceed = await canChangeEditorContext();
+                        if (!canProceed) {
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                            return;
+                        }
                         setSelectedCategory(categoryName);
                         rebuildCategoryList();
                         renderContent(searchInput.value);
@@ -1912,7 +2002,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let editModeLastClickPrompt = "";
         let editModeLastClickAt = 0;
 
-        const promptTypeChoices = getPromptTypeChoices()
+        const promptTypeChoices = getPromptTypeChoices(node?.prompts)
             .filter((choice) => String(choice?.value || "").trim())
             .map((choice) => ({
                 value: String(choice.value).trim().toLowerCase(),
@@ -1943,13 +2033,31 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         };
 
+        const categoryHasSearchMatch = (category, filter = "") => {
+            const normalizedFilter = String(filter || "").trim().toLowerCase();
+            if (!normalizedFilter) return true;
+            const promptNames = getPromptNamesForCategory(node, category, {
+                hideNSFW: hideNSFWState,
+                workflowOnly,
+                contentFilter: contentFilterState,
+                endpointPrefix,
+            });
+            return promptNames.some((name) => String(name || "").toLowerCase().includes(normalizedFilter));
+        };
+
+        const applyCategorySearchFilter = (filter = "") => {
+            categories = categories.filter((cat) => categoryHasSearchMatch(cat, filter));
+        };
+
         const ensureSelectedCategory = () => {
             allCategories = filterAllowedCategories(getVisibleCategories(node, {
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
+                endpointPrefix,
             }));
             applyCategoryTypeFilter();
+            applyCategorySearchFilter(searchInput?.value || "");
 
             if (!Array.isArray(categories) || categories.length === 0) {
                 setSelectedCategory("");
@@ -2168,6 +2276,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     updateTypeRailButtons();
                 };
                 btn.onclick = async () => {
+                    const canProceed = await canChangeEditorContext();
+                    if (!canProceed) return;
                     hideTypeRailTooltip();
                     setBlankPromptSelection();
                     if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
@@ -2406,13 +2516,23 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 return { progress, progressText, cancelBtn };
             };
 
-            const runBatchGeneration = async (names, title) => {
+            const runBatchGeneration = async (names, title, options = {}) => {
+                const regenerateAll = options.regenerateAll === true;
                 if (names.length === 0) {
-                    await showInfo("No Thumbnails to Generate", `All prompts in "${cat}" already have thumbnails.`);
+                    await showInfo(
+                        regenerateAll ? "No Prompts to Re-Generate" : "No Thumbnails to Generate",
+                        regenerateAll
+                            ? `No prompts were found in "${cat}" to re-generate thumbnails for.`
+                            : `All prompts in "${cat}" already have thumbnails.`
+                    );
                     return;
                 }
 
-                if (!await showConfirm(title, `Generate thumbnails for ${names.length} prompt(s) in "${cat}"?`, "Generate", "#4CAF50")) {
+                const confirmMessage = regenerateAll
+                    ? `Re-generate thumbnails for ${names.length} prompt(s) in "${cat}"? Existing thumbnails will be replaced.`
+                    : `Generate thumbnails for ${names.length} prompt(s) in "${cat}"?`;
+                const confirmText = regenerateAll ? "Re-Generate" : "Generate";
+                if (!await showConfirm(title, confirmMessage, confirmText, "#4CAF50")) {
                     return;
                 }
 
@@ -2476,8 +2596,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (!catPrompts) return;
 
                 // Collect prompts without thumbnails
-                const missing = getPromptNamesForCategory(node, cat, { hideNSFW: false, workflowOnly: false, contentFilter: "all" }).filter(name => {
-                    const data = catPrompts[name];
+                const missing = getPromptNamesForCategory(node, cat, { hideNSFW: false, workflowOnly: false, contentFilter: "all", endpointPrefix }).filter(name => {
+                    const data = getCategoryPromptEntry(catPrompts, name, endpointPrefix);
                     return data && typeof data === "object" && !data.thumbnail;
                 });
 
@@ -2501,12 +2621,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const catPrompts = node.prompts[cat];
                 if (!catPrompts) return;
 
-                const all = getPromptNamesForCategory(node, cat, { hideNSFW: false, workflowOnly: false, contentFilter: "all" }).filter(name => {
-                    const data = catPrompts[name];
+                const all = getPromptNamesForCategory(node, cat, { hideNSFW: false, workflowOnly: false, contentFilter: "all", endpointPrefix }).filter(name => {
+                    const data = getCategoryPromptEntry(catPrompts, name, endpointPrefix);
                     return data && typeof data === "object";
                 });
 
-                await runBatchGeneration(all, "Re-Generate All Thumbnails");
+                await runBatchGeneration(all, "Re-Generate All Thumbnails", { regenerateAll: true });
             };
             menu.appendChild(regenerateItem);
 
@@ -2654,6 +2774,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
+                endpointPrefix,
             }));
             ensureSelectedCategory();
             categoryButtons = [];
@@ -2679,6 +2800,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 btn.textContent = cat;
 
                 btn.onclick = async () => {
+                    const canProceed = await canChangeEditorContext();
+                    if (!canProceed) return;
                     setBlankPromptSelection();
                     if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
                         await editPanel.clearPrompt({ skipConfirm: true });
@@ -2736,6 +2859,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         const data = await resp.json();
                         if (data.success) {
                             node.prompts = data.prompts;
+                            const canProceed = await canChangeEditorContext();
+                            if (!canProceed) {
+                                rebuildCategoryList();
+                                renderContent(searchInput.value);
+                                return;
+                            }
                             setSelectedCategory(categoryName);
                             rebuildCategoryList();
                             renderContent(searchInput.value);
@@ -2817,21 +2946,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 loadPrompts: loadPromptsFn,
                 savePrompt: async (payload) => {
                     try {
-                        const body = {
-                            category: payload?.category,
-                            name: payload?.name,
-                            text: payload?.text,
-                            thumbnail: payload?.thumbnail,
-                        };
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "prompt_category")) body.prompt_category = payload.prompt_category;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora")) body.lora = payload.lora;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_strength")) body.lora_strength = payload.lora_strength;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_image")) body.lora_image = payload.lora_image;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_image_strength")) body.lora_image_strength = payload.lora_image_strength;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_video")) body.lora_video = payload.lora_video;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "lora_video_strength")) body.lora_video_strength = payload.lora_video_strength;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "refmod")) body.refmod = payload.refmod;
-                        if (payload && Object.prototype.hasOwnProperty.call(payload, "refmod_weight")) body.refmod_weight = payload.refmod_weight;
+                        const body = buildSavePromptRequestBodyForEndpoint(endpointPrefix, payload);
                         const resp = await fetch(`${endpointPrefix}/save-prompt`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -2892,31 +3007,57 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                     endpointPrefix,
                                     draftPromptData,
                                     persistThumbnail: !isDraftGeneration,
+                                    promptStrength,
+                                    generationMode: thumbnailGenerationMode,
                                 });
                                 _thumbQueueDone++;
                                 if (isDraftGeneration) {
                                     resolve(generatedThumbnail || null);
                                     return;
                                 }
+                                await loadPromptsFn(node);
+                                resolve(getCategoryPromptEntry(node?.prompts?.[category], queuedName, endpointPrefix)?.thumbnail || null);
                             } catch (e) {
-                                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
+                                const error = e instanceof Error
+                                    ? e
+                                    : new Error(e == null ? "Thumbnail generation failed." : String(e));
+                                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, error);
                                 _thumbQueueFailed++;
-                                reject(e);
+                                reject(error);
                                 return;
                             } finally {
                                 if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
                                     _finishThumbQueueProgress();
                                 }
                             }
-                            if (isDraftGeneration) {
-                                return;
-                            }
-                            await loadPromptsFn(node);
-                            resolve(node?.prompts?.[category]?.[queuedName]?.thumbnail || null);
                         });
                     });
                 },
                 onChange: () => {
+                    renderContent(searchInput.value);
+                },
+                onCategorySettingsSaved: async ({ category, previousPromptType, promptType }) => {
+                    const previousType = String(previousPromptType || "").trim().toLowerCase();
+                    const nextType = String(promptType || "").trim().toLowerCase();
+                    const typeChanged = previousType !== nextType;
+
+                    if (showCategoryTypeFilter && typeChanged) {
+                        categoryTypeFilter = nextType || "__none__";
+                        updateTypeRailButtons();
+                    }
+
+                    selectedCategory = category;
+                    setBlankPromptSelection();
+                    if (typeof editPanel.clearPrompt === "function") {
+                        await editPanel.clearPrompt({ skipConfirm: true });
+                    }
+                    rebuildCategoryList();
+                    if (editPanel) {
+                        editPanel.loadCategorySettings(category);
+                        if (typeof editPanel.showCategorySettings === "function") {
+                            editPanel.showCategorySettings();
+                        }
+                    }
                     renderContent(searchInput.value);
                 },
                 compact: compactBrowser,
@@ -2939,6 +3080,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
+                endpointPrefix,
             });
 
             // Filter by search
@@ -3189,7 +3331,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
 
             filteredPrompts.forEach(promptName => {
-                const promptData = categoryPrompts[promptName];
+                const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
@@ -3558,7 +3700,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
 
             filteredPrompts.forEach(promptName => {
-                const promptData = categoryPrompts[promptName];
+                const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
@@ -4083,7 +4225,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
 
             filteredPrompts.forEach(promptName => {
-                const promptData = categoryPrompts[promptName];
+                const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
                 const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
@@ -4759,7 +4901,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 return;
             }
 
-            const existing = node.prompts?.[category]?.[name];
+            const existing = getCategoryPromptEntry(node?.prompts?.[category], name, endpointPrefix);
             let overwrite = false;
             if (existing) {
                 overwrite = await showConfirm(
@@ -4796,6 +4938,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // Search filtering
         searchInput.oninput = () => {
+            rebuildCategoryList();
             renderContent(searchInput.value);
         };
 

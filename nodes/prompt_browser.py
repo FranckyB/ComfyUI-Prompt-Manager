@@ -5,7 +5,12 @@ import time
 
 import server
 
-from ..py.prompt_composer_store import PromptComposerStore, _find_category_case_insensitive, _find_prompt_case_insensitive
+from ..py.prompt_composer_store import (
+    PromptComposerStore,
+    _find_category_case_insensitive,
+    _find_prompt_case_insensitive,
+    _get_category_prompts_map,
+)
 from .prompt_manager_basic import _get_workflow_node
 from .prompt_manager_basic import PromptManager
 from .prompt_generator import PromptGeneratorDataStore
@@ -13,7 +18,20 @@ from .prompt_generator import PromptGeneratorDataStore
 
 def _is_hidden_category_entry_key(name):
     normalized = str(name or "").strip().lower()
-    return normalized in {"__meta__", "_base_prompt_", "_prompt_type_"}
+    return normalized in {"__meta__", "_base_prompt_", "_prompt_type_", "_prompts_"}
+
+
+def _iter_prompt_items(entries):
+    if not isinstance(entries, dict):
+        return []
+    prompt_entries = _get_category_prompts_map(entries)
+    if isinstance(prompt_entries, dict) and "_prompts_" in entries:
+        return list(prompt_entries.items())
+    return [
+        (name, entry)
+        for name, entry in entries.items()
+        if not _is_hidden_category_entry_key(name)
+    ]
 
 
 class PromptBrowser:
@@ -88,9 +106,7 @@ class PromptBrowser:
                 entries = source_data.get(cat, {})
                 if not isinstance(entries, dict):
                     continue
-                for name, entry in entries.items():
-                    if _is_hidden_category_entry_key(name):
-                        continue
+                for name, entry in _iter_prompt_items(entries):
                     all_prompts.append(name)
                     if not first_prompt:
                         first_prompt = name

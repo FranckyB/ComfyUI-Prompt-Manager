@@ -2,7 +2,6 @@ import { app } from "../../scripts/app.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import { DEFAULT_THUMBNAIL } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
-import { getPromptTypeChoices } from "./prompt_browser_edit.js";
 import { loadComposerPrompts, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
 
 const PARTS_PROP_KEY = "prompt_composer_parts";
@@ -33,8 +32,15 @@ const SCROLLER_PADDING_BOTTOM = 24;
 const SUBJECT_NONE = 0;
 const SUBJECT_MIN = 1;
 const SUBJECT_MAX = 16;
+const SUBJECT_START_PROMPT_TYPES = new Set([
+    "animal",
+    "character",
+    "environment",
+]);
 const NON_SUBJECT_PROMPT_TYPES = new Set([
     "style",
+    "action",
+    "effect",
     "motion",
     "lighting",
     "ambience",
@@ -46,14 +52,14 @@ const NON_SUBJECT_PROMPT_TYPES = new Set([
     "weather",
 ]);
 const SUBJECT_ACCENTS = [
-    { border: "hsla(8, 84%, 64%, 0.95)", soft: "hsla(8, 84%, 64%, 0.18)", strong: "hsla(8, 84%, 48%, 0.95)", text: "hsl(8, 100%, 96%)" },
+    { border: "hsla(205, 88%, 60%, 0.95)", soft: "hsla(205, 88%, 60%, 0.18)", strong: "hsla(205, 88%, 44%, 0.95)", text: "hsl(205, 100%, 96%)" },
     { border: "hsla(40, 92%, 60%, 0.95)", soft: "hsla(40, 92%, 60%, 0.18)", strong: "hsla(40, 92%, 44%, 0.95)", text: "hsl(48, 100%, 96%)" },
     { border: "hsla(92, 72%, 56%, 0.95)", soft: "hsla(92, 72%, 56%, 0.18)", strong: "hsla(92, 72%, 40%, 0.95)", text: "hsl(92, 100%, 96%)" },
-    { border: "hsla(155, 72%, 48%, 0.95)", soft: "hsla(155, 72%, 48%, 0.18)", strong: "hsla(155, 72%, 34%, 0.95)", text: "hsl(155, 100%, 96%)" },
-    { border: "hsla(205, 88%, 60%, 0.95)", soft: "hsla(205, 88%, 60%, 0.18)", strong: "hsla(205, 88%, 44%, 0.95)", text: "hsl(205, 100%, 96%)" },
+    { border: "hsla(8, 84%, 64%, 0.95)", soft: "hsla(8, 84%, 64%, 0.18)", strong: "hsla(8, 84%, 48%, 0.95)", text: "hsl(8, 100%, 96%)" },
     { border: "hsla(248, 80%, 68%, 0.95)", soft: "hsla(248, 80%, 68%, 0.18)", strong: "hsla(248, 80%, 52%, 0.95)", text: "hsl(248, 100%, 97%)" },
-    { border: "hsla(294, 72%, 64%, 0.95)", soft: "hsla(294, 72%, 64%, 0.18)", strong: "hsla(294, 72%, 48%, 0.95)", text: "hsl(294, 100%, 97%)" },
+    { border: "hsla(155, 72%, 48%, 0.95)", soft: "hsla(155, 72%, 48%, 0.18)", strong: "hsla(155, 72%, 34%, 0.95)", text: "hsl(155, 100%, 96%)" },
     { border: "hsla(332, 78%, 62%, 0.95)", soft: "hsla(332, 78%, 62%, 0.18)", strong: "hsla(332, 78%, 46%, 0.95)", text: "hsl(332, 100%, 97%)" },
+    { border: "hsla(92, 72%, 56%, 0.95)", soft: "hsla(92, 72%, 56%, 0.18)", strong: "hsla(92, 72%, 40%, 0.95)", text: "hsl(92, 100%, 96%)" },
 ];
 
 function getWidgetByName(node, name) {
@@ -66,94 +72,6 @@ function hideWidget(widget) {
     widget.computeSize = () => [0, -4];
     widget.hidden = true;
     widget.draw = function () {};
-}
-
-function showComposerTypePicker(anchorEvent, anchorElement = null) {
-    return new Promise((resolve) => {
-        const existing = document.querySelector('.pm-composer-type-picker');
-        if (existing) existing.remove();
-
-        const menu = document.createElement('div');
-        menu.className = 'pm-composer-type-picker';
-        menu.style.cssText = `
-            position: fixed;
-            background: ${UI.panel || "#1f2937"};
-            border: 1px solid ${UI.inputBorder || "#445064"};
-            border-radius: 8px;
-            padding: 6px 0;
-            z-index: 10001;
-            min-width: 180px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.45);
-        `;
-
-        const addItem = (value, label) => {
-            const item = document.createElement('div');
-            item.textContent = label;
-            item.style.cssText = `
-                padding: 8px 14px;
-                color: ${UI.textPrimary || "#d1d5db"};
-                cursor: pointer;
-                font-size: 13px;
-                white-space: nowrap;
-            `;
-            item.onmouseover = () => {
-                item.style.background = UI.accentSoft || 'rgba(56, 130, 246, 0.16)';
-            };
-            item.onmouseout = () => {
-                item.style.background = 'transparent';
-            };
-            item.onclick = () => {
-                cleanup();
-                resolve(value);
-            };
-            menu.appendChild(item);
-        };
-
-        addItem('__all__', 'All');
-        for (const choice of getPromptTypeChoices()) {
-            if (!choice?.value) continue;
-            addItem(choice.value, choice.label || choice.value);
-        }
-
-        const clickX = Number(anchorEvent?.clientX);
-        const clickY = Number(anchorEvent?.clientY);
-        const hasPointerPosition = Number.isFinite(clickX) && Number.isFinite(clickY);
-        const rect = anchorElement?.getBoundingClientRect?.();
-        const left = hasPointerPosition
-            ? Math.min(clickX + 4, window.innerWidth - 200)
-            : (rect ? Math.min(rect.left, window.innerWidth - 200) : Math.max(16, (window.innerWidth - 180) / 2));
-        const top = hasPointerPosition
-            ? Math.min(clickY + 4, window.innerHeight - 320)
-            : (rect ? Math.min(rect.bottom + 6, window.innerHeight - 320) : Math.max(16, (window.innerHeight - 320) / 2));
-        menu.style.left = `${Math.max(8, left)}px`;
-        menu.style.top = `${Math.max(8, top)}px`;
-        document.body.appendChild(menu);
-
-        const onPointerDown = (event) => {
-            if (!menu.contains(event.target)) {
-                cleanup();
-                resolve(null);
-            }
-        };
-
-        const onKeyDown = (event) => {
-            if (event.key === 'Escape') {
-                cleanup();
-                resolve(null);
-            }
-        };
-
-        const cleanup = () => {
-            document.removeEventListener('mousedown', onPointerDown, true);
-            document.removeEventListener('keydown', onKeyDown, true);
-            if (menu.parentNode) menu.parentNode.removeChild(menu);
-        };
-
-        setTimeout(() => {
-            document.addEventListener('mousedown', onPointerDown, true);
-            document.addEventListener('keydown', onKeyDown, true);
-        }, 0);
-    });
 }
 
 function readToggleValue(node, widgetName, propKey, fallbackValue) {
@@ -394,11 +312,20 @@ function resolveSubjectAssignments(parts) {
 function getInheritedSubjectDefaults(parts) {
     const resolved = resolveSubjectAssignments(parts);
     if (!resolved.length) {
-        return { subject_number: SUBJECT_MIN, subject_locked: false };
+        return { subject_number: SUBJECT_MIN, subject_locked: false, has_subject: false, has_parts: false };
+    }
+    let lastSubjectNumber = SUBJECT_MIN;
+    let hasSubject = false;
+    for (const part of resolved) {
+        if (part.effective_subject_number === SUBJECT_NONE) continue;
+        lastSubjectNumber = clampSubjectNumber(part.effective_subject_number, SUBJECT_MIN);
+        hasSubject = true;
     }
     return {
-        subject_number: resolved[resolved.length - 1].effective_subject_number,
+        subject_number: lastSubjectNumber,
         subject_locked: false,
+        has_subject: hasSubject,
+        has_parts: true,
     };
 }
 
@@ -418,7 +345,11 @@ function categoryShouldBeNonSubject(node, category) {
     return NON_SUBJECT_PROMPT_TYPES.has(getCategoryPromptType(node, category));
 }
 
-function inferPartSubjectState(node, category, basePart = null, inheritedDefaults = null) {
+function categoryStartsNewSubject(node, category) {
+    return SUBJECT_START_PROMPT_TYPES.has(getCategoryPromptType(node, category));
+}
+
+function inferPartSubjectState(node, category, basePart = null, inheritedDefaults = null, options = null) {
     if (categoryShouldBeNonSubject(node, category)) {
         return {
             subject_number: SUBJECT_NONE,
@@ -440,11 +371,32 @@ function inferPartSubjectState(node, category, basePart = null, inheritedDefault
         };
     }
 
-    const inherited = inheritedDefaults || { subject_number: SUBJECT_MIN, subject_locked: false };
+    const inherited = inheritedDefaults || { subject_number: SUBJECT_MIN, subject_locked: false, has_subject: false, has_parts: false };
+    const shouldBumpSubject = options?.bumpSubject === true;
+    let subjectNumber = clampSubjectNumber(inherited.subject_number ?? SUBJECT_MIN);
+    if (shouldBumpSubject) {
+        subjectNumber = inherited.has_subject
+            ? nextSubjectNumber(subjectNumber, 1)
+            : SUBJECT_MIN;
+    }
     return {
-        subject_number: clampSubjectNumber(inherited.subject_number ?? SUBJECT_MIN),
+        subject_number: subjectNumber,
         subject_locked: false,
     };
+}
+
+function advanceInheritedSubjectDefaults(currentDefaults, part) {
+    const nextDefaults = {
+        subject_number: clampSubjectNumber(currentDefaults?.subject_number ?? SUBJECT_MIN),
+        subject_locked: false,
+        has_subject: currentDefaults?.has_subject === true,
+        has_parts: true,
+    };
+    if (clampSubjectNumber(part?.subject_number ?? SUBJECT_NONE, SUBJECT_NONE) !== SUBJECT_NONE) {
+        nextDefaults.subject_number = clampSubjectNumber(part.subject_number, SUBJECT_MIN);
+        nextDefaults.has_subject = true;
+    }
+    return nextDefaults;
 }
 
 function parseParts(raw) {
@@ -528,9 +480,17 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
 
     const normalizedBasePart = basePart ? normalizePart(basePart) : null;
     const selectionMode = String(selection.selectionMode || "combine").trim().toLowerCase();
+    let currentInheritedSubject = {
+        subject_number: clampSubjectNumber(inheritedSubject?.subject_number ?? SUBJECT_MIN),
+        subject_locked: false,
+        has_subject: inheritedSubject?.has_subject === true,
+        has_parts: inheritedSubject?.has_parts === true,
+    };
     const buildPart = (category, prompts) => {
-        const subjectState = inferPartSubjectState(node, category, normalizedBasePart, inheritedSubject);
-        return normalizePart({
+        const subjectState = inferPartSubjectState(node, category, normalizedBasePart, currentInheritedSubject, {
+            bumpSubject: !normalizedBasePart && categoryStartsNewSubject(node, category),
+        });
+        const nextPart = normalizePart({
             category,
             prompts,
             strength: normalizedBasePart?.strength ?? 1.0,
@@ -538,6 +498,8 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
             subject_number: subjectState.subject_number,
             subject_locked: subjectState.subject_locked,
         });
+        currentInheritedSubject = advanceInheritedSubjectDefaults(currentInheritedSubject, nextPart);
+        return nextPart;
     };
 
     if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
@@ -1011,6 +973,8 @@ function ensureComposerUi(node) {
             preferenceScope: "composer",
             initialCategoryTypeFilter,
             multiSelectActionMode: "composer-add",
+            promptStrength: part.strength,
+            thumbnailGenerationMode: readGenerationMode(node),
         });
 
         if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) return;
@@ -1308,7 +1272,7 @@ function ensureComposerUi(node) {
             `;
             const strengthRow = document.createElement("div");
             strengthRow.style.cssText = `
-                display: ${isVideoMode ? "none" : "flex"};
+                display: flex;
                 align-items: center;
                 gap: 4px;
             `;
@@ -1486,10 +1450,6 @@ function ensureComposerUi(node) {
         addCard.onclick = async (evt) => {
             const parts = readParts(node);
             const inheritedSubject = getInheritedSubjectDefaults(parts);
-            const selectedType = await showComposerTypePicker(evt, evt.currentTarget);
-            if (selectedType === null) {
-                return;
-            }
             const selection = await showThumbnailBrowser(node, "", "", {
                 title: "Add Prompt Composer Part",
                 multiSelect: true,
@@ -1499,8 +1459,8 @@ function ensureComposerUi(node) {
                 selectedPrompts: [],
                 loadPromptsFn: loadComposerPrompts,
                 preferenceScope: "composer",
-                initialCategoryTypeFilter: selectedType,
                 multiSelectActionMode: "composer-add",
+                thumbnailGenerationMode: readGenerationMode(node),
             });
 
             if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) {
@@ -1637,6 +1597,12 @@ app.registerExtension({
             node._composerUiSyncSwitches?.();
             node._composerUiRefreshHeight?.();
             node._composerUiRender?.();
+            loadComposerPrompts(node).then(() => {
+                node._composerUiSyncSwitches?.();
+                node._composerUiRefreshHeight?.();
+                node._composerUiRender?.();
+                app.graph.setDirtyCanvas(true, true);
+            });
             return result;
         };
 

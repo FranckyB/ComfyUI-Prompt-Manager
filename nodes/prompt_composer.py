@@ -57,10 +57,10 @@ def _prefix_with_category(category, text):
 PROMPT_TYPE_CHOICES = [
     "scene",
     "character",
-    "animal",
     "accessory",
     "ambience",
     "attire",
+    "hairstyle",
     "background",
     "style",
     "lighting",
@@ -96,25 +96,23 @@ def _resolve_prompt_type(category_data, fallback_category):
 
 
 def _resolve_prompt_prefix(category_data, fallback_category):
-    def _normalize_prefix(value):
-        prefix = str(value or "").strip()
-        if not prefix:
-            return ""
-        return prefix if prefix.endswith(":") else f"{prefix}:"
-
     if isinstance(category_data, dict):
-        raw_type = category_data.get("_prompt_type_", "")
-        prompt_type = str(raw_type or "").strip()
-        if prompt_type:
-            return _normalize_prefix(prompt_type)
-    return _normalize_prefix(fallback_category)
+        raw_prefix = category_data.get("_prompt_prefix_", "")
+        prompt_prefix = str(raw_prefix or "").strip()
+        if prompt_prefix:
+            return prompt_prefix
+    return ""
 
 
-def _json_section_key(category, prompt_prefix):
-    """Use the explicit prompt prefix or category name as the JSON section key."""
-    key = str(prompt_prefix or "").strip().rstrip(":")
+def _json_section_key(category, prompt_type):
+    """Use the category prompt type, or fall back to the category name."""
+    key = str(prompt_type or "").strip().rstrip(":")
     if key:
         return key
+    return str(category or "").strip()
+
+
+def _text_section_key(category):
     return str(category or "").strip()
 
 
@@ -481,7 +479,20 @@ def _append_text_section(sections, section_key, section_label, text):
             "descriptions": [],
         }
         sections[key] = bucket
+    elif not bucket.get("label") and str(section_label or "").strip():
+        bucket["label"] = str(section_label or "").strip()
     bucket["descriptions"].append(fragment_text)
+
+
+def _join_text_descriptions(descriptions):
+    items = [str(value or "").strip() for value in (descriptions or []) if str(value or "").strip()]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def _render_text_sections(sections):
@@ -490,9 +501,25 @@ def _render_text_sections(sections):
         descriptions = [str(value or "").strip() for value in bucket.get("descriptions", []) if str(value or "").strip()]
         if not descriptions:
             continue
-        joined = ", ".join(descriptions)
-        fragments.append(joined)
-    return ", ".join(fragment for fragment in fragments if fragment)
+        joined = _join_text_descriptions(descriptions)
+        label = str(bucket.get("label") or "").strip()
+        fragment_text = f"{label} {joined}".strip() if label else joined
+        if fragment_text:
+            fragments.append({
+                "text": fragment_text,
+                "has_label": bool(label),
+            })
+    if not fragments:
+        return ""
+    if len(fragments) == 1:
+        return fragments[0]["text"]
+
+    rendered = fragments[0]["text"]
+    for index, fragment in enumerate(fragments[1:], start=1):
+        previous = fragments[index - 1]
+        separator = ". " if fragment["has_label"] or previous["has_label"] else ", "
+        rendered = f"{rendered}{separator}{fragment['text']}"
+    return rendered
 
 
 def _append_json_section(sections, section_key, text):
@@ -514,6 +541,17 @@ def _format_json_description(text, strength, use_strength=True):
     if not use_strength:
         return str(text or "").strip()
     return _format_fragment(text, strength)
+
+
+def _scale_prompt_asset_weight(base_weight, part_strength, minimum=0.0, maximum=None):
+    normalized_base = _normalize_scalar(base_weight, default=1.0, minimum=minimum, maximum=maximum)
+    normalized_part = _normalize_strength(part_strength)
+    scaled = normalized_base * normalized_part
+    if minimum is not None:
+        scaled = max(float(minimum), scaled)
+    if maximum is not None:
+        scaled = min(float(maximum), scaled)
+    return scaled
 
 
 def _load_prompt_refmods(mod_name, weight):
@@ -648,7 +686,10 @@ class PromptComposer:
                 continue
 
             text = entry.get("prompt", "") or ""
+            prompt_type = _resolve_prompt_type(category_data, category)
             prompt_prefix = _resolve_prompt_prefix(category_data, category)
+            text_section_key = _text_section_key(category)
+            json_section_key = _json_section_key(category, prompt_type)
             use_strength = selected_generation_mode != "video"
             formatted_plain = _format_fragment(text, part.get("strength", 1.0)) if use_strength else str(text or "").strip()
             formatted_json = _format_json_description(text, part.get("strength", 1.0), use_strength=use_strength)
@@ -657,14 +698,14 @@ class PromptComposer:
                 if formatted_plain:
                     _append_text_section(
                         non_subject_text_sections,
-                        _json_section_key(category, prompt_prefix),
+                        text_section_key,
                         prompt_prefix,
                         formatted_plain,
                     )
                 if formatted_json:
                     _append_json_section(
                         non_subject_sections,
-                        _json_section_key(category, prompt_prefix),
+                        json_section_key,
                         formatted_json,
                     )
             else:
@@ -672,20 +713,21 @@ class PromptComposer:
                 if formatted_plain:
                     _append_text_section(
                         subject_group["text_sections"],
-                        _json_section_key(category, prompt_prefix),
+                        text_section_key,
                         prompt_prefix,
                         formatted_plain,
                     )
-                key = _json_section_key(category, prompt_prefix)
+                key = json_section_key
                 if key:
                     _append_json_section(subject_group["sections"], key, formatted_json)
 
+            part_strength = part.get("strength", 1.0)
             if selected_generation_mode == "video":
                 lora_name = _normalize_lora_path(entry.get("lora_video") or "")
-                lora_strength = _normalize_scalar(entry.get("lora_video_strength", 1.0), default=1.0)
+                lora_strength = _scale_prompt_asset_weight(entry.get("lora_video_strength", 1.0), part_strength)
             else:
                 lora_name = _normalize_lora_path(entry.get("lora_image") or entry.get("lora") or "")
-                lora_strength = _normalize_scalar(entry.get("lora_image_strength", entry.get("lora_strength", 1.0)), default=1.0)
+                lora_strength = _scale_prompt_asset_weight(entry.get("lora_image_strength", entry.get("lora_strength", 1.0)), part_strength)
             if lora_name:
                 prompt_lora_stack = _merge_lora_stacks(
                     prompt_lora_stack,
@@ -694,7 +736,12 @@ class PromptComposer:
 
             refmod_name = _normalize_refmod_name(entry.get("refmod") or "")
             if refmod_name:
-                refmod_weight = _normalize_scalar(entry.get("refmod_weight", 1.0), default=1.0, minimum=0.0, maximum=REFMOD_MAX_WEIGHT)
+                refmod_weight = _scale_prompt_asset_weight(
+                    entry.get("refmod_weight", 1.0),
+                    part_strength,
+                    minimum=0.0,
+                    maximum=REFMOD_MAX_WEIGHT,
+                )
                 try:
                     loaded_prompt_mods = _load_prompt_refmods(refmod_name, refmod_weight)
                     loaded_prompt_mods = _override_refmod_row_descriptions(loaded_prompt_mods, text)

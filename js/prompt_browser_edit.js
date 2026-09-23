@@ -1,6 +1,7 @@
 import { saveComposerCategorySettings } from "./prompt_composer_common.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { getCategoryPromptEntries, getCategoryPromptEntriesForEndpoint, getCategoryPromptEntryForEndpoint } from "./prompt_store_adapters.js";
 
 // Placeholder thumbnail. Defined locally (NOT imported from prompt_manager_advanced.js)
 // to break the module cycle:
@@ -17,40 +18,64 @@ const SYSTEM_PROMPT_CATEGORIES = ["Audio", "Image", "Video", "Other"];
 
 const PROMPT_TYPE_CHOICES = [
     { value: "", label: "None" },
-    { value: "action", label: "Action" },
-    { value: "accessory", label: "Accessory" },
-    { value: "ambience", label: "Ambience" },
-    { value: "animal", label: "Animal" },
-    { value: "attire", label: "Attire" },
-    { value: "background", label: "Background" },
-    { value: "camera", label: "Camera" },
     { value: "character", label: "Character" },
     { value: "characteristic", label: "Characteristic" },
-    { value: "composition", label: "Composition" },
-    { value: "dialogue", label: "Dialogue" },
+    { value: "attire", label: "Attire" },
+    { value: "hairstyle", label: "Hairstyle" },
+    { value: "accessory", label: "Accessory" },
     { value: "expression", label: "Expression" },
+    { value: "action", label: "Action" },
+    { value: "environment", label: "Environment" },
     { value: "lighting", label: "Lighting" },
+    { value: "ambience", label: "Ambience" },
+    { value: "camera", label: "Camera" },
+    { value: "composition", label: "Composition" },
+    { value: "effect", label: "Effect" },
     { value: "soundscape", label: "Soundscape" },
     { value: "style", label: "Style" },
+    { value: "dialogue", label: "Dialogue" },
 ];
 
-export function getPromptTypeChoices() {
+function addPromptTypeChoice(choices, seen, value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    choices.push({ value: normalized, label: normalized });
+}
+
+function collectPromptTypesFromData(promptsData) {
+    if (!promptsData || typeof promptsData !== "object") return [];
+    const discovered = [];
+    for (const categoryData of Object.values(promptsData)) {
+        if (!categoryData || typeof categoryData !== "object" || Array.isArray(categoryData)) continue;
+        const promptType = String(categoryData._prompt_type_ || "").trim();
+        if (promptType) {
+            discovered.push(promptType);
+        }
+    }
+    return discovered;
+}
+
+export function getPromptTypeChoices(promptsData = null) {
     const choices = [...PROMPT_TYPE_CHOICES];
     const seen = new Set(choices.map((c) => String(c.value || "").trim().toLowerCase()));
 
     const raw = String(app?.ui?.settings?.getSettingValue?.(SETTING_COMPOSER_EXTRA_TYPES) || "");
-    if (!raw.trim()) return choices;
+    if (raw.trim()) {
+        const extras = raw
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
 
-    const extras = raw
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+        for (const item of extras) {
+            addPromptTypeChoice(choices, seen, item);
+        }
+    }
 
-    for (const item of extras) {
-        const key = item.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        choices.push({ value: item, label: item });
+    for (const item of collectPromptTypesFromData(promptsData)) {
+        addPromptTypeChoice(choices, seen, item);
     }
 
     return choices;
@@ -563,6 +588,7 @@ export function createPromptBrowserEditPanel(options) {
     const _syncPromptSelection = typeof syncPromptSelection === "function" ? syncPromptSelection : () => {};
     const _selectPrompt = typeof options?.selectPrompt === "function" ? options.selectPrompt : null;
     const _onChange = typeof onChange === "function" ? onChange : () => {};
+    const _onCategorySettingsSaved = typeof options?.onCategorySettingsSaved === "function" ? options.onCategorySettingsSaved : () => {};
 
     let currentCategory = "";
     let currentPromptName = "";
@@ -575,6 +601,9 @@ export function createPromptBrowserEditPanel(options) {
     let loadedVideoLoraStrength = 1.0;
     let loadedRefMod = "";
     let loadedRefModWeight = 1.0;
+    let loadedCategoryPromptType = "";
+    let loadedCategoryBasePrompt = "";
+    let loadedCategoryPromptPrefix = "";
 
     const root = el("div", {
         display: "flex",
@@ -743,22 +772,8 @@ export function createPromptBrowserEditPanel(options) {
     const typeLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prompt Type");
     settingsBody.appendChild(typeLabel);
 
-    const typeSelect = createSelect("", getPromptTypeChoices());
+    const typeSelect = createSelect("", getPromptTypeChoices(node?.prompts));
     settingsBody.appendChild(typeSelect);
-
-    // Auto-save prompt type when changed (no confirmation; prompt-level Save handles the prompt itself).
-    typeSelect.addEventListener("change", async () => {
-        const category = currentCategory;
-        if (!category) return;
-        const result = await saveComposerCategorySettings(category, {
-            basePrompt: baseTextArea.value,
-            promptType: typeSelect.value,
-        });
-        if (result?.success) {
-            node.prompts = result.prompts;
-            _onChange();
-        }
-    });
 
     const baseLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Base Prompt (for thumbnails)");
     settingsBody.appendChild(baseLabel);
@@ -768,6 +783,26 @@ export function createPromptBrowserEditPanel(options) {
 
     settingsBody.appendChild(baseTextArea);
 
+    const prefixInfoText = "Prepended once before grouped prompts\nfrom this category in text output.\nJSON output ignores this field.";
+    const prefixLabelRow = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+    });
+    const prefixLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prefix");
+    prefixLabel.title = prefixInfoText;
+    const prefixHint = el("span", {
+        color: STYLE.textMuted,
+        fontSize: "12px",
+        userSelect: "none",
+    }, "ⓘ");
+    prefixHint.title = prefixInfoText;
+    prefixLabelRow.append(prefixLabel, prefixHint);
+    settingsBody.appendChild(prefixLabelRow);
+
+    const prefixInput = createInput("", "");
+    settingsBody.appendChild(prefixInput);
+
     const saveSettingsBtn = createButton("Save Category Settings", async () => {
         const category = currentCategory;
         if (!category) {
@@ -776,33 +811,45 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         const categoryData = node?.prompts?.[category];
-        const promptKeys = (categoryData && typeof categoryData === "object")
-            ? Object.keys(categoryData).filter((k) => !String(k || "").startsWith("_"))
-            : [];
+        const promptKeys = Object.keys(getCategoryPromptEntries(categoryData, "composer"));
         const hasExistingPrompts = promptKeys.length > 0;
         const hasExistingCategorySettings = !!(
             categoryData
             && typeof categoryData === "object"
-            && (String(categoryData._base_prompt_ || "").trim() || String(categoryData._prompt_type_ || "").trim())
+            && (
+                String(categoryData._base_prompt_ || "").trim()
+                || String(categoryData._prompt_type_ || "").trim()
+                || String(categoryData._prompt_prefix_ || "").trim()
+            )
         );
 
         if (hasExistingPrompts || hasExistingCategorySettings) {
             const confirmed = await _showConfirm(
-                "Overwrite Category Settings",
-                `Category settings for "${category}" already exist. Replace them?`,
-                "Replace",
+                "Update Category Settings",
+                `Category settings for "${category}" already exist. Update them?`,
+                "Update",
                 "#c44"
             );
             if (!confirmed) return;
         }
 
+        const previousPromptType = loadedCategoryPromptType;
         const result = await saveComposerCategorySettings(category, {
             basePrompt: baseTextArea.value,
             promptType: typeSelect.value,
+            promptPrefix: prefixInput.value,
         });
         if (result?.success) {
             node.prompts = result.prompts;
+            loadCategorySettings(category);
             _onChange();
+            await _onCategorySettingsSaved({
+                category,
+                previousPromptType,
+                promptType: String(typeSelect.value || "").trim(),
+                basePrompt: String(baseTextArea.value || ""),
+                promptPrefix: String(prefixInput.value || ""),
+            });
         } else {
             await _showInfo("Save Failed", result?.error || "Failed to save category settings.");
         }
@@ -1013,7 +1060,7 @@ export function createPromptBrowserEditPanel(options) {
             const draftPromptData = {
                 prompt: text,
             };
-            const savedEntry = node?.prompts?.[category]?.[name];
+            const savedEntry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], name, endpointPrefix);
             if (savedEntry && typeof savedEntry === "object" && savedEntry.workflow_data) {
                 draftPromptData.workflow_data = savedEntry.workflow_data;
             }
@@ -1067,13 +1114,13 @@ export function createPromptBrowserEditPanel(options) {
         let existing = null;
         let existingFound = false;
         if (categoryData && typeof categoryData === "object") {
-            if (Object.prototype.hasOwnProperty.call(categoryData, name)) {
-                existing = categoryData[name];
+            const promptEntries = getCategoryPromptEntriesForEndpoint(categoryData, endpointPrefix);
+            if (Object.prototype.hasOwnProperty.call(promptEntries, name)) {
+                existing = promptEntries[name];
                 existingFound = true;
             } else {
                 const target = name.toLowerCase();
-                for (const [entryName, entryValue] of Object.entries(categoryData)) {
-                    if (String(entryName || "").startsWith("_")) continue;
+                for (const [entryName, entryValue] of Object.entries(promptEntries)) {
                     if (String(entryName).toLowerCase() === target) {
                         existing = entryValue;
                         existingFound = true;
@@ -1116,7 +1163,7 @@ export function createPromptBrowserEditPanel(options) {
             }
             currentPromptName = name;
             pendingThumbnail = null;
-            const entry = node?.prompts?.[category]?.[name];
+            const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], name, endpointPrefix);
             loadedPromptText = entry?.prompt || "";
             loadedImageLora = String(entry?.lora_image || entry?.lora || "").trim();
             loadedImageLoraStrength = normalizeAssetWeight(entry?.lora_image_strength ?? entry?.lora_strength, 1.0);
@@ -1141,12 +1188,19 @@ export function createPromptBrowserEditPanel(options) {
     function hasUnsavedChanges() {
         const currentName = String(promptNameInput.value || "").trim();
         const currentText = String(promptTextArea.value || "").trim();
+        const currentCategoryPromptType = String(typeSelect.value || "").trim();
+        const currentCategoryBasePrompt = String(baseTextArea.value || "").trim();
+        const currentCategoryPromptPrefix = String(prefixInput.value || "").trim();
 
         if (!currentCategory) {
             return false;
         }
 
-        const entry = node?.prompts?.[currentCategory]?.[currentPromptName];
+        if (currentCategoryPromptType !== String(loadedCategoryPromptType || "").trim()) return true;
+        if (currentCategoryBasePrompt !== String(loadedCategoryBasePrompt || "").trim()) return true;
+        if (currentCategoryPromptPrefix !== String(loadedCategoryPromptPrefix || "").trim()) return true;
+
+        const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[currentCategory], currentPromptName, endpointPrefix);
         if (currentPromptName && entry && typeof entry === "object") {
             const originalText = String(entry.prompt || "").trim();
             const originalThumbnail = entry.thumbnail || null;
@@ -1206,7 +1260,7 @@ export function createPromptBrowserEditPanel(options) {
         }
         syncSectionVisibility();
 
-        const entry = node?.prompts?.[category]?.[promptName];
+        const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], promptName, endpointPrefix);
         if (entry && typeof entry === "object") {
             promptTextArea.value = entry.prompt || "";
             loadedPromptText = entry.prompt || "";
@@ -1247,12 +1301,20 @@ export function createPromptBrowserEditPanel(options) {
         currentCategory = category || currentCategory || "";
         const catData = node?.prompts?.[category];
         if (catData && typeof catData === "object") {
-            const promptType = catData._prompt_type_ || "";
+            const promptType = String(catData._prompt_type_ || "").trim();
             typeSelect.value = promptType;
-            baseTextArea.value = catData._base_prompt_ || "";
+            baseTextArea.value = String(catData._base_prompt_ || "");
+            prefixInput.value = String(catData._prompt_prefix_ || "");
+            loadedCategoryPromptType = promptType;
+            loadedCategoryBasePrompt = String(catData._base_prompt_ || "").trim();
+            loadedCategoryPromptPrefix = String(catData._prompt_prefix_ || "").trim();
         } else {
             typeSelect.value = "";
             baseTextArea.value = "";
+            prefixInput.value = "";
+            loadedCategoryPromptType = "";
+            loadedCategoryBasePrompt = "";
+            loadedCategoryPromptPrefix = "";
         }
     }
 
@@ -1445,6 +1507,7 @@ export function createPromptBrowserEditPanel(options) {
         showCategorySettings,
         showPromptSettings,
         clearPrompt,
+        confirmDiscardChanges,
         getCurrentPromptName: () => String(promptNameInput.value || "").trim(),
     };
 }

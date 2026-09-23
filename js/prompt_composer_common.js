@@ -1,6 +1,5 @@
 import { api } from "../../scripts/api.js";
-
-const COMPOSER_ENDPOINT_PREFIX = "/prompt-manager/compose";
+import { COMPOSER_ENDPOINT_PREFIX, getCategoryPromptEntries } from "./prompt_store_adapters.js";
 
 export async function loadComposerPrompts(node) {
     try {
@@ -32,14 +31,14 @@ export function getComposerNames(node, category) {
     const data = getComposerData(node);
     const catData = data[category];
     if (!catData || typeof catData !== "object") return [];
-    return Object.keys(catData).filter((n) => n !== "__meta__").sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    return Object.keys(getCategoryPromptEntries(catData, "composer")).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
 export function getComposerEntry(node, category, name) {
     const data = getComposerData(node);
     const catData = data[category];
     if (!catData || typeof catData !== "object") return null;
-    return catData[name] || null;
+    return getCategoryPromptEntries(catData, "composer")[name] || null;
 }
 
 export async function saveComposerCategorySettings(category, settings) {
@@ -51,6 +50,7 @@ export async function saveComposerCategorySettings(category, settings) {
                 category,
                 base_prompt: settings.basePrompt || "",
                 prompt_type: settings.promptType || "",
+                prompt_prefix: settings.promptPrefix || "",
             }),
         });
         return await resp.json();
