@@ -149,6 +149,13 @@ function writeThumbZoom(node, zoom) {
     app.graph.setDirtyCanvas(true, true);
 }
 
+function getDefaultComposerPickerCategory(node) {
+    const categories = Object.keys(node?.prompts || {}).filter((name) => String(name || "").trim() && String(name) !== "__meta__");
+    if (!categories.length) return "";
+    const preferred = categories.find((name) => String(name || "").trim().toLowerCase() === "character");
+    return preferred || categories[0] || "";
+}
+
 function ensureComposerDragStyles() {
     if (document.getElementById(COMPOSER_DRAG_STYLE_ID)) return;
     const style = document.createElement("style");
@@ -486,9 +493,9 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
         has_subject: inheritedSubject?.has_subject === true,
         has_parts: inheritedSubject?.has_parts === true,
     };
-    const buildPart = (category, prompts) => {
+    const buildPart = (category, prompts, bumpSubject = false) => {
         const subjectState = inferPartSubjectState(node, category, normalizedBasePart, currentInheritedSubject, {
-            bumpSubject: !normalizedBasePart && categoryStartsNewSubject(node, category),
+            bumpSubject,
         });
         const nextPart = normalizePart({
             category,
@@ -502,6 +509,19 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
         return nextPart;
     };
 
+    const buildPartsForCategory = (category, prompts) => {
+        const names = Array.isArray(prompts)
+            ? prompts.filter((name) => String(name || "").trim())
+            : [];
+        if (!names.length) return [];
+
+        const shouldBumpSubject = !normalizedBasePart && categoryStartsNewSubject(node, category);
+        if (selectionMode === "split") {
+            return names.map((promptName, promptIndex) => buildPart(category, [promptName], shouldBumpSubject && promptIndex === 0));
+        }
+        return [buildPart(category, names, shouldBumpSubject)];
+    };
+
     if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
         const entries = Object.entries(selection.selectionsByCategory)
             .filter(([, prompts]) => Array.isArray(prompts) && prompts.length > 0)
@@ -511,18 +531,12 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
                 if (b[0] === preferredCategory) return 1;
                 return 0;
             });
-        if (selectionMode === "split") {
-            return entries.flatMap(([category, prompts]) => prompts.map((promptName) => buildPart(category, [promptName])));
-        }
-        return entries.map(([category, prompts]) => buildPart(category, prompts));
+        return entries.flatMap(([category, prompts]) => buildPartsForCategory(category, prompts));
     }
 
     const category = selection.category || normalizedBasePart?.category || "";
     const prompts = selection.prompts.filter((name) => String(name || "").trim());
-    if (selectionMode === "split") {
-        return prompts.map((promptName) => buildPart(category, [promptName]));
-    }
-    return [buildPart(category, prompts)];
+    return buildPartsForCategory(category, prompts);
 }
 
 function ensureHiddenComposerWidgets(node) {
@@ -961,8 +975,9 @@ function ensureComposerUi(node) {
         const inheritedSubject = getInheritedSubjectDefaults(parts.slice(0, index));
         const currentPrompt = part.prompts[0] || "";
         const hasMultiSelection = Array.isArray(part.prompts) && part.prompts.length > 1;
-        const initialCategoryTypeFilter = getCategoryPromptType(node, part.category) || "__none__";
-        const selection = await showThumbnailBrowser(node, part.category || "", currentPrompt, {
+        const initialCategory = part.category || getDefaultComposerPickerCategory(node);
+        const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__none__";
+        const selection = await showThumbnailBrowser(node, initialCategory, currentPrompt, {
             title: "Select Prompt Composer Part",
             multiSelect: hasMultiSelection,
             multiCategorySelect: hasMultiSelection,
@@ -1450,7 +1465,8 @@ function ensureComposerUi(node) {
         addCard.onclick = async (evt) => {
             const parts = readParts(node);
             const inheritedSubject = getInheritedSubjectDefaults(parts);
-            const selection = await showThumbnailBrowser(node, "", "", {
+            const initialCategory = getDefaultComposerPickerCategory(node);
+            const selection = await showThumbnailBrowser(node, initialCategory, "", {
                 title: "Add Prompt Composer Part",
                 multiSelect: true,
                 multiCategorySelect: true,
