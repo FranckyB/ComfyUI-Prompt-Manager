@@ -1322,24 +1322,42 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
             return "";
         };
-        const setCurrentPromptSelection = (name) => {
+        let currentPromptCategory = String(currentCategory || "").trim();
+        const setCurrentPromptSelection = (name, category = selectedCategory) => {
             currentPrompt = name;
+            currentPromptCategory = String(category || "").trim();
             blankPromptExplicitSelection = false;
         };
         const setBlankPromptSelection = () => {
             currentPrompt = "";
+            currentPromptCategory = "";
             blankPromptExplicitSelection = true;
         };
         let editPanel = null;
         let selectedByCategory = {};
         let selectedNames;
         if (multiCategorySelect) {
-            const initialCat = currentCategory || "";
-            if (initialCat) {
+            const selectedPromptsByCategory = options?.selectedPromptsByCategory;
+            if (selectedPromptsByCategory && typeof selectedPromptsByCategory === "object") {
+                for (const [categoryName, promptNames] of Object.entries(selectedPromptsByCategory)) {
+                    const normalizedCategory = String(categoryName || "").trim();
+                    if (!normalizedCategory) continue;
+                    const normalizedPrompts = Array.isArray(promptNames)
+                        ? promptNames.map((name) => String(name || "").trim()).filter(Boolean)
+                        : [];
+                    if (normalizedPrompts.length > 0) {
+                        selectedByCategory[normalizedCategory] = new Set(normalizedPrompts);
+                    }
+                }
+            }
+            const initialCat = currentPromptCategory || currentCategory || "";
+            if (initialCat && !selectedByCategory[initialCat]) {
                 const initialPrompts = Array.isArray(options?.selectedPrompts)
                     ? options.selectedPrompts
                     : (currentPrompt ? [currentPrompt] : []);
-                selectedByCategory[initialCat] = new Set(initialPrompts);
+                if (initialPrompts.length > 0) {
+                    selectedByCategory[initialCat] = new Set(initialPrompts);
+                }
             }
             selectedNames = selectedByCategory[selectedCategory] || new Set();
         } else {
@@ -1725,9 +1743,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let multiSelectBtn = null;
         let enableMultiSelect = () => {};
         let updateMultiSelectBtn = () => {};
-        const disableMultiSelect = () => {
-            if (!multiSelectMode) return;
-            multiSelectMode = false;
+        const resetAllMultiSelections = () => {
             selectedNames.clear();
             if (multiCategorySelect) {
                 Object.keys(selectedByCategory).forEach((cat) => {
@@ -1735,6 +1751,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 });
             }
             multiSelectAnchorName = "";
+        };
+        const disableMultiSelect = () => {
+            if (!multiSelectMode) return;
+            multiSelectMode = false;
+            resetAllMultiSelections();
             updateMultiSelectBtn();
             updateSelectButton();
             updateFooterText();
@@ -1763,34 +1784,25 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (multiSelectMode) {
                     disableMultiSelect();
                 } else {
-                    multiSelectMode = true;
-                    selectedNames.clear();
-                    if (multiCategorySelect) {
-                        Object.keys(selectedByCategory).forEach((cat) => {
-                            selectedByCategory[cat].clear();
-                        });
-                    }
-                    multiSelectAnchorName = "";
-                    updateMultiSelectBtn();
-                    updateSelectButton();
-                    updateFooterText();
-                    updateSelectionToolbar();
-                    updateEditModeLayout();
+                    enableMultiSelect({ preserveCurrentSelection: true });
                 }
                 renderContent(searchInput.value);
             };
             updateMultiSelectBtn();
 
-            enableMultiSelect = () => {
+            enableMultiSelect = (options = null) => {
                 if (multiSelectMode) return;
                 multiSelectMode = true;
-                selectedNames.clear();
-                if (multiCategorySelect) {
-                    Object.keys(selectedByCategory).forEach((cat) => {
-                        selectedByCategory[cat].clear();
-                    });
+                resetAllMultiSelections();
+                const preserveCurrentSelection = options?.preserveCurrentSelection === true;
+                if (preserveCurrentSelection && currentPrompt) {
+                    selectedNames.add(currentPrompt);
+                    const selectionCategory = currentPromptCategory || selectedCategory;
+                    if (multiCategorySelect && selectionCategory) {
+                        selectedByCategory[selectionCategory] = selectedNames;
+                    }
+                    multiSelectAnchorName = currentPrompt;
                 }
-                multiSelectAnchorName = "";
                 updateMultiSelectBtn();
                 updateSelectButton();
                 updateFooterText();
@@ -3333,7 +3345,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             filteredPrompts.forEach(promptName => {
                 const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
+                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : (promptName === currentPrompt && selectedCategory === currentPromptCategory);
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
                 const hasWorkflowData = !promptOnly && (
@@ -3493,7 +3505,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 card.onclick = async (e) => {
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
-                        enableMultiSelect();
+                        enableMultiSelect({ preserveCurrentSelection: true });
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (editMode && editPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
@@ -3537,7 +3549,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                 selectedByCategory[cat].clear();
                             });
                         }
-                        currentPrompt = promptName;
+                        setCurrentPromptSelection(promptName);
                         renderContent(searchInput.value);
                         return;
                     }
@@ -3549,7 +3561,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             saveNameInput.focus();
                             saveNameInput.select();
                         }
-                        currentPrompt = promptName;
+                        setCurrentPromptSelection(promptName);
                         renderContent(searchInput.value);
                         return;
                     }
@@ -3561,7 +3573,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             selectedByCategory[cat].clear();
                         });
                     }
-                    currentPrompt = promptName;
+                    setCurrentPromptSelection(promptName);
 
                     resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                     cleanup();
@@ -3702,7 +3714,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             filteredPrompts.forEach(promptName => {
                 const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
+                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : (promptName === currentPrompt && selectedCategory === currentPromptCategory);
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
                 const hasWorkflowData = !promptOnly && (
@@ -3859,7 +3871,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 card.onclick = async (e) => {
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
-                        enableMultiSelect();
+                        enableMultiSelect({ preserveCurrentSelection: true });
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (editMode && editPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
@@ -4227,7 +4239,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             filteredPrompts.forEach(promptName => {
                 const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : promptName === currentPrompt;
+                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : (promptName === currentPrompt && selectedCategory === currentPromptCategory);
                 const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
                 const rawWorkflowData = promptData?.workflow_data;
                 const hasWorkflowData = !promptOnly && (
@@ -4443,7 +4455,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 row.onclick = async (e) => {
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
-                        enableMultiSelect();
+                        enableMultiSelect({ preserveCurrentSelection: true });
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (editMode && editPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);

@@ -101,19 +101,16 @@ Workflow examples are provided to help understand the basics.
 
 ## Prompt Composer
 
-Prompt Composer replaces the older Expression Selector style workflow with a broader prompt-fragment composition system. It is built for assembling prompts from reusable category-based fragments while keeping those fragments easy to browse, edit, and randomize.
+Prompt Composer is a visual prompt builder for assembling full prompts from reusable fragments such as characters, expressions, attire, action, lighting, ambience, style, environment, and camera.
 
-- Compose output can be inserted before or after an incoming prompt.
-- Output can be returned as plain text or JSON.
-- Supports both image and video composition modes.
-- Prompt fragments can carry LoRAs and RefMods, not just text.
-- Categories can be typed for cleaner browsing, with dedicated filtering in the Prompt Browser.
-- Multi-select can be added either as one random-choice fragment or as separate prompt parts.
-- Existing multi-prompt parts can be merged or split directly on the node.
-- Parts support subject-aware assignment so character-related fragments can stay grouped while non-subject fragments remain shared.
-- Parts can be muted temporarily from the node UI without deleting them.
-- Prompt Browser integration supports direct editing, thumbnails, category creation, and type-aware reopen behavior from the node.
-- Prompt Browser state such as expanded type filtering is preserved across reopenings.
+- Compose output before or after an incoming prompt, or use it on its own.
+- Return output as plain text or JSON.
+- Works in both image and video modes. The Video mode being formatted for Minimax.
+- Prompt fragments can include LoRAs, RefMods, and thumbnails can be generate easily.
+- Categories support prompt types and prefixes for cleaner browsing and formatting.
+- Multi-select can become one random pool or multiple separate prompt parts.
+- Parts support subject-aware grouping, muting, reordering, merge/split actions, and per-part strength.
+- Prompt Browser integration supports direct editing, category settings, thumbnail generation, and reopen behavior that preserves browser state.
 
 Node-side Prompt Composer controls include:
 
@@ -125,17 +122,18 @@ Node-side Prompt Composer controls include:
 - Adjust fragment strength directly on the card.
 
 <div align="center">
-  <figcaption>Use Prompt Composer to generate prompts from preset fragments</figcaption>
-  <img src="docs/images/prompt_compose.png" alt="Expression Selector Example">
+  <figcaption>Use Prompt Composer to build prompts from reusable fragments, including random multi-prompt groups.</figcaption>
+  <img src="docs/images/prompt_composer.jpg" alt="Prompt Composer Example">
 </div>
 
 <div align="center">
-  <figcaption>Prompt Browser now allows for direct Editing</figcaption>
-  <img src="docs/images/prompt_browser_edit_mode.png" alt="Expression Selector Browser">
+  <figcaption>Edit prompts in the browser, attach LoRAs or RefMods, and generate thumbnails for any prompt.</figcaption>
+  <img src="docs/images/prompt_browser_ui.png" alt="Prompt Browser Editor">
 </div>
 
 
-The new **Prompt Browser** lets you create and edit all three prompt libraries from a single interface:
+
+The **Prompt Browser Node** lets you create and edit all three prompt libraries from a single interface:
   - **System prompts**: the instructions that steer the Prompt Generator's LLM
   - **Compose prompts**: Prompt Composer fragment libraries, including category types, thumbnails, LoRAs, and RefMods
   - **Prompt Manager prompts**: your saved user prompts

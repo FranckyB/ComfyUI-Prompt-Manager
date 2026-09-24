@@ -116,6 +116,47 @@ def _text_section_key(category):
     return str(category or "").strip()
 
 
+def _normalize_prompt_ref(value, fallback_category=""):
+    if not isinstance(value, dict):
+        return None
+    category = str(value.get("category") or fallback_category or "").strip()
+    name = str(value.get("name") or value.get("prompt") or "").strip()
+    if not name:
+        return None
+    return {
+        "category": category,
+        "name": name,
+    }
+
+
+def _derive_prompt_refs(category, prompts):
+    fallback_category = str(category or "").strip()
+    refs = []
+    for name in prompts or []:
+        normalized_name = str(name or "").strip()
+        if not normalized_name:
+            continue
+        refs.append({
+            "category": fallback_category,
+            "name": normalized_name,
+        })
+    return refs
+
+
+def _get_part_prompt_refs(part):
+    fallback_category = str(part.get("category") or "").strip() if isinstance(part, dict) else ""
+    explicit_refs = []
+    if isinstance(part, dict) and isinstance(part.get("prompt_refs"), list):
+        for item in part.get("prompt_refs") or []:
+            normalized = _normalize_prompt_ref(item, fallback_category)
+            if normalized:
+                explicit_refs.append(normalized)
+    if explicit_refs:
+        return explicit_refs
+    prompts = part.get("prompts") if isinstance(part, dict) else []
+    return _derive_prompt_refs(fallback_category, prompts)
+
+
 def _parse_parts(parts_data):
     try:
         parts = json.loads(parts_data or "[]")
@@ -139,12 +180,22 @@ def _parse_parts(parts_data):
             single_name = str(part.get("name") or "").strip()
             if single_name:
                 names = [single_name]
+        prompt_refs = _get_part_prompt_refs({
+            "category": category,
+            "prompt_refs": part.get("prompt_refs"),
+            "prompts": names,
+        })
+        if prompt_refs:
+            names = [ref["name"] for ref in prompt_refs]
+            if not category:
+                category = str(prompt_refs[0].get("category") or "").strip()
         strength = _normalize_strength(part.get("strength", 1.0))
         if not names:
             continue
         normalized.append({
             "category": category,
             "prompts": names,
+            "prompt_refs": prompt_refs,
             "strength": strength,
             "subject_number": _normalize_subject_number(part.get("subject_number", part.get("subject", SUBJECT_MIN)), default=SUBJECT_MIN),
             "subject_locked": bool(part.get("subject_locked", part.get("subject_manual", False))),
@@ -194,8 +245,8 @@ def _has_multi_part_selection(parts):
     for part in parts:
         if bool(part.get("muted", False)):
             continue
-        names = part.get("prompts") or []
-        if len(names) > 1:
+        prompt_refs = _get_part_prompt_refs(part)
+        if len(prompt_refs) > 1:
             return True
     return False
 
@@ -495,7 +546,7 @@ def _join_text_descriptions(descriptions):
     return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
-def _render_text_sections(sections):
+def _render_text_sections(sections, break_on_labeled_sections=False):
     fragments = []
     for bucket in sections.values():
         descriptions = [str(value or "").strip() for value in bucket.get("descriptions", []) if str(value or "").strip()]
@@ -517,7 +568,7 @@ def _render_text_sections(sections):
     rendered = fragments[0]["text"]
     for index, fragment in enumerate(fragments[1:], start=1):
         previous = fragments[index - 1]
-        separator = ". " if fragment["has_label"] or previous["has_label"] else ", "
+        separator = "\n\n" if break_on_labeled_sections and (fragment["has_label"] or previous["has_label"]) else ", "
         rendered = f"{rendered}{separator}{fragment['text']}"
     return rendered
 
@@ -672,15 +723,15 @@ class PromptComposer:
         for part in parts:
             if bool(part.get("muted", False)):
                 continue
-            raw_category = part.get("category") or ""
-            category = _find_category_case_insensitive(prompts_data, raw_category) or raw_category
-            category_data = prompts_data.get(category, {})
-
-            names = part.get("prompts") or []
-            if not names:
+            prompt_refs = _get_part_prompt_refs(part)
+            if not prompt_refs:
                 continue
 
-            chosen_name = names[0] if len(names) == 1 else rng.choice(names)
+            chosen_ref = prompt_refs[0] if len(prompt_refs) == 1 else rng.choice(prompt_refs)
+            raw_category = chosen_ref.get("category") or part.get("category") or ""
+            category = _find_category_case_insensitive(prompts_data, raw_category) or raw_category
+            category_data = prompts_data.get(category, {})
+            chosen_name = chosen_ref.get("name") or ""
             entry, canonical_name = _find_prompt_case_insensitive(category_data, chosen_name)
             if not isinstance(entry, dict):
                 continue
@@ -788,7 +839,7 @@ class PromptComposer:
                 sections = []
                 if subject_blocks:
                     sections.append("subject_definitions:\n" + "\n\n".join(subject_blocks))
-                non_subject_text = _render_text_sections(non_subject_text_sections)
+                non_subject_text = _render_text_sections(non_subject_text_sections, break_on_labeled_sections=True)
                 if non_subject_text:
                     sections.append(non_subject_text)
                 fragments_text = "\n\n".join(section for section in sections if section)
@@ -798,7 +849,7 @@ class PromptComposer:
                     body = _render_text_sections(group.get("text_sections", {}))
                     if body:
                         sections.append(body)
-                non_subject_text = _render_text_sections(non_subject_text_sections)
+                non_subject_text = _render_text_sections(non_subject_text_sections, break_on_labeled_sections=True)
                 if non_subject_text:
                     sections.append(non_subject_text)
                 fragments_text = "\n\n".join(section for section in sections if section)

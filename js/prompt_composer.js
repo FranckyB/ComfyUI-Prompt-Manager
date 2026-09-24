@@ -156,6 +156,80 @@ function getDefaultComposerPickerCategory(node) {
     return preferred || categories[0] || "";
 }
 
+function buildPromptPreviewThumbnails(node, category, prompts) {
+    const names = Array.isArray(prompts) ? prompts : [];
+    return names
+        .slice(0, 10)
+        .map((name) => getComposerEntry(node, category, name)?.thumbnail || DEFAULT_THUMBNAIL);
+}
+
+function appendMultiPromptSlices(container, thumbnails) {
+    const images = Array.isArray(thumbnails) ? thumbnails.filter((value) => String(value || "").trim()) : [];
+    if (!images.length) return;
+
+    const sliceLayer = document.createElement("div");
+    sliceLayer.style.cssText = `
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        border-radius: inherit;
+        pointer-events: none;
+    `;
+
+    const count = images.length;
+    const slantPct = Math.min(22, 72 / count);
+    const dividerPct = Math.min(1.2, Math.max(0.55, 3 / count));
+    const clampPct = (value) => Math.max(0, Math.min(100, value));
+    const boundaryTop = (index) => {
+        if (index <= 0) return 0;
+        if (index >= count) return 100;
+        return clampPct((index / count) * 100 + (slantPct / 2));
+    };
+    const boundaryBottom = (index) => {
+        if (index <= 0) return 0;
+        if (index >= count) return 100;
+        return clampPct((index / count) * 100 - (slantPct / 2));
+    };
+
+    images.forEach((thumbnail, index) => {
+        const slice = document.createElement("div");
+        const leftTop = boundaryTop(index);
+        const rightTop = boundaryTop(index + 1);
+        const leftBottom = boundaryBottom(index);
+        const rightBottom = boundaryBottom(index + 1);
+        slice.style.cssText = `
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(180deg, rgba(15, 23, 42, 0.08), rgba(15, 23, 42, 0.28)), url(${thumbnail});
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-position: center;
+            clip-path: polygon(${leftTop}% 0%, ${rightTop}% 0%, ${rightBottom}% 100%, ${leftBottom}% 100%);
+        `;
+        sliceLayer.appendChild(slice);
+    });
+
+    for (let index = 1; index < count; index += 1) {
+        const divider = document.createElement("div");
+        const topCenter = boundaryTop(index);
+        const bottomCenter = boundaryBottom(index);
+        const topLeft = clampPct(topCenter - (dividerPct / 2));
+        const topRight = clampPct(topCenter + (dividerPct / 2));
+        const bottomLeft = clampPct(bottomCenter - (dividerPct / 2));
+        const bottomRight = clampPct(bottomCenter + (dividerPct / 2));
+        divider.style.cssText = `
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.82);
+            clip-path: polygon(${topLeft}% 0%, ${topRight}% 0%, ${bottomRight}% 100%, ${bottomLeft}% 100%);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+        `;
+        sliceLayer.appendChild(divider);
+    }
+
+    container.appendChild(sliceLayer);
+}
+
 function ensureComposerDragStyles() {
     if (document.getElementById(COMPOSER_DRAG_STYLE_ID)) return;
     const style = document.createElement("style");
@@ -271,15 +345,64 @@ function getSubjectAccent(subjectNumber) {
     return SUBJECT_ACCENTS[(normalized - SUBJECT_MIN) % SUBJECT_ACCENTS.length];
 }
 
+function normalizePromptRef(ref, fallbackCategory = "") {
+    if (!ref || typeof ref !== "object") return null;
+    const category = String(ref.category || fallbackCategory || "").trim();
+    const name = String(ref.name || ref.prompt || "").trim();
+    if (!name) return null;
+    return { category, name };
+}
+
+function derivePromptRefs(category, prompts) {
+    const fallbackCategory = String(category || "").trim();
+    return (Array.isArray(prompts) ? prompts : [])
+        .map((name) => String(name || "").trim())
+        .filter((name) => name.length > 0)
+        .map((name) => ({ category: fallbackCategory, name }));
+}
+
+function getPartPromptRefs(part) {
+    const fallbackCategory = String(part?.category || "").trim();
+    const explicitRefs = Array.isArray(part?.prompt_refs)
+        ? part.prompt_refs.map((ref) => normalizePromptRef(ref, fallbackCategory)).filter(Boolean)
+        : [];
+    if (explicitRefs.length > 0) return explicitRefs;
+    return derivePromptRefs(fallbackCategory, part?.prompts);
+}
+
+function getPartCategories(part) {
+    return Array.from(new Set(getPartPromptRefs(part)
+        .map((ref) => String(ref.category || "").trim())
+        .filter(Boolean)));
+}
+
+function getPartDisplayCategory(part) {
+    const categories = getPartCategories(part);
+    if (categories.length > 1) return "Multiple Categories";
+    if (categories.length === 1) return categories[0];
+    return String(part?.category || "").trim();
+}
+
+function buildSelectedPromptsByCategory(part) {
+    const selected = {};
+    getPartPromptRefs(part).forEach((ref) => {
+        const category = String(ref.category || "").trim();
+        const name = String(ref.name || "").trim();
+        if (!category || !name) return;
+        if (!selected[category]) selected[category] = [];
+        selected[category].push(name);
+    });
+    return selected;
+}
+
 function normalizePart(part) {
     const category = String(part?.category || "").trim();
-    const promptsInput = Array.isArray(part?.prompts) ? part.prompts : [];
-    const prompts = promptsInput
-        .map((name) => String(name || "").trim())
-        .filter((name) => name.length > 0);
+    const promptRefs = getPartPromptRefs(part);
+    const prompts = promptRefs.map((ref) => ref.name);
     return {
-        category,
+        category: category || promptRefs[0]?.category || "",
         prompts,
+        prompt_refs: promptRefs,
         strength: clampStrength(part?.strength ?? 1.0),
         subject_number: clampSubjectNumber(part?.subject_number ?? part?.subject ?? SUBJECT_MIN),
         subject_locked: !!(part?.subject_locked ?? part?.subject_manual ?? false),
@@ -412,7 +535,7 @@ function parseParts(raw) {
         if (!Array.isArray(parsed)) return [];
         return parsed
             .map((part) => normalizePart(part))
-            .filter((part) => part.prompts.length > 0 || part.category.length > 0);
+            .filter((part) => part.prompt_refs.length > 0 || part.category.length > 0);
     } catch {
         return [];
     }
@@ -421,7 +544,7 @@ function parseParts(raw) {
 function serializeParts(parts) {
     const normalized = (Array.isArray(parts) ? parts : [])
         .map((part) => normalizePart(part))
-        .filter((part) => part.prompts.length > 0 || part.category.length > 0);
+        .filter((part) => part.prompt_refs.length > 0 || part.category.length > 0);
     return JSON.stringify(normalized);
 }
 
@@ -493,13 +616,14 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
         has_subject: inheritedSubject?.has_subject === true,
         has_parts: inheritedSubject?.has_parts === true,
     };
-    const buildPart = (category, prompts, bumpSubject = false) => {
+    const buildPart = (category, prompts, bumpSubject = false, promptRefs = null) => {
         const subjectState = inferPartSubjectState(node, category, normalizedBasePart, currentInheritedSubject, {
             bumpSubject,
         });
         const nextPart = normalizePart({
             category,
             prompts,
+            prompt_refs: promptRefs,
             strength: normalizedBasePart?.strength ?? 1.0,
             muted: normalizedBasePart?.muted === true,
             subject_number: subjectState.subject_number,
@@ -510,16 +634,18 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
     };
 
     const buildPartsForCategory = (category, prompts) => {
-        const names = Array.isArray(prompts)
-            ? prompts.filter((name) => String(name || "").trim())
+        const refs = Array.isArray(prompts)
+            ? prompts
+                .map((name) => ({ category, name: String(name || "").trim() }))
+                .filter((ref) => ref.name.length > 0)
             : [];
-        if (!names.length) return [];
+        if (!refs.length) return [];
 
         const shouldBumpSubject = !normalizedBasePart && categoryStartsNewSubject(node, category);
         if (selectionMode === "split") {
-            return names.map((promptName, promptIndex) => buildPart(category, [promptName], shouldBumpSubject && promptIndex === 0));
+            return refs.map((ref, promptIndex) => buildPart(category, [ref.name], shouldBumpSubject && promptIndex === 0, [ref]));
         }
-        return [buildPart(category, names, shouldBumpSubject)];
+        return [buildPart(category, refs.map((ref) => ref.name), shouldBumpSubject, refs)];
     };
 
     if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
@@ -531,6 +657,15 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
                 if (b[0] === preferredCategory) return 1;
                 return 0;
             });
+        if (selectionMode !== "split" && entries.length > 1) {
+            const primaryCategory = normalizedBasePart?.category || preferredCategory || entries[0]?.[0] || "";
+            const promptRefs = entries.flatMap(([category, prompts]) => (Array.isArray(prompts) ? prompts : [])
+                .map((name) => ({ category, name: String(name || "").trim() }))
+                .filter((ref) => ref.name.length > 0));
+            if (!promptRefs.length) return [];
+            const shouldBumpSubject = !normalizedBasePart && categoryStartsNewSubject(node, primaryCategory);
+            return [buildPart(primaryCategory, promptRefs.map((ref) => ref.name), shouldBumpSubject, promptRefs)];
+        }
         return entries.flatMap(([category, prompts]) => buildPartsForCategory(category, prompts));
     }
 
@@ -764,12 +899,14 @@ function ensureComposerUi(node) {
 
         const seenPrompts = new Set();
         const mergedPrompts = [];
+        const mergedPromptRefs = [];
         selectedParts.forEach((part) => {
-            part.prompts.forEach((promptName) => {
-                const key = String(promptName || "").trim().toLowerCase();
+            getPartPromptRefs(part).forEach((ref) => {
+                const key = `${String(ref.category || "").trim().toLowerCase()}::${String(ref.name || "").trim().toLowerCase()}`;
                 if (!key || seenPrompts.has(key)) return;
                 seenPrompts.add(key);
-                mergedPrompts.push(promptName);
+                mergedPrompts.push(ref.name);
+                mergedPromptRefs.push(ref);
             });
         });
         if (!mergedPrompts.length) return false;
@@ -777,6 +914,7 @@ function ensureComposerUi(node) {
         const mergedPart = normalizePart({
             ...selectedParts[0],
             prompts: mergedPrompts,
+            prompt_refs: mergedPromptRefs,
         });
 
         const selectedIndexSet = new Set(selectedIndices);
@@ -802,10 +940,13 @@ function ensureComposerUi(node) {
     const splitPromptPart = (partIndex) => {
         const parts = readParts(node);
         const part = normalizePart(parts[partIndex]);
-        if (!part || part.prompts.length < 2) return false;
-        const splitParts = part.prompts.map((promptName) => normalizePart({
+        const promptRefs = getPartPromptRefs(part);
+        if (!part || promptRefs.length < 2) return false;
+        const splitParts = promptRefs.map((ref) => normalizePart({
             ...part,
-            prompts: [promptName],
+            category: ref.category || part.category,
+            prompts: [ref.name],
+            prompt_refs: [ref],
         }));
         const next = [...parts];
         next.splice(partIndex, 1, ...splitParts);
@@ -973,17 +1114,20 @@ function ensureComposerUi(node) {
         const parts = readParts(node);
         const part = parts[index] || { category: "", prompts: [], strength: 1.0, subject_number: SUBJECT_MIN, subject_locked: false };
         const inheritedSubject = getInheritedSubjectDefaults(parts.slice(0, index));
-        const currentPrompt = part.prompts[0] || "";
-        const hasMultiSelection = Array.isArray(part.prompts) && part.prompts.length > 1;
-        const initialCategory = part.category || getDefaultComposerPickerCategory(node);
+        const promptRefs = getPartPromptRefs(part);
+        const currentPrompt = promptRefs[0]?.name || part.prompts[0] || "";
+        const hasMultiSelection = promptRefs.length > 1 || (Array.isArray(part.prompts) && part.prompts.length > 1);
+        const initialCategory = promptRefs[0]?.category || part.category || getDefaultComposerPickerCategory(node);
         const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__none__";
         const selection = await showThumbnailBrowser(node, initialCategory, currentPrompt, {
             title: "Select Prompt Composer Part",
-            multiSelect: hasMultiSelection,
-            multiCategorySelect: hasMultiSelection,
+            multiSelect: true,
+            startInMultiSelect: hasMultiSelection,
+            multiCategorySelect: true,
             endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
             promptOnly: true,
             selectedPrompts: part.prompts,
+            selectedPromptsByCategory: buildSelectedPromptsByCategory(part),
             loadPromptsFn: loadComposerPrompts,
             preferenceScope: "composer",
             initialCategoryTypeFilter,
@@ -1041,11 +1185,16 @@ function ensureComposerUi(node) {
         grid.innerHTML = "";
 
         resolvedParts.forEach((part, index) => {
-            const entry = part.prompts.length > 0
-                ? getComposerEntry(node, part.category, part.prompts[0])
+            const promptRefs = getPartPromptRefs(part);
+            const primaryRef = promptRefs[0] || null;
+            const entry = primaryRef
+                ? getComposerEntry(node, primaryRef.category || part.category, primaryRef.name)
                 : null;
             const thumb = entry?.thumbnail || DEFAULT_THUMBNAIL;
-            const multiCount = part.prompts.length;
+            const multiCount = promptRefs.length || part.prompts.length;
+            const previewThumbnails = multiCount > 1
+                ? promptRefs.slice(0, 10).map((ref) => getComposerEntry(node, ref.category || part.category, ref.name)?.thumbnail || DEFAULT_THUMBNAIL)
+                : [thumb];
             const subjectAccent = getSubjectAccent(part.effective_subject_number);
             const isSubjectAnchor = !!part.subject_locked && part.effective_subject_number !== SUBJECT_NONE;
             const isMuted = part.muted === true;
@@ -1128,7 +1277,7 @@ function ensureComposerUi(node) {
                 aspect-ratio: 3 / 4;
                 border: 1px solid ${UI.inputBorder || "#445064"};
                 border-radius: 4px;
-                background-image: url(${thumb});
+                background-image: ${multiCount > 1 ? "none" : `url(${thumb})`};
                 background-size: contain;
                 background-repeat: no-repeat;
                 background-position: center;
@@ -1136,8 +1285,13 @@ function ensureComposerUi(node) {
                 cursor: pointer;
                 position: relative;
                 display: block;
+                overflow: hidden;
             `;
             thumbBtn.title = "Click to select prompt fragment(s)\nMiddle click to mute";
+
+            if (multiCount > 1) {
+                appendMultiPromptSlices(thumbBtn, previewThumbnails);
+            }
 
             const togglePartMuted = () => {
                 const next = [...readParts(node)];
@@ -1267,12 +1421,13 @@ function ensureComposerUi(node) {
             }
 
             const label = document.createElement("div");
-            const primaryName = part.prompts[0] || "Select";
+            const displayCategory = getPartDisplayCategory(part) || "Category";
+            const primaryName = primaryRef?.name || part.prompts[0] || "Select";
             label.textContent = multiCount > 1
-                ? `${part.category || "Category"}: (Multi)`
-                : `${part.category || "Category"}: ${primaryName}`;
+                ? `${displayCategory}: (Multi)`
+                : `${displayCategory}: ${primaryName}`;
             label.title = multiCount > 1
-                ? `Subject #${padSubjectNumber(part.effective_subject_number)}\n${part.category || ""}\n${part.prompts.join("\n")}`
+                ? `Subject #${padSubjectNumber(part.effective_subject_number)}\n${promptRefs.map((ref) => `${ref.category || displayCategory}: ${ref.name}`).join("\n")}`
                 : label.textContent;
             label.style.cssText = `
                 font-size: 10px;
