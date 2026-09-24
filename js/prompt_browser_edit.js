@@ -2,6 +2,7 @@ import { saveComposerCategorySettings } from "./prompt_composer_common.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { getCategoryPromptEntries, getCategoryPromptEntriesForEndpoint, getCategoryPromptEntryForEndpoint } from "./prompt_store_adapters.js";
+import { mediaFileUrl } from "./path_browser.js";
 
 // Placeholder thumbnail. Defined locally (NOT imported from prompt_manager_advanced.js)
 // to break the module cycle:
@@ -9,6 +10,7 @@ import { getCategoryPromptEntries, getCategoryPromptEntriesForEndpoint, getCateg
 // which left prompt_browser's bindings in the temporal dead zone and intermittently
 // prevented the PromptBrowser node's JS from registering.
 const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
+const IMAGE_PREVIEW_EXTS = [".png", ".jpg", ".jpeg", ".webp"];
 
 const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
 
@@ -88,9 +90,11 @@ const STYLE = {
     inputBg: "hsl(220 15% 10%)",
     inputBorder: "hsl(218 10% 41%)",
     buttonBg: "hsl(219 16% 18%)",
+    cardBg: "hsl(219 16% 18%)",
     textPrimary: "hsl(0 0% 87%)",
     textMuted: "hsl(0 0% 67%)",
     accent: "hsl(208 73% 57% / 0.9)",
+    accentBorder: "hsl(208 73% 57% / 0.65)",
     accentSoft: "hsl(208 73% 57% / 0.16)",
 };
 
@@ -98,6 +102,522 @@ let _composerLoraPickerCache = null;
 let _composerLoraPickerPromise = null;
 let _composerRefModPickerCache = null;
 let _composerRefModPickerPromise = null;
+
+function normalizeBrowserPath(value) {
+    return String(value || "").replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+function stripKnownAssetExtension(value) {
+    return String(value || "").replace(/\.(safetensors|ckpt|pt|bin|pth)$/i, "");
+}
+
+function previewUrlCandidatesForAbsoluteStem(pathStem) {
+    const stem = String(pathStem || "").trim();
+    if (!stem) return [];
+    return IMAGE_PREVIEW_EXTS.map((ext) => mediaFileUrl(`${stem}${ext}`));
+}
+
+function loraValueFromAbsolutePath(absPath, rootPath) {
+    const normalizedPath = normalizeBrowserPath(stripKnownAssetExtension(absPath));
+    const normalizedRoot = normalizeBrowserPath(rootPath);
+    if (normalizedRoot && normalizedPath.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}/`)) {
+        return normalizedPath.substring(normalizedRoot.length + 1);
+    }
+    const parts = splitFolderAndName(normalizedPath);
+    return parts.subfolder ? `${parts.subfolder}/${parts.name}` : parts.name;
+}
+
+function createAssetPromptLabel(value) {
+    return String(value || "").trim();
+}
+
+function setImagePreviewCandidates(img, candidates) {
+    const queue = Array.isArray(candidates)
+        ? candidates.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+    let index = 0;
+    const loadNext = () => {
+        if (index >= queue.length) {
+            img.onerror = null;
+            img.src = DEFAULT_THUMBNAIL;
+            return;
+        }
+        img.src = queue[index++];
+    };
+    img.onerror = loadNext;
+    loadNext();
+}
+
+function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error || new Error("Failed to read blob"));
+        reader.readAsDataURL(blob);
+    });
+}
+
+async function fetchImageAsDataUrl(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch preview (${response.status})`);
+    }
+    return await blobToDataUrl(await response.blob());
+}
+
+async function previewCandidatesToThumbnail(candidates) {
+    const queue = Array.isArray(candidates)
+        ? candidates.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+    for (const candidate of queue) {
+        try {
+            const thumbnail = await fetchImageAsDataUrl(candidate);
+            if (thumbnail) return thumbnail;
+        } catch {
+            // Try the next candidate.
+        }
+    }
+    return null;
+}
+
+async function fetchLoraBrowserRoot() {
+    try {
+        const response = await api.fetchApi("/fbnodes/lora-browser/root");
+        if (!response?.ok) return "";
+        const data = await response.json();
+        return data?.ok ? String(data.root || "") : "";
+    } catch (err) {
+        console.warn("[PromptBrowserEdit] Failed to get LoRA browser root:", err);
+        return "";
+    }
+}
+
+async function listLoraBrowserFolder(path, rootPath) {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const response = await api.fetchApi(`/fbnodes/lora-browser/list${query}`);
+    if (!response?.ok) {
+        let message = `Failed to browse LoRAs (${response?.status || "request"})`;
+        try {
+            const payload = await response.json();
+            if (payload?.error) message = String(payload.error);
+        } catch {
+            // ignore
+        }
+        throw new Error(message);
+    }
+    const data = await response.json();
+    const currentPath = String(data?.current_path || path || rootPath || "");
+    const files = Array.isArray(data?.files) ? data.files : [];
+    return {
+        root: String(rootPath || data?.root || ""),
+        currentPath,
+        parentPath: data?.parent_path ? String(data.parent_path) : null,
+        dirs: Array.isArray(data?.dirs) ? data.dirs : [],
+        assets: files.map((item) => {
+            const absPath = String(item?.path || "").trim();
+            const promptName = createAssetPromptLabel(stripKnownAssetExtension(String(item?.name || "")));
+            const stem = stripKnownAssetExtension(absPath);
+            return {
+                id: absPath,
+                path: absPath,
+                assetValue: loraValueFromAbsolutePath(absPath, rootPath),
+                promptName,
+                promptText: promptName,
+                previewCandidates: previewUrlCandidatesForAbsoluteStem(stem),
+                meta: absPath,
+            };
+        }),
+    };
+}
+
+async function listRefModBrowserFolder(path) {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const response = await api.fetchApi(`/h3refmods/refmod-browser/list${query}`);
+    if (!response?.ok) {
+        let message = `Failed to browse RefMods (${response?.status || "request"})`;
+        try {
+            const payload = await response.json();
+            if (payload?.error) message = String(payload.error);
+        } catch {
+            // ignore
+        }
+        throw new Error(message);
+    }
+    const data = await response.json();
+    const currentPath = String(data?.current_path || path || "");
+    const root = String(data?.root || "");
+    const mods = Array.isArray(data?.mods) ? data.mods : [];
+    return {
+        root,
+        currentPath,
+        parentPath: data?.parent_path ? String(data.parent_path) : null,
+        dirs: Array.isArray(data?.dirs) ? data.dirs : [],
+        assets: mods.map((item) => {
+            const absPath = String(item?.path || "").trim();
+            const promptName = createAssetPromptLabel(stripKnownAssetExtension(String(item?.name || "")));
+            const normalizedRoot = normalizeBrowserPath(root);
+            const normalizedPath = normalizeBrowserPath(stripKnownAssetExtension(absPath));
+            const assetValue = normalizedRoot && normalizedPath.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}/`)
+                ? normalizedPath.substring(normalizedRoot.length + 1)
+                : stripKnownAssetExtension(String(item?.name || ""));
+            return {
+                id: absPath,
+                path: absPath,
+                assetValue,
+                promptName,
+                promptText: promptName,
+                previewCandidates: item?.preview_path
+                    ? [api.apiURL(`/h3refmods/refmod-browser/file?path=${encodeURIComponent(String(item.preview_path))}`)]
+                    : [],
+                meta: String(item?.description || item?.concept_type || absPath || ""),
+            };
+        }),
+    };
+}
+
+function showVisualAssetImportPicker({ title, rootPath, loadFolder, emptyMessage = "No assets found.", createButtonLabel = "Create Prompts" }) {
+    return new Promise((resolve) => {
+        const selectedAssets = new Map();
+        const assetCardEls = new Map();
+        let currentListing = null;
+        let currentPath = String(rootPath || "");
+        let requestToken = 0;
+        let selectionAnchorId = "";
+
+        const overlay = el("div", {
+            position: "fixed",
+            inset: "0",
+            background: "rgba(0, 0, 0, 0.75)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: "10010",
+        });
+
+        const dialog = el("div", {
+            background: STYLE.panel,
+            border: `1px solid ${STYLE.panelBorder}`,
+            borderRadius: "8px",
+            width: "1100px",
+            maxWidth: "94vw",
+            height: "860px",
+            maxHeight: "90vh",
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+            padding: "16px",
+            boxSizing: "border-box",
+            boxShadow: "0 12px 36px rgba(0, 0, 0, 0.4)",
+        });
+
+        const titleEl = el("div", { color: STYLE.textPrimary, fontSize: "16px", fontWeight: "600" }, title || "Import Assets");
+        const controlsRow = el("div", { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" });
+        const rootBtn = createButton("Root", () => { void loadPath(rootPath); });
+        const upBtn = createButton("Up", () => {
+            if (currentListing?.parentPath) {
+                void loadPath(currentListing.parentPath);
+            }
+        });
+        const pathLabel = el("div", {
+            flex: "1",
+            minWidth: "240px",
+            color: STYLE.textMuted,
+            fontSize: "12px",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+        }, "");
+        const filterInput = createInput("", "Filter assets...", { maxWidth: "260px" });
+        controlsRow.append(rootBtn, upBtn, pathLabel, filterInput);
+
+        const selectionInfo = el("div", { color: STYLE.textMuted, fontSize: "12px" }, "0 selected");
+        const content = el("div", {
+            display: "flex",
+            flexDirection: "column",
+            gap: "12px",
+            overflowY: "auto",
+            flex: "1",
+            minHeight: "0",
+            paddingRight: "4px",
+        });
+        const itemsSection = el("div", {
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            flex: "1",
+            minHeight: "0",
+        });
+        const itemsTitle = el("div", {
+            color: STYLE.textMuted,
+            fontSize: "12px",
+            fontWeight: "600",
+            letterSpacing: "0.02em",
+            textTransform: "uppercase",
+        }, "Items");
+        const itemsWrap = el("div", {
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+            gap: "12px",
+        });
+        const emptyState = el("div", {
+            color: STYLE.textMuted,
+            fontSize: "13px",
+            padding: "24px 0",
+            textAlign: "center",
+        }, emptyMessage);
+        itemsSection.append(itemsTitle, itemsWrap, emptyState);
+        content.append(itemsSection);
+
+        const buttonRow = el("div", { display: "flex", justifyContent: "flex-end", gap: "8px" });
+        const selectionTools = el("div", {
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            marginRight: "auto",
+        });
+        const selectToggleBtn = createButton("Select All", () => {
+            const visibleAssets = getVisibleAssets();
+            const allVisibleSelected = visibleAssets.length > 0 && visibleAssets.every((asset) => selectedAssets.has(asset.id));
+            if (allVisibleSelected) {
+                for (const asset of visibleAssets) {
+                    selectedAssets.delete(asset.id);
+                }
+                selectionAnchorId = "";
+            } else {
+                for (const asset of visibleAssets) {
+                    selectedAssets.set(asset.id, asset);
+                }
+                if (visibleAssets.length > 0) {
+                    selectionAnchorId = visibleAssets[0].id;
+                }
+            }
+            updateSelectionInfo();
+            syncAssetCardSelectionStates();
+        });
+        selectionTools.appendChild(selectToggleBtn);
+        const cancelBtn = createButton("Cancel", () => close(null));
+        const createBtn = createButton(createButtonLabel, () => close([...selectedAssets.values()]), {
+            background: "#2b6d3a",
+            borderColor: "#4a9158",
+            color: "#fff",
+        });
+        buttonRow.append(selectionTools, cancelBtn, createBtn);
+
+        dialog.append(titleEl, controlsRow, selectionInfo, content, buttonRow);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        const close = (value) => {
+            document.removeEventListener("keydown", onKeyDown, true);
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            resolve(value);
+        };
+
+        const updateSelectionInfo = () => {
+            const count = selectedAssets.size;
+            selectionInfo.textContent = `${count} selected`;
+            createBtn.disabled = count === 0;
+            createBtn.style.opacity = count === 0 ? "0.55" : "1";
+            createBtn.style.cursor = count === 0 ? "not-allowed" : "pointer";
+            const visibleAssets = getVisibleAssets();
+            const allVisibleSelected = visibleAssets.length > 0 && visibleAssets.every((asset) => selectedAssets.has(asset.id));
+            selectToggleBtn.textContent = allVisibleSelected ? "Select None" : "Select All";
+        };
+
+        const matchesFilter = (asset) => {
+            const tokens = String(filterInput.value || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+            if (!tokens.length) return true;
+            const haystack = `${asset?.promptName || ""} ${asset?.meta || ""} ${asset?.assetValue || ""}`.toLowerCase();
+            return tokens.every((token) => haystack.includes(token));
+        };
+
+        const getVisibleAssets = () => {
+            return (Array.isArray(currentListing?.assets) ? currentListing.assets : []).filter(matchesFilter);
+        };
+
+        const updateAssetCardSelectionStyles = (card, selected) => {
+            if (!card) return;
+            card.style.background = selected ? STYLE.accentSoft : STYLE.cardBg;
+            card.style.border = `2px solid ${selected ? STYLE.accentBorder : STYLE.inputBorder}`;
+        };
+
+        const syncAssetCardSelectionStates = () => {
+            for (const [assetId, card] of assetCardEls.entries()) {
+                updateAssetCardSelectionStyles(card, selectedAssets.has(assetId));
+            }
+        };
+
+        const applyShiftSelection = (targetAsset, visibleAssets) => {
+            if (!selectionAnchorId) return false;
+            const anchorIndex = visibleAssets.findIndex((asset) => asset.id === selectionAnchorId);
+            const targetIndex = visibleAssets.findIndex((asset) => asset.id === targetAsset.id);
+            if (anchorIndex < 0 || targetIndex < 0) return false;
+            const start = Math.min(anchorIndex, targetIndex);
+            const end = Math.max(anchorIndex, targetIndex);
+            for (let i = start; i <= end; i++) {
+                const asset = visibleAssets[i];
+                selectedAssets.set(asset.id, asset);
+            }
+            return true;
+        };
+
+        const render = () => {
+            pathLabel.textContent = currentListing?.currentPath || currentPath || rootPath || "";
+            itemsWrap.innerHTML = "";
+            assetCardEls.clear();
+            const dirs = Array.isArray(currentListing?.dirs) ? currentListing.dirs : [];
+            const assets = getVisibleAssets();
+
+            for (const dir of dirs) {
+                const dirCard = el("button", {
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "10px",
+                    width: "100%",
+                    padding: "10px",
+                    background: STYLE.cardBg,
+                    border: `2px solid ${STYLE.inputBorder}`,
+                    borderRadius: "8px",
+                    color: STYLE.textPrimary,
+                    cursor: "pointer",
+                    textAlign: "left",
+                    minHeight: "220px",
+                    boxSizing: "border-box",
+                });
+                dirCard.type = "button";
+                dirCard.addEventListener("click", () => {
+                    void loadPath(String(dir?.path || ""));
+                });
+                const dirPreview = el("div", {
+                    width: "100%",
+                    aspectRatio: "3 / 4",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: "6px",
+                    background: STYLE.inputBg,
+                    border: `1px solid ${STYLE.inputBorder}`,
+                });
+                const dirIcon = el("div", {
+                    fontSize: "42px",
+                    lineHeight: "1",
+                }, "📁");
+                const dirName = el("div", {
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    textAlign: "center",
+                }, String(dir?.name || "Folder"));
+                dirPreview.appendChild(dirIcon);
+                dirCard.append(dirPreview, dirName);
+                itemsWrap.appendChild(dirCard);
+            }
+
+            assets.forEach((asset) => {
+                const selected = selectedAssets.has(asset.id);
+                const card = el("button", {
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "10px",
+                    width: "100%",
+                    padding: "10px",
+                    background: selected ? STYLE.accentSoft : STYLE.cardBg,
+                    border: `2px solid ${selected ? STYLE.accentBorder : STYLE.inputBorder}`,
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    color: STYLE.textPrimary,
+                    textAlign: "left",
+                    minHeight: "220px",
+                    boxSizing: "border-box",
+                });
+                card.type = "button";
+                card.addEventListener("click", (event) => {
+                    if (event.shiftKey && applyShiftSelection(asset, assets)) {
+                        updateSelectionInfo();
+                        syncAssetCardSelectionStates();
+                        return;
+                    }
+                    if (selectedAssets.has(asset.id)) {
+                        selectedAssets.delete(asset.id);
+                    } else {
+                        selectedAssets.set(asset.id, asset);
+                    }
+                    selectionAnchorId = asset.id;
+                    updateSelectionInfo();
+                    syncAssetCardSelectionStates();
+                });
+
+                const preview = document.createElement("img");
+                preview.style.cssText = `
+                    width: 100%;
+                    aspect-ratio: 3 / 4;
+                    object-fit: cover;
+                    border-radius: 6px;
+                    background: ${STYLE.inputBg};
+                    border: 1px solid ${STYLE.inputBorder};
+                `;
+                setImagePreviewCandidates(preview, asset.previewCandidates);
+
+                const name = el("div", {
+                    color: STYLE.textPrimary,
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    textAlign: "center",
+                }, asset.promptName || asset.assetValue || "Asset");
+
+                card.append(preview, name);
+                assetCardEls.set(asset.id, card);
+                itemsWrap.appendChild(card);
+            });
+
+            emptyState.style.display = itemsWrap.childElementCount === 0 ? "block" : "none";
+        };
+
+        const loadPath = async (nextPath) => {
+            const token = ++requestToken;
+            currentPath = String(nextPath || rootPath || "");
+            pathLabel.textContent = `Loading ${currentPath || rootPath || "assets"}...`;
+            itemsWrap.innerHTML = "";
+            emptyState.style.display = "block";
+            emptyState.textContent = "Loading...";
+            try {
+                const listing = await loadFolder(currentPath);
+                if (token !== requestToken) return;
+                currentListing = listing;
+                emptyState.textContent = emptyMessage;
+                render();
+            } catch (err) {
+                console.error("[PromptBrowserEdit] Asset browser load failed:", err);
+                if (token !== requestToken) return;
+                currentListing = { currentPath, parentPath: null, dirs: [], assets: [] };
+                emptyState.textContent = String(err?.message || err || "Failed to load assets.");
+                render();
+            }
+        };
+
+        const onKeyDown = (event) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                close(null);
+            }
+        };
+
+        filterInput.addEventListener("input", () => render());
+        overlay.addEventListener("click", (event) => {
+            if (event.target === overlay) close(null);
+        });
+        document.addEventListener("keydown", onKeyDown, true);
+        updateSelectionInfo();
+        void loadPath(currentPath || rootPath || "");
+        filterInput.focus();
+    });
+}
 
 function el(tag, styles = {}, text = "") {
     const element = document.createElement(tag);
@@ -861,6 +1381,7 @@ export function createPromptBrowserEditPanel(options) {
     promptBody.appendChild(promptNameInput);
     promptNameInput.addEventListener("input", () => {
         _syncPromptSelection(currentCategory, String(promptNameInput.value || "").trim());
+        updateEditorActionButtons();
         _onChange();
     });
 
@@ -994,20 +1515,196 @@ export function createPromptBrowserEditPanel(options) {
         justifyContent: "flex-end",
     });
 
-    const clearBtn = createButton("Clear", async () => {
-        const cleared = await clearPrompt();
-        if (cleared) {
-            _onChange();
-        }
-    });
+    const saveNewBtn = createButton("Save New", async () => {
+        await doSavePrompt(false);
+    }, { background: "#313843", borderColor: "#5f6773", color: STYLE.textPrimary });
 
     const saveBtn = createButton("Save", async () => {
-        await doSavePrompt(false);
+        await doPrimaryPromptAction(false);
     }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
 
-    editorButtonRow.appendChild(clearBtn);
+    saveNewBtn.style.display = "none";
+
+    editorButtonRow.appendChild(saveNewBtn);
     editorButtonRow.appendChild(saveBtn);
     promptBody.appendChild(editorButtonRow);
+
+    function getLoadedPromptEntry(category = currentCategory, promptName = currentPromptName) {
+        return getCategoryPromptEntryForEndpoint(node?.prompts?.[category], promptName, endpointPrefix);
+    }
+
+    function isEditingExistingPrompt() {
+        return !!(currentCategory && currentPromptName && getLoadedPromptEntry(currentCategory, currentPromptName));
+    }
+
+    function hasPromptNameChanged() {
+        if (!isEditingExistingPrompt()) return false;
+        const currentName = String(promptNameInput.value || "").trim();
+        return currentName.length > 0 && currentName !== String(currentPromptName || "").trim();
+    }
+
+    function findPromptNameConflict(category, name, excludedName = "") {
+        const targetName = String(name || "").trim().toLowerCase();
+        const skipName = String(excludedName || "").trim().toLowerCase();
+        if (!category || !targetName) return "";
+        const promptEntries = getCategoryPromptEntriesForEndpoint(node?.prompts?.[category], endpointPrefix);
+        for (const entryName of Object.keys(promptEntries)) {
+            const normalized = String(entryName || "").trim().toLowerCase();
+            if (!normalized || normalized === skipName) continue;
+            if (normalized === targetName) return entryName;
+        }
+        return "";
+    }
+
+    function buildCurrentPromptSavePayload() {
+        const payload = {
+            category: currentCategory,
+            name: String(promptNameInput.value || "").trim(),
+            text: String(promptTextArea.value || "").trim(),
+            thumbnail: pendingThumbnail || loadedThumbnail,
+        };
+        if (isComposerSource) {
+            payload.lora_image = String(imageLoraTrigger.getSelectedValue() || "").trim();
+            payload.lora_image_strength = readCurrentImageLoraStrength();
+            payload.lora_video = String(videoLoraTrigger.getSelectedValue() || "").trim();
+            payload.lora_video_strength = readCurrentVideoLoraStrength();
+            payload.refmod = String(refModTrigger.getSelectedValue() || "").trim();
+            payload.refmod_weight = readCurrentRefModWeight();
+        }
+        return payload;
+    }
+
+    async function applyPromptSaveResult(result, category, name) {
+        if (!result?.success) return result || { success: false };
+        if (result?.prompts && typeof result.prompts === "object") {
+            node.prompts = result.prompts;
+        } else {
+            await _loadPrompts(node);
+        }
+        currentPromptName = name;
+        pendingThumbnail = null;
+        const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], name, endpointPrefix);
+        loadedPromptText = entry?.prompt || "";
+        loadedThumbnail = entry?.thumbnail || null;
+        loadedImageLora = String(entry?.lora_image || entry?.lora || "").trim();
+        loadedImageLoraStrength = normalizeAssetWeight(entry?.lora_image_strength ?? entry?.lora_strength, 1.0);
+        loadedVideoLora = String(entry?.lora_video || "").trim();
+        loadedVideoLoraStrength = normalizeAssetWeight(entry?.lora_video_strength, 1.0);
+        loadedRefMod = String(entry?.refmod || "").trim();
+        loadedRefModWeight = normalizeAssetWeight(entry?.refmod_weight, 1.0, 0.0, 10.0);
+        imageLoraStrengthInput.value = String(loadedImageLoraStrength);
+        videoLoraStrengthInput.value = String(loadedVideoLoraStrength);
+        refModWeightInput.value = String(loadedRefModWeight);
+        await refreshComposerAssetChoices({ loraImage: loadedImageLora, loraVideo: loadedVideoLora, refmod: loadedRefMod });
+        updateThumbnailDisplay(entry?.thumbnail || null);
+        updateEditorActionButtons();
+        _onChange();
+        return result;
+    }
+
+    async function saveCurrentPromptPayload(savePayload, options = {}) {
+        const result = await _savePrompt(savePayload);
+        if (result?.success) {
+            return await applyPromptSaveResult(result, savePayload.category, savePayload.name);
+        }
+        if (options.showFailure !== false) {
+            await _showInfo(options.failureTitle || "Save Failed", result?.error || options.failureMessage || "Failed to save prompt.");
+        }
+        return result || { success: false };
+    }
+
+    async function deletePromptByName(category, name) {
+        const response = await fetch(`${endpointPrefix}/delete-prompt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                category,
+                name,
+            }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data?.success) {
+            return { success: false, error: data?.error || `Delete request failed (${response.status})` };
+        }
+        return data;
+    }
+
+    function updateEditorActionButtons() {
+        const editingExisting = isEditingExistingPrompt();
+        const nameChanged = hasPromptNameChanged();
+        saveBtn.textContent = editingExisting ? "Update" : "Save";
+        saveNewBtn.style.display = editingExisting && nameChanged ? "inline-flex" : "none";
+    }
+
+    async function doPrimaryPromptAction(autoFromGeneration) {
+        if (isEditingExistingPrompt()) {
+            return await doUpdatePrompt(autoFromGeneration);
+        }
+        return await doSavePrompt(autoFromGeneration);
+    }
+
+    async function doUpdatePrompt(autoFromGeneration) {
+        const category = currentCategory;
+        const originalName = String(currentPromptName || "").trim();
+        const nextName = String(promptNameInput.value || "").trim();
+
+        if (!category) {
+            await _showInfo("Missing Category", "Please select a category first.");
+            return { success: false };
+        }
+        if (!originalName || !getLoadedPromptEntry(category, originalName)) {
+            return await doSavePrompt(autoFromGeneration);
+        }
+        if (!nextName) {
+            await _showInfo("Missing Name", "Please enter a prompt name.");
+            promptNameInput.focus();
+            return { success: false };
+        }
+
+        const conflictingName = findPromptNameConflict(category, nextName, originalName);
+        if (conflictingName) {
+            await _showInfo("Update Failed", `A prompt named "${conflictingName}" already exists in category "${category}".`);
+            return { success: false };
+        }
+
+        const confirmed = await _showConfirm(
+            "Update Prompt",
+            nextName === originalName
+                ? `Update prompt "${originalName}" in category "${category}"?`
+                : `Update prompt "${originalName}" and rename it to "${nextName}" in category "${category}"?`,
+            "Update",
+            "#2b6d3a"
+        );
+        if (!confirmed) return { success: false };
+
+        const savePayload = buildCurrentPromptSavePayload();
+        const saveResult = await saveCurrentPromptPayload(savePayload, {
+            showFailure: !autoFromGeneration,
+            failureTitle: "Update Failed",
+            failureMessage: "Failed to update prompt.",
+        });
+        if (!saveResult?.success) {
+            return saveResult || { success: false };
+        }
+
+        if (nextName !== originalName) {
+            const deleteResult = await deletePromptByName(category, originalName);
+            if (!deleteResult?.success) {
+                await _showInfo("Update Partially Completed", deleteResult?.error || `Updated "${nextName}", but failed to remove "${originalName}".`);
+                return deleteResult || { success: false };
+            }
+            if (deleteResult?.prompts && typeof deleteResult.prompts === "object") {
+                node.prompts = deleteResult.prompts;
+            } else {
+                await _loadPrompts(node);
+            }
+            currentPromptName = nextName;
+            updateEditorActionButtons();
+            _onChange();
+        }
+
+        return saveResult;
+    }
 
     const thumbnailWrap = el("div", {
         display: "flex",
@@ -1145,44 +1842,16 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         const thumbnail = pendingThumbnail || loadedThumbnail;
-        const savePayload = { category, name, text, thumbnail };
-        if (isComposerSource) {
-            savePayload.lora_image = String(imageLoraTrigger.getSelectedValue() || "").trim();
-            savePayload.lora_image_strength = readCurrentImageLoraStrength();
-            savePayload.lora_video = String(videoLoraTrigger.getSelectedValue() || "").trim();
-            savePayload.lora_video_strength = readCurrentVideoLoraStrength();
-            savePayload.refmod = String(refModTrigger.getSelectedValue() || "").trim();
-            savePayload.refmod_weight = readCurrentRefModWeight();
-        }
-        const result = await _savePrompt(savePayload);
-        if (result?.success) {
-            if (result?.prompts && typeof result.prompts === "object") {
-                node.prompts = result.prompts;
-            } else {
-                await _loadPrompts(node);
-            }
-            currentPromptName = name;
-            pendingThumbnail = null;
-            const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], name, endpointPrefix);
-            loadedPromptText = entry?.prompt || "";
-            loadedImageLora = String(entry?.lora_image || entry?.lora || "").trim();
-            loadedImageLoraStrength = normalizeAssetWeight(entry?.lora_image_strength ?? entry?.lora_strength, 1.0);
-            loadedVideoLora = String(entry?.lora_video || "").trim();
-            loadedVideoLoraStrength = normalizeAssetWeight(entry?.lora_video_strength, 1.0);
-            loadedRefMod = String(entry?.refmod || "").trim();
-            loadedRefModWeight = normalizeAssetWeight(entry?.refmod_weight, 1.0, 0.0, 10.0);
-            imageLoraStrengthInput.value = String(loadedImageLoraStrength);
-            videoLoraStrengthInput.value = String(loadedVideoLoraStrength);
-            refModWeightInput.value = String(loadedRefModWeight);
-            await refreshComposerAssetChoices({ loraImage: loadedImageLora, loraVideo: loadedVideoLora, refmod: loadedRefMod });
-            updateThumbnailDisplay(entry?.thumbnail || null);
-            _onChange();
-        } else {
-            if (!autoFromGeneration) {
-                await _showInfo("Save Failed", result?.error || "Failed to save prompt.");
-            }
-        }
-        return result || { success: false };
+        const savePayload = buildCurrentPromptSavePayload();
+        savePayload.category = category;
+        savePayload.name = name;
+        savePayload.text = text;
+        savePayload.thumbnail = thumbnail;
+        return await saveCurrentPromptPayload(savePayload, {
+            showFailure: !autoFromGeneration,
+            failureTitle: "Save Failed",
+            failureMessage: "Failed to save prompt.",
+        });
     }
 
     function hasUnsavedChanges() {
@@ -1276,6 +1945,7 @@ export function createPromptBrowserEditPanel(options) {
             refModWeightInput.value = String(loadedRefModWeight);
             await refreshComposerAssetChoices({ loraImage: loadedImageLora, loraVideo: loadedVideoLora, refmod: loadedRefMod });
             updateThumbnailDisplay(loadedThumbnail);
+            updateEditorActionButtons();
         } else {
             promptTextArea.value = "";
             loadedPromptText = "";
@@ -1291,6 +1961,7 @@ export function createPromptBrowserEditPanel(options) {
             refModWeightInput.value = "1";
             await refreshComposerAssetChoices({ loraImage: "", loraVideo: "", refmod: "" });
             updateThumbnailDisplay(null);
+            updateEditorActionButtons();
         }
 
         loadCategorySettings(category);
@@ -1357,6 +2028,7 @@ export function createPromptBrowserEditPanel(options) {
         }
         updateThumbnailDisplay(null);
         currentPromptName = "";
+        updateEditorActionButtons();
         return true;
     }
 
@@ -1494,8 +2166,126 @@ export function createPromptBrowserEditPanel(options) {
         });
     }
 
+    async function importAssetsViaBrowser(config) {
+        const category = currentCategory;
+        if (!category) {
+            await _showInfo("Missing Category", "Please select a category first.");
+            return;
+        }
+
+        const canProceed = await confirmDiscardChanges();
+        if (!canProceed) return;
+
+        const rootPath = await config.getRootPath();
+        if (!rootPath) {
+            await _showInfo("Browser Unavailable", config.browserUnavailableMessage || "Unable to open asset browser.");
+            return;
+        }
+
+        const selectedAssets = await showVisualAssetImportPicker({
+            title: config.dialogTitle,
+            rootPath,
+            loadFolder: (path) => config.loadFolder(path, rootPath),
+            emptyMessage: config.emptyMessage,
+            createButtonLabel: config.createButtonLabel,
+        });
+
+        if (!Array.isArray(selectedAssets) || selectedAssets.length === 0) return;
+
+        let created = 0;
+        let failed = 0;
+        let firstCreatedName = "";
+        const seen = new Set();
+
+        for (const asset of selectedAssets) {
+            const promptName = String(asset?.promptName || "").trim();
+            if (!promptName) continue;
+            const key = promptName.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            try {
+                const thumbnail = await previewCandidatesToThumbnail(asset.previewCandidates);
+                const payload = config.buildSavePayload(asset, thumbnail, category);
+                const result = await _savePrompt(payload);
+                if (result?.success) {
+                    created++;
+                    if (!firstCreatedName) firstCreatedName = promptName;
+                } else {
+                    failed++;
+                }
+            } catch (err) {
+                console.error("[PromptBrowserEdit] Asset import failed:", err);
+                failed++;
+            }
+        }
+
+        await _loadPrompts(node);
+        _onChange();
+        if (created > 0 && firstCreatedName) {
+            _selectPrompt?.(category, firstCreatedName);
+        }
+        await _showInfo(
+            config.resultTitle || "Import Complete",
+            `${created} prompt(s) created in "${category}".${failed ? ` ${failed} failed.` : ""}`
+        );
+    }
+
+    const importLorasBtn = createButton("Import LoRAs", async () => {
+        await importAssetsViaBrowser({
+            dialogTitle: "Import LoRAs As Prompts",
+            getRootPath: fetchLoraBrowserRoot,
+            loadFolder: listLoraBrowserFolder,
+            emptyMessage: "No LoRAs found in this folder.",
+            createButtonLabel: "Create Prompts",
+            browserUnavailableMessage: "The FBnodes LoRA browser routes are unavailable.",
+            resultTitle: "LoRAs Imported",
+            buildSavePayload: (asset, thumbnail, category) => ({
+                category,
+                name: asset.promptName,
+                text: asset.promptText,
+                thumbnail,
+                lora_image: String(asset.assetValue || "").trim(),
+                lora_image_strength: 1.0,
+                lora_video: String(asset.assetValue || "").trim(),
+                lora_video_strength: 1.0,
+                refmod: "",
+                refmod_weight: 1.0,
+            }),
+        });
+    });
+    toolsBody.appendChild(importLorasBtn);
+
+    const importRefModsBtn = createButton("Import RefMods", async () => {
+        await importAssetsViaBrowser({
+            dialogTitle: "Import RefMods As Prompts",
+            getRootPath: async () => {
+                try {
+                    const listing = await listRefModBrowserFolder("");
+                    return listing.root || "";
+                } catch {
+                    return "";
+                }
+            },
+            loadFolder: (path) => listRefModBrowserFolder(path),
+            emptyMessage: "No RefMods found in this folder.",
+            createButtonLabel: "Create Prompts",
+            browserUnavailableMessage: "The H3 RefMod browser routes are unavailable.",
+            resultTitle: "RefMods Imported",
+            buildSavePayload: (asset, thumbnail, category) => ({
+                category,
+                name: asset.promptName,
+                text: asset.promptText,
+                thumbnail,
+                refmod: String(asset.assetValue || "").trim(),
+                refmod_weight: 1.0,
+            }),
+        });
+    });
+    toolsBody.appendChild(importRefModsBtn);
+
     // Initialize the thumbnail area with the placeholder so it never starts empty.
     updateThumbnailDisplay(null);
+    updateEditorActionButtons();
     if (isComposerSource) {
         void refreshComposerAssetChoices();
     }

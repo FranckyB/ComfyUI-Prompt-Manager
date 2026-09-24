@@ -636,24 +636,34 @@ async def compose_rename_prompt(request):
             return server.web.json_response({"success": False, "error": "Missing required fields"})
 
         prompts = PromptComposerStore.load_prompts()
-        if old_category not in prompts:
+        old_category_key = _find_category_case_insensitive(prompts, old_category)
+        if not old_category_key:
             return server.web.json_response({"success": False, "error": "Prompt not found"})
 
-        old_category_data = _ensure_category_data(prompts, old_category)
+        old_category_data = _ensure_category_data(prompts, old_category_key)
         old_prompt_entries = _ensure_category_prompts_map(old_category_data)
-        if old_name not in old_prompt_entries:
+        existing_old_name = next((name for name in old_prompt_entries.keys() if str(name).lower() == old_name.lower()), None)
+        if not existing_old_name:
             return server.web.json_response({"success": False, "error": "Prompt not found"})
 
-        if new_category not in prompts:
+        new_category_key = _find_category_case_insensitive(prompts, new_category)
+        if not new_category_key:
             prompts[new_category] = {"_prompts_": {}}
+            new_category_key = new_category
 
-        new_category_data = _ensure_category_data(prompts, new_category)
+        new_category_data = _ensure_category_data(prompts, new_category_key)
         new_prompt_entries = _ensure_category_prompts_map(new_category_data)
 
-        entry = old_prompt_entries.pop(old_name)
+        same_category = old_category_key == new_category_key
+        existing_target_name = next((name for name in new_prompt_entries.keys() if str(name).lower() == new_name.lower()), None)
+        if existing_target_name:
+            if not (same_category and str(existing_target_name).lower() == str(existing_old_name).lower()):
+                return server.web.json_response({"success": False, "error": f"A prompt named '{existing_target_name}' already exists in '{new_category_key}'"})
+
+        entry = old_prompt_entries.pop(existing_old_name)
         new_prompt_entries[new_name] = entry
-        prompts[old_category] = old_category_data
-        prompts[new_category] = new_category_data
+        prompts[old_category_key] = old_category_data
+        prompts[new_category_key] = new_category_data
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
