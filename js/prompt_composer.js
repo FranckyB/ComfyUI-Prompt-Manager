@@ -1506,16 +1506,20 @@ function ensureComposerUi(node) {
         return Math.max(180, nodeHeight - NODE_CHROME_HEIGHT);
     };
 
+    const computeComposerMinHeight = () => {
+        return Math.max(180, MIN_NODE_HEIGHT - NODE_CHROME_HEIGHT);
+    };
+
     const refreshComposerHeight = () => {
         const h = computeComposerHeight();
-        root.style.setProperty("--comfy-widget-min-height", `${h}px`);
+        root.style.setProperty("--comfy-widget-min-height", `${computeComposerMinHeight()}px`);
         root.style.setProperty("--comfy-widget-height", `${h}px`);
     };
 
     const widget = node.addDOMWidget("prompt_composer_ui", "div", root, {
         serialize: false,
         hideOnZoom: false,
-        getMinHeight: () => computeComposerHeight(),
+        getMinHeight: () => computeComposerMinHeight(),
         getHeight: () => "100%",
     });
 
