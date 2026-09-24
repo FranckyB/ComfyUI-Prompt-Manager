@@ -1214,12 +1214,12 @@ const FAMILY_DEFAULTS = {
     flux1:         { steps_a: 20, cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
     flux2:         { steps_a: 4,  cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
     zimage:        { steps_a: 9,  cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
-    // ltxv:       { steps_a: 8,  cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
     wan_image:     { steps_a: 10, cfg: 1.0,  sampler: "lcm",             scheduler: "simple" },
     wan_video_t2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",             scheduler: "simple",
                      steps_b: 3 },
     wan_video_i2v: { steps_a: 3,  cfg: 1.0,  sampler: "lcm",             scheduler: "simple",
                      steps_b: 3 },
+    anima:         { steps_a: 10, cfg: 1.0,  sampler: "er_sde",          scheduler: "simple" },
     qwen_image:    { steps_a: 10, cfg: 1.0,  sampler: "euler",           scheduler: "simple" },
 };
 

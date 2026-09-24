@@ -7110,6 +7110,7 @@ function getThumbnailFamilySamplerDefaults(familyKey) {
         wan_image: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
         wan_video_t2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
         wan_video_i2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+        anima: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "er_sde", scheduler: "simple" },
         qwen_image: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
     };
     const d = byFamily[key] || byFamily.sdxl;
@@ -7122,6 +7123,40 @@ function getThumbnailFamilySamplerDefaults(familyKey) {
         scheduler: d.scheduler,
         seed_b: null,
     };
+}
+
+function applyThumbnailFamilySamplerDefaults(workflowData, familyKey, selectedSlot = "model_a") {
+    if (!workflowData || typeof workflowData !== "object") {
+        return workflowData;
+    }
+
+    const defaults = getThumbnailFamilySamplerDefaults(familyKey);
+    const wf = workflowData;
+    const sampler = (wf.sampler && typeof wf.sampler === "object") ? wf.sampler : (wf.sampler = {});
+    sampler.steps_a = defaults.steps_a;
+    sampler.steps = defaults.steps_a;
+    sampler.steps_b = defaults.steps_b;
+    sampler.cfg = defaults.cfg;
+    sampler.sampler_name = defaults.sampler_name;
+    sampler.scheduler = defaults.scheduler;
+
+    if (Number(wf.version || 0) >= 2 && wf.models && typeof wf.models === "object") {
+        const slotKey = String(selectedSlot || "model_a").trim().toLowerCase();
+        const modelBlock = (wf.models[slotKey] && typeof wf.models[slotKey] === "object")
+            ? wf.models[slotKey]
+            : null;
+        if (modelBlock) {
+            const blockSampler = (modelBlock.sampler && typeof modelBlock.sampler === "object")
+                ? modelBlock.sampler
+                : (modelBlock.sampler = {});
+            blockSampler.steps = defaults.steps_a;
+            blockSampler.cfg = defaults.cfg;
+            blockSampler.sampler_name = defaults.sampler_name;
+            blockSampler.scheduler = defaults.scheduler;
+        }
+    }
+
+    return wf;
 }
 
 async function buildRendererFallbackWorkflowData(promptText, promptData, renderSelection) {
@@ -7758,6 +7793,10 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     // Enforce thumbnail-safe render sizing before queueing.
     const wfForThumb = applyThumbnailResolution(workflowData);
     const modelSlot = resolveThumbnailModelSlot(wfForThumb);
+    const thumbnailFamily = String(renderSelection?.family || wfForThumb?.family || "").trim();
+    if (thumbnailFamily) {
+        applyThumbnailFamilySamplerDefaults(wfForThumb, thumbnailFamily, modelSlot);
+    }
     const seedUsed = applyThumbnailSeeds(wfForThumb, modelSlot, { staticSeed: options?.staticSeed });
     applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);
     if (options?.promptData && typeof options.promptData === "object") {

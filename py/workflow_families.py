@@ -186,6 +186,20 @@ MODEL_FAMILIES = {
         "sampler": "standard",
         "checkpoint": True,
     },
+    # ── Anima ───────────────────────────────────────────────────────────────
+    "anima": {
+        "label":   "Anima",
+        "folders": ["anima/"],
+        "names":   ["anima"],
+        "vae_exact": ["qwen_image_vae.safetensors"],
+        "vae":     ["qwen_image_vae"],
+        "clip_exact": ["qwen_3_06b_base.safetensors"],
+        "clip":         ["qwen_3_06b_base", "qwen-3-06b-base", "qwen3_06b_base"],
+        "clip_exclude": ["qwen_2.5", "qwen_2_5", "qwen_image", "qwen_3_4b", "qwen_3_8b",
+                         "t5xxl", "umt5", "clip_l", "clip_g", "gemma"],
+        "clip_type": "stable_diffusion",
+        "sampler": "standard",
+    },
     # ── Qwen Image ───────────────────────────────────────────────────────────
     "qwen_image": {
         "label":   "Qwen Image",
@@ -236,6 +250,7 @@ FAMILY_WORKFLOW_STEMS = {
     "wan_video_i2v": "wan_video_i2v",
     "wan_video_t2v": "wan_video_t2v",
     "ltxv":          None,          # No template yet
+    "anima":         "sdxl",
     "qwen_image":    "qwen_image",
 }
 

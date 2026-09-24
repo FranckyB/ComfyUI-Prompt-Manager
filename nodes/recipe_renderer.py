@@ -62,6 +62,7 @@ _FAMILY_SAMPLER_DEFAULTS = {
     "wan_image": {"steps_a": 8, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple"},
     "wan_video_t2v": {"steps_a": 2, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 2},
     "wan_video_i2v": {"steps_a": 2, "cfg": 1.0, "sampler": "lcm", "scheduler": "simple", "steps_b": 2},
+    "anima": {"steps_a": 10, "cfg": 1.0, "sampler": "er_sde", "scheduler": "simple"},
     "qwen_image": {"steps_a": 10, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
 }
 
@@ -825,6 +826,9 @@ class WorkflowRenderer:
         elif family_key == "qwen_image":
             decoded, out_latent = _render_qwen_image(**render_args)
 
+        elif family_key == "anima":
+            decoded, out_latent = _render_anima(**render_args)
+
         elif family_key == "flux1":
             decoded, out_latent = _render_flux1(**render_args)
 
@@ -1507,6 +1511,36 @@ def _render_sdxl(model, clip, vae, pos_prompt, neg_prompt,
     denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
     latent_out = _run_standard_ksampler(model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise)
     decoded = _decode_latent_output(vae, latent_out, tag="_render_sdxl")
+    return decoded, latent_out
+
+
+def _render_anima(model, clip, vae, pos_prompt, neg_prompt,
+                  width, height, batch, sampler_params,
+                  input_latent=None,
+                  loras_a=None, lora_overrides=None, lora_stack_key=''):
+    """
+    Anima render path matching the provided reference workflow.
+
+    Uses a plain stable-diffusion CLIP loader, EmptyLatentImage-compatible
+    latent, and standard KSampler settings without forcing SDXL clip_layer(-2).
+    """
+    if loras_a:
+        model, clip = _apply_loras(
+            model, clip, loras_a, lora_overrides or {}, stack_key=lora_stack_key
+        )
+
+    tokens_pos = clip.tokenize(pos_prompt)
+    cond_pos = clip.encode_from_tokens_scheduled(tokens_pos)
+    tokens_neg = clip.tokenize(neg_prompt)
+    cond_neg = clip.encode_from_tokens_scheduled(tokens_neg)
+
+    use_input_latent = isinstance(input_latent, dict) and ("samples" in input_latent)
+    latent = input_latent if use_input_latent else _make_latent(4, width, height, batch=batch)
+    denoise = float(sampler_params.get("denoise", 1.0)) if use_input_latent else 1.0
+    latent_out = _run_standard_ksampler(
+        model, cond_pos, cond_neg, latent, sampler_params, denoise_override=denoise
+    )
+    decoded = _decode_latent_output(vae, latent_out, tag="_render_anima")
     return decoded, latent_out
 
 
