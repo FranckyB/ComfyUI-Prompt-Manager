@@ -520,10 +520,10 @@ def _subject_role(subject_group):
     if prompt_types and all(value == "animal" for value in prompt_types):
         return "animal"
     if "character" in prompt_types:
-        return "character"
+        return "person"
     if "animal" in prompt_types:
         return "animal"
-    return "character"
+    return "person"
 
 
 def _ordinal_word(index):
@@ -558,7 +558,7 @@ def _image_subject_prefix(role, position, total):
         return "The Environment is"
     noun = "Animal" if normalized_role == "animal" else "Character"
     if int(total or 0) <= 1:
-        return f"{noun} is"
+        return ""
     return f"{_ordinal_word(position)} {noun} is"
 
 
@@ -578,8 +578,9 @@ def _render_image_subject_groups(subject_groups):
 
     for group in typed_groups:
         role = group["role"]
+        prefix = _image_subject_prefix(role, group["position"], group["total"])
         rendered_groups.append(
-            f"{_image_subject_prefix(role, group['position'], group['total'])} {group['body']}"
+            f"{prefix} {group['body']}".strip() if prefix else group["body"]
         )
 
     return "\n\n".join(fragment for fragment in rendered_groups if fragment)
