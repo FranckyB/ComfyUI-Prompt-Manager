@@ -1280,6 +1280,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const promptStrength = _normalizeThumbnailPromptStrength(options?.promptStrength);
     const thumbnailGenerationMode = String(options?.thumbnailGenerationMode || "image").trim().toLowerCase() || "image";
     const showCategoryTypeFilter = endpointPrefix === "/prompt-manager/compose";
+    const requireDoubleClickToSelect = mode !== "save" && endpointPrefix === "/prompt-manager/compose";
     const initialCategoryTypeFilter = showCategoryTypeFilter
         ? (String(options?.initialCategoryTypeFilter || "__all__").trim() || "__all__")
         : "__all__";
@@ -3366,6 +3367,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 updateSelectButton();
             };
 
+            const updateGridSelections = () => {
+                grid.querySelectorAll("[data-prompt-name]").forEach((item) => {
+                    updateCardSelection(item, item.dataset.promptName || "");
+                });
+                updateEditModeLayout();
+            };
+
             filteredPrompts.forEach(promptName => {
                 const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
@@ -3379,6 +3387,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
+                card.dataset.promptName = promptName;
                 if (isSelected) {
                     card.dataset.selectedPrompt = "true";
                 }
@@ -3599,6 +3608,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     setCurrentPromptSelection(promptName);
 
+                    if (requireDoubleClickToSelect) {
+                        selectedNames.add(promptName);
+                        updateGridSelections();
+                        return;
+                    }
+
                     resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
@@ -3627,7 +3642,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
                     };
-                } else if (isMultiSelectActive()) {
+                } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
                         resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                         cleanup();
@@ -3735,6 +3750,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 updateSelectButton();
             };
 
+            const updateCompactGridSelections = () => {
+                grid.querySelectorAll("[data-prompt-name]").forEach((item) => {
+                    updateCardSelection(item, item.dataset.promptName || "");
+                });
+                updateEditModeLayout();
+            };
+
             filteredPrompts.forEach(promptName => {
                 const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
                 const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
@@ -3748,6 +3770,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
+                card.dataset.promptName = promptName;
                 if (isSelected) {
                     card.dataset.selectedPrompt = "true";
                 }
@@ -3964,6 +3987,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     setCurrentPromptSelection(promptName);
 
+                    if (requireDoubleClickToSelect) {
+                        selectedNames.add(promptName);
+                        updateCompactGridSelections();
+                        return;
+                    }
+
                     resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
@@ -3992,7 +4021,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
                     };
-                } else if (isMultiSelectActive()) {
+                } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
                         resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                         cleanup();
@@ -4099,6 +4128,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 row.style.outlineOffset = isSel ? "-2px" : "0";
                 row.style.boxShadow = isSel ? `0 0 8px ${UI.accentSoft}` : "none";
                 updateSelectButton();
+            };
+
+            const updateListSelections = () => {
+                grid.querySelectorAll("[data-prompt-name]").forEach((item) => {
+                    updateRowSelection(item, item.dataset.promptName || "");
+                });
+                updateEditModeLayout();
             };
 
             const listViewportWidth = Math.max(
@@ -4277,6 +4313,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 const row = document.createElement("div");
                 row.dataset.pmListRow = "true";
+                row.dataset.promptName = promptName;
                 if (isSelected) {
                     row.dataset.selectedPrompt = "true";
                 }
@@ -4548,6 +4585,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     setCurrentPromptSelection(promptName);
 
+                    if (requireDoubleClickToSelect) {
+                        selectedNames.add(promptName);
+                        updateListSelections();
+                        return;
+                    }
+
                     resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
@@ -4576,7 +4619,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
                         }
                     };
-                } else if (isMultiSelectActive()) {
+                } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     row.ondblclick = () => {
                         resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
                         cleanup();
@@ -5284,7 +5327,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     ? (multiCategorySelect
                         ? "Multi-select is ON. Select prompts across categories. Shift+click for range selection. Right-click selected prompts for batch actions."
                         : "Multi-select is ON. Click prompts to select/deselect, Shift+click for range selection, and right-click selected prompts for batch actions.")
-                    : "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Turn Multi on for batch actions.");
+                    : (requireDoubleClickToSelect
+                        ? "Click a prompt to select it. Double-click it to send it. Right-click a prompt or category for more options."
+                        : "Right-click a prompt or category for more options (thumbnails, NSFW, delete). Turn Multi on for batch actions."));
         };
         updateFooterText();
 
