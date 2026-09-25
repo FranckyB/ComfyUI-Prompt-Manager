@@ -7,6 +7,19 @@ import server
 from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
 
 
+def _safe_abspath(path):
+    return os.path.abspath(os.path.expanduser(path or ""))
+
+
+def _normalize_export_path(raw_path):
+    candidate = _safe_abspath(raw_path)
+    if not candidate:
+        return ""
+    if not candidate.lower().endswith(".json"):
+        candidate = f"{candidate}.json"
+    return candidate
+
+
 def _get_workflow_node(extra_pnginfo, node_id: str):
     """Find workflow node by id, including nested subgraphs (id chains like a:b:c)."""
     if not isinstance(extra_pnginfo, dict):
@@ -385,7 +398,7 @@ async def import_prompts(request):
     try:
         data = await request.json()
         imported_data = data.get("data", {})
-        mode = data.get("mode", "merge")
+        mode = str(data.get("mode", "replace_existing") or "replace_existing").strip().lower()
 
         if not isinstance(imported_data, dict):
             return server.web.json_response({"success": False, "error": "Invalid data format"})
@@ -397,6 +410,9 @@ async def import_prompts(request):
         else:
             # Merge with existing prompts
             prompts = PromptManager.load_prompts()
+            imported_prompts = 0
+            skipped_prompts = 0
+            created_categories = 0
 
             for category, category_prompts in imported_data.items():
                 if not isinstance(category_prompts, dict):
@@ -404,18 +420,83 @@ async def import_prompts(request):
 
                 if category not in prompts:
                     prompts[category] = {}
+                    created_categories += 1
 
                 for prompt_name, prompt_data in category_prompts.items():
+                    if prompt_name == "__meta__":
+                        if mode != "skip_existing" or "__meta__" not in prompts[category]:
+                            prompts[category][prompt_name] = prompt_data
+                        continue
+
+                    if prompt_name in prompts[category] and mode == "skip_existing":
+                        skipped_prompts += 1
+                        continue
+
                     # Merge prompt data, preserving structure
                     if isinstance(prompt_data, dict):
                         prompts[category][prompt_name] = prompt_data
                     elif isinstance(prompt_data, str):
                         # Legacy format: just the prompt text
                         prompts[category][prompt_name] = {"prompt": prompt_data}
+                    else:
+                        continue
+                    imported_prompts += 1
 
             PromptManager.save_prompts(prompts)
-            return server.web.json_response({"success": True, "prompts": prompts})
+            return server.web.json_response({
+                "success": True,
+                "prompts": prompts,
+                "imported_prompts": imported_prompts,
+                "skipped_prompts": skipped_prompts,
+                "created_categories": created_categories,
+            })
 
     except Exception as e:
         print(f"[PromptManager] Error in import_prompts API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/load-prompts-file")
+async def load_prompts_file(request):
+    try:
+        data = await request.json()
+        file_path = _safe_abspath(data.get("path", ""))
+        if not file_path:
+            return server.web.json_response({"success": False, "error": "Path is required"})
+        if not os.path.isfile(file_path):
+            return server.web.json_response({"success": False, "error": "JSON file not found"}, status=404)
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            return server.web.json_response({"success": False, "error": "Invalid JSON data format"}, status=400)
+
+        return server.web.json_response({"success": True, "data": loaded, "path": file_path})
+    except Exception as e:
+        print(f"[PromptManager] Error in load_prompts_file API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/export-prompts-file")
+async def export_prompts_file(request):
+    try:
+        data = await request.json()
+        export_path = _normalize_export_path(data.get("path", ""))
+        exported_data = data.get("data", {})
+
+        if not export_path:
+            return server.web.json_response({"success": False, "error": "Export path is required"})
+        if not isinstance(exported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        parent_dir = os.path.dirname(export_path)
+        if not parent_dir or not os.path.isdir(parent_dir):
+            return server.web.json_response({"success": False, "error": "Target folder does not exist"})
+
+        if not atomic_save(export_path, exported_data, "PromptManagerExport"):
+            return server.web.json_response({"success": False, "error": "Failed to save export file"}, status=500)
+
+        return server.web.json_response({"success": True, "path": export_path})
+    except Exception as e:
+        print(f"[PromptManager] Error in export_prompts_file API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)

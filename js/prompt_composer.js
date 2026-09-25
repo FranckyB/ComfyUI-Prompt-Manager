@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
-import { DEFAULT_THUMBNAIL } from "./prompt_manager_advanced.js";
+import { DEFAULT_THUMBNAIL, showInfo, showConfirm } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
 import { loadComposerPrompts, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
 
@@ -18,6 +18,7 @@ const MIN_NODE_HEIGHT = 600;
 const HOLD_TO_DRAG_MS = 140;
 const COMPOSER_DRAG_STYLE_ID = "pm-composer-drag-style";
 const THUMB_BASE_WIDTH = 128;
+const COMPOSER_BACKUP_BROWSER_DIR = "/mnt/Neuralnet/ComfyUI/user/default/prompt_backups";
 const DEFAULT_THUMB_ZOOM = 1.0;
 const RESET_THUMB_ZOOM = 1.0;
 const MIN_THUMB_ZOOM = 0.75;
@@ -149,11 +150,800 @@ function writeThumbZoom(node, zoom) {
     app.graph.setDirtyCanvas(true, true);
 }
 
+function getComposerCategories(node) {
+    return Object.keys(node?.prompts || {})
+        .filter((name) => String(name || "").trim() && String(name) !== "__meta__");
+}
+
 function getDefaultComposerPickerCategory(node) {
-    const categories = Object.keys(node?.prompts || {}).filter((name) => String(name || "").trim() && String(name) !== "__meta__");
+    const categories = getComposerCategories(node);
     if (!categories.length) return "";
-    const preferred = categories.find((name) => String(name || "").trim().toLowerCase() === "character");
-    return preferred || categories[0] || "";
+    const preferredByType = categories.find((name) => getCategoryPromptType(node, name) === "character");
+    if (preferredByType) return preferredByType;
+    const preferredByName = categories.find((name) => String(name || "").trim().toLowerCase() === "character");
+    return preferredByName || categories[0] || "";
+}
+
+function getComposerExportData(node) {
+    return node?.prompts || node?.composerPrompts || {};
+}
+
+function normalizeComposerFilename(name, fallback = "prompt_composer_data.json") {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) return fallback;
+    return trimmed.toLowerCase().endsWith(".json") ? trimmed : `${trimmed}.json`;
+}
+
+function joinComposerBrowserPath(base, leaf) {
+    if (!base || !leaf) return leaf || base || "";
+    const cleanBase = String(base).replace(/[\\/]+$/, "");
+    const cleanLeaf = String(leaf).replace(/^[\\/]+/, "");
+    return `${cleanBase}/${cleanLeaf}`;
+}
+
+function composerBrowserBasename(path) {
+    const normalized = String(path || "").replace(/\\/g, "/");
+    const idx = normalized.lastIndexOf("/");
+    return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+}
+
+async function fetchComposerBrowserListing(path = "") {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    params.set("kind", "json");
+    const query = params.toString();
+    const response = await fetch(`/prompt-extractor/path-browser/list${query ? `?${query}` : ""}`);
+    if (!response.ok) {
+        let message = `Request failed (${response.status})`;
+        try {
+            const err = await response.json();
+            if (err?.error) message = err.error;
+        } catch {
+            // ignore
+        }
+        throw new Error(message);
+    }
+    return await response.json();
+}
+
+async function requestComposerFilename(defaultValue = "prompt_composer_data.json") {
+    return await new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(520px, calc(100vw - 48px));
+            background: ${UI.panel || "hsl(216 11% 15%)"};
+            border: 1px solid ${UI.panelBorder || "hsl(216 20% 65% / 0.24)"};
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 10px 32px rgba(0,0,0,0.45);
+            color: ${UI.textPrimary || "hsl(0 0% 87%)"};
+            z-index: 10000;
+            box-sizing: border-box;
+        `;
+
+        dialog.innerHTML = `
+            <div style="font-size: 16px; font-weight: 700; margin-bottom: 10px;">Save Prompt Composer JSON</div>
+            <div style="color: ${UI.textMuted || "hsl(0 0% 67%)"}; line-height: 1.45; margin-bottom: 12px;">
+                Choose a filename for the exported Prompt Composer library.
+            </div>
+            <input class="filename-input" type="text" value="${String(defaultValue || "prompt_composer_data.json").replace(/"/g, "&quot;")}" style="width: 100%; height: 34px; padding: 0 10px; border-radius: 8px; border: 1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; background: ${UI.inputBg || "hsl(220 15% 10%)"}; color: ${UI.textPrimary || "hsl(0 0% 87%)"}; box-sizing: border-box; margin-bottom: 16px;" />
+            <div style="display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;">
+                <button class="cancel-btn" style="padding: 7px 12px; background: ${UI.buttonBg || "hsl(219 16% 18%)"}; color: ${UI.textPrimary || "hsl(0 0% 87%)"}; border: 1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; border-radius: 7px; cursor: pointer;">Cancel</button>
+                <button class="save-btn" style="padding: 7px 12px; background: ${UI.accentSoft || "hsl(208 73% 57% / 0.16)"}; color: #dbeafe; border: 1px solid ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"}; border-radius: 7px; cursor: pointer;">Save</button>
+            </div>
+        `;
+
+        const input = dialog.querySelector(".filename-input");
+
+        const cleanup = () => {
+            overlay.parentNode?.removeChild(overlay);
+            dialog.parentNode?.removeChild(dialog);
+            document.removeEventListener("keydown", onKeyDown, true);
+        };
+
+        const finish = (value) => {
+            cleanup();
+            resolve(value);
+        };
+
+        const onKeyDown = (event) => {
+            if (event.key === "Escape") {
+                finish(null);
+            } else if (event.key === "Enter") {
+                event.preventDefault();
+                finish(normalizeComposerFilename(input?.value, defaultValue));
+            }
+        };
+
+        dialog.querySelector(".cancel-btn").onclick = () => finish(null);
+        dialog.querySelector(".save-btn").onclick = () => finish(normalizeComposerFilename(input?.value, defaultValue));
+        overlay.onclick = () => finish(null);
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        document.addEventListener("keydown", onKeyDown, true);
+        input?.focus();
+        input?.select();
+    });
+}
+
+async function selectComposerSaveTarget(defaultValue = "prompt_composer_data.json") {
+    if (window.showSaveFilePicker) {
+        try {
+            const handle = await window.showSaveFilePicker({
+                suggestedName: normalizeComposerFilename(defaultValue, "prompt_composer_data.json"),
+                types: [{
+                    description: "JSON Files",
+                    accept: { "application/json": [".json"] },
+                }],
+            });
+            if (!handle) return null;
+            return { mode: "handle", handle };
+        } catch (err) {
+            if (err?.name === "AbortError") return null;
+            console.warn("[PromptComposer] Save picker failed, trying directory picker:", err);
+        }
+    }
+
+    if (window.showDirectoryPicker) {
+        try {
+            const directoryHandle = await window.showDirectoryPicker();
+            if (!directoryHandle) return null;
+            const filename = await requestComposerFilename(defaultValue);
+            if (!filename) return null;
+            const handle = await directoryHandle.getFileHandle(filename, { create: true });
+            return { mode: "handle", handle };
+        } catch (err) {
+            if (err?.name === "AbortError") return null;
+            console.warn("[PromptComposer] Directory picker failed, falling back to download:", err);
+        }
+    }
+
+    const filename = await requestComposerFilename(defaultValue);
+    if (!filename) return null;
+    return { mode: "download", filename };
+}
+
+async function selectComposerJsonFile() {
+    if (window.showOpenFilePicker) {
+        try {
+            const [handle] = await window.showOpenFilePicker({
+                multiple: false,
+                types: [{
+                    description: "JSON Files",
+                    accept: { "application/json": [".json"] },
+                }],
+            });
+            if (!handle) return null;
+            const file = await handle.getFile();
+            return {
+                file,
+                text: await file.text(),
+            };
+        } catch (err) {
+            if (err?.name === "AbortError") {
+                return null;
+            }
+            console.warn("[PromptComposer] Open picker failed, falling back to file input:", err);
+        }
+    }
+
+    return await new Promise((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json,application/json";
+        input.onchange = async (evt) => {
+            const file = evt.target?.files?.[0];
+            if (!file) {
+                resolve(null);
+                return;
+            }
+            resolve({
+                file,
+                text: await file.text(),
+            });
+        };
+        input.click();
+    });
+}
+
+async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data.json") {
+    return await new Promise((resolve) => {
+        const preferredStartDir = COMPOSER_BACKUP_BROWSER_DIR;
+        let currentDir = "";
+        let currentParent = null;
+        let roots = [];
+        let currentFiles = [];
+        let currentDirs = [];
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.74);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            background: #17191d;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 4px;
+            width: min(920px, calc(100vw - 48px));
+            height: min(700px, calc(100vh - 48px));
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 18px 42px rgba(0,0,0,0.48);
+        `;
+
+        const header = document.createElement("div");
+        header.style.cssText = `
+            padding: 10px 14px 8px 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        `;
+
+        const topRow = document.createElement("div");
+        topRow.style.cssText = "display:flex; justify-content:space-between; align-items:center; gap:12px;";
+        topRow.innerHTML = `
+            <h3 style="margin:0; color:#e5e7eb; font-size:14px; font-weight:600; letter-spacing:0.01em;">Save Prompt Composer JSON</h3>
+            <button class="close-btn" style="background:none; border:none; color:#8b9098; font-size:22px; cursor:pointer; padding:0; width:28px; height:28px;">×</button>
+        `;
+        header.appendChild(topRow);
+
+        const navRow = document.createElement("div");
+        navRow.style.cssText = "display:flex; gap:6px; align-items:center; flex-wrap:nowrap;";
+        const makeNavButton = (label) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = label;
+            button.style.cssText = "background:#23262b; border:1px solid rgba(255,255,255,0.08); border-radius:3px; color:#cfd5de; min-width:28px; height:28px; padding:0 8px; cursor:pointer; font-size:11px;";
+            button.onmouseover = () => { button.style.background = "#2a2e34"; };
+            button.onmouseout = () => { button.style.background = "#23262b"; };
+            return button;
+        };
+        const upBtn = makeNavButton("◀");
+        const refreshBtn = makeNavButton("↻");
+        const inputBtn = makeNavButton("In");
+        const outputBtn = makeNavButton("Out");
+        const pathInput = document.createElement("input");
+        pathInput.type = "text";
+        pathInput.placeholder = "Paste folder path and press Enter";
+        pathInput.style.cssText = "flex:1; min-width:240px; height:30px; font-size:12px; color:#e5e7eb; background:#111317; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:0 10px; box-sizing:border-box;";
+        navRow.appendChild(upBtn);
+        navRow.appendChild(refreshBtn);
+        navRow.appendChild(inputBtn);
+        navRow.appendChild(outputBtn);
+        navRow.appendChild(pathInput);
+        header.appendChild(navRow);
+
+        const body = document.createElement("div");
+        body.style.cssText = "flex:1; min-height:0; overflow:hidden; padding:10px 14px 0 14px; display:flex; flex-direction:column; gap:0;";
+        const listHeader = document.createElement("div");
+        listHeader.textContent = "Name";
+        listHeader.style.cssText = "height:30px; display:flex; align-items:center; padding:0 12px; background:#212121; color:#d7dbe1; font-size:12px; border:1px solid rgba(255,255,255,0.08); border-bottom:none; box-sizing:border-box;";
+        const listing = document.createElement("div");
+        listing.style.cssText = "flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:0; background:#17191d; border:1px solid rgba(255,255,255,0.08);";
+        body.appendChild(listHeader);
+        body.appendChild(listing);
+
+        const footer = document.createElement("div");
+        footer.style.cssText = `
+            padding: 10px 14px 14px 14px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        `;
+        const filenameRow = document.createElement("div");
+        filenameRow.style.cssText = "display:flex; align-items:center; gap:10px;";
+        const filenameLabel = document.createElement("span");
+        filenameLabel.textContent = "Name:";
+        filenameLabel.style.cssText = "font-size:12px; color:#d7dbe1; min-width:48px;";
+        const filenameInput = document.createElement("input");
+        filenameInput.type = "text";
+        filenameInput.value = normalizeComposerFilename(defaultFilename, "prompt_composer_data.json");
+        filenameInput.style.cssText = "flex:1; height:32px; padding:0 10px; border-radius:3px; border:1px solid rgba(255,255,255,0.08); background:#111317; color:#e5e7eb; box-sizing:border-box;";
+        filenameRow.appendChild(filenameLabel);
+        filenameRow.appendChild(filenameInput);
+        footer.appendChild(filenameRow);
+
+        const footerButtons = document.createElement("div");
+        footerButtons.style.cssText = "display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap;";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.style.cssText = "padding:7px 12px; background:#2a2f36; color:#e5e7eb; border:1px solid rgba(255,255,255,0.14); border-radius:7px; cursor:pointer;";
+        const saveBtn = document.createElement("button");
+        saveBtn.type = "button";
+        saveBtn.textContent = "Save Here";
+        saveBtn.style.cssText = "padding:7px 12px; background:#23262b; color:#e5e7eb; border:1px solid rgba(255,255,255,0.14); border-radius:3px; cursor:pointer;";
+        footerButtons.appendChild(cancelBtn);
+        footerButtons.appendChild(saveBtn);
+        footer.appendChild(footerButtons);
+
+        dialog.appendChild(header);
+        dialog.appendChild(body);
+        dialog.appendChild(footer);
+        overlay.appendChild(dialog);
+
+        const cleanup = () => {
+            overlay.parentNode?.removeChild(overlay);
+            document.removeEventListener("keydown", onKeyDown, true);
+        };
+
+        const finish = (value) => {
+            cleanup();
+            resolve(value);
+        };
+
+        const renderListing = () => {
+            listing.innerHTML = "";
+            pathInput.value = currentDir || "";
+            upBtn.disabled = !currentParent;
+            upBtn.style.opacity = currentParent ? "1" : "0.45";
+
+            if (!currentDir && !roots.length) {
+                const empty = document.createElement("div");
+                empty.textContent = "No locations available.";
+                empty.style.cssText = "text-align:center; padding:40px; color:#888;";
+                listing.appendChild(empty);
+                return;
+            }
+
+            if (!currentDir && roots.length) {
+                roots.forEach((rootPath) => {
+                    const item = document.createElement("button");
+                    item.type = "button";
+                    item.textContent = rootPath;
+                    item.style.cssText = "text-align:left; min-height:38px; padding:0 12px; background:#17191d; color:#dce6f2; border:none; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer;";
+                    item.onmouseover = () => { item.style.background = "#1f2937"; };
+                    item.onmouseout = () => { item.style.background = "#17191d"; };
+                    item.onclick = async () => {
+                        currentDir = rootPath;
+                        await loadListing(rootPath);
+                    };
+                    listing.appendChild(item);
+                });
+                return;
+            }
+
+            if (!currentDirs.length && !currentFiles.length) {
+                const empty = document.createElement("div");
+                empty.textContent = "This folder is empty";
+                empty.style.cssText = "padding:12px; color:#6b7280; font-size:12px; border-bottom:1px solid rgba(255,255,255,0.04);";
+                listing.appendChild(empty);
+                return;
+            }
+
+            currentDirs.forEach((dir) => {
+                const item = document.createElement("button");
+                item.type = "button";
+                item.textContent = dir.name;
+                item.style.cssText = "text-align:left; min-height:40px; padding:0 12px; background:#17191d; color:#dce6f2; border:none; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer;";
+                item.onmouseover = () => { item.style.background = "#1d344d"; };
+                item.onmouseout = () => { item.style.background = "#17191d"; };
+                item.onclick = async () => {
+                    currentDir = dir.path;
+                    await loadListing(dir.path);
+                };
+                listing.appendChild(item);
+            });
+
+            currentFiles.forEach((file) => {
+                const item = document.createElement("button");
+                item.type = "button";
+                item.textContent = file.name;
+                item.style.cssText = "text-align:left; min-height:40px; padding:0 12px; background:#17191d; color:#dbeafe; border:none; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer;";
+                item.onmouseover = () => { item.style.background = "#125d90"; };
+                item.onmouseout = () => { item.style.background = "#17191d"; };
+                item.onclick = () => {
+                    filenameInput.value = file.name;
+                    item.style.background = "#125d90";
+                };
+                item.ondblclick = async () => {
+                    filenameInput.value = file.name;
+                    await confirmSave();
+                };
+                listing.appendChild(item);
+            });
+        };
+
+        const loadListing = async (targetPath = currentDir) => {
+            listing.innerHTML = '<div style="text-align:center; padding:40px; color:#888;">Loading...</div>';
+            try {
+                let data = await fetchComposerBrowserListing(targetPath || "");
+                if (data.mode === "roots") {
+                    roots = Array.isArray(data.roots) ? data.roots : [];
+                    if (!targetPath) {
+                        currentDir = roots[0] || "";
+                        if (currentDir) {
+                            data = await fetchComposerBrowserListing(currentDir);
+                        } else {
+                            currentParent = null;
+                            currentDirs = [];
+                            currentFiles = [];
+                            renderListing();
+                            return;
+                        }
+                    }
+                }
+
+                currentDir = data.current_path || currentDir || targetPath || "";
+                currentParent = data.parent_path || null;
+                roots = Array.isArray(data.roots) ? data.roots : roots;
+                currentDirs = Array.isArray(data.dirs) ? data.dirs : [];
+                currentFiles = Array.isArray(data.files) ? data.files : [];
+                renderListing();
+                return true;
+            } catch (error) {
+                console.error("[PromptComposer] Error loading save browser listing:", error);
+                listing.innerHTML = `<div style="text-align:center; padding:40px; color:rgba(220,53,69,0.9);">${String(error?.message || "Error loading folders")}</div>`;
+                return false;
+            }
+        };
+
+        const confirmSave = async () => {
+            const filename = normalizeComposerFilename(filenameInput.value, defaultFilename);
+            if (!currentDir) {
+                await showInfo("Save Failed", "Choose a target folder first.");
+                return;
+            }
+            if (!filename) {
+                await showInfo("Save Failed", "Enter a filename first.");
+                return;
+            }
+            const existing = currentFiles.some((file) => String(file?.name || "").trim().toLowerCase() === filename.toLowerCase());
+            if (existing) {
+                const overwrite = await showConfirm(
+                    "Overwrite JSON",
+                    `A file named "${filename}" already exists in this folder. Overwrite it?`,
+                    "Overwrite",
+                    "rgba(56, 130, 246, 0.96)"
+                );
+                if (!overwrite) {
+                    return;
+                }
+            }
+            finish(joinComposerBrowserPath(currentDir, filename));
+        };
+
+        const onKeyDown = async (event) => {
+            if (event.key === "Escape") {
+                finish(null);
+            } else if (event.key === "Enter" && document.activeElement === pathInput) {
+                event.preventDefault();
+                const next = pathInput.value.trim();
+                if (next) {
+                    currentDir = next;
+                    await loadListing(next);
+                }
+            } else if (event.key === "Enter" && document.activeElement === filenameInput) {
+                event.preventDefault();
+                await confirmSave();
+            }
+        };
+
+        topRow.querySelector(".close-btn").onclick = () => finish(null);
+        cancelBtn.onclick = () => finish(null);
+        saveBtn.onclick = async () => {
+            await confirmSave();
+        };
+        overlay.onclick = (event) => {
+            if (event.target === overlay) finish(null);
+        };
+        upBtn.onclick = async () => {
+            if (!currentParent) return;
+            currentDir = currentParent;
+            await loadListing(currentDir);
+        };
+        refreshBtn.onclick = async () => {
+            await loadListing(currentDir);
+        };
+        inputBtn.onclick = async () => {
+            const inputRoot = Array.isArray(roots) ? roots[0] : "";
+            if (!inputRoot) return;
+            currentDir = inputRoot;
+            await loadListing(currentDir);
+        };
+        outputBtn.onclick = async () => {
+            const outputRoot = Array.isArray(roots) ? roots[1] : "";
+            if (!outputRoot) return;
+            currentDir = outputRoot;
+            await loadListing(currentDir);
+        };
+
+        document.body.appendChild(overlay);
+        document.addEventListener("keydown", onKeyDown, true);
+        void (async () => {
+            const loadedPreferred = await loadListing(preferredStartDir);
+            if (!loadedPreferred) {
+                await loadListing("");
+            }
+        })();
+        filenameInput.focus();
+        filenameInput.select();
+    });
+}
+
+function findExistingComposerCategoryName(promptsData, category) {
+    const normalized = String(category || "").trim().toLowerCase();
+    if (!normalized || !promptsData || typeof promptsData !== "object") return null;
+    return Object.keys(promptsData).find((existing) => String(existing || "").trim().toLowerCase() === normalized) || null;
+}
+
+function getComposerPromptEntries(categoryData) {
+    if (!categoryData || typeof categoryData !== "object") return {};
+    if (categoryData._prompts_ && typeof categoryData._prompts_ === "object") return categoryData._prompts_;
+    return Object.fromEntries(
+        Object.entries(categoryData).filter(([key, value]) => key !== "__meta__" && !String(key || "").startsWith("_") && value && typeof value === "object")
+    );
+}
+
+function findExistingComposerPromptName(categoryData, promptName) {
+    const normalized = String(promptName || "").trim().toLowerCase();
+    if (!normalized) return null;
+    return Object.keys(getComposerPromptEntries(categoryData)).find((existing) => String(existing || "").trim().toLowerCase() === normalized) || null;
+}
+
+function analyzeComposerImportConflicts(promptsData, importedData) {
+    const conflicts = {
+        duplicatePrompts: [],
+        duplicateCategorySettings: [],
+    };
+
+    for (const [category, entries] of Object.entries(importedData || {})) {
+        if (category === "__meta__" || !entries || typeof entries !== "object") continue;
+        const existingCategory = findExistingComposerCategoryName(promptsData, category);
+        const basePrompt = typeof entries?._base_prompt_ === "string" ? entries._base_prompt_.trim() : "";
+        const promptType = typeof entries?._prompt_type_ === "string" ? entries._prompt_type_.trim() : "";
+        const promptPrefix = typeof entries?._prompt_prefix_ === "string" ? entries._prompt_prefix_.trim() : "";
+
+        if (existingCategory && (basePrompt || promptType || promptPrefix)) {
+            conflicts.duplicateCategorySettings.push({ category, existingCategory });
+        }
+
+        const existingCategoryData = existingCategory ? promptsData?.[existingCategory] : null;
+        for (const [promptName] of Object.entries(getComposerPromptEntries(entries))) {
+            const existingPrompt = findExistingComposerPromptName(existingCategoryData, promptName);
+            if (existingPrompt) {
+                conflicts.duplicatePrompts.push({
+                    category,
+                    existingCategory: existingCategory || category,
+                    name: promptName,
+                    existingPrompt,
+                });
+            }
+        }
+    }
+
+    return conflicts;
+}
+
+function showComposerImportModeDialog({ duplicatePromptCount = 0, duplicateCategorySettingsCount = 0 }) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(640px, calc(100vw - 48px));
+            background: ${UI.panel || "hsl(216 11% 15%)"};
+            border: 1px solid ${UI.panelBorder || "hsl(216 20% 65% / 0.24)"};
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 10px 32px rgba(0,0,0,0.45);
+            color: ${UI.textPrimary || "hsl(0 0% 87%)"};
+            z-index: 10000;
+            box-sizing: border-box;
+        `;
+
+        const summaryLines = [];
+        if (duplicatePromptCount > 0) {
+            summaryLines.push(`${duplicatePromptCount} duplicate prompt${duplicatePromptCount === 1 ? "" : "s"}`);
+        }
+        if (duplicateCategorySettingsCount > 0) {
+            summaryLines.push(`${duplicateCategorySettingsCount} existing categor${duplicateCategorySettingsCount === 1 ? "y" : "ies"} with settings`);
+        }
+
+        dialog.innerHTML = `
+            <div style="font-size: 16px; font-weight: 700; margin-bottom: 10px;">Merge Composer JSON</div>
+            <div style="color: ${UI.textMuted || "hsl(0 0% 67%)"}; line-height: 1.45; margin-bottom: 14px; white-space: normal; word-break: break-word;">
+                The imported file contains entries that may overlap with your current Prompt Composer library.<br><br>
+                ${summaryLines.length ? summaryLines.join("<br>") : "Choose how overlapping entries should be handled."}
+            </div>
+            <div style="color: ${UI.textHint || "hsl(216 15% 65%)"}; line-height: 1.45; margin-bottom: 18px;">
+                <strong>Keep Existing:</strong> preserve current prompts and category settings when names collide.<br>
+                <strong>Replace Existing:</strong> overwrite current prompts and category settings with the imported file.
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;">
+                <button class="cancel-btn" style="padding: 8px 14px; background: ${UI.buttonBg || "hsl(219 16% 18%)"}; color: ${UI.textPrimary || "hsl(0 0% 87%)"}; border: 1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; border-radius: 6px; cursor: pointer;">Cancel</button>
+                <button class="skip-btn" style="padding: 8px 14px; background: ${UI.buttonBg || "hsl(219 16% 18%)"}; color: ${UI.textPrimary || "hsl(0 0% 87%)"}; border: 1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; border-radius: 6px; cursor: pointer;">Keep Existing</button>
+                <button class="replace-btn" style="padding: 8px 14px; background: ${UI.accent || "hsl(208 73% 57% / 0.9)"}; color: #fff; border: 1px solid transparent; border-radius: 6px; cursor: pointer;">Replace Existing</button>
+            </div>
+        `;
+
+        const cleanup = () => {
+            overlay.parentNode?.removeChild(overlay);
+            dialog.parentNode?.removeChild(dialog);
+            document.removeEventListener("keydown", onKeyDown, true);
+        };
+
+        const finish = (result) => {
+            cleanup();
+            resolve(result);
+        };
+
+        const onKeyDown = (event) => {
+            if (event.key === "Escape") finish("cancel");
+        };
+
+        dialog.querySelector(".cancel-btn").onclick = () => finish("cancel");
+        dialog.querySelector(".skip-btn").onclick = () => finish("skip_existing");
+        dialog.querySelector(".replace-btn").onclick = () => finish("replace_existing");
+        overlay.onclick = () => finish("cancel");
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        document.addEventListener("keydown", onKeyDown, true);
+        dialog.querySelector(".skip-btn")?.focus();
+    });
+}
+
+function applyComposerPromptData(node, prompts) {
+    node.composerPrompts = prompts && typeof prompts === "object" ? prompts : {};
+    node.prompts = node.composerPrompts;
+    node._composerUiRender?.();
+    app.graph.setDirtyCanvas(true, true);
+}
+
+async function exportComposerJsonLibrary(node) {
+    try {
+        const savePath = await showComposerSaveAsBrowser("prompt_composer_data.json");
+        if (!savePath) return;
+
+        const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/export-prompts-file`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                path: savePath,
+                data: getComposerExportData(node),
+            }),
+        });
+        const result = await response.json();
+        if (!result?.success) {
+            await showInfo("Export Failed", result?.error || "Failed to export Prompt Composer JSON.");
+            return;
+        }
+    } catch (error) {
+        console.error("[PromptComposer] Error exporting JSON:", error);
+        await showInfo("Export Failed", error?.message || "Failed to export Prompt Composer JSON.");
+    }
+}
+
+async function openComposerJsonLibrary(node) {
+    const confirmed = await showConfirm(
+        "Open Prompt Composer JSON",
+        "This will replace the current Prompt Composer library with the selected JSON file. Continue?",
+        "Open JSON",
+        UI.accent || "hsl(208 73% 57% / 0.9)"
+    );
+    if (!confirmed) return;
+
+    const picked = await selectComposerJsonFile();
+    if (!picked) return;
+
+    try {
+        const data = JSON.parse(picked.text);
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+            await showInfo("Open Failed", "Invalid JSON structure. Expected an object with categories.");
+            return;
+        }
+
+        const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/replace-prompts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data }),
+        });
+        const result = await response.json();
+        if (!result?.success) {
+            await showInfo("Open Failed", result?.error || "Failed to replace Prompt Composer JSON.");
+            return;
+        }
+
+        applyComposerPromptData(node, result.prompts || {});
+    } catch (error) {
+        console.error("[PromptComposer] Error opening JSON:", error);
+        await showInfo("Open Failed", error?.message || "Failed to open Prompt Composer JSON.");
+    }
+}
+
+async function mergeComposerJsonLibrary(node) {
+    const confirmed = await showConfirm(
+        "Merge Prompt Composer JSON",
+        "Import another Prompt Composer JSON file into the current library?",
+        "Merge JSON",
+        UI.accent || "hsl(208 73% 57% / 0.9)"
+    );
+    if (!confirmed) return;
+
+    const picked = await selectComposerJsonFile();
+    if (!picked) return;
+
+    try {
+        const data = JSON.parse(picked.text);
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+            await showInfo("Merge Failed", "Invalid JSON structure. Expected an object with categories.");
+            return;
+        }
+
+        const conflicts = analyzeComposerImportConflicts(getComposerExportData(node), data);
+        const importMode = await showComposerImportModeDialog({
+            duplicatePromptCount: conflicts.duplicatePrompts.length,
+            duplicateCategorySettingsCount: conflicts.duplicateCategorySettings.length,
+        });
+        if (importMode === "cancel") return;
+
+        const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/import-prompts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data, mode: importMode }),
+        });
+        const result = await response.json();
+        if (!result?.success) {
+            await showInfo("Merge Failed", result?.error || "Failed to merge Prompt Composer JSON.");
+            return;
+        }
+
+        applyComposerPromptData(node, result.prompts || {});
+        const imported = Number(result?.imported_prompts || 0);
+        const skippedPrompts = Number(result?.skipped_prompts || 0);
+        const importedCategorySettings = Number(result?.imported_category_settings || 0);
+        const skippedCategorySettings = Number(result?.skipped_category_settings || 0);
+        const categoriesCreated = Number(result?.created_categories || 0);
+        const summaryParts = [`Imported ${imported} prompt${imported === 1 ? "" : "s"}`];
+        if (categoriesCreated > 0) {
+            summaryParts.push(`created ${categoriesCreated} categor${categoriesCreated === 1 ? "y" : "ies"}`);
+        }
+        if (importedCategorySettings > 0) {
+            summaryParts.push(`updated ${importedCategorySettings} category setting${importedCategorySettings === 1 ? "" : "s"}`);
+        }
+        const keptExisting = skippedPrompts + skippedCategorySettings;
+        if (keptExisting > 0) {
+            summaryParts.push(`kept ${keptExisting} existing item${keptExisting === 1 ? "" : "s"}`);
+        }
+        await showInfo("Merge Complete", `${summaryParts.join(", ")}.`);
+    } catch (error) {
+        console.error("[PromptComposer] Error merging JSON:", error);
+        await showInfo("Merge Failed", error?.message || "Failed to merge Prompt Composer JSON.");
+    }
 }
 
 function buildPromptPreviewThumbnails(node, category, prompts) {
@@ -817,6 +1607,67 @@ function ensureComposerUi(node) {
     switchRow.appendChild(generationModeSwitch.group);
     root.appendChild(switchRow);
 
+    const actionRow = document.createElement("div");
+    actionRow.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 8px 0;
+        padding: 0 2px;
+        flex: 0 0 auto;
+    `;
+
+    const createToolbarActionButton = ({ label, title, onClick }) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.title = title;
+        button.style.cssText = `
+            flex: 1 1 0;
+            min-width: 70px;
+            min-height: 28px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #222;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            box-sizing: border-box;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        button.onclick = async (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            await onClick();
+        };
+        return button;
+    };
+
+    actionRow.appendChild(createToolbarActionButton({
+        label: "Save JSON",
+        title: "Export the current Prompt Composer library to a JSON file",
+        onClick: () => exportComposerJsonLibrary(node),
+    }));
+    actionRow.appendChild(createToolbarActionButton({
+        label: "Open JSON",
+        title: "Replace the current Prompt Composer library with another JSON file",
+        onClick: () => openComposerJsonLibrary(node),
+    }));
+    actionRow.appendChild(createToolbarActionButton({
+        label: "Merge JSON",
+        title: "Import another Prompt Composer JSON file into the current library",
+        onClick: () => mergeComposerJsonLibrary(node),
+    }));
+    root.appendChild(actionRow);
+
     const scroller = document.createElement("div");
     scroller.style.cssText = `
         flex: 1;
@@ -1149,6 +2000,42 @@ function ensureComposerUi(node) {
         render();
     };
 
+    const insertBrowserPartAfter = async (index) => {
+        const parts = readParts(node);
+        const basePart = parts[index] || null;
+        const inheritedSubject = getInheritedSubjectDefaults(parts.slice(0, index + 1));
+        const initialCategory = basePart?.category || getDefaultComposerPickerCategory(node);
+        const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__none__";
+        const selection = await showThumbnailBrowser(node, initialCategory, "", {
+            title: "Add Prompt Composer Part",
+            multiSelect: true,
+            multiCategorySelect: true,
+            endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
+            promptOnly: true,
+            selectedPrompts: [],
+            loadPromptsFn: loadComposerPrompts,
+            preferenceScope: "composer",
+            initialCategoryTypeFilter,
+            multiSelectActionMode: "composer-add",
+            thumbnailGenerationMode: readGenerationMode(node),
+        });
+
+        if (!selection || !Array.isArray(selection.prompts) || selection.prompts.length === 0) {
+            return;
+        }
+
+        const addedParts = buildPartsFromBrowserSelection(node, selection, inheritedSubject, null, initialCategory || "");
+        if (!addedParts.length) {
+            return;
+        }
+
+        const next = [...parts];
+        next.splice(index + 1, 0, ...addedParts);
+        clearSelectedPartIndices(node);
+        writeParts(node, next);
+        render();
+    };
+
     const reorderPart = (fromIndex, toIndex) => {
         const parts = readParts(node);
         if (fromIndex === toIndex) return;
@@ -1378,7 +2265,7 @@ function ensureComposerUi(node) {
                 mutedBadge.textContent = "MUTED";
                 mutedBadge.style.cssText = `
                     position: absolute;
-                    right: 4px;
+                    left: 4px;
                     bottom: 4px;
                     min-width: 40px;
                     height: 18px;
@@ -1419,6 +2306,45 @@ function ensureComposerUi(node) {
                 `;
                 thumbBtn.appendChild(badge);
             }
+
+            const inlineAddBtn = document.createElement("button");
+            inlineAddBtn.type = "button";
+            inlineAddBtn.textContent = "+";
+            inlineAddBtn.title = "Add a new prompt part after this one";
+            inlineAddBtn.style.cssText = `
+                position: absolute;
+                right: 4px;
+                bottom: 4px;
+                width: 18px;
+                height: 18px;
+                border-radius: 999px;
+                border: 1px solid ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"};
+                background: rgba(15,23,42,0.9);
+                color: #dbeafe;
+                font-size: 13px;
+                line-height: 1;
+                font-weight: 700;
+                padding: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                box-sizing: border-box;
+                z-index: 2;
+            `;
+            inlineAddBtn.addEventListener("mousedown", (evt) => {
+                evt.stopPropagation();
+            });
+            inlineAddBtn.addEventListener("mouseup", (evt) => {
+                evt.stopPropagation();
+            });
+            inlineAddBtn.addEventListener("click", async (evt) => {
+                evt.preventDefault();
+                evt.stopPropagation();
+                clearSelectedPartIndices(node);
+                await insertBrowserPartAfter(index);
+            });
+            thumbBtn.appendChild(inlineAddBtn);
 
             const label = document.createElement("div");
             const displayCategory = getPartDisplayCategory(part) || "Category";
@@ -1621,6 +2547,7 @@ function ensureComposerUi(node) {
             const parts = readParts(node);
             const inheritedSubject = getInheritedSubjectDefaults(parts);
             const initialCategory = getDefaultComposerPickerCategory(node);
+            const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__none__";
             const selection = await showThumbnailBrowser(node, initialCategory, "", {
                 title: "Add Prompt Composer Part",
                 multiSelect: true,
@@ -1630,6 +2557,7 @@ function ensureComposerUi(node) {
                 selectedPrompts: [],
                 loadPromptsFn: loadComposerPrompts,
                 preferenceScope: "composer",
+                initialCategoryTypeFilter,
                 multiSelectActionMode: "composer-add",
                 thumbnailGenerationMode: readGenerationMode(node),
             });

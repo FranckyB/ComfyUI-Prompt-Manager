@@ -44,6 +44,7 @@ const PROMPT_BROWSER_DEFAULT_NODE_HEIGHT = 700;
 // Hard minimum node size - the resize handle can never shrink below this.
 const PROMPT_BROWSER_MIN_NODE_HEIGHT = 500;
 const PROMPT_BROWSER_SOURCE_PROP = "prompt_browser_source";
+const PROMPT_BROWSER_BACKUP_DIR = "/mnt/Neuralnet/ComfyUI/user/default/prompt_backups";
 
 function computePromptBrowserUiHeight(node) {
     const nodeHeight = Number(node?.size?.[1]) || PROMPT_BROWSER_DEFAULT_NODE_HEIGHT;
@@ -239,6 +240,392 @@ function getPreferenceScopeForSource(source) {
     if (source === SOURCE_PROMPT) return "manager";
     if (source === SOURCE_SYSTEM_PROMPTS) return "system";
     return "composer";
+}
+
+function normalizePromptLibraryFilename(name, fallback = "prompt_library_data.json") {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) return fallback;
+    return trimmed.toLowerCase().endsWith(".json") ? trimmed : `${trimmed}.json`;
+}
+
+function joinPromptLibraryBrowserPath(base, leaf) {
+    if (!base || !leaf) return leaf || base || "";
+    const cleanBase = String(base).replace(/[\\/]+$/, "");
+    const cleanLeaf = String(leaf).replace(/^[\\/]+/, "");
+    return `${cleanBase}/${cleanLeaf}`;
+}
+
+function promptLibraryBrowserBasename(path) {
+    const normalized = String(path || "").replace(/\\/g, "/");
+    const idx = normalized.lastIndexOf("/");
+    return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+}
+
+async function fetchPromptLibraryBrowserListing(path = "") {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    params.set("kind", "json");
+    const query = params.toString();
+    const response = await fetch(`/prompt-extractor/path-browser/list${query ? `?${query}` : ""}`);
+    if (!response.ok) {
+        let message = `Request failed (${response.status})`;
+        try {
+            const err = await response.json();
+            if (err?.error) message = err.error;
+        } catch {
+            // ignore
+        }
+        throw new Error(message);
+    }
+    return await response.json();
+}
+
+async function showPromptLibraryBrowser({
+    mode = "open",
+    title = "Browse Prompt Library JSON",
+    confirmLabel = "Select",
+    defaultFilename = "prompt_library_data.json",
+} = {}) {
+    return await new Promise((resolve) => {
+        const preferredStartDir = PROMPT_BROWSER_BACKUP_DIR;
+        const isSaveMode = mode === "save";
+        let currentDir = "";
+        let currentParent = null;
+        let roots = [];
+        let currentFiles = [];
+        let currentDirs = [];
+        let selectedFilePath = "";
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.74);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            background: #17191d;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 4px;
+            width: min(920px, calc(100vw - 48px));
+            height: min(700px, calc(100vh - 48px));
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 18px 42px rgba(0,0,0,0.48);
+        `;
+
+        const header = document.createElement("div");
+        header.style.cssText = `
+            padding: 10px 14px 8px 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        `;
+
+        const topRow = document.createElement("div");
+        topRow.style.cssText = "display:flex; justify-content:space-between; align-items:center; gap:12px;";
+        topRow.innerHTML = `
+            <h3 style="margin:0; color:#e5e7eb; font-size:14px; font-weight:600; letter-spacing:0.01em;">${title}</h3>
+            <button class="close-btn" style="background:none; border:none; color:#8b9098; font-size:22px; cursor:pointer; padding:0; width:28px; height:28px;">×</button>
+        `;
+        header.appendChild(topRow);
+
+        const navRow = document.createElement("div");
+        navRow.style.cssText = "display:flex; gap:6px; align-items:center; flex-wrap:nowrap;";
+        const makeNavButton = (label) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = label;
+            button.style.cssText = "background:#23262b; border:1px solid rgba(255,255,255,0.08); border-radius:3px; color:#cfd5de; min-width:28px; height:28px; padding:0 8px; cursor:pointer; font-size:11px;";
+            button.onmouseover = () => { button.style.background = "#2a2e34"; };
+            button.onmouseout = () => { button.style.background = "#23262b"; };
+            return button;
+        };
+        const upBtn = makeNavButton("◀");
+        const refreshBtn = makeNavButton("↻");
+        const inputBtn = makeNavButton("In");
+        const outputBtn = makeNavButton("Out");
+        const pathInput = document.createElement("input");
+        pathInput.type = "text";
+        pathInput.placeholder = "Paste folder path and press Enter";
+        pathInput.style.cssText = "flex:1; min-width:240px; height:30px; font-size:12px; color:#e5e7eb; background:#111317; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:0 10px; box-sizing:border-box;";
+        navRow.appendChild(upBtn);
+        navRow.appendChild(refreshBtn);
+        navRow.appendChild(inputBtn);
+        navRow.appendChild(outputBtn);
+        navRow.appendChild(pathInput);
+        header.appendChild(navRow);
+
+        const body = document.createElement("div");
+        body.style.cssText = "flex:1; min-height:0; overflow:hidden; padding:10px 14px 0 14px; display:flex; flex-direction:column; gap:0;";
+        const listHeader = document.createElement("div");
+        listHeader.textContent = "Name";
+        listHeader.style.cssText = "height:30px; display:flex; align-items:center; padding:0 12px; background:#212121; color:#d7dbe1; font-size:12px; border:1px solid rgba(255,255,255,0.08); border-bottom:none; box-sizing:border-box;";
+        const listing = document.createElement("div");
+        listing.style.cssText = "flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:0; background:#17191d; border:1px solid rgba(255,255,255,0.08);";
+        body.appendChild(listHeader);
+        body.appendChild(listing);
+
+        const footer = document.createElement("div");
+        footer.style.cssText = `
+            padding: 10px 14px 14px 14px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        `;
+        const filenameRow = document.createElement("div");
+        filenameRow.style.cssText = "display:flex; align-items:center; gap:10px;";
+        const filenameLabel = document.createElement("span");
+        filenameLabel.textContent = "Name:";
+        filenameLabel.style.cssText = "font-size:12px; color:#d7dbe1; min-width:48px;";
+        const filenameInput = document.createElement("input");
+        filenameInput.type = "text";
+        filenameInput.value = isSaveMode ? normalizePromptLibraryFilename(defaultFilename, "prompt_library_data.json") : "";
+        filenameInput.readOnly = !isSaveMode;
+        filenameInput.style.cssText = "flex:1; height:32px; padding:0 10px; border-radius:3px; border:1px solid rgba(255,255,255,0.08); background:#111317; color:#e5e7eb; box-sizing:border-box;";
+        filenameRow.appendChild(filenameLabel);
+        filenameRow.appendChild(filenameInput);
+        footer.appendChild(filenameRow);
+
+        const footerButtons = document.createElement("div");
+        footerButtons.style.cssText = "display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap;";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.style.cssText = "padding:7px 12px; background:#2a2f36; color:#e5e7eb; border:1px solid rgba(255,255,255,0.14); border-radius:7px; cursor:pointer;";
+        const confirmBtn = document.createElement("button");
+        confirmBtn.type = "button";
+        confirmBtn.textContent = confirmLabel;
+        confirmBtn.style.cssText = "padding:7px 12px; background:#23262b; color:#e5e7eb; border:1px solid rgba(255,255,255,0.14); border-radius:3px; cursor:pointer;";
+        footerButtons.appendChild(cancelBtn);
+        footerButtons.appendChild(confirmBtn);
+        footer.appendChild(footerButtons);
+
+        dialog.appendChild(header);
+        dialog.appendChild(body);
+        dialog.appendChild(footer);
+        overlay.appendChild(dialog);
+
+        const cleanup = () => {
+            overlay.parentNode?.removeChild(overlay);
+            document.removeEventListener("keydown", onKeyDown, true);
+        };
+
+        const finish = (value) => {
+            cleanup();
+            resolve(value);
+        };
+
+        const renderListing = () => {
+            listing.innerHTML = "";
+            pathInput.value = currentDir || "";
+            upBtn.disabled = !currentParent;
+            upBtn.style.opacity = currentParent ? "1" : "0.45";
+
+            if (!currentDir && !roots.length) {
+                const empty = document.createElement("div");
+                empty.textContent = "No locations available.";
+                empty.style.cssText = "text-align:center; padding:40px; color:#888;";
+                listing.appendChild(empty);
+                return;
+            }
+
+            if (!currentDir && roots.length) {
+                roots.forEach((rootPath) => {
+                    const item = document.createElement("button");
+                    item.type = "button";
+                    item.textContent = rootPath;
+                    item.style.cssText = "text-align:left; min-height:38px; padding:0 12px; background:#17191d; color:#dce6f2; border:none; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer;";
+                    item.onmouseover = () => { item.style.background = "#1f2937"; };
+                    item.onmouseout = () => { item.style.background = "#17191d"; };
+                    item.onclick = async () => {
+                        currentDir = rootPath;
+                        await loadListing(rootPath);
+                    };
+                    listing.appendChild(item);
+                });
+                return;
+            }
+
+            if (!currentDirs.length && !currentFiles.length) {
+                const empty = document.createElement("div");
+                empty.textContent = "This folder is empty";
+                empty.style.cssText = "padding:12px; color:#6b7280; font-size:12px; border-bottom:1px solid rgba(255,255,255,0.04);";
+                listing.appendChild(empty);
+                return;
+            }
+
+            currentDirs.forEach((dir) => {
+                const item = document.createElement("button");
+                item.type = "button";
+                item.textContent = dir.name;
+                item.style.cssText = "text-align:left; min-height:40px; padding:0 12px; background:#17191d; color:#dce6f2; border:none; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer;";
+                item.onmouseover = () => { item.style.background = "#1d344d"; };
+                item.onmouseout = () => { item.style.background = "#17191d"; };
+                item.onclick = async () => {
+                    currentDir = dir.path;
+                    selectedFilePath = "";
+                    if (!isSaveMode) {
+                        filenameInput.value = "";
+                    }
+                    await loadListing(dir.path);
+                };
+                listing.appendChild(item);
+            });
+
+            currentFiles.forEach((file) => {
+                const item = document.createElement("button");
+                item.type = "button";
+                item.textContent = file.name;
+                item.style.cssText = "text-align:left; min-height:40px; padding:0 12px; background:#17191d; color:#dbeafe; border:none; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer;";
+                item.onmouseover = () => { item.style.background = "#125d90"; };
+                item.onmouseout = () => { item.style.background = "#17191d"; };
+                item.onclick = () => {
+                    selectedFilePath = file.path || joinPromptLibraryBrowserPath(currentDir, file.name);
+                    filenameInput.value = file.name;
+                    item.style.background = "#125d90";
+                };
+                item.ondblclick = () => {
+                    selectedFilePath = file.path || joinPromptLibraryBrowserPath(currentDir, file.name);
+                    filenameInput.value = file.name;
+                    void confirmSelection();
+                };
+                listing.appendChild(item);
+            });
+        };
+
+        const loadListing = async (targetPath = currentDir) => {
+            listing.innerHTML = '<div style="text-align:center; padding:40px; color:#888;">Loading...</div>';
+            try {
+                let data = await fetchPromptLibraryBrowserListing(targetPath || "");
+                if (data.mode === "roots") {
+                    roots = Array.isArray(data.roots) ? data.roots : [];
+                    if (!targetPath) {
+                        currentDir = roots[0] || "";
+                        if (currentDir) {
+                            data = await fetchPromptLibraryBrowserListing(currentDir);
+                        } else {
+                            currentParent = null;
+                            currentDirs = [];
+                            currentFiles = [];
+                            renderListing();
+                            return true;
+                        }
+                    }
+                }
+
+                currentDir = data.current_path || currentDir || targetPath || "";
+                currentParent = data.parent_path || null;
+                roots = Array.isArray(data.roots) ? data.roots : roots;
+                currentDirs = Array.isArray(data.dirs) ? data.dirs : [];
+                currentFiles = Array.isArray(data.files) ? data.files : [];
+                renderListing();
+                return true;
+            } catch (error) {
+                console.error("[PromptBrowser] Error loading JSON browser listing:", error);
+                listing.innerHTML = `<div style="text-align:center; padding:40px; color:rgba(220,53,69,0.9);">${String(error?.message || "Error loading folders")}</div>`;
+                return false;
+            }
+        };
+
+        const confirmSelection = async () => {
+            if (isSaveMode) {
+                const filename = normalizePromptLibraryFilename(filenameInput.value, defaultFilename);
+                if (!currentDir) {
+                    await showInfo("Save Failed", "Choose a target folder first.");
+                    return;
+                }
+                if (!filename) {
+                    await showInfo("Save Failed", "Enter a filename first.");
+                    return;
+                }
+                finish(joinPromptLibraryBrowserPath(currentDir, filename));
+                return;
+            }
+
+            if (!selectedFilePath) {
+                await showInfo("Open Failed", "Choose a JSON file first.");
+                return;
+            }
+            finish(selectedFilePath);
+        };
+
+        const onKeyDown = async (event) => {
+            if (event.key === "Escape") {
+                finish(null);
+            } else if (event.key === "Enter" && document.activeElement === pathInput) {
+                event.preventDefault();
+                const next = pathInput.value.trim();
+                if (next) {
+                    currentDir = next;
+                    await loadListing(next);
+                }
+            } else if (event.key === "Enter" && (document.activeElement === filenameInput || !isSaveMode)) {
+                event.preventDefault();
+                await confirmSelection();
+            }
+        };
+
+        topRow.querySelector(".close-btn").onclick = () => finish(null);
+        cancelBtn.onclick = () => finish(null);
+        confirmBtn.onclick = async () => {
+            await confirmSelection();
+        };
+        overlay.onclick = (event) => {
+            if (event.target === overlay) finish(null);
+        };
+        upBtn.onclick = async () => {
+            if (!currentParent) return;
+            currentDir = currentParent;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
+            await loadListing(currentDir);
+        };
+        refreshBtn.onclick = async () => {
+            await loadListing(currentDir);
+        };
+        inputBtn.onclick = async () => {
+            const inputRoot = Array.isArray(roots) ? roots[0] : "";
+            if (!inputRoot) return;
+            currentDir = inputRoot;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
+            await loadListing(currentDir);
+        };
+        outputBtn.onclick = async () => {
+            const outputRoot = Array.isArray(roots) ? roots[1] : "";
+            if (!outputRoot) return;
+            currentDir = outputRoot;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
+            await loadListing(currentDir);
+        };
+
+        document.body.appendChild(overlay);
+        document.addEventListener("keydown", onKeyDown, true);
+        void (async () => {
+            const loadedPreferred = await loadListing(preferredStartDir);
+            if (!loadedPreferred) {
+                await loadListing("");
+            }
+        })();
+        filenameInput.focus();
+        filenameInput.select();
+    });
 }
 
 async function loadPromptsFromEndpoint(endpointPrefix) {
@@ -1776,12 +2163,16 @@ function buildComposerButtonBar(node) {
             },
             { divider: true },
             {
-                label: "Export JSON",
-                action: () => exportComposerJSON(node),
+                label: "Save JSON",
+                action: () => savePromptBrowserJSON(node),
             },
             {
-                label: "Import JSON",
-                action: () => importComposerJSON(node),
+                label: "Open JSON",
+                action: () => openPromptBrowserJSON(node),
+            },
+            {
+                label: "Merge JSON",
+                action: () => mergePromptBrowserJSON(node),
             },
         ];
         if (getSourceValue(node) === SOURCE_SYSTEM_PROMPTS) {
@@ -1870,19 +2261,209 @@ function getSourceExportFilename(node) {
     return "prompt_composer_data.json";
 }
 
-function exportComposerJSON(node) {
-    // Export the currently selected source's data (node.prompts reflects whatever
-    // source is active after loadActivePrompts), with a source-appropriate filename.
-    const data = node.prompts || node.composerPrompts || {};
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = getSourceExportFilename(node);
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+function getSourceImportEndpointPrefix(node) {
+    return getEndpointPrefixForSource(getSourceValue(node));
+}
+
+function getSourceReplaceEndpoint(node) {
+    const endpointPrefix = getSourceImportEndpointPrefix(node);
+    if (endpointPrefix === COMPOSER_ENDPOINT_PREFIX) {
+        return `${endpointPrefix}/replace-prompts`;
+    }
+    return `${endpointPrefix}/import-prompts`;
+}
+
+function analyzePromptBrowserImportConflicts(node, importedData) {
+    const conflicts = {
+        duplicatePrompts: [],
+        duplicateCategorySettings: [],
+    };
+    const source = getSourceValue(node);
+
+    for (const [category, entries] of Object.entries(importedData || {})) {
+        if (category === "__meta__" || !entries || typeof entries !== "object") continue;
+        const existingCategory = findExistingCategoryName(node, category);
+        if (existingCategory && entries.__meta__ && typeof entries.__meta__ === "object") {
+            conflicts.duplicateCategorySettings.push({ category, existingCategory });
+        }
+
+        for (const [name] of Object.entries(getCategoryPromptEntriesForSource(entries, source))) {
+            const existingPrompt = findExistingPromptName(node, category, name);
+            if (existingPrompt) {
+                conflicts.duplicatePrompts.push({
+                    category,
+                    existingCategory: existingCategory || category,
+                    name,
+                    existingPrompt,
+                });
+            }
+        }
+    }
+
+    return conflicts;
+}
+
+async function loadPromptLibraryFile(endpointPrefix, filePath) {
+    const response = await api.fetchApi(`${endpointPrefix}/load-prompts-file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: filePath }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to load JSON file.");
+    }
+    return result.data;
+}
+
+async function exportPromptLibraryFile(endpointPrefix, filePath, data) {
+    const response = await api.fetchApi(`${endpointPrefix}/export-prompts-file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: filePath, data }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to save JSON file.");
+    }
+    return result;
+}
+
+async function refreshPromptBrowserAfterLibraryChange(node, options = {}) {
+    const clearSelection = options.clearSelection === true;
+    await loadActivePrompts(node);
+
+    if (clearSelection) {
+        const categoryWidget = node.widgets?.find((w) => w.name === "category");
+        const nameWidget = node.widgets?.find((w) => w.name === "name");
+        const textWidget = node.widgets?.find((w) => w.name === "text");
+        if (categoryWidget) categoryWidget.value = "";
+        if (nameWidget) nameWidget.value = "";
+        if (textWidget) textWidget.value = "";
+        setSelectedPrompts(node, []);
+    }
+
+    if (typeof node.updateComposerSelectorDisplay === "function") {
+        node.updateComposerSelectorDisplay();
+    }
+    if (typeof node.updateComposerPromptEditor === "function") {
+        node.updateComposerPromptEditor();
+    }
+    if (typeof node.updateComposerPreview === "function") {
+        node.updateComposerPreview();
+    }
+    updateComposerLastSavedState(node);
+    refreshComposerPromptInputGhosting(node);
+    if (typeof node.refreshComposerMultiUiState === "function") {
+        node.refreshComposerMultiUiState();
+    }
+    app.graph.setDirtyCanvas(true, true);
+}
+
+async function mergePromptBrowserLibraryData(node, libraryData) {
+    const source = getSourceValue(node);
+    const endpointPrefix = getSourceImportEndpointPrefix(node);
+    const conflicts = source === SOURCE_COMPOSE
+        ? analyzeComposerImportConflicts(node, libraryData)
+        : analyzePromptBrowserImportConflicts(node, libraryData);
+
+    let importMode = "skip_existing";
+    if (conflicts.duplicatePrompts.length || conflicts.duplicateCategorySettings.length) {
+        importMode = await showComposerImportModeDialog({
+            duplicatePromptCount: conflicts.duplicatePrompts.length,
+            duplicateCategorySettingsCount: conflicts.duplicateCategorySettings.length,
+        });
+        if (importMode === "cancel") {
+            return false;
+        }
+    }
+
+    const response = await api.fetchApi(`${endpointPrefix}/import-prompts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: libraryData, mode: importMode }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to merge JSON library.");
+    }
+
+    await refreshPromptBrowserAfterLibraryChange(node);
+
+    const imported = Number(result?.imported_prompts || 0);
+    const skipped = Number(result?.skipped_prompts || 0);
+    const createdCategories = Number(result?.created_categories || 0);
+    const summaryParts = [];
+    if (imported > 0) {
+        summaryParts.push(`Imported ${imported} prompt${imported === 1 ? "" : "s"}`);
+    }
+    if (createdCategories > 0) {
+        summaryParts.push(`created ${createdCategories} categor${createdCategories === 1 ? "y" : "ies"}`);
+    }
+    if (skipped > 0) {
+        summaryParts.push(`kept ${skipped} existing prompt${skipped === 1 ? "" : "s"}`);
+    }
+    await showInfo("Merge Complete", summaryParts.length ? `${summaryParts.join(", ")}.` : "JSON library merged.");
+    return true;
+}
+
+async function savePromptBrowserJSON(node) {
+    try {
+        const endpointPrefix = getSourceImportEndpointPrefix(node);
+        const savePath = await showPromptLibraryBrowser({
+            mode: "save",
+            title: "Save Prompt Browser JSON",
+            confirmLabel: "Save Here",
+            defaultFilename: getSourceExportFilename(node),
+        });
+        if (!savePath) return;
+
+        const data = node.prompts || node.composerPrompts || {};
+        await exportPromptLibraryFile(endpointPrefix, savePath, data);
+    } catch (err) {
+        console.error("[PromptBrowser] Save JSON error:", err);
+        await showInfo("Save Failed", err.message || "Unknown error");
+    }
+}
+
+async function openPromptBrowserJSON(node) {
+    const confirmed = await showConfirm(
+        "Open JSON",
+        "This will replace the current library for the active source with the selected JSON file. Continue?",
+        "Open & Replace",
+        PMA_THEME.accent
+    );
+    if (!confirmed) return;
+
+    try {
+        const endpointPrefix = getSourceImportEndpointPrefix(node);
+        const filePath = await showPromptLibraryBrowser({
+            mode: "open",
+            title: "Open Prompt Browser JSON",
+            confirmLabel: "Open",
+        });
+        if (!filePath) return;
+
+        const libraryData = await loadPromptLibraryFile(endpointPrefix, filePath);
+        const replaceEndpoint = getSourceReplaceEndpoint(node);
+        const body = replaceEndpoint.endsWith("/replace-prompts")
+            ? { data: libraryData }
+            : { data: libraryData, mode: "replace" };
+        const response = await api.fetchApi(replaceEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const result = await response.json();
+        if (!response.ok || !result?.success) {
+            throw new Error(result?.error || "Failed to open JSON library.");
+        }
+
+        await refreshPromptBrowserAfterLibraryChange(node, { clearSelection: true });
+    } catch (err) {
+        console.error("[PromptBrowser] Open JSON error:", err);
+        await showInfo("Open Failed", err.message || "Unknown error");
+    }
 }
 
 async function reimportBasicSystemPrompts(node) {
@@ -1924,79 +2505,22 @@ async function reimportBasicSystemPrompts(node) {
     }
 }
 
-async function importComposerJSON(node) {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        try {
-            const text = await file.text();
-            const data = JSON.parse(text);
-            if (!data || typeof data !== "object") {
-                await showInfo("Import Failed", "Invalid JSON file.");
-                return;
-            }
-            const conflicts = analyzeComposerImportConflicts(node, data);
-            const duplicatePromptCount = conflicts.duplicatePrompts.length;
-            const duplicateCategorySettingsCount = conflicts.duplicateCategorySettings.length;
-            let importMode = "skip_existing";
-            if (duplicatePromptCount || duplicateCategorySettingsCount) {
-                importMode = await showComposerImportModeDialog({
-                    duplicatePromptCount,
-                    duplicateCategorySettingsCount,
-                });
-                if (importMode === "cancel") {
-                    return;
-                }
-            }
-            const resp = await api.fetchApi(`${COMPOSER_ENDPOINT_PREFIX}/import-prompts`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ data, mode: importMode }),
-            });
-            const result = await resp.json();
-            if (!result?.success) {
-                await showInfo("Import Failed", result?.error || "Failed to import composer prompts.");
-                return;
-            }
-            if (result?.prompts && typeof result.prompts === "object") {
-                node.composerPrompts = result.prompts;
-                node.prompts = result.prompts;
-            }
-            const imported = Number(result?.imported_prompts || 0);
-            const skippedPrompts = Number(result?.skipped_prompts || 0);
-            const importedCategorySettings = Number(result?.imported_category_settings || 0);
-            const skippedCategorySettings = Number(result?.skipped_category_settings || 0);
-            const categoriesCreated = Number(result?.created_categories || 0);
-            const summaryParts = [`Imported ${imported} prompt${imported === 1 ? "" : "s"}`];
-            if (categoriesCreated > 0) {
-                summaryParts.push(`created ${categoriesCreated} categor${categoriesCreated === 1 ? "y" : "ies"}`);
-            }
-            if (importedCategorySettings > 0) {
-                summaryParts.push(`updated ${importedCategorySettings} category setting${importedCategorySettings === 1 ? "" : "s"}`);
-            }
-            if (skippedPrompts > 0 || skippedCategorySettings > 0) {
-                const skippedTotal = skippedPrompts + skippedCategorySettings;
-                summaryParts.push(`kept ${skippedTotal} existing item${skippedTotal === 1 ? "" : "s"}`);
-            }
-            const summary = `${summaryParts.join(", ")}.`;
-            await showInfo("Import Complete", summary);
-            // Reload the active source so the imported prompts appear in the UI.
-            await loadActivePrompts(node);
-            if (typeof node.updateComposerSelectorDisplay === "function") {
-                node.updateComposerSelectorDisplay();
-            }
-            if (typeof node.updateComposerPreview === "function") {
-                node.updateComposerPreview();
-            }
-        } catch (err) {
-            console.error("[PromptBrowser] Import error:", err);
-            await showInfo("Import Failed", err.message || "Unknown error");
-        }
-    };
-    input.click();
+async function mergePromptBrowserJSON(node) {
+    try {
+        const endpointPrefix = getSourceImportEndpointPrefix(node);
+        const filePath = await showPromptLibraryBrowser({
+            mode: "open",
+            title: "Merge Prompt Browser JSON",
+            confirmLabel: "Merge",
+        });
+        if (!filePath) return;
+
+        const libraryData = await loadPromptLibraryFile(endpointPrefix, filePath);
+        await mergePromptBrowserLibraryData(node, libraryData);
+    } catch (err) {
+        console.error("[PromptBrowser] Merge JSON error:", err);
+        await showInfo("Merge Failed", err.message || "Unknown error");
+    }
 }
 
 app.registerExtension({

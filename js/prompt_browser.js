@@ -323,7 +323,7 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         .join(" ");
 
     const isComposerManager = endpointPrefix === "/prompt-manager/compose";
-    const staticSeedForRun = null;
+    const staticSeedForRun = 42;
 
     console.log(`[ThumbnailGen] Preparing thumbnail for "${category}/${promptName}" | seed=${staticSeedForRun ?? "random"}`);
     console.log(`[ThumbnailGen] Effective prompt text: ${promptText}`);

@@ -414,6 +414,19 @@ def _generator_sort_prompts_data(data):
     return sorted_data
 
 
+def _safe_abspath(path):
+    return os.path.abspath(os.path.expanduser(path or ""))
+
+
+def _normalize_export_path(raw_path):
+    candidate = _safe_abspath(raw_path)
+    if not candidate:
+        return ""
+    if not candidate.lower().endswith(".json"):
+        candidate = f"{candidate}.json"
+    return candidate
+
+
 @server.PromptServer.instance.routes.get("/prompt-generator/get-prompts")
 async def generator_get_prompts(request):
     try:
@@ -421,6 +434,107 @@ async def generator_get_prompts(request):
     except Exception as e:
         print_pg(f"[PromptGenerator] Error in get_prompts API: {e}", RED)
         return server.web.json_response({"error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/import-prompts")
+async def generator_import_prompts(request):
+    try:
+        data = await request.json()
+        imported_data = data.get("data", {})
+        mode = str(data.get("mode", "replace_existing") or "replace_existing").strip().lower()
+
+        if not isinstance(imported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        prompts = {} if mode == "replace" else PromptGeneratorDataStore.load()
+        imported_prompts = 0
+        skipped_prompts = 0
+        created_categories = 0
+
+        for category, category_prompts in imported_data.items():
+            if not isinstance(category_prompts, dict):
+                continue
+
+            if category not in prompts:
+                prompts[category] = {}
+                created_categories += 1
+
+            for prompt_name, prompt_data in category_prompts.items():
+                if prompt_name == "__meta__":
+                    if mode != "skip_existing" or "__meta__" not in prompts[category]:
+                        prompts[category][prompt_name] = prompt_data
+                    continue
+
+                if prompt_name in prompts[category] and mode == "skip_existing":
+                    skipped_prompts += 1
+                    continue
+
+                if isinstance(prompt_data, dict):
+                    prompts[category][prompt_name] = prompt_data
+                elif isinstance(prompt_data, str):
+                    prompts[category][prompt_name] = {"prompt": prompt_data}
+                else:
+                    continue
+                imported_prompts += 1
+
+        if PromptGeneratorDataStore.save(prompts):
+            return server.web.json_response({
+                "success": True,
+                "prompts": prompts,
+                "imported_prompts": imported_prompts,
+                "skipped_prompts": skipped_prompts,
+                "created_categories": created_categories,
+            })
+        return server.web.json_response({"success": False, "error": "Failed to save data"}, status=500)
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in import_prompts API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/load-prompts-file")
+async def generator_load_prompts_file(request):
+    try:
+        data = await request.json()
+        file_path = _safe_abspath(data.get("path", ""))
+        if not file_path:
+            return server.web.json_response({"success": False, "error": "Path is required"})
+        if not os.path.isfile(file_path):
+            return server.web.json_response({"success": False, "error": "JSON file not found"}, status=404)
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            return server.web.json_response({"success": False, "error": "Invalid JSON data format"}, status=400)
+
+        return server.web.json_response({"success": True, "data": loaded, "path": file_path})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in load_prompts_file API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-generator/export-prompts-file")
+async def generator_export_prompts_file(request):
+    try:
+        data = await request.json()
+        export_path = _normalize_export_path(data.get("path", ""))
+        exported_data = data.get("data", {})
+
+        if not export_path:
+            return server.web.json_response({"success": False, "error": "Export path is required"})
+        if not isinstance(exported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        parent_dir = os.path.dirname(export_path)
+        if not parent_dir or not os.path.isdir(parent_dir):
+            return server.web.json_response({"success": False, "error": "Target folder does not exist"})
+
+        if not atomic_save(export_path, exported_data, "PromptGeneratorExport"):
+            return server.web.json_response({"success": False, "error": "Failed to save export file"}, status=500)
+
+        return server.web.json_response({"success": True, "path": export_path})
+    except Exception as e:
+        print_pg(f"[PromptGenerator] Error in export_prompts_file API: {e}", RED)
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 @server.PromptServer.instance.routes.post("/prompt-generator/reimport-default-prompts")

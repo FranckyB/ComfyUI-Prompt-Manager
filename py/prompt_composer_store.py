@@ -115,6 +115,10 @@ class PromptComposerStore:
         atomic_save(user_path, sorted_data, "PromptComposerStore")
 
 
+def _safe_abspath(path):
+    return os.path.abspath(os.path.expanduser(path or ""))
+
+
 def _find_category_case_insensitive(prompts_data, category):
     """Return the canonical category name or None."""
     if not isinstance(prompts_data, dict):
@@ -261,6 +265,30 @@ def _find_prompt_case_insensitive(category_data, name):
         if entry_name.lower() == name_lower:
             return entry, entry_name
     return None, None
+
+
+def _count_prompt_totals(prompts_data):
+    category_count = 0
+    prompt_count = 0
+    if not isinstance(prompts_data, dict):
+        return category_count, prompt_count
+    for category, category_data in prompts_data.items():
+        if category == "__meta__" or not isinstance(category_data, dict):
+            continue
+        category_count += 1
+        prompt_entries = _get_category_prompts_map(category_data)
+        if isinstance(prompt_entries, dict):
+            prompt_count += len(prompt_entries)
+    return category_count, prompt_count
+
+
+def _normalize_export_path(raw_path):
+    candidate = _safe_abspath(raw_path)
+    if not candidate:
+        return ""
+    if not candidate.lower().endswith(".json"):
+        candidate = f"{candidate}.json"
+    return candidate
 
 
 @server.PromptServer.instance.routes.get("/prompt-manager/compose/get-prompts")
@@ -462,9 +490,11 @@ async def compose_import_prompts(request):
 
             imported_base_prompt = normalized_imported_category.get("_base_prompt_")
             imported_prompt_type = normalized_imported_category.get("_prompt_type_")
+            imported_prompt_prefix = normalized_imported_category.get("_prompt_prefix_")
             has_category_settings = bool(
                 (isinstance(imported_base_prompt, str) and imported_base_prompt.strip()) or
-                (isinstance(imported_prompt_type, str) and imported_prompt_type.strip())
+                (isinstance(imported_prompt_type, str) and imported_prompt_type.strip()) or
+                (isinstance(imported_prompt_prefix, str) and imported_prompt_prefix.strip())
             )
             if has_category_settings:
                 if mode == "replace_existing" or is_new_category:
@@ -472,6 +502,8 @@ async def compose_import_prompts(request):
                         category_data["_base_prompt_"] = imported_base_prompt
                     if isinstance(imported_prompt_type, str) and imported_prompt_type.strip():
                         category_data["_prompt_type_"] = imported_prompt_type
+                    if isinstance(imported_prompt_prefix, str) and imported_prompt_prefix.strip():
+                        category_data["_prompt_prefix_"] = imported_prompt_prefix
                     imported_category_settings += 1
                 else:
                     skipped_category_settings += 1
@@ -501,6 +533,76 @@ async def compose_import_prompts(request):
         })
     except Exception as e:
         print(f"[PromptComposerStore] Error in import-prompts: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/replace-prompts")
+async def compose_replace_prompts(request):
+    try:
+        data = await request.json()
+        imported_data = _normalize_prompts_data(data.get("data", {}))
+
+        if not isinstance(imported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        PromptComposerStore.save_prompts(imported_data)
+        category_count, prompt_count = _count_prompt_totals(imported_data)
+        return server.web.json_response({
+            "success": True,
+            "prompts": imported_data,
+            "category_count": category_count,
+            "prompt_count": prompt_count,
+        })
+    except Exception as e:
+        print(f"[PromptComposerStore] Error in replace-prompts: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/export-prompts-file")
+async def compose_export_prompts_file(request):
+    try:
+        data = await request.json()
+        export_path = _normalize_export_path(data.get("path", ""))
+        exported_data = _normalize_prompts_data(data.get("data", {}))
+
+        if not export_path:
+            return server.web.json_response({"success": False, "error": "Export path is required"})
+        if not isinstance(exported_data, dict):
+            return server.web.json_response({"success": False, "error": "Invalid data format"})
+
+        parent_dir = os.path.dirname(export_path)
+        if not parent_dir or not os.path.isdir(parent_dir):
+            return server.web.json_response({"success": False, "error": "Target folder does not exist"})
+
+        if not atomic_save(export_path, exported_data, "PromptComposerExport"):
+            return server.web.json_response({"success": False, "error": "Failed to save export file"}, status=500)
+
+        return server.web.json_response({"success": True, "path": export_path})
+    except Exception as e:
+        print(f"[PromptComposerStore] Error in export-prompts-file: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/load-prompts-file")
+async def compose_load_prompts_file(request):
+    try:
+        data = await request.json()
+        file_path = _safe_abspath(data.get("path", ""))
+
+        if not file_path:
+            return server.web.json_response({"success": False, "error": "Path is required"})
+        if not os.path.isfile(file_path):
+            return server.web.json_response({"success": False, "error": "JSON file not found"}, status=404)
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            return server.web.json_response({"success": False, "error": "Invalid JSON data format"}, status=400)
+
+        normalized = _normalize_prompts_data(loaded)
+        return server.web.json_response({"success": True, "data": normalized, "path": file_path})
+    except Exception as e:
+        print(f"[PromptComposerStore] Error in load-prompts-file: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 

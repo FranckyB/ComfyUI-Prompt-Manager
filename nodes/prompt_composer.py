@@ -505,6 +505,126 @@ def _subject_label(subject_number):
     return f"Subject {int(subject_number)}"
 
 
+def _normalize_prompt_type_name(value):
+    return str(value or "").strip().lower()
+
+
+def _subject_role(subject_group):
+    prompt_types = [
+        _normalize_prompt_type_name(value)
+        for value in subject_group.get("prompt_types", [])
+        if _normalize_prompt_type_name(value)
+    ]
+    if prompt_types and all(value == "environment" for value in prompt_types):
+        return "environment"
+    if prompt_types and all(value == "animal" for value in prompt_types):
+        return "animal"
+    if "character" in prompt_types:
+        return "character"
+    if "animal" in prompt_types:
+        return "animal"
+    return "character"
+
+
+def _ordinal_word(index):
+    words = {
+        1: "First",
+        2: "Second",
+        3: "Third",
+        4: "Fourth",
+        5: "Fifth",
+        6: "Sixth",
+        7: "Seventh",
+        8: "Eighth",
+        9: "Ninth",
+        10: "Tenth",
+        11: "Eleventh",
+        12: "Twelfth",
+        13: "Thirteenth",
+        14: "Fourteenth",
+        15: "Fifteenth",
+        16: "Sixteenth",
+    }
+    try:
+        normalized = int(index)
+    except (TypeError, ValueError):
+        normalized = 0
+    return words.get(normalized, f"Character {normalized}")
+
+
+def _image_subject_prefix(role, position, total):
+    normalized_role = str(role or "character").strip().lower()
+    if normalized_role == "environment":
+        return "The Environment is"
+    noun = "Animal" if normalized_role == "animal" else "Character"
+    if int(total or 0) <= 1:
+        return f"{noun} is"
+    return f"{_ordinal_word(position)} {noun} is"
+
+
+def _image_subject_name(role, position, total):
+    normalized_role = str(role or "character").strip().lower()
+    if normalized_role == "environment":
+        return "The Environment"
+    noun = "Animal" if normalized_role == "animal" else "Character"
+    if int(total or 0) <= 1:
+        return noun
+    return f"{_ordinal_word(position)} {noun}"
+
+
+def _render_image_subject_groups(subject_groups):
+    rendered_groups = []
+    typed_groups = _prepare_image_subject_groups(subject_groups)
+
+    for group in typed_groups:
+        role = group["role"]
+        rendered_groups.append(
+            f"{_image_subject_prefix(role, group['position'], group['total'])} {group['body']}"
+        )
+
+    return "\n\n".join(fragment for fragment in rendered_groups if fragment)
+
+
+def _prepare_image_subject_groups(subject_groups):
+    typed_groups = []
+    for group in subject_groups:
+        body = _render_text_sections(group.get("text_sections", {}))
+        if not body:
+            continue
+        typed_groups.append({
+            "role": _subject_role(group),
+            "body": body,
+            "sections": group.get("sections", {}),
+        })
+
+    role_totals = {}
+    for group in typed_groups:
+        role = group["role"]
+        if role == "environment":
+            continue
+        role_totals[role] = role_totals.get(role, 0) + 1
+
+    role_positions = {}
+    prepared_groups = []
+    for group in typed_groups:
+        role = group["role"]
+        if role == "environment":
+            prepared_groups.append({
+                **group,
+                "position": 1,
+                "total": 1,
+            })
+            continue
+        role_positions[role] = role_positions.get(role, 0) + 1
+        prepared_groups.append({
+            **group,
+            "position": role_positions[role],
+            "total": role_totals.get(role, 1),
+        })
+
+    return prepared_groups
+
+
 def _get_subject_group(subject_groups, subject_number):
     for group in subject_groups:
         if group["number"] == subject_number:
@@ -513,6 +633,7 @@ def _get_subject_group(subject_groups, subject_number):
         "number": subject_number,
         "text_sections": {},
         "sections": {},
+        "prompt_types": [],
     }
     subject_groups.append(group)
     return group
@@ -761,6 +882,7 @@ class PromptComposer:
                     )
             else:
                 subject_group = _get_subject_group(subject_groups, subject_number)
+                subject_group["prompt_types"].append(prompt_type)
                 if formatted_plain:
                     _append_text_section(
                         subject_group["text_sections"],
@@ -809,9 +931,16 @@ class PromptComposer:
             if position != "before" and base:
                 structured["scene"] = base
             structured["subjects"] = []
-            for group in subject_groups:
-                subject_entry = {"name": _subject_label(group["number"])}
-                for key, values in group["sections"].items():
+            for group in _prepare_image_subject_groups(subject_groups) if selected_generation_mode != "video" else subject_groups:
+                if selected_generation_mode == "video":
+                    subject_entry = {"name": _subject_label(group["number"])}
+                    section_values = group["sections"]
+                else:
+                    subject_entry = {
+                        "name": _image_subject_name(group["role"], group["position"], group["total"])
+                    }
+                    section_values = group["sections"]
+                for key, values in section_values.items():
                     rendered_value = _render_json_section_value(values)
                     if rendered_value:
                         subject_entry[key] = rendered_value
@@ -845,10 +974,9 @@ class PromptComposer:
                 fragments_text = "\n\n".join(section for section in sections if section)
             else:
                 sections = []
-                for group in subject_groups:
-                    body = _render_text_sections(group.get("text_sections", {}))
-                    if body:
-                        sections.append(body)
+                subject_text = _render_image_subject_groups(subject_groups)
+                if subject_text:
+                    sections.append(subject_text)
                 non_subject_text = _render_text_sections(non_subject_text_sections, break_on_labeled_sections=True)
                 if non_subject_text:
                     sections.append(non_subject_text)
