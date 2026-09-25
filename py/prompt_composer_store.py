@@ -613,6 +613,8 @@ async def compose_save_prompt(request):
         category = str(data.get("category", "")).strip()
         name = str(data.get("name", "")).strip()
         text = str(data.get("text", "")).strip()
+        old_category = str(data.get("old_category", "")).strip() or category
+        old_name = str(data.get("old_name", "")).strip() or name
         thumbnail = data.get("thumbnail")
         lora = data.get("lora", None)
         lora_strength = data.get("lora_strength", None)
@@ -633,18 +635,43 @@ async def compose_save_prompt(request):
         category_data = _ensure_category_data(prompts, category)
         prompt_entries = _ensure_category_prompts_map(category_data)
 
+        source_category_key = _find_category_case_insensitive(prompts, old_category)
+        if source_category_key == category:
+            source_category_data = category_data
+            source_prompt_entries = prompt_entries
+        else:
+            source_category_data = _ensure_category_data(prompts, source_category_key) if source_category_key else None
+            source_prompt_entries = _ensure_category_prompts_map(source_category_data) if source_category_data else {}
+        existing_old_name = next((entry_name for entry_name in source_prompt_entries.keys() if str(entry_name).lower() == old_name.lower()), None)
+        existing_prompt = source_prompt_entries.get(existing_old_name, {}) if existing_old_name else {}
+
+        existing_target_name = next((entry_name for entry_name in prompt_entries.keys() if str(entry_name).lower() == name.lower()), None)
+        if existing_target_name:
+            same_entry = (
+                existing_old_name is not None
+                and source_category_key == category
+                and str(existing_target_name).lower() == str(existing_old_name).lower()
+            )
+            if not same_entry:
+                return server.web.json_response({
+                    "success": False,
+                    "error": f"A prompt named '{existing_target_name}' already exists in '{category}'"
+                })
+
+        if existing_old_name and (source_category_key != category or existing_old_name != name):
+            existing_prompt = source_prompt_entries.pop(existing_old_name, existing_prompt)
+
         # Case-insensitive prompt replacement.
         existing_lower = {
             k.lower(): k
             for k in prompt_entries.keys()
         }
-        existing_prompt = {}
         if name.lower() in existing_lower:
-            old_name = existing_lower[name.lower()]
-            existing_prompt = prompt_entries.get(old_name, {})
-            if old_name != name:
-                print(f"[PromptComposerStore] Removing old casing '{old_name}' before saving as '{name}'")
-                del prompt_entries[old_name]
+            casing_name = existing_lower[name.lower()]
+            existing_prompt = prompt_entries.get(casing_name, existing_prompt)
+            if casing_name != name:
+                print(f"[PromptComposerStore] Removing old casing '{casing_name}' before saving as '{name}'")
+                del prompt_entries[casing_name]
 
         entry = {"prompt": text}
         if thumbnail is not None:
@@ -695,6 +722,8 @@ async def compose_save_prompt(request):
 
         prompt_entries[name] = entry
         prompts[category] = category_data
+        if source_category_key and source_category_key != category and source_category_data is not None:
+            prompts[source_category_key] = source_category_data
         PromptComposerStore.save_prompts(prompts)
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
@@ -753,10 +782,13 @@ async def compose_rename_prompt(request):
             prompts[new_category] = {"_prompts_": {}}
             new_category_key = new_category
 
-        new_category_data = _ensure_category_data(prompts, new_category_key)
-        new_prompt_entries = _ensure_category_prompts_map(new_category_data)
-
         same_category = old_category_key == new_category_key
+        if same_category:
+            new_category_data = old_category_data
+            new_prompt_entries = old_prompt_entries
+        else:
+            new_category_data = _ensure_category_data(prompts, new_category_key)
+            new_prompt_entries = _ensure_category_prompts_map(new_category_data)
         existing_target_name = next((name for name in new_prompt_entries.keys() if str(name).lower() == new_name.lower()), None)
         if existing_target_name:
             if not (same_category and str(existing_target_name).lower() == str(existing_old_name).lower()):

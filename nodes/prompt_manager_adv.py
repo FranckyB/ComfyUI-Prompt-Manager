@@ -1620,6 +1620,8 @@ async def save_prompt_advanced(request):
         category = data.get("category", "").strip()
         name = data.get("name", "").strip()
         text = data.get("text", "").strip()
+        old_category = data.get("old_category", "").strip() or category
+        old_name = data.get("old_name", "").strip() or name
         loras_a = data.get("loras_a", [])
         loras_b = data.get("loras_b", [])
         loras_c = data.get("loras_c", [])
@@ -1634,6 +1636,32 @@ async def save_prompt_advanced(request):
         if category not in prompts:
             prompts[category] = {}
 
+        source_prompts = prompts.get(old_category, {}) if isinstance(prompts.get(old_category), dict) else {}
+        target_prompts = prompts[category]
+
+        existing_old_name = None
+        existing_prompt = {}
+        if old_category in prompts:
+            existing_old_name = next((key for key in source_prompts.keys() if str(key).lower() == old_name.lower()), None)
+            if existing_old_name:
+                existing_prompt = source_prompts.get(existing_old_name, {})
+
+        existing_target_name = next((key for key in target_prompts.keys() if str(key).lower() == name.lower() and not _is_hidden_category_entry_key(key)), None)
+        if existing_target_name:
+            same_entry = (
+                existing_old_name is not None
+                and old_category == category
+                and str(existing_target_name).lower() == str(existing_old_name).lower()
+            )
+            if not same_entry:
+                return server.web.json_response({
+                    "success": False,
+                    "error": f"A prompt named '{existing_target_name}' already exists in '{category}'"
+                })
+
+        if existing_old_name and (old_category != category or existing_old_name != name):
+            existing_prompt = source_prompts.pop(existing_old_name, existing_prompt)
+
         # Case-insensitive check for existing prompt
         # Get existing prompt data BEFORE potentially deleting it (to preserve thumbnail)
         existing_prompts_lower = {
@@ -1641,14 +1669,13 @@ async def save_prompt_advanced(request):
             for k in prompts[category].keys()
             if not _is_hidden_category_entry_key(k)
         }
-        existing_prompt = {}
         if name.lower() in existing_prompts_lower:
-            old_name = existing_prompts_lower[name.lower()]
-            existing_prompt = prompts[category].get(old_name, {})
-            if old_name != name:
+            casing_name = existing_prompts_lower[name.lower()]
+            existing_prompt = prompts[category].get(casing_name, existing_prompt)
+            if casing_name != name:
                 # Delete the old casing version
-                print(f"[PromptManagerAdvanced] Removing old casing '{old_name}' before saving as '{name}'")
-                del prompts[category][old_name]
+                print(f"[PromptManagerAdvanced] Removing old casing '{casing_name}' before saving as '{name}'")
+                del prompts[category][casing_name]
 
         # Normalize lora data - keep path when present for lossless save/restore.
         def normalize_lora_data(loras):
@@ -1921,8 +1948,8 @@ async def rename_prompt_advanced(request):
                 "error": f"A prompt named '{existing_lower[new_name.lower()]}' already exists in '{new_category}'"
             })
 
-        prompts[new_category][new_name] = prompts[category][old_name]
-        del prompts[category][old_name]
+        entry = prompts[category].pop(old_name)
+        prompts[new_category][new_name] = entry
         PromptManagerAdvanced.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts, "new_name": new_name, "new_category": new_category})

@@ -547,6 +547,18 @@ async function showPromptLibraryBrowser({
                     await showInfo("Save Failed", "Enter a filename first.");
                     return;
                 }
+                const existingFile = currentFiles.find((file) => String(file?.name || "").toLowerCase() === filename.toLowerCase());
+                if (existingFile) {
+                    const overwriteConfirmed = await showConfirm(
+                        "Overwrite JSON",
+                        `JSON file "${filename}" already exists in this folder. Replace it?`,
+                        "Overwrite",
+                        "#c44"
+                    );
+                    if (!overwriteConfirmed) {
+                        return;
+                    }
+                }
                 finish(joinPromptLibraryBrowserPath(currentDir, filename));
                 return;
             }
@@ -2261,6 +2273,47 @@ function getSourceExportFilename(node) {
     return "prompt_composer_data.json";
 }
 
+async function savePromptLibraryJsonToBrowser(data, defaultFilename) {
+    const jsonStr = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const suggestedName = String(defaultFilename || "prompt_library_data.json").trim() || "prompt_library_data.json";
+
+    if (window.showSaveFilePicker) {
+        try {
+            const handle = await window.showSaveFilePicker({
+                suggestedName,
+                types: [{
+                    description: "JSON Files",
+                    accept: { "application/json": [".json"] },
+                }],
+            });
+            if (!handle) return false;
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            return true;
+        } catch (err) {
+            if (err?.name === "AbortError") {
+                return false;
+            }
+            console.warn("[PromptBrowser] Save picker failed, falling back to download:", err);
+        }
+    }
+
+    const url = URL.createObjectURL(blob);
+    try {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = suggestedName.toLowerCase().endsWith(".json") ? suggestedName : `${suggestedName}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return true;
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+}
+
 function getSourceImportEndpointPrefix(node) {
     return getEndpointPrefixForSource(getSourceValue(node));
 }
@@ -2409,17 +2462,10 @@ async function mergePromptBrowserLibraryData(node, libraryData) {
 
 async function savePromptBrowserJSON(node) {
     try {
-        const endpointPrefix = getSourceImportEndpointPrefix(node);
-        const savePath = await showPromptLibraryBrowser({
-            mode: "save",
-            title: "Save Prompt Browser JSON",
-            confirmLabel: "Save Here",
-            defaultFilename: getSourceExportFilename(node),
-        });
-        if (!savePath) return;
-
         const data = node.prompts || node.composerPrompts || {};
-        await exportPromptLibraryFile(endpointPrefix, savePath, data);
+        const didSave = await savePromptLibraryJsonToBrowser(data, getSourceExportFilename(node));
+        if (!didSave) return;
+        await showInfo("Export Complete", "JSON library exported successfully!");
     } catch (err) {
         console.error("[PromptBrowser] Save JSON error:", err);
         await showInfo("Save Failed", err.message || "Unknown error");

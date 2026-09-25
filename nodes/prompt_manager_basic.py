@@ -273,6 +273,8 @@ async def save_prompt(request):
         category = data.get("category", "").strip()
         name = data.get("name", "").strip()
         text = data.get("text", "").strip()
+        old_category = data.get("old_category", "").strip() or category
+        old_name = data.get("old_name", "").strip() or name
 
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and name are required"})
@@ -282,18 +284,43 @@ async def save_prompt(request):
         if category not in prompts:
             prompts[category] = {}
 
+        source_prompts = prompts.get(old_category, {}) if isinstance(prompts.get(old_category), dict) else {}
+        target_prompts = prompts[category]
+
+        existing_data = {}
+        existing_old_name = None
+        if old_category in prompts:
+            existing_old_name = next((key for key in source_prompts.keys() if str(key).lower() == old_name.lower()), None)
+            if existing_old_name:
+                existing_data = source_prompts.get(existing_old_name, {})
+
+        target_conflict_name = next((key for key in target_prompts.keys() if str(key).lower() == name.lower()), None)
+        if target_conflict_name:
+            same_entry = (
+                existing_old_name is not None
+                and old_category == category
+                and str(target_conflict_name).lower() == str(existing_old_name).lower()
+            )
+            if not same_entry:
+                return server.web.json_response({
+                    "success": False,
+                    "error": f"A prompt named '{target_conflict_name}' already exists in '{category}'"
+                })
+
+        if existing_old_name and (old_category != category or existing_old_name != name):
+            existing_data = source_prompts.pop(existing_old_name, existing_data)
+
         # Case-insensitive check - find if name exists with different casing
         existing_prompts_lower = {k.lower(): k for k in prompts[category].keys()}
         if name.lower() in existing_prompts_lower:
-            old_name = existing_prompts_lower[name.lower()]
-            if old_name != name:
+            casing_name = existing_prompts_lower[name.lower()]
+            if casing_name != name:
 
                 # Delete the old casing version
-                print(f"[PromptManager] Removing old casing '{old_name}' before saving as '{name}'")
-                del prompts[category][old_name]
+                print(f"[PromptManager] Removing old casing '{casing_name}' before saving as '{name}'")
+                del prompts[category][casing_name]
 
         # Save prompt in dict, preserving any existing lora data, trigger words, thumbnail, and nsfw from PromptManagerAdvanced
-        existing_data = prompts[category].get(name, {})
         prompts[category][name] = {
             "prompt": text,
             "loras_a": existing_data.get("loras_a", []),
@@ -304,11 +331,56 @@ async def save_prompt(request):
         # Preserve nsfw flag if it was set
         if existing_data.get("nsfw"):
             prompts[category][name]["nsfw"] = existing_data["nsfw"]
+
         PromptManager.save_prompts(prompts)
 
         return server.web.json_response({"success": True, "prompts": prompts})
     except Exception as e:
         print(f"[PromptManager] Error in save_prompt API: {e}")
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/rename-prompt")
+async def rename_prompt(request):
+    """API endpoint to rename or move a prompt"""
+    try:
+        data = await request.json()
+        category = data.get("category", "").strip()
+        old_name = data.get("old_name", "").strip()
+        new_name = data.get("new_name", "").strip()
+        new_category = data.get("new_category", "").strip() or category
+
+        if not category or not old_name or not new_name:
+            return server.web.json_response({"success": False, "error": "Category, old name, and new name are required"})
+
+        prompts = PromptManager.load_prompts()
+        if category not in prompts:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+        if new_category not in prompts:
+            return server.web.json_response({"success": False, "error": f"Category '{new_category}' not found"})
+
+        source_prompts = prompts.get(category, {}) if isinstance(prompts.get(category), dict) else {}
+        target_prompts = prompts.get(new_category, {}) if isinstance(prompts.get(new_category), dict) else {}
+        existing_old_name = next((key for key in source_prompts.keys() if str(key).lower() == old_name.lower()), None)
+        if not existing_old_name:
+            return server.web.json_response({"success": False, "error": "Prompt not found"})
+
+        existing_target_name = next((key for key in target_prompts.keys() if str(key).lower() == new_name.lower()), None)
+        if existing_target_name:
+            same_entry = new_category == category and str(existing_target_name).lower() == str(existing_old_name).lower()
+            if not same_entry:
+                return server.web.json_response({
+                    "success": False,
+                    "error": f"A prompt named '{existing_target_name}' already exists in '{new_category}'"
+                })
+
+        entry = source_prompts.pop(existing_old_name)
+        target_prompts[new_name] = entry
+        PromptManager.save_prompts(prompts)
+
+        return server.web.json_response({"success": True, "prompts": prompts, "new_name": new_name, "new_category": new_category})
+    except Exception as e:
+        print(f"[PromptManager] Error in rename_prompt API: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 

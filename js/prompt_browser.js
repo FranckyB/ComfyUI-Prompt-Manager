@@ -284,6 +284,7 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         persistThumbnail = true,
         promptStrength = 1.0,
         generationMode = "image",
+        staticSeed = 42,
     } = options || {};
 
     // If browser has not been wired with low-level generation helpers yet,
@@ -323,7 +324,8 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         .join(" ");
 
     const isComposerManager = endpointPrefix === "/prompt-manager/compose";
-    const staticSeedForRun = 42;
+    const numericSeed = Number(staticSeed);
+    const staticSeedForRun = Number.isFinite(numericSeed) ? Math.trunc(numericSeed) : 42;
 
     console.log(`[ThumbnailGen] Preparing thumbnail for "${category}/${promptName}" | seed=${staticSeedForRun ?? "random"}`);
     console.log(`[ThumbnailGen] Effective prompt text: ${promptText}`);
@@ -701,7 +703,8 @@ function showCategoryPickerDialog(title, categories, defaultCategory) {
     });
 }
 
-function showThumbnailContextMenu(event, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
+function showThumbnailContextMenu(event, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced", options = {}) {
+    const onDelete = typeof options?.onDelete === "function" ? options.onDelete : null;
     const existing = document.querySelector('.thumbnail-context-menu');
     if (existing) existing.remove();
 
@@ -882,6 +885,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
     menu.appendChild(createMenuItem("🗑️ Delete Prompt", async () => {
         if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
             await deletePromptEntry(node, category, promptName, endpointPrefix);
+            await onDelete?.(category, promptName);
             onUpdate();
         }
     }));
@@ -1179,13 +1183,14 @@ export function hasWorkflowDataPayload(rawWorkflowData) {
 
 export function hasPromptPresetPayload(promptData) {
     if (!promptData || typeof promptData !== "object") return false;
+    const hasExplicitPromptField = Object.prototype.hasOwnProperty.call(promptData, "prompt");
     const promptText = String(promptData.prompt || "").trim();
     const negativeText = String(promptData.negative_prompt || "").trim();
     const hasLorasA = Array.isArray(promptData.loras_a) && promptData.loras_a.some((lora) => String(lora?.name || "").trim().length > 0);
     const hasLorasB = Array.isArray(promptData.loras_b) && promptData.loras_b.some((lora) => String(lora?.name || "").trim().length > 0);
     const hasLorasC = Array.isArray(promptData.loras_c) && promptData.loras_c.some((lora) => String(lora?.name || "").trim().length > 0);
     const hasLorasD = Array.isArray(promptData.loras_d) && promptData.loras_d.some((lora) => String(lora?.name || "").trim().length > 0);
-    return promptText.length > 0 || negativeText.length > 0 || hasLorasA || hasLorasB || hasLorasC || hasLorasD;
+    return hasExplicitPromptField || promptText.length > 0 || negativeText.length > 0 || hasLorasA || hasLorasB || hasLorasC || hasLorasD;
 }
 
 function getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix = "/prompt-manager-advanced") {
@@ -2998,6 +3003,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     return new Promise((resolve, reject) => {
                         const queuedName = promptName;
                         const isDraftGeneration = draftPromptData && typeof draftPromptData === "object";
+                        const requestedSeed = Number(draftPromptData?.__pm_thumbnail_seed);
+                        const staticSeed = Number.isFinite(requestedSeed) ? Math.trunc(requestedSeed) : 42;
                         _thumbQueueTotal++;
                         _ensureThumbQueueProgress();
                         _updateThumbQueueProgress(queuedName);
@@ -3021,6 +3028,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                     persistThumbnail: !isDraftGeneration,
                                     promptStrength,
                                     generationMode: thumbnailGenerationMode,
+                                    staticSeed,
                                 });
                                 _thumbQueueDone++;
                                 if (isDraftGeneration) {
@@ -3301,9 +3309,25 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 showMultiPromptContextMenu(e, selectedNames);
                 return;
             }
-            showThumbnailContextMenu(e, node, selectedCategory, promptName, () => {
-                renderContent(searchInput.value);
-            }, endpointPrefix);
+            showThumbnailContextMenu(
+                e,
+                node,
+                selectedCategory,
+                promptName,
+                () => {
+                    renderContent(searchInput.value);
+                },
+                endpointPrefix,
+                {
+                    onDelete: async (deletedCategory, deletedPromptName) => {
+                        if (deletedPromptName !== currentPrompt || deletedCategory !== currentPromptCategory) return;
+                        setBlankPromptSelection();
+                        if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
+                            await editPanel.clearPrompt({ skipConfirm: true });
+                        }
+                    },
+                }
+            );
         };
 
         // ---- Grid (Large Thumbnail) View ----

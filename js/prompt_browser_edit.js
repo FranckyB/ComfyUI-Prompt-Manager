@@ -1380,7 +1380,10 @@ export function createPromptBrowserEditPanel(options) {
     const promptNameInput = createInput("", "Prompt name");
     promptBody.appendChild(promptNameInput);
     promptNameInput.addEventListener("input", () => {
-        _syncPromptSelection(currentCategory, String(promptNameInput.value || "").trim());
+        const nextName = String(promptNameInput.value || "").trim();
+        if (!isEditingExistingPrompt() || nextName === String(currentPromptName || "").trim()) {
+            _syncPromptSelection(currentCategory, nextName);
+        }
         updateEditorActionButtons();
         _onChange();
     });
@@ -1522,9 +1525,7 @@ export function createPromptBrowserEditPanel(options) {
     const saveBtn = createButton("Save", async () => {
         await doPrimaryPromptAction(false);
     }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
-
     saveNewBtn.style.display = "none";
-
     editorButtonRow.appendChild(saveNewBtn);
     editorButtonRow.appendChild(saveBtn);
     promptBody.appendChild(editorButtonRow);
@@ -1556,13 +1557,18 @@ export function createPromptBrowserEditPanel(options) {
         return "";
     }
 
-    function buildCurrentPromptSavePayload() {
+    function buildCurrentPromptSavePayload(options = {}) {
+        const includeOriginalIdentity = options.includeOriginalIdentity === true;
         const payload = {
             category: currentCategory,
             name: String(promptNameInput.value || "").trim(),
             text: String(promptTextArea.value || "").trim(),
             thumbnail: pendingThumbnail || loadedThumbnail,
         };
+        if (includeOriginalIdentity && isEditingExistingPrompt()) {
+            payload.old_name = String(currentPromptName || "").trim();
+            payload.old_category = String(currentCategory || "").trim();
+        }
         if (isComposerSource) {
             payload.lora_image = String(imageLoraTrigger.getSelectedValue() || "").trim();
             payload.lora_image_strength = readCurrentImageLoraStrength();
@@ -1613,26 +1619,10 @@ export function createPromptBrowserEditPanel(options) {
         return result || { success: false };
     }
 
-    async function deletePromptByName(category, name) {
-        const response = await fetch(`${endpointPrefix}/delete-prompt`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                category,
-                name,
-            }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data?.success) {
-            return { success: false, error: data?.error || `Delete request failed (${response.status})` };
-        }
-        return data;
-    }
-
     function updateEditorActionButtons() {
         const editingExisting = isEditingExistingPrompt();
         const nameChanged = hasPromptNameChanged();
-        saveBtn.textContent = editingExisting ? "Update" : "Save";
+        saveBtn.textContent = editingExisting ? (nameChanged ? "Rename" : "Update") : "Save";
         saveNewBtn.style.display = editingExisting && nameChanged ? "inline-flex" : "none";
     }
 
@@ -1677,33 +1667,13 @@ export function createPromptBrowserEditPanel(options) {
         );
         if (!confirmed) return { success: false };
 
-        const savePayload = buildCurrentPromptSavePayload();
+        const savePayload = buildCurrentPromptSavePayload({ includeOriginalIdentity: true });
         const saveResult = await saveCurrentPromptPayload(savePayload, {
             showFailure: !autoFromGeneration,
             failureTitle: "Update Failed",
             failureMessage: "Failed to update prompt.",
         });
-        if (!saveResult?.success) {
-            return saveResult || { success: false };
-        }
-
-        if (nextName !== originalName) {
-            const deleteResult = await deletePromptByName(category, originalName);
-            if (!deleteResult?.success) {
-                await _showInfo("Update Partially Completed", deleteResult?.error || `Updated "${nextName}", but failed to remove "${originalName}".`);
-                return deleteResult || { success: false };
-            }
-            if (deleteResult?.prompts && typeof deleteResult.prompts === "object") {
-                node.prompts = deleteResult.prompts;
-            } else {
-                await _loadPrompts(node);
-            }
-            currentPromptName = nextName;
-            updateEditorActionButtons();
-            _onChange();
-        }
-
-        return saveResult;
+        return saveResult?.success ? saveResult : (saveResult || { success: false });
     }
 
     const thumbnailWrap = el("div", {
@@ -1737,10 +1707,30 @@ export function createPromptBrowserEditPanel(options) {
 
     promptBody.appendChild(thumbnailWrap);
 
+    const thumbnailGenerateRow = el("div", {
+        display: "flex",
+        gap: "8px",
+        alignItems: "flex-end",
+    });
+    const thumbnailSeedWrap = el("div", {
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        width: "96px",
+        flexShrink: "0",
+    });
+    const thumbnailSeedLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Seed");
+    const thumbnailSeedInput = createNumberInput(42, { step: 1 }, { width: "100%" });
+    thumbnailSeedInput.title = "Seed used for edit-panel thumbnail generation";
+    thumbnailSeedInput.addEventListener("input", () => _onChange());
+    thumbnailSeedWrap.append(thumbnailSeedLabel, thumbnailSeedInput);
+
     const generateBtn = createButton("Generate Thumbnail", async () => {
         const category = currentCategory;
         const name = String(promptNameInput.value || "").trim();
         const text = String(promptTextArea.value || "").trim();
+        const requestedSeed = Number(thumbnailSeedInput.value);
+        const thumbnailSeed = Number.isFinite(requestedSeed) ? Math.trunc(requestedSeed) : 42;
         if (!category || !name) {
             await _showInfo("Missing Prompt", "Please enter a category and prompt name first.");
             return;
@@ -1756,6 +1746,7 @@ export function createPromptBrowserEditPanel(options) {
         try {
             const draftPromptData = {
                 prompt: text,
+                __pm_thumbnail_seed: thumbnailSeed,
             };
             const savedEntry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], name, endpointPrefix);
             if (savedEntry && typeof savedEntry === "object" && savedEntry.workflow_data) {
@@ -1781,9 +1772,11 @@ export function createPromptBrowserEditPanel(options) {
             generateBtn.textContent = "Generate Thumbnail";
         }
     });
-    promptBody.appendChild(generateBtn);
+    generateBtn.style.flex = "1";
+    thumbnailGenerateRow.append(generateBtn, thumbnailSeedWrap);
+    promptBody.appendChild(thumbnailGenerateRow);
 
-    const bulkPromptBtn = createButton("Bulk Prompt Builder", () => {
+    const bulkPromptBtn = createButton("Bulk Prompt Importer", () => {
         openBulkPromptDialog();
     });
     toolsBody.appendChild(bulkPromptBtn);
@@ -2071,7 +2064,7 @@ export function createPromptBrowserEditPanel(options) {
             color: STYLE.textPrimary,
             fontSize: "15px",
             fontWeight: "bold",
-        }, "Bulk Prompt Builder");
+        }, "Bulk Prompt Importer");
 
         const subtext = el("p", {
             margin: "0",
@@ -2079,11 +2072,19 @@ export function createPromptBrowserEditPanel(options) {
             fontSize: "12px",
         }, `Quickly create multiple prompts in "${category}".`);
 
-        const textarea = createTextarea("", "Enter one tag per line...");
+        const textarea = createTextarea("", "Bomber Jacket - a cropped bomber jacket over a simple shirt");
         textarea.style.minHeight = "auto";
         textarea.style.height = "auto";
         textarea.style.resize = "vertical";
         textarea.rows = 20;
+
+        const formatHint = el("p", {
+            margin: "0",
+            color: STYLE.textMuted,
+            fontSize: "12px",
+            lineHeight: "1.45",
+            whiteSpace: "pre-line",
+        }, "Each line must be: Title - Prompt text");
 
         const buttonRow = el("div", {
             display: "flex",
@@ -2107,16 +2108,31 @@ export function createPromptBrowserEditPanel(options) {
             createBtn.textContent = "Creating...";
             let created = 0;
             let failed = 0;
+            let invalid = 0;
             const seen = new Set();
+            let firstCreatedName = "";
 
             for (const line of lines) {
-                const key = line.toLowerCase();
+                const separatorIndex = line.indexOf("-");
+                if (separatorIndex <= 0) {
+                    invalid++;
+                    continue;
+                }
+                const name = line.substring(0, separatorIndex).trim();
+                const text = line.substring(separatorIndex + 1).trim();
+                if (!name || !text) {
+                    invalid++;
+                    continue;
+                }
+
+                const key = name.toLowerCase();
                 if (seen.has(key)) continue;
                 seen.add(key);
                 try {
-                    const result = await _savePrompt({ category, name: line, text: line, thumbnail: null });
+                    const result = await _savePrompt({ category, name, text, thumbnail: null });
                     if (result?.success) {
                         created++;
+                        if (!firstCreatedName) firstCreatedName = name;
                     } else {
                         failed++;
                     }
@@ -2129,13 +2145,13 @@ export function createPromptBrowserEditPanel(options) {
             await _loadPrompts(node);
             _onChange();
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            if (created > 0) {
-                const firstName = lines.find((line) => line.length > 0);
-                if (firstName) {
-                    _selectPrompt?.(category, firstName);
-                }
+            if (created > 0 && firstCreatedName) {
+                _selectPrompt?.(category, firstCreatedName);
             }
-            await _showInfo("Prompts Created", `${created} prompt(s) created in "${category}".${failed ? ` ${failed} failed.` : ""}`);
+            await _showInfo(
+                "Prompts Created",
+                `${created} prompt(s) created in "${category}".${failed ? ` ${failed} failed.` : ""}${invalid ? ` ${invalid} line(s) were skipped because they were not in the format \"Title - Prompt text\".` : ""}`
+            );
         }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
 
         buttonRow.appendChild(cancelBtn);
@@ -2143,6 +2159,7 @@ export function createPromptBrowserEditPanel(options) {
 
         dialog.appendChild(title);
         dialog.appendChild(subtext);
+        dialog.appendChild(formatHint);
         dialog.appendChild(textarea);
         dialog.appendChild(buttonRow);
         overlay.appendChild(dialog);

@@ -34,6 +34,7 @@ _last_extracted_info = {}
 IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'}
 VIDEO_EXTS = {'.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.wmv'}
 AUDIO_EXTS = {'.wav', '.flac', '.mp3', '.m4a', '.ogg', '.aac', '.opus'}
+JSON_EXTS = {'.json'}
 ALL_MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS | AUDIO_EXTS
 _MEDIA_META_CACHE = {}
 
@@ -114,6 +115,8 @@ def _exts_for_kind(kind):
         return VIDEO_EXTS
     if kind == 'audio':
         return AUDIO_EXTS
+    if kind == 'json':
+        return JSON_EXTS
     if kind == 'audiovideo':
         return AUDIO_EXTS | VIDEO_EXTS
     if kind == 'all':

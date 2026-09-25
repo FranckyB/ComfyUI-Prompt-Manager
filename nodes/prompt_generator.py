@@ -738,9 +738,8 @@ async def generator_rename_prompt(request):
         if new_category not in prompts:
             prompts[new_category] = {}
 
-        entry = prompts[category][old_name]
+        entry = prompts[category].pop(old_name)
         prompts[new_category][new_name] = entry
-        del prompts[category][old_name]
 
         prompts = _generator_sort_prompts_data(prompts)
         if PromptGeneratorDataStore.save(prompts):
@@ -757,6 +756,8 @@ async def generator_save_prompt(request):
         data = await request.json()
         category = data.get("category", "").strip()
         name = data.get("name", "").strip()
+        old_category = data.get("old_category", "").strip() or category
+        old_name = data.get("old_name", "").strip() or name
         text_raw = data.get("text", "")
         if isinstance(text_raw, dict):
             text = text_raw.get("prompt", "") or text_raw.get("text", "")
@@ -775,7 +776,31 @@ async def generator_save_prompt(request):
         if category not in prompts:
             prompts[category] = {}
 
-        existing_data = prompts[category].get(name, {})
+        source_prompts = prompts.get(old_category, {}) if isinstance(prompts.get(old_category), dict) else {}
+        target_prompts = prompts[category]
+        existing_old_name = None
+        existing_data = {}
+        if old_category in prompts:
+            existing_old_name = next((key for key in source_prompts.keys() if str(key).lower() == old_name.lower()), None)
+            if existing_old_name:
+                existing_data = source_prompts.get(existing_old_name, {})
+
+        existing_target_name = next((key for key in target_prompts.keys() if str(key).lower() == name.lower()), None)
+        if existing_target_name:
+            same_entry = (
+                existing_old_name is not None
+                and old_category == category
+                and str(existing_target_name).lower() == str(existing_old_name).lower()
+            )
+            if not same_entry:
+                return server.web.json_response({
+                    "success": False,
+                    "error": f"A prompt named '{existing_target_name}' already exists in '{category}'"
+                })
+
+        if existing_old_name and (old_category != category or existing_old_name != name):
+            existing_data = source_prompts.pop(existing_old_name, existing_data)
+
         entry = {
             "prompt": text,
             "loras_a": existing_data.get("loras_a", []) if isinstance(existing_data, dict) else [],

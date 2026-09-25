@@ -62,6 +62,9 @@ export function buildSavePromptRequestBody(storeKind, payload) {
         text: payload?.text,
     };
 
+    if (Object.prototype.hasOwnProperty.call(payload || {}, "old_name")) body.old_name = payload.old_name;
+    if (Object.prototype.hasOwnProperty.call(payload || {}, "old_category")) body.old_category = payload.old_category;
+
     if (storeKind === "generator") {
         if (Object.prototype.hasOwnProperty.call(payload || {}, "thumbnail")) body.thumbnail = payload.thumbnail;
         if (Object.prototype.hasOwnProperty.call(payload || {}, "prompt_category")) body.prompt_category = payload.prompt_category;
