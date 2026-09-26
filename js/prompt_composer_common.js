@@ -11,6 +11,24 @@ function normalizeComposerLibrary(library) {
     return { __meta__: { schema_version: 1, storage: "legacy_flat" }, _types_: {} };
 }
 
+function getComposerTypeOrder(typeData) {
+    const numeric = Number(typeData?.order);
+    return Number.isInteger(numeric) ? numeric : Number.POSITIVE_INFINITY;
+}
+
+function getOrderedComposerTypes(types) {
+    const entries = Object.entries(types || {});
+    const hasExplicitOrder = entries.some(([, typeData]) => Number.isInteger(Number(typeData?.order)));
+    if (!hasExplicitOrder) {
+        return entries.sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" }));
+    }
+    return entries.sort((a, b) => {
+        const orderDiff = getComposerTypeOrder(a[1]) - getComposerTypeOrder(b[1]);
+        if (orderDiff !== 0) return orderDiff;
+        return String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" });
+    });
+}
+
 function flattenComposerType(typeFile, typeData, flatData) {
     if (!typeData || typeof typeData !== "object") return;
     const typeKey = String(typeFile || "").replace(/\.json$/i, "").trim().toLowerCase();
@@ -39,6 +57,8 @@ function flattenComposerType(typeFile, typeData, flatData) {
         };
         if (effectivePrefix.trim()) flatCategory._prompt_prefix_ = effectivePrefix;
         if (effectiveBasePrompt.trim()) flatCategory._base_prompt_ = effectiveBasePrompt;
+        if (String(categoryData.prefix || "").trim()) flatCategory._category_prefix_ = String(categoryData.prefix || "");
+        if (String(categoryData.base_prompt || "").trim()) flatCategory._category_base_prompt_ = String(categoryData.base_prompt || "");
         if (typePrefix.trim()) flatCategory._type_prefix_ = typePrefix;
         if (typeBasePrompt.trim()) flatCategory._type_base_prompt_ = typeBasePrompt;
         if (typeNsfw) flatCategory._type_nsfw_ = true;
@@ -55,7 +75,7 @@ export function flattenComposerLibrary(library) {
     }
 
     const flatData = { __meta__: normalized.__meta__ || { schema_version: 2, storage: "type_files" } };
-    for (const [typeFile, typeData] of Object.entries(normalized._types_ || {})) {
+    for (const [typeFile, typeData] of getOrderedComposerTypes(normalized._types_ || {})) {
         flattenComposerType(typeFile, typeData, flatData);
     }
     return flatData;
@@ -119,6 +139,26 @@ export async function saveComposerCategorySettings(category, settings) {
         return await resp.json();
     } catch (err) {
         console.error("[PromptComposer] Error saving category settings:", err);
+        return { success: false, error: String(err) };
+    }
+}
+
+export async function saveComposerTypeSettings(settings) {
+    try {
+        const resp = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/save-type-settings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                type_file: settings.typeFile || "",
+                prompt_type: settings.promptType || "",
+                type_name: settings.typeName || "",
+                prefix: settings.promptPrefix || "",
+                base_prompt: settings.basePrompt || "",
+            }),
+        });
+        return await resp.json();
+    } catch (err) {
+        console.error("[PromptComposer] Error saving type settings:", err);
         return { success: false, error: String(err) };
     }
 }

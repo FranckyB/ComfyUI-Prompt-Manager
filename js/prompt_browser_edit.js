@@ -1,4 +1,4 @@
-import { saveComposerCategorySettings } from "./prompt_composer_common.js";
+import { saveComposerCategorySettings, saveComposerTypeSettings } from "./prompt_composer_common.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { getCategoryPromptEntries, getCategoryPromptEntriesForEndpoint, getCategoryPromptEntryForEndpoint } from "./prompt_store_adapters.js";
@@ -90,6 +90,43 @@ export function getPromptTypeChoices(promptsData = null) {
     }
 
     return choices;
+}
+
+function getPromptTypeMetadata(promptsData, promptType) {
+    const normalizedPromptType = String(promptType || "").trim();
+    if (!normalizedPromptType) {
+        return {
+            promptType: "",
+            typeFile: "",
+            typeName: "",
+            promptPrefix: "",
+            basePrompt: "",
+        };
+    }
+
+    const normalizedKey = normalizedPromptType.toLowerCase();
+    for (const categoryData of Object.values(promptsData || {})) {
+        if (!categoryData || typeof categoryData !== "object" || Array.isArray(categoryData)) continue;
+        if (String(categoryData._prompt_type_ || "").trim().toLowerCase() !== normalizedKey) continue;
+        return {
+            promptType: String(categoryData._prompt_type_ || normalizedPromptType).trim() || normalizedPromptType,
+            typeFile: String(categoryData._type_file_ || `${normalizedKey}.json`).trim(),
+            typeName: String(categoryData._type_name_ || normalizedPromptType).trim() || normalizedPromptType,
+            promptPrefix: String(categoryData._type_prefix_ || ""),
+            basePrompt: String(categoryData._type_base_prompt_ || ""),
+        };
+    }
+
+    const fallbackChoice = getPromptTypeChoices(promptsData)
+        .find((choice) => String(choice?.value || "").trim().toLowerCase() === normalizedKey);
+
+    return {
+        promptType: normalizedPromptType,
+        typeFile: `${normalizedKey}.json`,
+        typeName: String(fallbackChoice?.label || normalizedPromptType).trim() || normalizedPromptType,
+        promptPrefix: "",
+        basePrompt: "",
+    };
 }
 
 const STYLE = {
@@ -1142,7 +1179,7 @@ export function createPromptBrowserEditPanel(options) {
     const _pickThumbnailModel = typeof options?.pickThumbnailModel === "function" ? options.pickThumbnailModel : async () => false;
     const _getThumbnailModelLabel = typeof options?.getThumbnailModelLabel === "function"
         ? options.getThumbnailModelLabel
-        : (() => ({ shortLabel: "Model", fullLabel: "Select thumbnail model" }));
+        : (() => ({ shortLabel: "🔧 Model", iconLabel: "🔧", fullLabel: "Select thumbnail model" }));
     const _onChange = typeof onChange === "function" ? onChange : () => {};
     const _onCategorySettingsSaved = typeof options?.onCategorySettingsSaved === "function" ? options.onCategorySettingsSaved : () => {};
 
@@ -1157,7 +1194,11 @@ export function createPromptBrowserEditPanel(options) {
     let loadedVideoLoraStrength = 1.0;
     let loadedRefMod = "";
     let loadedRefModWeight = 1.0;
+    let loadedGroupPromptType = "";
+    let loadedGroupPromptPrefix = "";
+    let loadedGroupBasePrompt = "";
     let loadedCategoryPromptType = "";
+    let loadedCategoryBasePrompt = "";
     let loadedCategoryPromptPrefix = "";
 
     const root = el("div", {
@@ -1174,7 +1215,35 @@ export function createPromptBrowserEditPanel(options) {
         marginTop: "-1px",
     });
 
-    // Category settings collapsible (top)
+    // Prompt group settings collapsible (top)
+    const groupHeader = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "6px 0 8px 0",
+        cursor: "pointer",
+        userSelect: "none",
+        color: STYLE.textPrimary,
+        fontSize: "13px",
+        fontWeight: "bold",
+    }, "Prompt Group Settings");
+
+    const groupArrow = el("span", {
+        display: "inline-block",
+        width: "12px",
+        transition: "color 0.2s ease",
+    }, "▶");
+    groupHeader.prepend(groupArrow);
+
+    const groupBody = el("div", {
+        display: "none",
+        flexDirection: "column",
+        gap: "10px",
+        paddingBottom: "10px",
+        borderBottom: `1px solid ${STYLE.sectionBorder}`,
+        flexShrink: "0",
+    });
+
     const settingsHeader = el("div", {
         display: "flex",
         alignItems: "center",
@@ -1258,14 +1327,17 @@ export function createPromptBrowserEditPanel(options) {
         flexShrink: "0",
     });
 
+    let groupOpen = false;
     let settingsOpen = false;
     let promptOpen = true;
     let toolsOpen = false;
 
     const syncSectionVisibility = () => {
+        groupBody.style.display = groupOpen ? "flex" : "none";
         settingsBody.style.display = settingsOpen ? "flex" : "none";
         promptBody.style.display = promptOpen ? "flex" : "none";
         toolsBody.style.display = toolsOpen ? "flex" : "none";
+        groupArrow.textContent = groupOpen ? "▼" : "▶";
         settingsArrow.textContent = settingsOpen ? "▼" : "▶";
         promptArrow.textContent = promptOpen ? "▼" : "▶";
         toolsArrow.textContent = toolsOpen ? "▼" : "▶";
@@ -1274,19 +1346,35 @@ export function createPromptBrowserEditPanel(options) {
     // Category Settings / Tools are only meaningful for the compose source;
     // hide them for System Prompts and Prompt Manager prompts.
     const showCategorySections = isComposerSource;
+    groupHeader.style.display = showCategorySections ? "flex" : "none";
+    groupBody.style.display = showCategorySections ? groupBody.style.display : "none";
     settingsHeader.style.display = showCategorySections ? "flex" : "none";
     settingsBody.style.display = showCategorySections ? settingsBody.style.display : "none";
     toolsHeader.style.display = showCategorySections ? "flex" : "none";
     toolsBody.style.display = showCategorySections ? toolsBody.style.display : "none";
     if (!showCategorySections) {
+        groupOpen = false;
         settingsOpen = false;
         toolsOpen = false;
     }
+
+    groupHeader.addEventListener("click", () => {
+        if (groupOpen) {
+            groupOpen = false;
+        } else {
+            groupOpen = true;
+            settingsOpen = false;
+            promptOpen = false;
+            toolsOpen = false;
+        }
+        syncSectionVisibility();
+    });
 
     settingsHeader.addEventListener("click", () => {
         if (settingsOpen) {
             settingsOpen = false;
         } else {
+            groupOpen = false;
             settingsOpen = true;
             promptOpen = false;
             toolsOpen = false;
@@ -1298,6 +1386,7 @@ export function createPromptBrowserEditPanel(options) {
         if (promptOpen) {
             promptOpen = false;
         } else {
+            groupOpen = false;
             promptOpen = true;
             settingsOpen = false;
             toolsOpen = false;
@@ -1310,12 +1399,15 @@ export function createPromptBrowserEditPanel(options) {
             toolsOpen = false;
         } else {
             toolsOpen = true;
+            groupOpen = false;
             settingsOpen = false;
             promptOpen = false;
         }
         syncSectionVisibility();
     });
 
+    root.appendChild(groupHeader);
+    root.appendChild(groupBody);
     root.appendChild(settingsHeader);
     root.appendChild(settingsBody);
     root.appendChild(promptHeader);
@@ -1324,19 +1416,150 @@ export function createPromptBrowserEditPanel(options) {
     root.appendChild(toolsBody);
     syncSectionVisibility();
 
-    const typeLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prompt Type");
-    settingsBody.appendChild(typeLabel);
+    const groupNameLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prompt Group");
+    groupBody.appendChild(groupNameLabel);
 
-    const typeSelect = createSelect("", getPromptTypeChoices(node?.prompts));
-    settingsBody.appendChild(typeSelect);
+    const groupNameValue = el("div", {
+        minHeight: "34px",
+        padding: "7px 10px",
+        background: STYLE.inputBg,
+        border: `1px solid ${STYLE.inputBorder}`,
+        borderRadius: "4px",
+        color: STYLE.textPrimary,
+        fontSize: "13px",
+        boxSizing: "border-box",
+        display: "flex",
+        alignItems: "center",
+    }, "");
+    groupBody.appendChild(groupNameValue);
 
-    const prefixInfoText = "Prepended once before grouped prompts\nfrom this category in text output.\nJSON output ignores this field.";
+    const groupBasePromptInfoText = "Thumbnail prompt for this prompt group.";
+    const groupBasePromptLabelRow = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+    });
+    const groupBasePromptLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Thumbnail Prompt");
+    groupBasePromptLabel.title = groupBasePromptInfoText;
+    const groupBasePromptHint = el("span", {
+        color: STYLE.textMuted,
+        fontSize: "12px",
+        userSelect: "none",
+    }, "ⓘ");
+    groupBasePromptHint.title = groupBasePromptInfoText;
+    groupBasePromptLabelRow.append(groupBasePromptLabel, groupBasePromptHint);
+    groupBody.appendChild(groupBasePromptLabelRow);
+
+    const groupBasePromptInput = createTextarea("", "A shared thumbnail prompt for this prompt group");
+    groupBasePromptInput.style.minHeight = "112px";
+    groupBasePromptInput.style.resize = "vertical";
+    groupBasePromptInput.addEventListener("input", () => _onChange());
+    groupBody.appendChild(groupBasePromptInput);
+
+    const groupPrefixInfoText = "Prefix prompt to add before prompt.\nex: \"She wears\" \"a green dress\"";
+    const groupPrefixLabelRow = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+    });
+    const groupPrefixLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Generation Prefix");
+    groupPrefixLabel.title = groupPrefixInfoText;
+    const groupPrefixHint = el("span", {
+        color: STYLE.textMuted,
+        fontSize: "12px",
+        userSelect: "none",
+    }, "ⓘ");
+    groupPrefixHint.title = groupPrefixInfoText;
+    groupPrefixLabelRow.append(groupPrefixLabel, groupPrefixHint);
+    groupBody.appendChild(groupPrefixLabelRow);
+
+    const groupPrefixInput = createInput("", "");
+    groupPrefixInput.addEventListener("input", () => _onChange());
+    groupBody.appendChild(groupPrefixInput);
+
+    const saveGroupSettingsBtn = createButton("Save Prompt Group Settings", async () => {
+        const promptType = String(loadedGroupPromptType || "").trim();
+        if (!promptType) {
+            await _showInfo("Missing Prompt Group", "Please select a prompt group first.");
+            return;
+        }
+
+        const groupMeta = getPromptTypeMetadata(node?.prompts, promptType);
+        const hasExistingGroupSettings = !!(
+            String(loadedGroupPromptPrefix || "").trim()
+            || String(loadedGroupBasePrompt || "").trim()
+        );
+
+        if (hasExistingGroupSettings) {
+            const confirmed = await _showConfirm(
+                "Update Prompt Group Settings",
+                `Prompt group settings for "${groupMeta.typeName || promptType}" already exist. Update them?`,
+                "Update",
+                "#c44"
+            );
+            if (!confirmed) return;
+        }
+
+        const result = await saveComposerTypeSettings({
+            typeFile: groupMeta.typeFile,
+            promptType,
+            typeName: groupMeta.typeName || promptType,
+            promptPrefix: groupPrefixInput.value,
+            basePrompt: groupBasePromptInput.value,
+        });
+        if (result?.success) {
+            if (result.library && typeof result.library === "object") {
+                node.composerPromptLibrary = result.library;
+            }
+            if (result.prompts && typeof result.prompts === "object") {
+                node.composerPrompts = result.prompts;
+                node.prompts = result.prompts;
+            }
+            loadTypeSettings(promptType);
+            if (currentCategory) {
+                const currentCategoryType = String(node?.prompts?.[currentCategory]?._prompt_type_ || "").trim();
+                loadCategorySettings(currentCategory);
+                if (promptType && promptType !== currentCategoryType) {
+                    loadTypeSettings(promptType);
+                }
+            }
+            _onChange();
+        } else {
+            await _showInfo("Save Failed", result?.error || "Failed to save prompt group settings.");
+        }
+    }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
+    groupBody.appendChild(saveGroupSettingsBtn);
+
+    const categoryBasePromptInfoText = "Thumbnail prompt for this category.\nIf empty, the prompt group thumbnail prompt is used.";
+    const categoryBasePromptLabelRow = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+    });
+    const categoryBasePromptLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Thumbnail Prompt");
+    categoryBasePromptLabel.title = categoryBasePromptInfoText;
+    const categoryBasePromptHint = el("span", {
+        color: STYLE.textMuted,
+        fontSize: "12px",
+        userSelect: "none",
+    }, "ⓘ");
+    categoryBasePromptHint.title = categoryBasePromptInfoText;
+    categoryBasePromptLabelRow.append(categoryBasePromptLabel, categoryBasePromptHint);
+    settingsBody.appendChild(categoryBasePromptLabelRow);
+
+    const categoryBasePromptInput = createTextarea("", "A thumbnail prompt for this category");
+    categoryBasePromptInput.style.minHeight = "96px";
+    categoryBasePromptInput.style.resize = "vertical";
+    categoryBasePromptInput.addEventListener("input", () => _onChange());
+    settingsBody.appendChild(categoryBasePromptInput);
+
+    const prefixInfoText = "Prefix prompt to add before prompt.\nex: \"She wears\" \"a green dress\"\nIf empty, the prompt group prefix is used.";
     const prefixLabelRow = el("div", {
         display: "flex",
         alignItems: "center",
         gap: "6px",
     });
-    const prefixLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Prefix");
+    const prefixLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Generation Prefix");
     prefixLabel.title = prefixInfoText;
     const prefixHint = el("span", {
         color: STYLE.textMuted,
@@ -1348,6 +1571,7 @@ export function createPromptBrowserEditPanel(options) {
     settingsBody.appendChild(prefixLabelRow);
 
     const prefixInput = createInput("", "");
+    prefixInput.addEventListener("input", () => _onChange());
     settingsBody.appendChild(prefixInput);
 
     const saveSettingsBtn = createButton("Save Category Settings", async () => {
@@ -1364,8 +1588,8 @@ export function createPromptBrowserEditPanel(options) {
             categoryData
             && typeof categoryData === "object"
             && (
-                String(categoryData._prompt_type_ || "").trim()
-                || String(categoryData._prompt_prefix_ || "").trim()
+                String(categoryData._category_base_prompt_ || "").trim()
+                || String(categoryData._category_prefix_ || "").trim()
             )
         );
 
@@ -1381,17 +1605,20 @@ export function createPromptBrowserEditPanel(options) {
 
         const previousPromptType = loadedCategoryPromptType;
         const result = await saveComposerCategorySettings(category, {
-            promptType: typeSelect.value,
+            basePrompt: categoryBasePromptInput.value,
             promptPrefix: prefixInput.value,
         });
         if (result?.success) {
+            if (result.library && typeof result.library === "object") {
+                node.composerPromptLibrary = result.library;
+            }
             node.prompts = result.prompts;
             loadCategorySettings(category);
             _onChange();
             await _onCategorySettingsSaved({
                 category,
                 previousPromptType,
-                promptType: String(typeSelect.value || "").trim(),
+                promptType: String(loadedCategoryPromptType || "").trim(),
                 promptPrefix: String(prefixInput.value || ""),
             });
         } else {
@@ -1606,7 +1833,11 @@ export function createPromptBrowserEditPanel(options) {
 
     async function applyPromptSaveResult(result, category, name) {
         if (!result?.success) return result || { success: false };
+        if (result?.library && typeof result.library === "object") {
+            node.composerPromptLibrary = result.library;
+        }
         if (result?.prompts && typeof result.prompts === "object") {
+            node.composerPrompts = result.prompts;
             node.prompts = result.prompts;
         } else {
             await _loadPrompts(node);
@@ -1736,22 +1967,37 @@ export function createPromptBrowserEditPanel(options) {
         gap: "8px",
         alignItems: "flex-end",
     });
+    const thumbnailControlHeight = "32px";
+    const thumbnailSideControlWidth = "62px";
     const thumbnailModelBtn = createButton("Model", async () => {
         const picked = await _pickThumbnailModel();
         if (picked) {
             refreshThumbnailModelButton();
         }
-    }, { flex: "0 0 110px" });
+    }, {
+        flex: `0 0 ${thumbnailSideControlWidth}`,
+        width: thumbnailSideControlWidth,
+        height: thumbnailControlHeight,
+        minHeight: thumbnailControlHeight,
+        padding: "4px 10px",
+        minWidth: "0",
+        alignSelf: "flex-end",
+    });
     thumbnailModelBtn.title = "Select thumbnail model";
     const thumbnailSeedWrap = el("div", {
         display: "flex",
         flexDirection: "column",
         gap: "4px",
-        width: "84px",
+        width: thumbnailSideControlWidth,
         flexShrink: "0",
     });
-    const thumbnailSeedLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Seed");
-    const thumbnailSeedInput = createNumberInput(42, { step: 1 }, { width: "100%" });
+    const thumbnailSeedLabel = el("label", { color: STYLE.textMuted, fontSize: "12px", textAlign: "center" }, "Seed");
+    const thumbnailSeedInput = createNumberInput(42, { step: 1 }, {
+        width: "100%",
+        height: thumbnailControlHeight,
+        minHeight: thumbnailControlHeight,
+        padding: "4px 8px",
+    });
     thumbnailSeedInput.title = "Seed used for edit-panel thumbnail generation";
     thumbnailSeedInput.addEventListener("input", () => _onChange());
     thumbnailSeedWrap.append(thumbnailSeedLabel, thumbnailSeedInput);
@@ -1804,13 +2050,15 @@ export function createPromptBrowserEditPanel(options) {
         }
     });
     generateBtn.style.flex = "1";
+    generateBtn.style.height = thumbnailControlHeight;
+    generateBtn.style.minHeight = thumbnailControlHeight;
     const refreshThumbnailModelButton = () => {
         const label = _getThumbnailModelLabel() || {};
-        thumbnailModelBtn.textContent = String(label.shortLabel || "Model");
+        thumbnailModelBtn.textContent = String(label.iconLabel || label.shortLabel || "🔧");
         thumbnailModelBtn.title = String(label.fullLabel || "Select thumbnail model");
     };
     refreshThumbnailModelButton();
-    thumbnailGenerateRow.append(generateBtn, thumbnailModelBtn, thumbnailSeedWrap);
+    thumbnailGenerateRow.append(thumbnailModelBtn, generateBtn, thumbnailSeedWrap);
     promptBody.appendChild(thumbnailGenerateRow);
 
     const bulkPromptBtn = createButton("Bulk Prompt Importer", () => {
@@ -1887,14 +2135,19 @@ export function createPromptBrowserEditPanel(options) {
     function hasUnsavedChanges() {
         const currentName = String(promptNameInput.value || "").trim();
         const currentText = String(promptTextArea.value || "").trim();
-        const currentCategoryPromptType = String(typeSelect.value || "").trim();
+        const currentGroupPromptPrefix = String(groupPrefixInput.value || "").trim();
+        const currentGroupBasePrompt = String(groupBasePromptInput.value || "").trim();
+        const currentCategoryBasePrompt = String(categoryBasePromptInput.value || "").trim();
         const currentCategoryPromptPrefix = String(prefixInput.value || "").trim();
+
+        if (currentGroupPromptPrefix !== String(loadedGroupPromptPrefix || "").trim()) return true;
+        if (currentGroupBasePrompt !== String(loadedGroupBasePrompt || "").trim()) return true;
 
         if (!currentCategory) {
             return false;
         }
 
-        if (currentCategoryPromptType !== String(loadedCategoryPromptType || "").trim()) return true;
+        if (currentCategoryBasePrompt !== String(loadedCategoryBasePrompt || "").trim()) return true;
         if (currentCategoryPromptPrefix !== String(loadedCategoryPromptPrefix || "").trim()) return true;
 
         const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[currentCategory], currentPromptName, endpointPrefix);
@@ -1950,9 +2203,12 @@ export function createPromptBrowserEditPanel(options) {
         pendingThumbnail = null;
 
         // Selecting a prompt should always focus Prompt Settings.
+        groupOpen = false;
         settingsOpen = false;
         promptOpen = true;
         if (!showCategorySections) {
+            toolsOpen = false;
+        } else {
             toolsOpen = false;
         }
         syncSectionVisibility();
@@ -1996,22 +2252,48 @@ export function createPromptBrowserEditPanel(options) {
         return true;
     }
 
+    function loadTypeSettings(promptType) {
+        const selectedPromptType = String(promptType || "").trim();
+        const typeMeta = getPromptTypeMetadata(node?.prompts, selectedPromptType || loadedGroupPromptType || "");
+        groupNameValue.textContent = String(typeMeta.typeName || typeMeta.promptType || "").trim() || "No prompt group selected";
+        groupPrefixInput.value = String(typeMeta.promptPrefix || "");
+        groupBasePromptInput.value = String(typeMeta.basePrompt || "");
+        loadedGroupPromptType = String(typeMeta.promptType || "").trim();
+        loadedGroupPromptPrefix = String(typeMeta.promptPrefix || "").trim();
+        loadedGroupBasePrompt = String(typeMeta.basePrompt || "").trim();
+    }
+
     function loadCategorySettings(category) {
         currentCategory = category || currentCategory || "";
-        replaceSelectOptions(typeSelect, getPromptTypeChoices(node?.prompts), String(typeSelect.value || loadedCategoryPromptType || ""));
         const catData = node?.prompts?.[category];
         if (catData && typeof catData === "object") {
             const promptType = String(catData._prompt_type_ || "").trim();
-            typeSelect.value = promptType;
-            prefixInput.value = String(catData._prompt_prefix_ || "");
+            loadTypeSettings(promptType);
+            categoryBasePromptInput.value = String(catData._category_base_prompt_ || "");
+            prefixInput.value = String(catData._category_prefix_ || "");
             loadedCategoryPromptType = promptType;
-            loadedCategoryPromptPrefix = String(catData._prompt_prefix_ || "").trim();
+            loadedCategoryBasePrompt = String(catData._category_base_prompt_ || "").trim();
+            loadedCategoryPromptPrefix = String(catData._category_prefix_ || "").trim();
         } else {
-            typeSelect.value = "";
+            loadTypeSettings("");
+            categoryBasePromptInput.value = "";
             prefixInput.value = "";
             loadedCategoryPromptType = "";
+            loadedCategoryBasePrompt = "";
             loadedCategoryPromptPrefix = "";
         }
+    }
+
+    function showTypeSettings() {
+        if (!showCategorySections) {
+            showPromptSettings();
+            return;
+        }
+        groupOpen = true;
+        settingsOpen = false;
+        promptOpen = false;
+        toolsOpen = false;
+        syncSectionVisibility();
     }
 
     function showCategorySettings() {
@@ -2019,14 +2301,18 @@ export function createPromptBrowserEditPanel(options) {
             showPromptSettings();
             return;
         }
+        groupOpen = false;
         settingsOpen = true;
         promptOpen = false;
+        toolsOpen = false;
         syncSectionVisibility();
     }
 
     function showPromptSettings() {
+        groupOpen = false;
         settingsOpen = false;
         promptOpen = true;
+        toolsOpen = false;
         syncSectionVisibility();
     }
 
@@ -2337,12 +2623,15 @@ export function createPromptBrowserEditPanel(options) {
     updateEditorActionButtons();
     if (isComposerSource) {
         void refreshComposerAssetChoices();
+        loadTypeSettings("");
     }
 
     return {
         element: root,
         loadPrompt,
+        loadTypeSettings,
         loadCategorySettings,
+        showTypeSettings,
         showCategorySettings,
         showPromptSettings,
         refreshThumbnailModelButton,

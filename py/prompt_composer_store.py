@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+from urllib.parse import urlencode
 
 import folder_paths
 import server
@@ -26,9 +27,28 @@ DEFAULT_LEGACY_FILENAME = "default_composer_prompts.json"
 CANONICAL_TYPES_KEY = "_types_"
 FALLBACK_TYPE_FILE = "misc.json"
 TYPE_FILE_SUFFIX = ".json"
+TYPE_ICON_SUFFIX = ".png"
+DEFAULT_TYPE_ICON_FILENAME = "_default.png"
 
 SUBJECT_START_TYPE_KEYS = {"character", "environment"}
 NON_SUBJECT_TYPE_KEYS = {"style", "effect", "lighting", "mood", "composition", "camera"}
+LEGACY_TYPE_ORDER_PRESET = [
+    "character",
+    "characteristic",
+    "clothing",
+    "hairstyle",
+    "accessory",
+    "expression",
+    "action",
+    "environment",
+    "lighting",
+    "mood",
+    "camera",
+    "composition",
+    "effect",
+    "style",
+]
+LEGACY_TYPE_ORDER_INDEX = {name: index for index, name in enumerate(LEGACY_TYPE_ORDER_PRESET)}
 
 
 class PromptComposerStore:
@@ -63,8 +83,10 @@ class PromptComposerStore:
     @classmethod
     def load_canonical_prompts(cls):
         storage_dir = cls.get_storage_dir()
+        default_dir = cls.get_default_prompts_dir()
         type_files = _list_type_files(storage_dir)
         if type_files:
+            _copy_matching_type_icons(default_dir, storage_dir, type_files)
             return _load_canonical_library_from_files(storage_dir, type_files)
 
         legacy_path = cls.get_data_path()
@@ -72,15 +94,16 @@ class PromptComposerStore:
             legacy_data = _load_legacy_library(legacy_path)
             canonical = _convert_legacy_library_to_canonical(legacy_data)
             cls.save_prompts(canonical)
+            _copy_matching_type_icons(default_dir, storage_dir, _ordered_type_files(canonical))
             _archive_legacy_file(legacy_path, cls.get_legacy_backup_path())
             return canonical
 
-        default_dir = cls.get_default_prompts_dir()
         default_type_files = _list_type_files(default_dir)
         if default_type_files:
             try:
                 canonical = _load_canonical_library_from_files(default_dir, default_type_files)
                 cls.save_prompts(canonical)
+                _copy_matching_type_icons(default_dir, storage_dir, _ordered_type_files(canonical))
                 return canonical
             except Exception as exc:
                 print(f"[PromptComposerStore] Error loading bundled defaults: {exc}")
@@ -92,6 +115,7 @@ class PromptComposerStore:
                     default_data = json.load(handle)
                 canonical = _convert_legacy_library_to_canonical(_normalize_prompts_data(default_data))
                 cls.save_prompts(canonical)
+                _copy_matching_type_icons(default_dir, storage_dir, _ordered_type_files(canonical))
                 return canonical
             except Exception as exc:
                 print(f"[PromptComposerStore] Error loading legacy bundled defaults: {exc}")
@@ -192,6 +216,65 @@ def _normalize_type_file_name(value, fallback=FALLBACK_TYPE_FILE):
 
 def _type_stem(type_file):
     return os.path.splitext(os.path.basename(str(type_file or "")))[0]
+
+
+def _type_icon_file_name(type_file):
+    stem = _type_stem(type_file)
+    return f"{stem}{TYPE_ICON_SUFFIX}" if stem else DEFAULT_TYPE_ICON_FILENAME
+
+
+def _composer_type_icon_url(type_file=None):
+    normalized = _normalize_type_file_name(type_file) if type_file else ""
+    query = urlencode({"type_file": normalized}) if normalized else ""
+    return f"/prompt-manager/compose/type-icon?{query}" if query else "/prompt-manager/compose/type-icon"
+
+
+def _copy_file_if_missing(source_path, target_path):
+    if not source_path or not target_path:
+        return
+    if not os.path.isfile(source_path) or os.path.exists(target_path):
+        return
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    shutil.copy2(source_path, target_path)
+
+
+def _copy_matching_type_icons(source_dir, target_dir, type_files):
+    if not source_dir or not target_dir or not os.path.isdir(source_dir):
+        return
+
+    _copy_file_if_missing(
+        os.path.join(source_dir, DEFAULT_TYPE_ICON_FILENAME),
+        os.path.join(target_dir, DEFAULT_TYPE_ICON_FILENAME),
+    )
+
+    for type_file in type_files or []:
+        icon_name = _type_icon_file_name(type_file)
+        _copy_file_if_missing(
+            os.path.join(source_dir, icon_name),
+            os.path.join(target_dir, icon_name),
+        )
+
+
+def _resolve_type_icon_path(type_file=None, storage_dir=None, fallback_dirs=None):
+    icon_name = _type_icon_file_name(type_file)
+    search_dirs = []
+    if storage_dir:
+        search_dirs.append(storage_dir)
+    for directory in fallback_dirs or []:
+        if directory and directory not in search_dirs:
+            search_dirs.append(directory)
+
+    for directory in search_dirs:
+        specific_path = os.path.join(directory, icon_name)
+        if os.path.isfile(specific_path):
+            return specific_path
+
+    for directory in search_dirs:
+        default_path = os.path.join(directory, DEFAULT_TYPE_ICON_FILENAME)
+        if os.path.isfile(default_path):
+            return default_path
+
+    return None
 
 
 def _default_type_name_from_file(type_file):
@@ -398,7 +481,7 @@ def _normalize_canonical_library(data):
     if not isinstance(raw_types, dict):
         raw_types = {}
 
-    for raw_type_file, raw_type_data in sorted(raw_types.items(), key=lambda item: str(item[0]).lower()):
+    for raw_type_file, raw_type_data in _sorted_type_items(raw_types):
         type_file = _normalize_type_file_name(raw_type_file)
         library[CANONICAL_TYPES_KEY][type_file] = _normalize_type_data(type_file, raw_type_data)
 
@@ -441,11 +524,80 @@ def _serialize_type_data(type_file, type_data):
     return payload
 
 
-def _iter_type_items(library):
-    types = library.get(CANONICAL_TYPES_KEY, {}) if isinstance(library, dict) else {}
+def _sorted_type_items(types):
     if not isinstance(types, dict):
         return []
-    return sorted(types.items(), key=lambda item: str(item[0]).lower())
+
+    entries = []
+    has_explicit_order = False
+    for type_file, type_data in types.items():
+        order = _normalize_optional_int(type_data.get("order")) if isinstance(type_data, dict) else None
+        if order is not None:
+            has_explicit_order = True
+        entries.append((str(type_file), type_data, order))
+
+    if not has_explicit_order:
+        return sorted(((type_file, type_data) for type_file, type_data, _order in entries), key=lambda item: str(item[0]).lower())
+
+    return [
+        (type_file, type_data)
+        for type_file, type_data, _order in sorted(
+            entries,
+            key=lambda item: (
+                item[2] is None,
+                item[2] if item[2] is not None else 0,
+                str(item[0]).lower(),
+            ),
+        )
+    ]
+
+
+def _iter_type_items(library):
+    types = library.get(CANONICAL_TYPES_KEY, {}) if isinstance(library, dict) else {}
+    return _sorted_type_items(types)
+
+
+def _ordered_type_files(library):
+    return [type_file for type_file, _type_data in _iter_type_items(library)]
+
+
+def _type_orders_are_dense(library):
+    ordered_type_files = _ordered_type_files(library)
+    if not ordered_type_files:
+        return True
+
+    types = library.get(CANONICAL_TYPES_KEY, {}) if isinstance(library, dict) else {}
+    expected_order = list(range(len(ordered_type_files)))
+    actual_order = [
+        _normalize_optional_int(types.get(type_file, {}).get("order"))
+        for type_file in ordered_type_files
+    ]
+    return actual_order == expected_order
+
+
+def _assign_type_orders(library, ordered_type_files, start_index=0, end_index=None):
+    types = library.get(CANONICAL_TYPES_KEY, {}) if isinstance(library, dict) else {}
+    if not isinstance(types, dict) or not ordered_type_files:
+        return
+
+    max_index = len(ordered_type_files) - 1
+    first_index = max(0, int(start_index or 0))
+    last_index = max_index if end_index is None else min(max_index, int(end_index))
+    if last_index < first_index:
+        return
+
+    for index in range(first_index, last_index + 1):
+        type_file = ordered_type_files[index]
+        type_data = types.get(type_file)
+        if isinstance(type_data, dict):
+            type_data["order"] = index
+
+
+def _ensure_dense_type_orders(library):
+    ordered_type_files = _ordered_type_files(library)
+    if ordered_type_files and not _type_orders_are_dense(library):
+        _assign_type_orders(library, ordered_type_files)
+    return ordered_type_files
 
 
 def _list_type_files(storage_dir):
@@ -545,6 +697,14 @@ def _convert_legacy_library_to_canonical(legacy_data):
             "_prompts_": _get_category_prompts_map(category_data),
         })
 
+    ordered_type_files = list(library[CANONICAL_TYPES_KEY].keys())
+    legacy_positions = {type_file: index for index, type_file in enumerate(ordered_type_files)}
+    ordered_type_files.sort(key=lambda type_file: (
+        LEGACY_TYPE_ORDER_INDEX.get(_type_stem(type_file), len(LEGACY_TYPE_ORDER_PRESET)),
+        legacy_positions.get(type_file, 0),
+    ))
+    _assign_type_orders(library, ordered_type_files)
+
     return _normalize_canonical_library(library)
 
 
@@ -570,6 +730,7 @@ def _flatten_canonical_library(library):
     for type_file, type_data in _iter_type_items(canonical):
         type_key = _type_stem(type_file)
         type_name = type_data.get("name") or _default_type_name_from_file(type_file)
+        type_icon_url = _composer_type_icon_url(type_file)
         type_prefix = str(type_data.get("prefix") or "")
         type_base_prompt = str(type_data.get("base_prompt") or "")
         type_subject_type = _normalize_subject_type(type_data.get("subject_type"), _default_subject_type_for_type_file(type_file))
@@ -587,6 +748,7 @@ def _flatten_canonical_library(library):
             flat_category["_prompt_type_"] = type_key
             flat_category["_type_file_"] = type_file
             flat_category["_type_name_"] = type_name
+            flat_category["_type_icon_url_"] = type_icon_url
             flat_category["_subject_type_"] = type_subject_type
             if type_prefix.strip():
                 flat_category["_type_prefix_"] = type_prefix
@@ -758,6 +920,23 @@ async def compose_get_prompts(request):
         return server.web.json_response({"error": str(exc)}, status=500)
 
 
+@server.PromptServer.instance.routes.get("/prompt-manager/compose/type-icon")
+async def compose_get_type_icon(request):
+    try:
+        requested_type_file = _normalize_optional_string(request.query.get("type_file"))
+        icon_path = _resolve_type_icon_path(
+            requested_type_file or None,
+            storage_dir=PromptComposerStore.get_storage_dir(),
+            fallback_dirs=[PromptComposerStore.get_default_prompts_dir()],
+        )
+        if not icon_path:
+            return server.web.Response(text="Type icon not found", status=404)
+        return server.web.FileResponse(icon_path, headers={"Cache-Control": "no-store"})
+    except Exception as exc:
+        print(f"[PromptComposerStore] Error in type-icon: {exc}")
+        return server.web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/save-category")
 async def compose_save_category(request):
     try:
@@ -897,6 +1076,58 @@ async def compose_save_category_settings(request):
         return server.web.json_response({"success": False, "error": str(exc)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/save-type-settings")
+async def compose_save_type_settings(request):
+    try:
+        data = await request.json()
+        requested_prompt_type = _normalize_optional_string(data.get("prompt_type"))
+        requested_type_file = data.get("type_file")
+        if not requested_prompt_type and not requested_type_file:
+            return server.web.json_response({"success": False, "error": "Prompt group is required"})
+
+        library = PromptComposerStore.load_canonical_prompts()
+        target_type_file = _find_type_case_insensitive(library, requested_type_file)
+        if not target_type_file:
+            candidate_file = _resolve_target_type_file("", requested_prompt_type, fallback_category="misc")
+            target_type_file = _find_type_case_insensitive(library, candidate_file) or candidate_file
+        existing_types = library.get(CANONICAL_TYPES_KEY, {}) if isinstance(library, dict) else {}
+        is_new_type = target_type_file not in existing_types
+        if is_new_type:
+            _ensure_dense_type_orders(library)
+
+        target_type_data = _ensure_type(
+            library,
+            target_type_file,
+            name=_normalize_optional_string(data.get("type_name")) or _default_type_name_from_file(target_type_file),
+        )
+        if is_new_type:
+            target_type_data["order"] = len(library.get(CANONICAL_TYPES_KEY, {})) - 1
+
+        prefix = str(data.get("prefix", "") or "")
+        if prefix.strip():
+            target_type_data["prefix"] = prefix
+        else:
+            target_type_data.pop("prefix", None)
+
+        base_prompt = str(data.get("base_prompt", "") or "")
+        if base_prompt.strip():
+            target_type_data["base_prompt"] = base_prompt
+        else:
+            target_type_data.pop("base_prompt", None)
+
+        PromptComposerStore.save_prompts(library)
+        return server.web.json_response({
+            "success": True,
+            "library": library,
+            "prompts": _flatten_canonical_library(library),
+            "type_file": target_type_file,
+            "type_name": target_type_data.get("name") or _default_type_name_from_file(target_type_file),
+        })
+    except Exception as exc:
+        print(f"[PromptComposerStore] Error in save-type-settings: {exc}")
+        return server.web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/rename-category")
 async def compose_rename_category(request):
     try:
@@ -982,9 +1213,15 @@ async def compose_delete_category(request):
         location, error = _locate_category(library, category, type_file=data.get("type_file"))
         if not error:
             type_file, type_data, canonical_category, _category_data = location
+            had_type_order = _type_orders_are_dense(library)
+            ordered_type_files = _ordered_type_files(library) if had_type_order else []
+            deleted_index = ordered_type_files.index(type_file) if had_type_order and type_file in ordered_type_files else -1
             type_data.setdefault("categories", {}).pop(canonical_category, None)
             if not type_data.get("categories"):
                 library[CANONICAL_TYPES_KEY].pop(type_file, None)
+                if had_type_order and deleted_index >= 0:
+                    remaining_type_files = [current_type_file for current_type_file in ordered_type_files if current_type_file != type_file]
+                    _assign_type_orders(library, remaining_type_files, deleted_index, len(remaining_type_files) - 1)
             PromptComposerStore.save_prompts(library)
 
         return server.web.json_response({
@@ -1006,7 +1243,13 @@ async def compose_delete_type(request):
         if not target_type_file:
             return server.web.json_response({"success": False, "error": "Type not found"})
 
+        had_type_order = _type_orders_are_dense(library)
+        ordered_type_files = _ordered_type_files(library) if had_type_order else []
+        deleted_index = ordered_type_files.index(target_type_file) if had_type_order and target_type_file in ordered_type_files else -1
         library.get(CANONICAL_TYPES_KEY, {}).pop(target_type_file, None)
+        if had_type_order and deleted_index >= 0:
+            remaining_type_files = [current_type_file for current_type_file in ordered_type_files if current_type_file != target_type_file]
+            _assign_type_orders(library, remaining_type_files, deleted_index, len(remaining_type_files) - 1)
         PromptComposerStore.save_prompts(library)
         return server.web.json_response({
             "success": True,
@@ -1015,6 +1258,58 @@ async def compose_delete_type(request):
         })
     except Exception as exc:
         print(f"[PromptComposerStore] Error in delete-type: {exc}")
+        return server.web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/reorder-types")
+async def compose_reorder_types(request):
+    try:
+        data = await request.json()
+        library = PromptComposerStore.load_canonical_prompts()
+        source_type_file = _find_type_case_insensitive(library, data.get("source_type_file") or data.get("source_prompt_type"))
+        target_type_file = _find_type_case_insensitive(library, data.get("target_type_file") or data.get("target_prompt_type"))
+        position = str(data.get("position", "before") or "before").strip().lower()
+        if position not in {"before", "after"}:
+            position = "before"
+
+        if not source_type_file or not target_type_file:
+            return server.web.json_response({"success": False, "error": "Both source and target prompt groups are required"})
+        if source_type_file == target_type_file:
+            return server.web.json_response({
+                "success": True,
+                "library": library,
+                "prompts": _flatten_canonical_library(library),
+            })
+
+        ordered_type_files = _ensure_dense_type_orders(library)
+        if source_type_file not in ordered_type_files or target_type_file not in ordered_type_files:
+            return server.web.json_response({"success": False, "error": "Prompt group order is unavailable"})
+
+        source_index = ordered_type_files.index(source_type_file)
+        reordered_type_files = [type_file for type_file in ordered_type_files if type_file != source_type_file]
+        target_index = reordered_type_files.index(target_type_file)
+        insertion_index = target_index + (1 if position == "after" else 0)
+        reordered_type_files.insert(insertion_index, source_type_file)
+
+        if reordered_type_files == ordered_type_files:
+            return server.web.json_response({
+                "success": True,
+                "library": library,
+                "prompts": _flatten_canonical_library(library),
+            })
+
+        affected_start = min(source_index, insertion_index)
+        affected_end = max(source_index, insertion_index)
+        _assign_type_orders(library, reordered_type_files, affected_start, affected_end)
+
+        PromptComposerStore.save_prompts(library)
+        return server.web.json_response({
+            "success": True,
+            "library": library,
+            "prompts": _flatten_canonical_library(library),
+        })
+    except Exception as exc:
+        print(f"[PromptComposerStore] Error in reorder-types: {exc}")
         return server.web.json_response({"success": False, "error": str(exc)}, status=500)
 
 

@@ -100,11 +100,13 @@ function getThumbnailRenderLabelParts() {
         const leafName = _thumbnailLeafName(_thumbnailRenderModel);
         return {
             shortLabel: typeSafeTruncate(`🔧 ${leafName}`, 18),
+            iconLabel: "🔧",
             fullLabel: `Thumbnail: ${_thumbnailRenderFamily} : ${leafName}${selectedLoras.length ? ` + ${selectedLoras.length} LoRA${selectedLoras.length > 1 ? "s" : ""}` : ""}`,
         };
     }
     return {
         shortLabel: "🔧 Model",
+        iconLabel: "🔧",
         fullLabel: "Select thumbnail family and model",
     };
 }
@@ -114,6 +116,75 @@ function typeSafeTruncate(value, maxLength) {
     const limit = Number(maxLength) || 0;
     if (!limit || text.length <= limit) return text;
     return `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function showTextInputDialog(title, message, defaultValue = "") {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
+            <input type="text" value="${String(defaultValue || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
+            </div>
+        `;
+
+        const input = dialog.querySelector("input");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            if (overlay.parentNode) document.body.removeChild(overlay);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve(String(input?.value || ""));
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+        input.onkeydown = (event) => {
+            if (event.key === "Enter") handleOk();
+            if (event.key === "Escape") handleCancel();
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        input.focus();
+        input.select();
+    });
 }
 
 function _getComposerImageThumbnailLoras(promptData) {
@@ -978,6 +1049,21 @@ function getComposerTypeLibrary(node) {
     return types && typeof types === "object" && !Array.isArray(types) ? types : null;
 }
 
+function getOrderedComposerTypeEntries(node) {
+    const types = getComposerTypeLibrary(node);
+    const entries = Object.entries(types || {});
+    const hasExplicitOrder = entries.some(([, typeData]) => Number.isInteger(Number(typeData?.order)));
+    if (!hasExplicitOrder) {
+        return entries.sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" }));
+    }
+    return entries.sort((a, b) => {
+        const aOrder = Number.isInteger(Number(a[1]?.order)) ? Number(a[1].order) : Number.POSITIVE_INFINITY;
+        const bOrder = Number.isInteger(Number(b[1]?.order)) ? Number(b[1].order) : Number.POSITIVE_INFINITY;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" });
+    });
+}
+
 function getComposerTypeFile(node, typeValue) {
     const normalized = String(typeValue || "").trim().toLowerCase();
     if (!normalized) return "";
@@ -1037,27 +1123,15 @@ function getCategoriesForComposerType(node, typeValue) {
         .filter((category) => String(getCategoryPromptType(node, category) || "").trim().toLowerCase() === normalized);
 }
 
-const PROMPT_TYPE_ICON_URLS = {
-    __all__: new URL("./icons/all.png", import.meta.url).href,
-    action: new URL("./icons/action.png", import.meta.url).href,
-    accessory: new URL("./icons/accessory.png", import.meta.url).href,
-    mood: new URL("./icons/mood.png", import.meta.url).href,
-    clothing: new URL("./icons/clothing.png", import.meta.url).href,
-    hairstyle: new URL("./icons/hairstyle.png", import.meta.url).href,
-    environment: new URL("./icons/environment.png", import.meta.url).href,
-    effect: new URL("./icons/effect.png", import.meta.url).href,
-    camera: new URL("./icons/camera.png", import.meta.url).href,
-    character: new URL("./icons/character.png", import.meta.url).href,
-    characteristic: new URL("./icons/characteristic.png", import.meta.url).href,
-    composition: new URL("./icons/composition.png", import.meta.url).href,
-    expression: new URL("./icons/expression.png", import.meta.url).href,
-    lighting: new URL("./icons/lighting.png", import.meta.url).href,
-    style: new URL("./icons/style.png", import.meta.url).href,
-};
+const COMPOSER_TYPE_ICON_ENDPOINT = "/prompt-manager/compose/type-icon";
 
-function getPromptTypeIconUrl(typeValue) {
+function getPromptTypeIconUrl(node, typeValue, typeFile = "") {
     const key = String(typeValue || "").trim().toLowerCase() || "__all__";
-    return PROMPT_TYPE_ICON_URLS[key] || PROMPT_TYPE_ICON_URLS.__all__;
+    const resolvedTypeFile = String(typeFile || getComposerTypeFile(node, key) || "").trim();
+    if (resolvedTypeFile) {
+        return `${COMPOSER_TYPE_ICON_ENDPOINT}?type_file=${encodeURIComponent(resolvedTypeFile)}`;
+    }
+    return COMPOSER_TYPE_ICON_ENDPOINT;
 }
 
 function showEditBasePromptDialog(categoryName, currentValue) {
@@ -1799,7 +1873,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const thumbnailModelBtn = document.createElement("button");
         const updateThumbnailModelBtn = () => {
             const label = getThumbnailRenderLabelParts();
-            thumbnailModelBtn.textContent = label.shortLabel;
+            thumbnailModelBtn.textContent = label.iconLabel || "🔧";
             thumbnailModelBtn.title = label.fullLabel;
             thumbnailModelBtn.style.cssText = btnStyle;
         };
@@ -2044,9 +2118,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             flex-shrink: 0;
             margin-top: 1px;
         `;
+        const updateCategoryCreateControls = () => {
+            const showCategoryCreate = !showCategoryTypeFilter || categoryTypeFilter !== "__all__";
+            addCategoryBtn.style.display = showCategoryCreate ? "" : "none";
+            categoryContainerLeftBorder.style.display = showCategoryCreate ? "block" : "none";
+        };
         addCategoryBtn.onmouseover = () => { addCategoryBtn.style.background = '#38414c'; addCategoryBtn.style.color = '#fff'; };
         addCategoryBtn.onmouseout = () => { addCategoryBtn.style.background = '#313843'; addCategoryBtn.style.color = '#aaa'; };
         addCategoryBtn.onclick = async () => {
+            if (showCategoryTypeFilter && categoryTypeFilter === "__all__") return;
             const result = await showNewCategoryDialog();
             if (result && result.name && result.name.trim()) {
                 const categoryName = result.name.trim();
@@ -2134,24 +2214,36 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let promptTypeFilters = [];
 
         const buildPromptTypeFilters = () => {
-            const choices = showCategoryTypeFilter
-                ? getPromptTypeChoices(node?.prompts)
-                    .filter((choice) => String(choice?.value || "").trim())
-                    .map((choice) => {
-                        const normalizedValue = String(choice.value || "").trim().toLowerCase();
+            let choices = [];
+            if (showCategoryTypeFilter) {
+                const canonicalEntries = getOrderedComposerTypeEntries(node);
+                if (canonicalEntries.length) {
+                    choices = canonicalEntries.map(([typeFile, typeData]) => {
+                        const normalizedValue = String(typeFile || "").replace(/\.json$/i, "").trim().toLowerCase();
                         return {
                             value: normalizedValue,
-                            label: showCategoryTypeFilter
-                                ? (getComposerTypeDisplayName(node, normalizedValue) || choice.label || choice.value)
-                                : (choice.label || choice.value),
-                            typeFile: getComposerTypeFile(node, normalizedValue),
-                            iconUrl: getPromptTypeIconUrl(choice.value),
+                            label: String(typeData?.name || "").trim() || normalizedValue,
+                            typeFile: String(typeFile || ""),
+                            iconUrl: String(typeData?.icon_url || "").trim() || getPromptTypeIconUrl(node, normalizedValue, typeFile),
                         };
-                    })
-                : [];
+                    });
+                } else {
+                    choices = getPromptTypeChoices(node?.prompts)
+                        .filter((choice) => String(choice?.value || "").trim())
+                        .map((choice) => {
+                            const normalizedValue = String(choice.value || "").trim().toLowerCase();
+                            return {
+                                value: normalizedValue,
+                                label: getComposerTypeDisplayName(node, normalizedValue) || choice.label || choice.value,
+                                typeFile: getComposerTypeFile(node, normalizedValue),
+                                iconUrl: getPromptTypeIconUrl(node, choice.value),
+                            };
+                        });
+                }
+            }
 
             return [
-                { value: "__all__", label: "All Types", typeFile: "", iconUrl: getPromptTypeIconUrl("__all__") },
+                { value: "__all__", label: "All Types", typeFile: "", iconUrl: getPromptTypeIconUrl(node, "__all__") },
                 ...choices,
             ];
         };
@@ -2170,6 +2262,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         refreshPromptTypeFilters();
+        updateCategoryCreateControls();
 
         const isCategoryNSFW = (cat) => {
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
@@ -2234,8 +2327,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let typeRail = null;
         let typeRailToggle = null;
         let typeRailList = null;
+        let typeRailAddButton = null;
         let typeRailButtons = [];
         let typeRailTooltip = null;
+        let draggingTypeFile = "";
+        let dragHoverTypeFile = "";
+        let dragHoverPosition = "";
+        let suppressTypeRailClickUntil = 0;
 
         const ensureTypeRailTooltip = () => {
             if (typeRailTooltip) return typeRailTooltip;
@@ -2289,16 +2387,122 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         };
 
+        const clearTypeRailDropIndicators = () => {
+            for (const btn of typeRailButtons) {
+                btn.style.boxShadow = "none";
+                btn.style.outline = "none";
+                btn.style.outlineOffset = "0";
+            }
+            dragHoverTypeFile = "";
+            dragHoverPosition = "";
+        };
+
+        const getVisibleTypeRailButtons = () => typeRailButtons.filter((btn) => btn.style.display !== "none");
+
+        const updateTypeRailDropIndicators = () => {
+            for (const btn of typeRailButtons) {
+                btn.style.boxShadow = "none";
+                btn.style.outline = "none";
+                btn.style.outlineOffset = "0";
+            }
+            if (!dragHoverTypeFile) return;
+
+            const visibleButtons = getVisibleTypeRailButtons();
+            const targetIndex = visibleButtons.findIndex((btn) => btn.dataset.typeFile === dragHoverTypeFile);
+            if (targetIndex < 0) return;
+
+            const targetBtn = visibleButtons[targetIndex];
+            const previousBtn = targetIndex > 0 ? visibleButtons[targetIndex - 1] : null;
+            const nextBtn = targetIndex < visibleButtons.length - 1 ? visibleButtons[targetIndex + 1] : null;
+            const highlight = "rgba(147, 197, 253, 1)";
+            const glow = "rgba(56, 130, 246, 0.5)";
+
+            if (dragHoverPosition === "before") {
+                targetBtn.style.boxShadow = `inset 0 4px 0 ${highlight}, 0 0 0 1px ${glow}`;
+                targetBtn.style.outline = `2px solid ${glow}`;
+                targetBtn.style.outlineOffset = "1px";
+                if (previousBtn) {
+                    previousBtn.style.boxShadow = `inset 0 -4px 0 ${highlight}`;
+                }
+                return;
+            }
+
+            targetBtn.style.boxShadow = `inset 0 -4px 0 ${highlight}, 0 0 0 1px ${glow}`;
+            targetBtn.style.outline = `2px solid ${glow}`;
+            targetBtn.style.outlineOffset = "1px";
+            if (nextBtn) {
+                nextBtn.style.boxShadow = `inset 0 4px 0 ${highlight}`;
+            }
+        };
+
+        const getTypeRailDropPosition = (btn, clientY) => {
+            const rect = btn.getBoundingClientRect();
+            return clientY >= rect.top + (rect.height / 2) ? "after" : "before";
+        };
+
+        const commitTypeReorder = async (sourceTypeFile, targetTypeFile, position) => {
+            const normalizedSource = String(sourceTypeFile || "").trim();
+            const normalizedTarget = String(targetTypeFile || "").trim();
+            if (!normalizedSource || !normalizedTarget || normalizedSource === normalizedTarget) return;
+            try {
+                const resp = await fetch(`${endpointPrefix}/reorder-types`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        source_type_file: normalizedSource,
+                        target_type_file: normalizedTarget,
+                        position: position === "after" ? "after" : "before",
+                    }),
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    applyPromptPayloadToNode(node, data);
+                    rebuildCategoryList();
+                    rebuildTypeRailButtons();
+                    renderContent(searchInput.value);
+                } else {
+                    await showInfo("Error", data.error || "Failed to reorder prompt groups.");
+                }
+            } catch (err) {
+                console.error("[PromptBrowser] Error reordering prompt groups:", err);
+            }
+        };
+
         const updateTypeRailButtons = () => {
             if (!typeRailButtons.length) return;
+            const visibleButtons = getVisibleTypeRailButtons();
+            const dropHighlightTypeFiles = new Set();
+            if (dragHoverTypeFile) {
+                const targetIndex = visibleButtons.findIndex((btn) => btn.dataset.typeFile === dragHoverTypeFile);
+                if (targetIndex >= 0) {
+                    const targetBtn = visibleButtons[targetIndex];
+                    const adjacentBtn = dragHoverPosition === "before"
+                        ? visibleButtons[targetIndex - 1] || null
+                        : visibleButtons[targetIndex + 1] || null;
+                    if (targetBtn?.dataset.typeFile) {
+                        dropHighlightTypeFiles.add(targetBtn.dataset.typeFile);
+                    }
+                    if (adjacentBtn?.dataset.typeFile) {
+                        dropHighlightTypeFiles.add(adjacentBtn.dataset.typeFile);
+                    }
+                }
+            }
             for (const btn of typeRailButtons) {
                 const isSelected = btn.dataset.typeValue === categoryTypeFilter;
                 const isHidden = hideNSFWState && btn.dataset.typeValue !== "__all__" && isComposerTypeNSFW(node, btn.dataset.typeValue);
+                const isNSFW = btn.dataset.typeValue !== "__all__" && isComposerTypeNSFW(node, btn.dataset.typeValue);
+                const isDraggingSelf = !!draggingTypeFile && btn.dataset.typeFile === draggingTypeFile;
+                const isDraggingOther = !!draggingTypeFile && !isDraggingSelf;
+                const isDropHighlight = !!dragHoverTypeFile && dropHighlightTypeFiles.has(btn.dataset.typeFile || "");
                 const labelEl = btn.querySelector(".pm-type-rail-label");
                 const iconEl = btn.querySelector(".pm-type-rail-icon");
                 btn.style.display = isHidden ? "none" : "flex";
                 btn.style.background = isSelected ? "rgba(56, 130, 246, 0.22)" : "transparent";
-                btn.style.borderColor = isSelected ? "rgba(56, 130, 246, 0.85)" : "rgba(95, 103, 115, 0.75)";
+                if (isNSFW && !isSelected) {
+                    btn.style.borderColor = "#944";
+                } else {
+                    btn.style.borderColor = isSelected ? "rgba(56, 130, 246, 0.85)" : "rgba(95, 103, 115, 0.75)";
+                }
                 btn.style.color = isSelected ? "#dbeafe" : "#c7d0db";
                 btn.style.justifyContent = typeRailExpanded ? "flex-start" : "center";
                 btn.style.padding = typeRailExpanded ? "3px 8px" : "2px";
@@ -2311,6 +2515,20 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     iconEl.style.height = typeRailExpanded ? "32px" : "38px";
                     iconEl.style.minWidth = typeRailExpanded ? "32px" : "38px";
                 }
+                btn.style.opacity = isDraggingOther && !isDropHighlight ? "0.28" : "1";
+                btn.style.filter = isDraggingOther && !isDropHighlight ? "brightness(0.6) saturate(0.7)" : "none";
+                btn.style.transform = isDraggingSelf ? "scale(1.04)" : "none";
+                btn.style.zIndex = isDraggingSelf ? "2" : "0";
+                if (isDraggingSelf) {
+                    btn.style.background = "rgba(56, 130, 246, 0.3)";
+                    btn.style.borderColor = "rgba(56, 130, 246, 1)";
+                    btn.style.color = "#eef6ff";
+                } else if (isDropHighlight) {
+                    btn.style.background = isSelected ? "rgba(56, 130, 246, 0.28)" : "rgba(147, 197, 253, 0.1)";
+                }
+                btn.style.boxShadow = "none";
+                btn.style.outline = "none";
+                btn.style.outlineOffset = "0";
             }
             if (typeRail) {
                 typeRail.style.width = `${typeRailExpanded ? TYPE_RAIL_EXPANDED_WIDTH : TYPE_RAIL_COLLAPSED_WIDTH}px`;
@@ -2319,6 +2537,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 typeRailToggle.textContent = typeRailExpanded ? "‹" : "›";
                 typeRailToggle.title = typeRailExpanded ? "Collapse type filters" : "Expand type filters";
             }
+            updateTypeRailDropIndicators();
         };
 
         const rebuildTypeRailButtons = () => {
@@ -2391,6 +2610,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     updateTypeRailButtons();
                 };
                 btn.onclick = async () => {
+                    if (Date.now() < suppressTypeRailClickUntil) return;
                     const canProceed = await canChangeEditorContext();
                     if (!canProceed) return;
                     hideTypeRailTooltip();
@@ -2400,10 +2620,54 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     categoryTypeFilter = choice.value;
                     rebuildCategoryList();
+                    if (editMode && editPanel) {
+                        if (typeof editPanel.loadTypeSettings === "function") {
+                            editPanel.loadTypeSettings(choice.value);
+                        }
+                        if (typeof editPanel.showTypeSettings === "function") {
+                            editPanel.showTypeSettings();
+                        }
+                    }
                     updateTypeRailButtons();
                     renderContent(searchInput.value);
                 };
                 if (choice.value !== "__all__") {
+                    btn.draggable = true;
+                    btn.style.cursor = "grab";
+                    btn.addEventListener("dragstart", (evt) => {
+                        draggingTypeFile = btn.dataset.typeFile || "";
+                        dragHoverTypeFile = "";
+                        dragHoverPosition = "";
+                        if (evt.dataTransfer) {
+                            evt.dataTransfer.effectAllowed = "move";
+                            evt.dataTransfer.setData("text/plain", draggingTypeFile);
+                        }
+                        updateTypeRailButtons();
+                    });
+                    btn.addEventListener("dragend", () => {
+                        draggingTypeFile = "";
+                        clearTypeRailDropIndicators();
+                        updateTypeRailButtons();
+                    });
+                    btn.addEventListener("dragover", (evt) => {
+                        if (!draggingTypeFile || draggingTypeFile === btn.dataset.typeFile) return;
+                        evt.preventDefault();
+                        dragHoverTypeFile = btn.dataset.typeFile || "";
+                        dragHoverPosition = getTypeRailDropPosition(btn, evt.clientY);
+                        if (evt.dataTransfer) {
+                            evt.dataTransfer.dropEffect = "move";
+                        }
+                        updateTypeRailButtons();
+                    });
+                    btn.addEventListener("drop", async (evt) => {
+                        if (!draggingTypeFile || draggingTypeFile === btn.dataset.typeFile) return;
+                        evt.preventDefault();
+                        const targetTypeFile = btn.dataset.typeFile || "";
+                        const dropPosition = getTypeRailDropPosition(btn, evt.clientY);
+                        suppressTypeRailClickUntil = Date.now() + 250;
+                        clearTypeRailDropIndicators();
+                        await commitTypeReorder(draggingTypeFile, targetTypeFile, dropPosition);
+                    });
                     btn.oncontextmenu = (evt) => {
                         evt.preventDefault();
                         evt.stopPropagation();
@@ -2467,6 +2731,133 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 scrollbar-width: thin;
             `;
 
+            const addTypeBtn = document.createElement("button");
+            addTypeBtn.type = "button";
+            addTypeBtn.style.cssText = `
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                align-self: center;
+                width: 34px;
+                height: 34px;
+                min-width: 34px;
+                min-height: 34px;
+                padding: 0;
+                border-radius: 6px;
+                border: 1px solid #5f6773;
+                background: #313843;
+                color: #aaa;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+                overflow: hidden;
+                box-sizing: border-box;
+                transition: all 0.15s ease;
+                margin-top: 6px;
+                flex-shrink: 0;
+            `;
+            addTypeBtn.title = "New Prompt Group";
+
+            const addTypeIcon = document.createElement("div");
+            addTypeIcon.className = "pm-type-rail-icon";
+            addTypeIcon.textContent = "+";
+            addTypeIcon.style.cssText = `
+                width: auto;
+                min-width: 0;
+                height: auto;
+                border-radius: 0;
+                display: block;
+                background: transparent;
+                color: inherit;
+                font-size: 18px;
+                line-height: 1;
+            `;
+
+            const addTypeLabel = document.createElement("span");
+            addTypeLabel.className = "pm-type-rail-label";
+            addTypeLabel.textContent = "New Prompt Group";
+            addTypeLabel.style.cssText = `
+                display: none;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            `;
+
+            addTypeBtn.onmouseover = (evt) => {
+                addTypeBtn.style.background = "#38414c";
+                addTypeBtn.style.color = "#fff";
+                if (!typeRailExpanded) {
+                    showTypeRailTooltip("New Prompt Group", evt.clientX, evt.clientY);
+                }
+            };
+            addTypeBtn.onmousemove = (evt) => {
+                if (!typeRailExpanded) {
+                    showTypeRailTooltip("New Prompt Group", evt.clientX, evt.clientY);
+                }
+            };
+            addTypeBtn.onmouseout = () => {
+                hideTypeRailTooltip();
+                addTypeBtn.style.background = "#313843";
+                addTypeBtn.style.color = "#aaa";
+            };
+            addTypeBtn.onclick = async () => {
+                const canProceed = await canChangeEditorContext();
+                if (!canProceed) return;
+                hideTypeRailTooltip();
+                const result = await showTextInputDialog(
+                    "New Prompt Group",
+                    "Enter new prompt group name:",
+                    "",
+                );
+                if (result === null) return;
+                const groupName = String(result || "").trim();
+                if (!groupName) return;
+
+                const existingChoice = promptTypeFilters.find((choice) => (
+                    choice.value !== "__all__"
+                    && (
+                        String(choice.label || "").trim().toLowerCase() === groupName.toLowerCase()
+                        || String(choice.value || "").trim().toLowerCase() === groupName.toLowerCase()
+                    )
+                ));
+                if (existingChoice) {
+                    await showInfo("Prompt Group Exists", `Prompt group already exists as "${existingChoice.label || groupName}".`);
+                    return;
+                }
+
+                try {
+                    const resp = await fetch(`${endpointPrefix}/save-type-settings`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            prompt_type: groupName,
+                            type_name: groupName,
+                        }),
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        applyPromptPayloadToNode(node, data);
+                        node.composerPrompts = data.prompts;
+                        categoryTypeFilter = String(data.type_file || groupName).replace(/\.json$/i, "").trim().toLowerCase() || "__all__";
+                        rebuildCategoryList();
+                        rebuildTypeRailButtons();
+                        if (editMode && editPanel) {
+                            if (typeof editPanel.loadTypeSettings === "function") {
+                                editPanel.loadTypeSettings(categoryTypeFilter);
+                            }
+                            if (typeof editPanel.showTypeSettings === "function") {
+                                editPanel.showTypeSettings();
+                            }
+                        }
+                        renderContent(searchInput.value);
+                    } else {
+                        await showInfo("Error", data.error || "Failed to create prompt group.");
+                    }
+                } catch (err) {
+                    console.error("[PromptBrowser] Error creating prompt group:", err);
+                }
+            };
+            addTypeBtn.append(addTypeIcon, addTypeLabel);
+
             toggleBtn.onclick = () => {
                 typeRailExpanded = !typeRailExpanded;
                 setTypeRailExpanded(typeRailExpanded, browserPrefScope);
@@ -2480,9 +2871,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             rail.appendChild(toggleBtn);
             rail.appendChild(typeRailList);
+            rail.appendChild(addTypeBtn);
 
             typeRail = rail;
             typeRailToggle = toggleBtn;
+            typeRailAddButton = addTypeBtn;
             rebuildTypeRailButtons();
             return rail;
         };
@@ -2996,17 +3389,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             menu.appendChild(renameDivider);
 
             menu.appendChild(createMenuItem("✏️ Rename", async () => {
-                const existingTypeNames = promptTypeFilters
-                    .filter((choice) => choice.value !== "__all__")
-                    .map((choice) => choice.label);
-                const result = await showRenameCategoryDialog(
-                    "Rename Type",
-                    "Enter new type name:",
-                    existingTypeNames,
+                const result = await showTextInputDialog(
+                    "Rename Prompt Group",
+                    "Enter new prompt group name:",
                     typeLabel,
                 );
-                if (!result?.newCategory || !String(result.newCategory).trim()) return;
-                const newName = String(result.newCategory).trim();
+                if (result === null) return;
+                const newName = String(result || "").trim();
+                if (!newName) return;
                 if (newName === typeLabel) return;
                 try {
                     const resp = await fetch(`${endpointPrefix}/rename-type`, {
@@ -3094,6 +3484,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 endpointPrefix,
             }));
             ensureSelectedCategory();
+            updateCategoryCreateControls();
             categoryButtons = [];
             categoryContainer.innerHTML = "";
             categories.forEach(cat => {
@@ -3152,9 +3543,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 flex-shrink: 0;
                 margin-bottom: 2px;
             `;
+            const canCreateCategoryInCurrentFilter = !showCategoryTypeFilter || categoryTypeFilter !== "__all__";
+            addBtn.style.display = canCreateCategoryInCurrentFilter ? "" : "none";
             addBtn.onmouseover = () => { addBtn.style.background = '#38414c'; addBtn.style.color = '#fff'; };
             addBtn.onmouseout = () => { addBtn.style.background = '#313843'; addBtn.style.color = '#aaa'; };
             addBtn.onclick = async () => {
+                if (!canCreateCategoryInCurrentFilter) return;
                 const result = await showNewCategoryDialog();
                 if (result && result.name && result.name.trim()) {
                     const categoryName = result.name.trim();
@@ -5249,6 +5643,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             setHideNSFW(hideNSFWState);
             updateNsfwBtn();
             rebuildCategoryList();
+            rebuildTypeRailButtons();
             renderContent(searchInput.value);
         };
 
