@@ -16,6 +16,7 @@ export function isHiddenPromptEntryKey(name) {
         || normalized === "_category_prefix_"
         || normalized === "_prompt_type_"
         || normalized === "_prompts_"
+        || normalized === "_category_name_"
         || normalized === "_type_file_"
         || normalized === "_type_name_"
         || normalized === "_subject_type_"

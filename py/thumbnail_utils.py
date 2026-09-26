@@ -9,7 +9,7 @@ except ImportError:
     IMAGE_THUMBNAIL_SUPPORT = False
 
 
-def image_to_base64_thumbnail(image_tensor, max_size=200, jpeg_quality=75, log_prefix="ThumbnailUtils"):
+def image_to_base64_thumbnail(image_tensor, max_size=200, jpeg_quality=85, log_prefix="ThumbnailUtils"):
     if not IMAGE_THUMBNAIL_SUPPORT or image_tensor is None:
         return None
 

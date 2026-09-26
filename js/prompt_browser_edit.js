@@ -17,6 +17,7 @@ const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
 // Per-prompt category for system prompts (Prompt Generator). Stored on each
 // prompt entry as "category"; distinct from the category-level _prompt_type_.
 const SYSTEM_PROMPT_CATEGORIES = ["Audio", "Image", "Video", "Other"];
+const COMPOSER_CATEGORY_KEY_SEPARATOR = "::";
 
 const PROMPT_TYPE_CHOICES = [
     { value: "character", label: "Character" },
@@ -92,40 +93,150 @@ export function getPromptTypeChoices(promptsData = null) {
     return choices;
 }
 
-function getPromptTypeMetadata(promptsData, promptType) {
+function getPromptTypeMetadata(promptsData, promptType, composerLibrary = null) {
     const normalizedPromptType = String(promptType || "").trim();
     if (!normalizedPromptType) {
         return {
+            exists: false,
             promptType: "",
             typeFile: "",
             typeName: "",
+            subjectType: "subject",
             promptPrefix: "",
             basePrompt: "",
         };
     }
 
     const normalizedKey = normalizedPromptType.toLowerCase();
-    for (const categoryData of Object.values(promptsData || {})) {
-        if (!categoryData || typeof categoryData !== "object" || Array.isArray(categoryData)) continue;
-        if (String(categoryData._prompt_type_ || "").trim().toLowerCase() !== normalizedKey) continue;
-        return {
-            promptType: String(categoryData._prompt_type_ || normalizedPromptType).trim() || normalizedPromptType,
-            typeFile: String(categoryData._type_file_ || `${normalizedKey}.json`).trim(),
-            typeName: String(categoryData._type_name_ || normalizedPromptType).trim() || normalizedPromptType,
-            promptPrefix: String(categoryData._type_prefix_ || ""),
-            basePrompt: String(categoryData._type_base_prompt_ || ""),
-        };
+    const canonicalTypes = composerLibrary && typeof composerLibrary === "object" && !Array.isArray(composerLibrary)
+        ? composerLibrary._types_
+        : null;
+    if (canonicalTypes && typeof canonicalTypes === "object" && !Array.isArray(canonicalTypes)) {
+        for (const [typeFile, typeData] of Object.entries(canonicalTypes)) {
+            if (!typeData || typeof typeData !== "object" || Array.isArray(typeData)) continue;
+            const typeStem = String(typeFile || "").replace(/\.json$/i, "").trim().toLowerCase();
+            if (typeStem !== normalizedKey) continue;
+            return {
+                exists: true,
+                promptType: typeStem || normalizedPromptType,
+                typeFile: String(typeFile || `${normalizedKey}.json`).trim(),
+                typeName: String(typeData.name || normalizedPromptType).trim() || normalizedPromptType,
+                subjectType: String(typeData.subject_type || "subject").trim().toLowerCase() || "subject",
+                promptPrefix: String(typeData.prefix || ""),
+                basePrompt: String(typeData.base_prompt || ""),
+            };
+        }
     }
 
     const fallbackChoice = getPromptTypeChoices(promptsData)
         .find((choice) => String(choice?.value || "").trim().toLowerCase() === normalizedKey);
 
     return {
+        exists: false,
         promptType: normalizedPromptType,
         typeFile: `${normalizedKey}.json`,
         typeName: String(fallbackChoice?.label || normalizedPromptType).trim() || normalizedPromptType,
+        subjectType: "subject",
         promptPrefix: "",
         basePrompt: "",
+    };
+}
+
+function parseComposerCategoryKey(category) {
+    const raw = String(category || "").trim();
+    const separatorIndex = raw.indexOf(COMPOSER_CATEGORY_KEY_SEPARATOR);
+    if (separatorIndex <= 0) {
+        return { typeFile: "", categoryName: raw };
+    }
+    return {
+        typeFile: raw.slice(0, separatorIndex).trim(),
+        categoryName: raw.slice(separatorIndex + COMPOSER_CATEGORY_KEY_SEPARATOR.length).trim(),
+    };
+}
+
+function getCategoryDisplayName(promptsData, category) {
+    const direct = promptsData && typeof promptsData === "object" ? promptsData?.[category] : null;
+    const metadataName = String(direct?._category_name_ || "").trim();
+    if (metadataName) return metadataName;
+    return parseComposerCategoryKey(category).categoryName || String(category || "").trim();
+}
+
+function getComposerCategoryMetadata(composerLibrary, category, promptType = "") {
+    const parsedCategory = parseComposerCategoryKey(category);
+    const normalizedCategory = String(parsedCategory.categoryName || category || "").trim();
+    const normalizedTypeFile = String(parsedCategory.typeFile || "").trim().toLowerCase();
+    if (!normalizedCategory) {
+        return {
+            exists: false,
+            categoryName: "",
+            promptType: "",
+            typeFile: "",
+            typeName: "",
+            subjectType: "subject",
+            typePromptPrefix: "",
+            typeBasePrompt: "",
+            categoryPromptPrefix: "",
+            categoryBasePrompt: "",
+        };
+    }
+
+    const canonicalTypes = composerLibrary && typeof composerLibrary === "object" && !Array.isArray(composerLibrary)
+        ? composerLibrary._types_
+        : null;
+    if (!canonicalTypes || typeof canonicalTypes !== "object" || Array.isArray(canonicalTypes)) {
+        return {
+            exists: false,
+            categoryName: normalizedCategory,
+            promptType: String(promptType || "").trim().toLowerCase(),
+            typeFile: "",
+            typeName: "",
+            subjectType: "subject",
+            typePromptPrefix: "",
+            typeBasePrompt: "",
+            categoryPromptPrefix: "",
+            categoryBasePrompt: "",
+        };
+    }
+
+    const normalizedPromptType = String(promptType || "").trim().toLowerCase();
+    let fallbackMatch = null;
+    for (const [typeFile, typeData] of Object.entries(canonicalTypes)) {
+        if (!typeData || typeof typeData !== "object" || Array.isArray(typeData)) continue;
+        if (normalizedTypeFile && String(typeFile || "").trim().toLowerCase() !== normalizedTypeFile) continue;
+        const typeStem = String(typeFile || "").replace(/\.json$/i, "").trim().toLowerCase();
+        if (normalizedPromptType && typeStem !== normalizedPromptType) continue;
+        const categories = typeData.categories;
+        if (!categories || typeof categories !== "object" || Array.isArray(categories)) continue;
+        for (const [categoryName, categoryData] of Object.entries(categories)) {
+            if (String(categoryName || "").trim().toLowerCase() !== normalizedCategory.toLowerCase()) continue;
+            const match = {
+                exists: true,
+                categoryName: String(categoryName || normalizedCategory).trim() || normalizedCategory,
+                promptType: typeStem,
+                typeFile: String(typeFile || "").trim(),
+                typeName: String(typeData.name || typeStem || normalizedCategory).trim() || typeStem || normalizedCategory,
+                subjectType: String(typeData.subject_type || "subject").trim().toLowerCase() || "subject",
+                typePromptPrefix: String(typeData.prefix || ""),
+                typeBasePrompt: String(typeData.base_prompt || ""),
+                categoryPromptPrefix: String(categoryData?.prefix || ""),
+                categoryBasePrompt: String(categoryData?.base_prompt || ""),
+            };
+            if (normalizedPromptType) return match;
+            if (!fallbackMatch) fallbackMatch = match;
+        }
+    }
+
+    return fallbackMatch || {
+        exists: false,
+        categoryName: normalizedCategory,
+        promptType: normalizedPromptType,
+        typeFile: "",
+        typeName: "",
+        subjectType: "subject",
+        typePromptPrefix: "",
+        typeBasePrompt: "",
+        categoryPromptPrefix: "",
+        categoryBasePrompt: "",
     };
 }
 
@@ -1195,6 +1306,7 @@ export function createPromptBrowserEditPanel(options) {
     let loadedRefMod = "";
     let loadedRefModWeight = 1.0;
     let loadedGroupPromptType = "";
+    let loadedGroupSubjectType = "subject";
     let loadedGroupPromptPrefix = "";
     let loadedGroupBasePrompt = "";
     let loadedCategoryPromptType = "";
@@ -1433,6 +1545,31 @@ export function createPromptBrowserEditPanel(options) {
     }, "");
     groupBody.appendChild(groupNameValue);
 
+    const groupSubjectTypeInfoText = "Controls how prompts from this group behave in subject building.\nNew Subject starts a fresh subject block.\nNon Subject applies styling or modifiers without creating a subject.\nSubject adds details to the current subject.";
+    const groupSubjectTypeLabelRow = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+    });
+    const groupSubjectTypeLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Subject Type");
+    groupSubjectTypeLabel.title = groupSubjectTypeInfoText;
+    const groupSubjectTypeHint = el("span", {
+        color: STYLE.textMuted,
+        fontSize: "12px",
+        userSelect: "none",
+    }, "ⓘ");
+    groupSubjectTypeHint.title = groupSubjectTypeInfoText;
+    groupSubjectTypeLabelRow.append(groupSubjectTypeLabel, groupSubjectTypeHint);
+    groupBody.appendChild(groupSubjectTypeLabelRow);
+
+    const groupSubjectTypeSelect = createSelect("subject", [
+        { value: "new_subject", label: "New Subject" },
+        { value: "non_subject", label: "Non Subject" },
+        { value: "subject", label: "Subject" },
+    ]);
+    groupSubjectTypeSelect.addEventListener("change", () => _onChange());
+    groupBody.appendChild(groupSubjectTypeSelect);
+
     const groupBasePromptInfoText = "Thumbnail prompt for this prompt group.";
     const groupBasePromptLabelRow = el("div", {
         display: "flex",
@@ -1484,26 +1621,24 @@ export function createPromptBrowserEditPanel(options) {
             return;
         }
 
-        const groupMeta = getPromptTypeMetadata(node?.prompts, promptType);
-        const hasExistingGroupSettings = !!(
-            String(loadedGroupPromptPrefix || "").trim()
-            || String(loadedGroupBasePrompt || "").trim()
-        );
-
-        if (hasExistingGroupSettings) {
-            const confirmed = await _showConfirm(
-                "Update Prompt Group Settings",
-                `Prompt group settings for "${groupMeta.typeName || promptType}" already exist. Update them?`,
-                "Update",
-                "#c44"
-            );
-            if (!confirmed) return;
+        const groupMeta = getPromptTypeMetadata(node?.prompts, promptType, node?.composerPromptLibrary);
+        if (!groupMeta.exists || !String(groupMeta.typeFile || "").trim()) {
+            await _showInfo("Missing Prompt Group Data", `Could not resolve canonical data for prompt group "${promptType}".`);
+            return;
         }
+        const confirmed = await _showConfirm(
+            "Save Prompt Group Settings",
+            `Save prompt group settings for "${groupMeta.typeName || promptType}"?`,
+            "Save",
+            "#2b6d3a"
+        );
+        if (!confirmed) return;
 
         const result = await saveComposerTypeSettings({
             typeFile: groupMeta.typeFile,
             promptType,
             typeName: groupMeta.typeName || promptType,
+            subjectType: groupSubjectTypeSelect.value,
             promptPrefix: groupPrefixInput.value,
             basePrompt: groupBasePromptInput.value,
         });
@@ -1576,6 +1711,7 @@ export function createPromptBrowserEditPanel(options) {
 
     const saveSettingsBtn = createButton("Save Category Settings", async () => {
         const category = currentCategory;
+        const categoryLabel = getCategoryDisplayName(node?.prompts, category);
         if (!category) {
             await _showInfo("Missing Category", "Please select a category first.");
             return;
@@ -1596,7 +1732,7 @@ export function createPromptBrowserEditPanel(options) {
         if (hasExistingPrompts || hasExistingCategorySettings) {
             const confirmed = await _showConfirm(
                 "Update Category Settings",
-                `Category settings for "${category}" already exist. Update them?`,
+                `Category settings for "${categoryLabel}" already exist. Update them?`,
                 "Update",
                 "#c44"
             );
@@ -1604,10 +1740,14 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         const previousPromptType = loadedCategoryPromptType;
-        const currentTypeFile = String(node?.prompts?.[category]?._type_file_ || "").trim();
-        const result = await saveComposerCategorySettings(category, {
-            typeFile: currentTypeFile,
-            promptType: loadedCategoryPromptType,
+        const categoryMeta = getComposerCategoryMetadata(node?.composerPromptLibrary, category, loadedCategoryPromptType);
+        if (!categoryMeta.exists || !String(categoryMeta.typeFile || "").trim()) {
+            await _showInfo("Missing Category Data", `Could not resolve canonical data for category "${categoryLabel}".`);
+            return;
+        }
+        const result = await saveComposerCategorySettings(categoryMeta.categoryName, {
+            typeFile: categoryMeta.typeFile,
+            promptType: categoryMeta.promptType,
             basePrompt: categoryBasePromptInput.value,
             promptPrefix: prefixInput.value,
         });
@@ -1893,6 +2033,7 @@ export function createPromptBrowserEditPanel(options) {
 
     async function doUpdatePrompt(autoFromGeneration) {
         const category = currentCategory;
+        const categoryLabel = getCategoryDisplayName(node?.prompts, category);
         const originalName = String(currentPromptName || "").trim();
         const nextName = String(promptNameInput.value || "").trim();
 
@@ -1911,15 +2052,15 @@ export function createPromptBrowserEditPanel(options) {
 
         const conflictingName = findPromptNameConflict(category, nextName, originalName);
         if (conflictingName) {
-            await _showInfo("Update Failed", `A prompt named "${conflictingName}" already exists in category "${category}".`);
+            await _showInfo("Update Failed", `A prompt named "${conflictingName}" already exists in category "${categoryLabel}".`);
             return { success: false };
         }
 
         const confirmed = await _showConfirm(
             "Update Prompt",
             nextName === originalName
-                ? `Update prompt "${originalName}" in category "${category}"?`
-                : `Update prompt "${originalName}" and rename it to "${nextName}" in category "${category}"?`,
+                ? `Update prompt "${originalName}" in category "${categoryLabel}"?`
+                : `Update prompt "${originalName}" and rename it to "${nextName}" in category "${categoryLabel}"?`,
             "Update",
             "#2b6d3a"
         );
@@ -2007,6 +2148,7 @@ export function createPromptBrowserEditPanel(options) {
 
     const generateBtn = createButton("Generate Thumbnail", async () => {
         const category = currentCategory;
+        const categoryLabel = getCategoryDisplayName(node?.prompts, category);
         const name = String(promptNameInput.value || "").trim();
         const text = String(promptTextArea.value || "").trim();
         const requestedSeed = Number(thumbnailSeedInput.value);
@@ -2114,7 +2256,7 @@ export function createPromptBrowserEditPanel(options) {
             } else {
                 overwrite = await _showConfirm(
                     "Overwrite Prompt",
-                    `Prompt "${name}" already exists in category "${category}". Replace it?`,
+                    `Prompt "${name}" already exists in category "${categoryLabel}". Replace it?`,
                     "Replace",
                     "#c44"
                 );
@@ -2138,11 +2280,13 @@ export function createPromptBrowserEditPanel(options) {
     function hasUnsavedChanges() {
         const currentName = String(promptNameInput.value || "").trim();
         const currentText = String(promptTextArea.value || "").trim();
+        const currentGroupSubjectType = String(groupSubjectTypeSelect.value || "subject").trim().toLowerCase() || "subject";
         const currentGroupPromptPrefix = String(groupPrefixInput.value || "").trim();
         const currentGroupBasePrompt = String(groupBasePromptInput.value || "").trim();
         const currentCategoryBasePrompt = String(categoryBasePromptInput.value || "").trim();
         const currentCategoryPromptPrefix = String(prefixInput.value || "").trim();
 
+        if (currentGroupSubjectType !== String(loadedGroupSubjectType || "subject").trim().toLowerCase()) return true;
         if (currentGroupPromptPrefix !== String(loadedGroupPromptPrefix || "").trim()) return true;
         if (currentGroupBasePrompt !== String(loadedGroupBasePrompt || "").trim()) return true;
 
@@ -2257,11 +2401,13 @@ export function createPromptBrowserEditPanel(options) {
 
     function loadTypeSettings(promptType) {
         const selectedPromptType = String(promptType || "").trim();
-        const typeMeta = getPromptTypeMetadata(node?.prompts, selectedPromptType || loadedGroupPromptType || "");
+        const typeMeta = getPromptTypeMetadata(node?.prompts, selectedPromptType || loadedGroupPromptType || "", node?.composerPromptLibrary);
         groupNameValue.textContent = String(typeMeta.typeName || typeMeta.promptType || "").trim() || "No prompt group selected";
+        groupSubjectTypeSelect.value = String(typeMeta.subjectType || "subject").trim().toLowerCase() || "subject";
         groupPrefixInput.value = String(typeMeta.promptPrefix || "");
         groupBasePromptInput.value = String(typeMeta.basePrompt || "");
         loadedGroupPromptType = String(typeMeta.promptType || "").trim();
+        loadedGroupSubjectType = String(typeMeta.subjectType || "subject").trim().toLowerCase() || "subject";
         loadedGroupPromptPrefix = String(typeMeta.promptPrefix || "").trim();
         loadedGroupBasePrompt = String(typeMeta.basePrompt || "").trim();
     }
@@ -2271,12 +2417,15 @@ export function createPromptBrowserEditPanel(options) {
         const catData = node?.prompts?.[category];
         if (catData && typeof catData === "object") {
             const promptType = String(catData._prompt_type_ || "").trim();
+            const categoryMeta = getComposerCategoryMetadata(node?.composerPromptLibrary, category, promptType);
             loadTypeSettings(promptType);
-            categoryBasePromptInput.value = String(catData._category_base_prompt_ || "");
-            prefixInput.value = String(catData._category_prefix_ || "");
-            loadedCategoryPromptType = promptType;
-            loadedCategoryBasePrompt = String(catData._category_base_prompt_ || "").trim();
-            loadedCategoryPromptPrefix = String(catData._category_prefix_ || "").trim();
+            categoryBasePromptInput.value = categoryMeta.exists ? String(categoryMeta.categoryBasePrompt || "") : "";
+            prefixInput.value = categoryMeta.exists ? String(categoryMeta.categoryPromptPrefix || "") : "";
+            loadedCategoryPromptType = categoryMeta.exists
+                ? String(categoryMeta.promptType || promptType).trim()
+                : promptType;
+            loadedCategoryBasePrompt = categoryMeta.exists ? String(categoryMeta.categoryBasePrompt || "").trim() : "";
+            loadedCategoryPromptPrefix = categoryMeta.exists ? String(categoryMeta.categoryPromptPrefix || "").trim() : "";
         } else {
             loadTypeSettings("");
             categoryBasePromptInput.value = "";

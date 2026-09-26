@@ -37,6 +37,26 @@ let _thumbnailLeafName = (path) => String(path || "");
 let getThumbnailRenderState = null;
 const COMPOSER_TYPE_PLACEHOLDER_URL = new URL("./placeholder.png", import.meta.url).href;
 const COMPOSER_TYPE_ALL_URL = new URL("./all.png", import.meta.url).href;
+const COMPOSER_CATEGORY_KEY_SEPARATOR = "::";
+
+function buildComposerCategoryKey(typeFile, categoryName) {
+    const normalizedTypeFile = String(typeFile || "").trim();
+    const normalizedCategory = String(categoryName || "").trim();
+    if (!normalizedTypeFile) return normalizedCategory;
+    return `${normalizedTypeFile}${COMPOSER_CATEGORY_KEY_SEPARATOR}${normalizedCategory}`;
+}
+
+function parseComposerCategoryKey(category) {
+    const raw = String(category || "").trim();
+    const separatorIndex = raw.indexOf(COMPOSER_CATEGORY_KEY_SEPARATOR);
+    if (separatorIndex <= 0) {
+        return { typeFile: "", categoryName: raw };
+    }
+    return {
+        typeFile: raw.slice(0, separatorIndex).trim(),
+        categoryName: raw.slice(separatorIndex + COMPOSER_CATEGORY_KEY_SEPARATOR.length).trim(),
+    };
+}
 
 function applyPromptPayloadToNode(node, payload) {
     if (!node || !payload || typeof payload !== "object") return;
@@ -509,13 +529,17 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
 async function saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix = "/prompt-manager-advanced") {
     try {
         const url = `${endpointPrefix}/save-thumbnail`;
+        const composerCategory = endpointPrefix === "/prompt-manager/compose"
+            ? getComposerCategoryRequestIdentity(node, category)
+            : null;
         const response = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                category: category,
+                category: composerCategory?.categoryName || category,
                 name: promptName,
-                thumbnail: thumbnail
+                thumbnail: thumbnail,
+                ...(composerCategory?.typeFile ? { type_file: composerCategory.typeFile } : {}),
             })
         });
 
@@ -547,10 +571,17 @@ async function saveThumbnailEntry(node, category, promptName, thumbnail, endpoin
 
 async function deletePromptEntry(node, category, promptName, endpointPrefix = "/prompt-manager-advanced") {
     try {
+        const composerCategory = endpointPrefix === "/prompt-manager/compose"
+            ? getComposerCategoryRequestIdentity(node, category)
+            : null;
         const response = await fetch(`${endpointPrefix}/delete-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ category, name: promptName })
+            body: JSON.stringify({
+                category: composerCategory?.categoryName || category,
+                name: promptName,
+                ...(composerCategory?.typeFile ? { type_file: composerCategory.typeFile } : {}),
+            })
         });
         const data = await response.json();
         if (data.success) {
@@ -693,7 +724,17 @@ function _attachThumbnailDropHandlers(element, node, category, promptName, onUpd
     });
 }
 
-function showPromptWithCategoryDialog(title, defaultName, categories, defaultCategory) {
+function buildDialogSelectOptionsHtml(items, selectedValue) {
+    return (items || []).map((item) => {
+        const isObject = item && typeof item === "object";
+        const value = String(isObject ? item.value : item || "");
+        const label = String(isObject ? item.label : item || "");
+        const selected = value === String(selectedValue || "") ? " selected" : "";
+        return `<option value="${value}"${selected}>${label}</option>`;
+    }).join("");
+}
+
+function showPromptWithCategoryDialog(title, defaultName, categories, defaultCategory, options = {}) {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -722,16 +763,35 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
             color: #fff;
         `;
 
-        const categoryOptions = (categories || [])
-            .map((cat) => `<option value="${cat}" ${cat === defaultCategory ? "selected" : ""}>${cat}</option>`)
-            .join("");
+        const groupOptions = Array.isArray(options.groupOptions) ? options.groupOptions : null;
+        const categoriesByGroup = options.categoriesByGroup && typeof options.categoriesByGroup === "object"
+            ? options.categoriesByGroup
+            : null;
+        const fallbackGroupValue = groupOptions && groupOptions.length > 0
+            ? String(groupOptions[0]?.value || "")
+            : "";
+        const defaultGroupValue = String(options.defaultGroupValue || fallbackGroupValue || "");
+        const resolvedDefaultCategory = String(defaultCategory || "");
+        const initialCategories = categoriesByGroup
+            ? (categoriesByGroup[defaultGroupValue] || [])
+            : (categories || []);
+        const initialCategoryValue = initialCategories.includes(resolvedDefaultCategory)
+            ? resolvedDefaultCategory
+            : (initialCategories[0] || resolvedDefaultCategory);
+        const groupFieldHtml = groupOptions && groupOptions.length > 0
+            ? `
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt Group</div>
+            <select class="group-select" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(groupOptions, defaultGroupValue)}</select>
+            `
+            : "";
 
         dialog.innerHTML = `
             <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">${title}</div>
             <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt name</div>
             <input class="name-input" type="text" value="${String(defaultName || "")}" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;" />
+            ${groupFieldHtml}
             <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category</div>
-            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${categoryOptions}</select>
+            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(initialCategories, initialCategoryValue)}</select>
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button class="ok-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
@@ -739,9 +799,25 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
         `;
 
         const nameInput = dialog.querySelector(".name-input");
+        const groupSelect = dialog.querySelector(".group-select");
         const catSelect = dialog.querySelector(".cat-select");
         const okBtn = dialog.querySelector(".ok-btn");
         const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const syncCategoryOptions = () => {
+            if (!categoriesByGroup || !groupSelect || !catSelect) return;
+            const selectedGroupValue = String(groupSelect.value || defaultGroupValue || "");
+            const groupCategories = Array.isArray(categoriesByGroup[selectedGroupValue])
+                ? categoriesByGroup[selectedGroupValue]
+                : [];
+            const preferredCategory = selectedGroupValue === defaultGroupValue && groupCategories.includes(resolvedDefaultCategory)
+                ? resolvedDefaultCategory
+                : (groupCategories[0] || "");
+            catSelect.innerHTML = buildDialogSelectOptionsHtml(groupCategories, preferredCategory);
+            if (!catSelect.value && preferredCategory) {
+                catSelect.value = preferredCategory;
+            }
+        };
 
         const cleanup = () => {
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
@@ -749,7 +825,11 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
         };
 
         const handleOk = () => {
-            resolve({ name: String(nameInput.value || ""), category: String(catSelect.value || defaultCategory || "") });
+            resolve({
+                name: String(nameInput.value || ""),
+                category: String(catSelect.value || resolvedDefaultCategory || ""),
+                typeFile: String(groupSelect?.value || defaultGroupValue || ""),
+            });
             cleanup();
         };
 
@@ -761,6 +841,9 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
         okBtn.onclick = handleOk;
         cancelBtn.onclick = handleCancel;
         overlay.onclick = handleCancel;
+        if (groupSelect) {
+            groupSelect.onchange = () => syncCategoryOptions();
+        }
         nameInput.onkeydown = (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
@@ -773,12 +856,13 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
 
         document.body.appendChild(overlay);
         document.body.appendChild(dialog);
+        syncCategoryOptions();
         nameInput.focus();
         nameInput.select();
     });
 }
 
-function showCategoryPickerDialog(title, categories, defaultCategory) {
+function showCategoryPickerDialog(title, categories, defaultCategory, options = {}) {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -807,23 +891,58 @@ function showCategoryPickerDialog(title, categories, defaultCategory) {
             color: #fff;
         `;
 
-        const categoryOptions = (categories || [])
-            .map((cat) => `<option value="${cat}" ${cat === defaultCategory ? "selected" : ""}>${cat}</option>`)
-            .join("");
+        const groupOptions = Array.isArray(options.groupOptions) ? options.groupOptions : null;
+        const categoriesByGroup = options.categoriesByGroup && typeof options.categoriesByGroup === "object"
+            ? options.categoriesByGroup
+            : null;
+        const fallbackGroupValue = groupOptions && groupOptions.length > 0
+            ? String(groupOptions[0]?.value || "")
+            : "";
+        const defaultGroupValue = String(options.defaultGroupValue || fallbackGroupValue || "");
+        const resolvedDefaultCategory = String(defaultCategory || "");
+        const initialCategories = categoriesByGroup
+            ? (categoriesByGroup[defaultGroupValue] || [])
+            : (categories || []);
+        const initialCategoryValue = initialCategories.includes(resolvedDefaultCategory)
+            ? resolvedDefaultCategory
+            : (initialCategories[0] || resolvedDefaultCategory);
+        const groupFieldHtml = groupOptions && groupOptions.length > 0
+            ? `
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt Group</div>
+            <select class="group-select" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(groupOptions, defaultGroupValue)}</select>
+            `
+            : "";
 
         dialog.innerHTML = `
             <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">${title}</div>
+            ${groupFieldHtml}
             <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Target category</div>
-            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${categoryOptions}</select>
+            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(initialCategories, initialCategoryValue)}</select>
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button class="ok-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Move</button>
             </div>
         `;
 
+        const groupSelect = dialog.querySelector(".group-select");
         const catSelect = dialog.querySelector(".cat-select");
         const okBtn = dialog.querySelector(".ok-btn");
         const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const syncCategoryOptions = () => {
+            if (!categoriesByGroup || !groupSelect || !catSelect) return;
+            const selectedGroupValue = String(groupSelect.value || defaultGroupValue || "");
+            const groupCategories = Array.isArray(categoriesByGroup[selectedGroupValue])
+                ? categoriesByGroup[selectedGroupValue]
+                : [];
+            const preferredCategory = selectedGroupValue === defaultGroupValue && groupCategories.includes(resolvedDefaultCategory)
+                ? resolvedDefaultCategory
+                : (groupCategories[0] || "");
+            catSelect.innerHTML = buildDialogSelectOptionsHtml(groupCategories, preferredCategory);
+            if (!catSelect.value && preferredCategory) {
+                catSelect.value = preferredCategory;
+            }
+        };
 
         const cleanup = () => {
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
@@ -831,7 +950,10 @@ function showCategoryPickerDialog(title, categories, defaultCategory) {
         };
 
         const handleOk = () => {
-            resolve({ category: String(catSelect.value || defaultCategory || "") });
+            resolve({
+                category: String(catSelect.value || resolvedDefaultCategory || ""),
+                typeFile: String(groupSelect?.value || defaultGroupValue || ""),
+            });
             cleanup();
         };
 
@@ -843,6 +965,9 @@ function showCategoryPickerDialog(title, categories, defaultCategory) {
         okBtn.onclick = handleOk;
         cancelBtn.onclick = handleCancel;
         overlay.onclick = handleCancel;
+        if (groupSelect) {
+            groupSelect.onchange = () => syncCategoryOptions();
+        }
         catSelect.onkeydown = (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
@@ -855,6 +980,7 @@ function showCategoryPickerDialog(title, categories, defaultCategory) {
 
         document.body.appendChild(overlay);
         document.body.appendChild(dialog);
+        syncCategoryOptions();
         catSelect.focus();
     });
 }
@@ -863,6 +989,9 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
     const onDelete = typeof options?.onDelete === "function" ? options.onDelete : null;
     const existing = document.querySelector('.thumbnail-context-menu');
     if (existing) existing.remove();
+    const isComposerManager = endpointPrefix === "/prompt-manager/compose";
+    const composerCategory = isComposerManager ? getComposerCategoryRequestIdentity(node, category) : null;
+    const categoryLabel = composerCategory?.categoryName || category;
 
     const menu = document.createElement("div");
     menu.className = "thumbnail-context-menu";
@@ -968,7 +1097,12 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
             const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ type: "prompt", category: category, name: promptName })
+                body: JSON.stringify({
+                    type: "prompt",
+                    category: categoryLabel,
+                    name: promptName,
+                    ...(composerCategory?.typeFile ? { type_file: composerCategory.typeFile } : {}),
+                })
             });
             const result = await resp.json();
             if (result.success) {
@@ -988,16 +1122,38 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
 
     menu.appendChild(createMenuItem("✏️ Rename / Move", async () => {
         const allCategories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
-        const result = await showPromptWithCategoryDialog("Rename / Move Prompt", promptName, allCategories, category);
+        const currentTypeFile = composerCategory?.typeFile || "";
+        const composerMoveTargets = isComposerManager ? getComposerMoveTargetOptions(node) : null;
+        const result = await showPromptWithCategoryDialog(
+            "Rename / Move Prompt",
+            promptName,
+            allCategories,
+            categoryLabel,
+            isComposerManager ? {
+                groupOptions: composerMoveTargets?.groupOptions || [],
+                categoriesByGroup: composerMoveTargets?.categoriesByGroup || {},
+                defaultGroupValue: currentTypeFile,
+            } : {}
+        );
         if (result && result.name && result.name.trim()) {
             const newName = result.name.trim();
             const newCat = result.category;
-            if (newName === promptName && newCat === category) return;
+            const newTypeFile = isComposerManager ? String(result.typeFile || currentTypeFile || "") : "";
+            if (newName === promptName && newCat === categoryLabel && (!isComposerManager || newTypeFile === currentTypeFile)) return;
             try {
                 const resp = await fetch(`${endpointPrefix}/rename-prompt`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ category: category, old_name: promptName, new_name: newName, new_category: newCat })
+                    body: JSON.stringify({
+                        category: categoryLabel,
+                        old_name: promptName,
+                        new_name: newName,
+                        new_category: newCat,
+                        ...(isComposerManager ? {
+                            type_file: currentTypeFile,
+                            new_type_file: newTypeFile || currentTypeFile,
+                        } : {}),
+                    })
                 });
                 const data = await resp.json();
                 if (data.success) {
@@ -1110,6 +1266,92 @@ function getOrderedComposerTypeEntries(node) {
     });
 }
 
+function getComposerMoveTargetOptions(node) {
+    const groupOptions = [];
+    const categoriesByGroup = {};
+    for (const [typeFile, typeData] of getOrderedComposerTypeEntries(node)) {
+        const resolvedTypeFile = String(typeFile || "").trim();
+        if (!resolvedTypeFile) continue;
+        groupOptions.push({
+            value: resolvedTypeFile,
+            label: String(typeData?.name || resolvedTypeFile.replace(/\.json$/i, "") || "").trim() || resolvedTypeFile,
+        });
+        const categories = typeData?.categories;
+        categoriesByGroup[resolvedTypeFile] = categories && typeof categories === "object" && !Array.isArray(categories)
+            ? Object.keys(categories).sort((a, b) => String(a || "").localeCompare(String(b || ""), undefined, { sensitivity: "base" }))
+            : [];
+    }
+    return { groupOptions, categoriesByGroup };
+}
+
+function resolveComposerCategoryKey(node, category, explicitTypeFile = "") {
+    const raw = String(category || "").trim();
+    if (!raw) return "";
+    if (node?.prompts?.[raw] && typeof node.prompts[raw] === "object") {
+        return raw;
+    }
+
+    const parsed = parseComposerCategoryKey(raw);
+    const normalizedCategoryName = String(parsed.categoryName || raw).trim().toLowerCase();
+    const normalizedTypeFile = String(explicitTypeFile || parsed.typeFile || "").trim().toLowerCase();
+    let fallback = "";
+
+    for (const [categoryKey, categoryData] of Object.entries(node?.prompts || {})) {
+        if (categoryKey === "__meta__" || !categoryData || typeof categoryData !== "object") continue;
+        const candidateCategoryName = String(categoryData._category_name_ || categoryKey).trim().toLowerCase();
+        if (candidateCategoryName !== normalizedCategoryName) continue;
+        const candidateTypeFile = String(categoryData._type_file_ || "").trim().toLowerCase();
+        if (normalizedTypeFile && candidateTypeFile === normalizedTypeFile) {
+            return categoryKey;
+        }
+        if (!fallback) {
+            fallback = categoryKey;
+        }
+    }
+
+    if (fallback) return fallback;
+    if (parsed.typeFile && parsed.categoryName) {
+        return buildComposerCategoryKey(parsed.typeFile, parsed.categoryName);
+    }
+    if (explicitTypeFile) {
+        return buildComposerCategoryKey(explicitTypeFile, parsed.categoryName || raw);
+    }
+    return raw;
+}
+
+function getComposerCategoryDisplayName(node, category) {
+    const resolvedKey = resolveComposerCategoryKey(node, category);
+    const metadataName = String(node?.prompts?.[resolvedKey]?._category_name_ || "").trim();
+    if (metadataName) return metadataName;
+    return parseComposerCategoryKey(resolvedKey || category).categoryName || String(category || "").trim();
+}
+
+function getComposerCategoryTypeFile(node, category) {
+    const resolvedKey = resolveComposerCategoryKey(node, category);
+    const flattenedTypeFile = String(node?.prompts?.[resolvedKey]?._type_file_ || "").trim();
+    if (flattenedTypeFile) return flattenedTypeFile;
+
+    const parsed = parseComposerCategoryKey(category);
+    if (parsed.typeFile) return parsed.typeFile;
+
+    const normalizedCategory = String(getComposerCategoryDisplayName(node, category) || "").trim().toLowerCase();
+    if (!normalizedCategory) return "";
+    for (const [typeFile, typeData] of getOrderedComposerTypeEntries(node)) {
+        const categories = typeData?.categories;
+        if (!categories || typeof categories !== "object" || Array.isArray(categories)) continue;
+        const match = Object.keys(categories).find((name) => String(name || "").trim().toLowerCase() === normalizedCategory);
+        if (match) return String(typeFile || "").trim();
+    }
+    return "";
+}
+
+function getComposerCategoryRequestIdentity(node, category, explicitTypeFile = "") {
+    const categoryKey = resolveComposerCategoryKey(node, category, explicitTypeFile);
+    const categoryName = getComposerCategoryDisplayName(node, categoryKey || category);
+    const typeFile = String(explicitTypeFile || getComposerCategoryTypeFile(node, categoryKey || category) || "").trim();
+    return { categoryKey: categoryKey || String(category || "").trim(), categoryName, typeFile };
+}
+
 function getComposerTypeFile(node, typeValue) {
     const normalized = String(typeValue || "").trim().toLowerCase();
     if (!normalized) return "";
@@ -1205,8 +1447,12 @@ function getOrderedComposerCategories(node, categories = null) {
     for (const [typeFile, typeData] of canonicalEntries) {
         const categoryNames = Object.keys(typeData?.categories || {}).sort((a, b) => a.localeCompare(b));
         for (const categoryName of categoryNames) {
+            const compositeKey = buildComposerCategoryKey(typeFile, categoryName);
+            if (!categoryOrder.has(compositeKey)) {
+                categoryOrder.set(compositeKey, nextIndex++);
+            }
             if (!categoryOrder.has(categoryName)) {
-                categoryOrder.set(categoryName, nextIndex++);
+                categoryOrder.set(categoryName, categoryOrder.get(compositeKey));
             }
         }
     }
@@ -1548,7 +1794,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
     const filterAllowedCategories = (categories) => {
         if (!allowedCategorySet || !Array.isArray(categories)) return categories;
-        return categories.filter((cat) => allowedCategorySet.has(String(cat).toLowerCase()));
+        return categories.filter((cat) => {
+            const normalizedKey = String(cat || "").toLowerCase();
+            const normalizedCategoryName = getComposerCategoryDisplayName(node, cat).toLowerCase();
+            return allowedCategorySet.has(normalizedKey) || allowedCategorySet.has(normalizedCategoryName);
+        });
     };
 
     // Check if thumbnail preview is enabled from user preferences
@@ -1563,7 +1813,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         });
         
-        let selectedCategory = currentCategory;
+        let selectedCategory = showCategoryTypeFilter
+            ? resolveComposerCategoryKey(
+                node,
+                currentCategory,
+                initialCategoryTypeFilter !== "__all__" ? getComposerTypeFile(node, initialCategoryTypeFilter) : "",
+            )
+            : currentCategory;
         let lastSelectedName = currentPrompt;
         let blankPromptExplicitSelection = false;
         const findMatchingPromptName = (category, name) => {
@@ -1578,7 +1834,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
             return "";
         };
-        let currentPromptCategory = String(currentCategory || "").trim();
+        let currentPromptCategory = String(selectedCategory || "").trim();
         const setCurrentPromptSelection = (name, category = selectedCategory) => {
             currentPrompt = name;
             currentPromptCategory = String(category || "").trim();
@@ -1589,6 +1845,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             currentPromptCategory = "";
             blankPromptExplicitSelection = true;
         };
+        const getResultCategoryName = (category = selectedCategory) => showCategoryTypeFilter
+            ? getComposerCategoryDisplayName(node, category)
+            : String(category || "").trim();
         let editPanel = null;
         let selectedByCategory = {};
         let selectedNames;
@@ -1634,8 +1893,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         const setSelectedCategory = (newCategory) => {
+            const normalizedNewCategory = showCategoryTypeFilter ? resolveComposerCategoryKey(node, newCategory) : newCategory;
             const previousCategory = selectedCategory;
-            if (previousCategory === newCategory) return;
+            if (previousCategory === normalizedNewCategory) return;
             if (multiCategorySelect && previousCategory) {
                 if (selectedNames.size > 0) {
                     selectedByCategory[previousCategory] = selectedNames;
@@ -1643,7 +1903,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     delete selectedByCategory[previousCategory];
                 }
             }
-            selectedCategory = newCategory;
+            selectedCategory = normalizedNewCategory;
             if (multiCategorySelect) {
                 selectedNames = selectedByCategory[selectedCategory] || new Set();
                 multiSelectAnchorName = selectedNames.size > 0 ? Array.from(selectedNames)[0] : "";
@@ -2218,7 +2478,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const result = await showNewCategoryDialog();
             if (result && result.name && result.name.trim()) {
                 const categoryName = result.name.trim();
-                const existingCategories = Object.keys(node.prompts || {});
+                const existingCategories = showCategoryTypeFilter ? [] : Object.keys(node.prompts || {});
                 const existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.toLowerCase());
                 if (existingCategoryName) {
                     await showInfo("Category Exists", `Category already exists as "${existingCategoryName}".`);
@@ -2242,7 +2502,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             renderContent(searchInput.value);
                             return;
                         }
-                        setSelectedCategory(categoryName);
+                        setSelectedCategory(resolveComposerCategoryKey(node, categoryName, data.type_file || ""));
                         rebuildCategoryList();
                         renderContent(searchInput.value);
                     } else {
@@ -2347,6 +2607,25 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             if (hideNSFWState && categoryTypeFilter !== "__all__" && isComposerTypeNSFW(node, categoryTypeFilter)) {
                 categoryTypeFilter = "__all__";
             }
+        };
+
+        const getComposerTypeFilterForCategory = (categoryName, explicitTypeFile = "") => {
+            if (!showCategoryTypeFilter) return "";
+            const normalizedExplicit = String(explicitTypeFile || "").replace(/\.json$/i, "").trim().toLowerCase();
+            if (normalizedExplicit) return normalizedExplicit;
+            const flattenedTypeFile = String(node?.prompts?.[categoryName]?._type_file_ || "").replace(/\.json$/i, "").trim().toLowerCase();
+            if (flattenedTypeFile) return flattenedTypeFile;
+            return String(getCategoryPromptType(node, categoryName) || "").trim().toLowerCase();
+        };
+
+        const syncComposerTypeFilterForCategory = (categoryName, explicitTypeFile = "") => {
+            const nextType = getComposerTypeFilterForCategory(categoryName, explicitTypeFile);
+            if (!showCategoryTypeFilter || !nextType || nextType === "__all__" || categoryTypeFilter === nextType) {
+                return false;
+            }
+            categoryTypeFilter = nextType;
+            updateTypeRailButtons();
+            return true;
         };
 
         refreshPromptTypeFilters();
@@ -3016,6 +3295,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const showCategoryContextMenu = (event, cat) => {
             const existing = document.querySelector('.category-context-menu');
             if (existing) existing.remove();
+            const isComposerManager = endpointPrefix === "/prompt-manager/compose";
 
             const menu = document.createElement("div");
             menu.className = "category-context-menu";
@@ -3033,6 +3313,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             `;
 
             const isNSFW = isCategoryNSFW(cat);
+            const categoryLabel = showCategoryTypeFilter ? getComposerCategoryDisplayName(node, cat) : cat;
             const item = document.createElement("div");
             item.textContent = isNSFW ? "✓ NSFW" : "Mark as NSFW";
             item.style.cssText = `
@@ -3049,7 +3330,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ type: "category", category: cat })
+                        body: JSON.stringify({
+                            type: "category",
+                            category: categoryLabel,
+                            ...(isComposerManager ? { type_file: getComposerCategoryTypeFile(node, cat) } : {}),
+                        })
                     });
                     const result = await resp.json();
                     if (result.success) {
@@ -3069,7 +3354,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             menu.appendChild(renameDivider);
 
             const renameItem = document.createElement("div");
-            renameItem.textContent = "✏️ Rename";
+            renameItem.textContent = isComposerManager ? "✏️ Rename / Move" : "✏️ Rename";
             renameItem.style.cssText = `
                 padding: 8px 16px;
                 color: #ccc;
@@ -3080,30 +3365,46 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             renameItem.onmouseout = () => renameItem.style.background = 'transparent';
             renameItem.onclick = async () => {
                 menu.remove();
+                const currentTypeFile = isComposerManager ? getComposerCategoryTypeFile(node, cat) : "";
+                const composerMoveTargets = isComposerManager ? getComposerMoveTargetOptions(node) : null;
                 const result = await showRenameCategoryDialog(
-                    "Rename Category",
+                    isComposerManager ? "Rename / Move Category" : "Rename Category",
                     "Enter new category name:",
-                    [cat],
-                    cat
+                    [categoryLabel],
+                    categoryLabel,
+                    isComposerManager ? {
+                        groupOptions: composerMoveTargets?.groupOptions || [],
+                        defaultGroupValue: currentTypeFile,
+                    } : {}
                 );
                 if (result && result.newCategory && result.newCategory.trim()) {
                     const newCat = result.newCategory.trim();
-                    if (newCat === cat) return;
+                    const newTypeFile = isComposerManager ? String(result.typeFile || currentTypeFile || "") : "";
+                    if (newCat === cat && (!isComposerManager || newTypeFile === currentTypeFile)) return;
                     try {
                         const resp = await fetch(`${endpointPrefix}/rename-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ old_category: cat, new_category: newCat })
+                            body: JSON.stringify({
+                                old_category: categoryLabel,
+                                new_category: newCat,
+                                ...(isComposerManager ? {
+                                    type_file: currentTypeFile,
+                                    new_type_file: newTypeFile || currentTypeFile,
+                                } : {}),
+                            })
                         });
                         const data = await resp.json();
                         if (data.success) {
                             applyPromptPayloadToNode(node, data);
                             if (selectedCategory === cat) {
+                                const nextCategoryKey = resolveComposerCategoryKey(node, data.new_category, data.type_file || newTypeFile || currentTypeFile);
+                                syncComposerTypeFilterForCategory(nextCategoryKey, data.type_file || newTypeFile || currentTypeFile);
                                 if (multiCategorySelect && selectedByCategory[cat]) {
-                                    selectedByCategory[data.new_category] = selectedByCategory[cat];
+                                    selectedByCategory[nextCategoryKey] = selectedByCategory[cat];
                                     delete selectedByCategory[cat];
                                 }
-                                setSelectedCategory(data.new_category);
+                                setSelectedCategory(nextCategoryKey);
                             }
                             rebuildCategoryList();
                             renderContent(searchInput.value);
@@ -3174,15 +3475,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     await showInfo(
                         regenerateAll ? "No Prompts to Re-Generate" : "No Thumbnails to Generate",
                         regenerateAll
-                            ? `No prompts were found in "${cat}" to re-generate thumbnails for.`
-                            : `All prompts in "${cat}" already have thumbnails.`
+                            ? `No prompts were found in "${categoryLabel}" to re-generate thumbnails for.`
+                            : `All prompts in "${categoryLabel}" already have thumbnails.`
                     );
                     return;
                 }
 
                 const confirmMessage = regenerateAll
-                    ? `Re-generate thumbnails for ${names.length} prompt(s) in "${cat}"? Existing thumbnails will be replaced.`
-                    : `Generate thumbnails for ${names.length} prompt(s) in "${cat}"?`;
+                    ? `Re-generate thumbnails for ${names.length} prompt(s) in "${categoryLabel}"? Existing thumbnails will be replaced.`
+                    : `Generate thumbnails for ${names.length} prompt(s) in "${categoryLabel}"?`;
                 const confirmText = regenerateAll ? "Re-Generate" : "Generate";
                 if (!await showConfirm(title, confirmMessage, confirmText, "#4CAF50")) {
                     return;
@@ -3299,12 +3600,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             deleteItem.onmouseout = () => deleteItem.style.background = 'transparent';
             deleteItem.onclick = async () => {
                 menu.remove();
-                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${cat}" and all its prompts?`)) {
+                if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryLabel}" and all its prompts?`)) {
                     try {
                         const resp = await fetch(`${endpointPrefix}/delete-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ category: cat })
+                            body: JSON.stringify({
+                                category: categoryLabel,
+                                ...(isComposerManager ? { type_file: getComposerCategoryTypeFile(node, cat) } : {}),
+                            })
                         });
                         const data = await resp.json();
                         if (data.success) {
@@ -3634,7 +3938,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     margin-top: 1px;
                 `;
 
-                btn.textContent = cat;
+                btn.textContent = showCategoryTypeFilter ? getComposerCategoryDisplayName(node, cat) : cat;
 
                 btn.onclick = async () => {
                     const canProceed = await canChangeEditorContext();
@@ -3681,7 +3985,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const result = await showNewCategoryDialog();
                 if (result && result.name && result.name.trim()) {
                     const categoryName = result.name.trim();
-                    const existingCategories = Object.keys(node.prompts || {});
+                    const existingCategories = showCategoryTypeFilter ? [] : Object.keys(node.prompts || {});
                     const existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.toLowerCase());
                     if (existingCategoryName) {
                         await showInfo("Category Exists", `Category already exists as "${existingCategoryName}".`);
@@ -3705,7 +4009,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                 renderContent(searchInput.value);
                                 return;
                             }
-                            setSelectedCategory(categoryName);
+                            const nextCategoryKey = resolveComposerCategoryKey(node, categoryName, data.type_file || "");
+                            syncComposerTypeFilterForCategory(nextCategoryKey, data.type_file || "");
+                            setSelectedCategory(nextCategoryKey);
                             rebuildCategoryList();
                             renderContent(searchInput.value);
                         } else {
@@ -3787,6 +4093,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 savePrompt: async (payload) => {
                     try {
                         const body = buildSavePromptRequestBodyForEndpoint(endpointPrefix, payload);
+                        if (endpointPrefix === "/prompt-manager/compose") {
+                            const composerCategory = getComposerCategoryRequestIdentity(node, payload.category, payload.type_file || "");
+                            body.category = composerCategory.categoryName;
+                            body.type_file = composerCategory.typeFile;
+                            if (Object.prototype.hasOwnProperty.call(body, "old_category")) {
+                                body.old_category = getComposerCategoryDisplayName(node, payload.old_category || payload.category);
+                            }
+                        }
                         const resp = await fetch(`${endpointPrefix}/save-prompt`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -3797,7 +4111,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             if (result?.prompts && typeof result.prompts === "object") {
                                 applyPromptPayloadToNode(node, result);
                             }
-                            setCurrentPromptSelection(body.name);
+                            const savedCategory = endpointPrefix === "/prompt-manager/compose"
+                                ? resolveComposerCategoryKey(node, body.category, body.type_file || "")
+                                : body.category;
+                            syncComposerTypeFilterForCategory(savedCategory, body.type_file || "");
+                            setCurrentPromptSelection(body.name, savedCategory);
                         }
                         return result;
                     } catch (err) {
@@ -3807,16 +4125,19 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 },
                 selectPrompt: (category, name) => {
                     if (category) {
-                        selectedCategory = category;
+                        const nextCategory = showCategoryTypeFilter ? resolveComposerCategoryKey(node, category) : category;
+                        syncComposerTypeFilterForCategory(nextCategory);
+                        selectedCategory = nextCategory;
                         renderCategoryTabs();
                     }
                     setCurrentPromptSelection(name);
                     renderContent(searchInput.value);
                 },
                 syncPromptSelection: (category, name) => {
-                    const matchedName = findMatchingPromptName(category || selectedCategory, name);
+                    const resolvedCategory = showCategoryTypeFilter ? resolveComposerCategoryKey(node, category || selectedCategory) : (category || selectedCategory);
+                    const matchedName = findMatchingPromptName(resolvedCategory, name);
                     if (matchedName) {
-                        setCurrentPromptSelection(matchedName);
+                        setCurrentPromptSelection(matchedName, resolvedCategory);
                     } else {
                         setBlankPromptSelection();
                     }
@@ -3889,14 +4210,16 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         updateTypeRailButtons();
                     }
 
-                    selectedCategory = category;
+                    selectedCategory = showCategoryTypeFilter
+                        ? resolveComposerCategoryKey(node, category, nextType && nextType !== "__all__" ? getComposerTypeFile(node, nextType) : "")
+                        : category;
                     setBlankPromptSelection();
                     if (typeof editPanel.clearPrompt === "function") {
                         await editPanel.clearPrompt({ skipConfirm: true });
                     }
                     rebuildCategoryList();
                     if (editPanel) {
-                        editPanel.loadCategorySettings(category);
+                        editPanel.loadCategorySettings(selectedCategory);
                         if (typeof editPanel.showCategorySettings === "function") {
                             editPanel.showCategorySettings();
                         }
@@ -4059,10 +4382,24 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             menu.appendChild(dividerA);
 
             menu.appendChild(createMenuItem(`📁 Move (${selectedList.length})`, async () => {
+                const isComposerManager = endpointPrefix === "/prompt-manager/compose";
                 const allCategories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
-                const picked = await showCategoryPickerDialog("Move Selected Prompts", allCategories, selectedCategory);
+                const currentComposerCategory = isComposerManager ? getComposerCategoryRequestIdentity(node, selectedCategory) : null;
+                const currentTypeFile = currentComposerCategory?.typeFile || "";
+                const composerMoveTargets = isComposerManager ? getComposerMoveTargetOptions(node) : null;
+                const picked = await showCategoryPickerDialog(
+                    "Move Selected Prompts",
+                    allCategories,
+                    isComposerManager ? currentComposerCategory?.categoryName || selectedCategory : selectedCategory,
+                    isComposerManager ? {
+                        groupOptions: composerMoveTargets?.groupOptions || [],
+                        categoriesByGroup: composerMoveTargets?.categoriesByGroup || {},
+                        defaultGroupValue: currentTypeFile,
+                    } : {}
+                );
                 const targetCategory = picked?.category;
-                if (!targetCategory || targetCategory === selectedCategory) return;
+                const targetTypeFile = isComposerManager ? String(picked?.typeFile || currentTypeFile || "") : "";
+                if (!targetCategory || (targetCategory === (currentComposerCategory?.categoryName || selectedCategory) && (!isComposerManager || targetTypeFile === currentTypeFile))) return;
 
                 let movedCount = 0;
                 const errors = [];
@@ -4072,10 +4409,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
-                                category: selectedCategory,
+                                category: currentComposerCategory?.categoryName || selectedCategory,
                                 old_name: promptName,
                                 new_name: promptName,
                                 new_category: targetCategory,
+                                ...(isComposerManager ? {
+                                    type_file: currentComposerCategory?.typeFile || currentTypeFile,
+                                    new_type_file: targetTypeFile || currentTypeFile,
+                                } : {}),
                             })
                         });
                         const data = await resp.json();
@@ -4405,7 +4746,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                            resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -4451,7 +4792,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                    resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -4481,7 +4822,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
-                        resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                        resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                         cleanup();
                     };
                 }
@@ -4784,7 +5125,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                            resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -4830,7 +5171,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                    resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -4860,7 +5201,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
-                        resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                        resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                         cleanup();
                     };
                 }
@@ -5382,7 +5723,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 1000) {
-                            resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                            resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -5428,7 +5769,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                    resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -5458,7 +5799,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     row.ondblclick = () => {
-                        resolve({ category: selectedCategory, prompt: promptName, prompts: [promptName] });
+                        resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
                         cleanup();
                     };
                 }
@@ -5819,11 +6160,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
 
             const existing = getCategoryPromptEntry(node?.prompts?.[category], name, endpointPrefix);
+            const categoryLabel = getResultCategoryName(category);
             let overwrite = false;
             if (existing) {
                 overwrite = await showConfirm(
                     "Overwrite Prompt",
-                    `Prompt "${name}" already exists in category "${category}". Do you want to replace it?`,
+                    `Prompt "${name}" already exists in category "${categoryLabel}". Do you want to replace it?`,
                     "Replace",
                     "#c44",
                     false
@@ -5833,7 +6175,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }
 
-            const saveResult = await onSave({ category, name, overwrite });
+            const saveResult = await onSave({ category: categoryLabel, name, overwrite });
             if (saveResult?.success) {
                 resolve(saveResult);
                 cleanup();

@@ -4,8 +4,8 @@ Prompt Composer Store.
 Canonical storage lives in per-type JSON files under:
     ComfyUI/user/default/prompt_composer/*.json
 
-Legacy single-file libraries are still accepted for import/export and are
-automatically migrated into the per-type layout on first load.
+Legacy v1 composer libraries are converted to canonical v2 on first load,
+then the runtime continues using canonical v2 data only.
 """
 import io
 import json
@@ -34,26 +34,10 @@ TYPE_ICON_SUFFIX = ".png"
 DEFAULT_TYPE_ICON_FILENAME = "_default.png"
 GROUP_PLACEHOLDER_ICON_FILENAME = "placeholder.png"
 ALL_TYPES_ICON_FILENAME = "all.png"
+COMPOSER_CATEGORY_KEY_SEPARATOR = "::"
 
 SUBJECT_START_TYPE_KEYS = {"character", "environment"}
 NON_SUBJECT_TYPE_KEYS = {"style", "effect", "lighting", "mood", "composition", "camera"}
-LEGACY_TYPE_ORDER_PRESET = [
-    "character",
-    "characteristic",
-    "clothing",
-    "hairstyle",
-    "accessory",
-    "expression",
-    "action",
-    "environment",
-    "lighting",
-    "mood",
-    "camera",
-    "composition",
-    "effect",
-    "style",
-]
-LEGACY_TYPE_ORDER_INDEX = {name: index for index, name in enumerate(LEGACY_TYPE_ORDER_PRESET)}
 
 
 class PromptComposerStore:
@@ -85,7 +69,7 @@ class PromptComposerStore:
 
     @classmethod
     def load_prompts(cls):
-        """Return a flattened category-first view for legacy consumers."""
+        """Return the flattened category-first browser view derived from canonical v2 data."""
         library = cls.load_canonical_prompts()
         return _flatten_canonical_library(library)
 
@@ -148,6 +132,35 @@ class PromptComposerStore:
                 os.remove(os.path.join(storage_dir, existing_name))
             except FileNotFoundError:
                 pass
+
+    @classmethod
+    def save_type_files(cls, data, touched_type_files=None, removed_type_files=None):
+        library = _normalize_canonical_library(data)
+        storage_dir = cls.get_storage_dir()
+        os.makedirs(storage_dir, exist_ok=True)
+
+        touched = _resolve_requested_type_files(library, touched_type_files)
+        removed = {
+            _normalize_type_file_name(type_file)
+            for type_file in (removed_type_files or [])
+            if str(type_file or "").strip()
+        }
+        removed.difference_update(touched)
+
+        for type_file in touched:
+            type_data = library.get(CANONICAL_TYPES_KEY, {}).get(type_file)
+            if not isinstance(type_data, dict):
+                continue
+            payload = _serialize_type_data(type_file, type_data)
+            atomic_save(os.path.join(storage_dir, type_file), payload, "PromptComposerStore")
+
+        for type_file in removed:
+            try:
+                os.remove(os.path.join(storage_dir, type_file))
+            except FileNotFoundError:
+                pass
+
+        return library
 
     @classmethod
     def sort_prompts_data(cls, data):
@@ -266,23 +279,6 @@ def _read_icon_data_url(path):
     except Exception as exc:
         print(f"[PromptComposerStore] Failed to read icon '{path}': {exc}")
         return ""
-
-
-def _resolve_legacy_icon_path(type_file=None, search_dirs=None):
-    icon_name = _type_icon_file_name(type_file)
-    search_dirs = [directory for directory in (search_dirs or []) if directory]
-
-    for directory in search_dirs:
-        specific_path = os.path.join(directory, icon_name)
-        if os.path.isfile(specific_path):
-            return specific_path
-
-    for directory in search_dirs:
-        default_path = os.path.join(directory, DEFAULT_TYPE_ICON_FILENAME)
-        if os.path.isfile(default_path):
-            return default_path
-
-    return None
 
 
 def _normalize_type_icon(value):
@@ -433,50 +429,6 @@ def _ensure_category_prompts_map(category_data):
     return prompt_entries
 
 
-def _normalize_category_data(category_data):
-    """Normalize legacy flat category data."""
-    if not isinstance(category_data, dict):
-        category_data = {}
-
-    normalized = {"_prompts_": {}}
-    if _coerce_bool(category_data.get("__meta__", {}).get("nsfw") if isinstance(category_data.get("__meta__"), dict) else False):
-        normalized["__meta__"] = {"nsfw": True}
-
-    base_prompt = str(category_data.get("_base_prompt_") or "")
-    if base_prompt.strip():
-        normalized["_base_prompt_"] = base_prompt
-
-    prompt_type = _normalize_optional_string(category_data.get("_prompt_type_"))
-    if prompt_type:
-        normalized["_prompt_type_"] = prompt_type
-
-    prompt_prefix = str(category_data.get("_prompt_prefix_") or "")
-    if prompt_prefix.strip():
-        normalized["_prompt_prefix_"] = prompt_prefix
-
-    for name, entry in _get_category_prompts_map(category_data).items():
-        normalized["_prompts_"][str(name)] = _normalize_prompt_entry(entry)
-
-    return normalized
-
-
-def _normalize_prompts_data(data):
-    """Normalize a legacy flat category-first library."""
-    if not isinstance(data, dict):
-        return {}
-
-    normalized = {}
-    top_level_meta = data.get("__meta__")
-    if isinstance(top_level_meta, dict):
-        normalized["__meta__"] = dict(top_level_meta)
-
-    for category, category_data in data.items():
-        if category == "__meta__":
-            continue
-        normalized[str(category)] = _normalize_category_data(category_data)
-    return normalized
-
-
 def _normalize_type_category_data(category_name, category_data):
     if not isinstance(category_data, dict):
         category_data = {}
@@ -511,6 +463,50 @@ def _normalize_type_category_data(category_name, category_data):
     for prompt_name, prompt_entry in prompts.items():
         normalized["_prompts_"][str(prompt_name)] = _normalize_prompt_entry(prompt_entry)
 
+    return normalized
+
+
+def _normalize_category_data(category_data):
+    """Normalize legacy flat category data during one-time v1 to v2 migration."""
+    if not isinstance(category_data, dict):
+        category_data = {}
+
+    normalized = {"_prompts_": {}}
+    if _coerce_bool(category_data.get("__meta__", {}).get("nsfw") if isinstance(category_data.get("__meta__"), dict) else False):
+        normalized["__meta__"] = {"nsfw": True}
+
+    base_prompt = str(category_data.get("_base_prompt_") or "")
+    if base_prompt.strip():
+        normalized["_base_prompt_"] = base_prompt
+
+    prompt_type = _normalize_optional_string(category_data.get("_prompt_type_"))
+    if prompt_type:
+        normalized["_prompt_type_"] = prompt_type
+
+    prompt_prefix = str(category_data.get("_prompt_prefix_") or "")
+    if prompt_prefix.strip():
+        normalized["_prompt_prefix_"] = prompt_prefix
+
+    for name, entry in _get_category_prompts_map(category_data).items():
+        normalized["_prompts_"][str(name)] = _normalize_prompt_entry(entry)
+
+    return normalized
+
+
+def _normalize_prompts_data(data):
+    """Normalize a legacy flat category-first library for startup migration."""
+    if not isinstance(data, dict):
+        return {}
+
+    normalized = {}
+    top_level_meta = data.get("__meta__")
+    if isinstance(top_level_meta, dict):
+        normalized["__meta__"] = dict(top_level_meta)
+
+    for category, category_data in data.items():
+        if category == "__meta__":
+            continue
+        normalized[str(category)] = _normalize_category_data(category_data)
     return normalized
 
 
@@ -647,6 +643,21 @@ def _ordered_type_files(library):
     return [type_file for type_file, _type_data in _iter_type_items(library)]
 
 
+def _resolve_requested_type_files(library, requested_type_files):
+    resolved = []
+    seen = set()
+    for requested in requested_type_files or []:
+        raw = str(requested or "").strip()
+        if not raw:
+            continue
+        canonical = _find_type_case_insensitive(library, raw) or _normalize_type_file_name(raw)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        resolved.append(canonical)
+    return resolved
+
+
 def _type_orders_are_dense(library):
     ordered_type_files = _ordered_type_files(library)
     if not ordered_type_files:
@@ -701,6 +712,26 @@ def _list_type_files(storage_dir):
         return []
 
 
+def _load_canonical_library_from_files(storage_dir, type_files, default_dir=None):
+    library = _new_canonical_library()
+    for type_file in type_files:
+        path = os.path.join(storage_dir, type_file)
+        loaded = None
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+        except Exception as exc:
+            print(f"[PromptComposerStore] Error loading type file '{type_file}': {exc}")
+            check_backup(path)
+            loaded = load_with_fallback(path, "PromptComposerStore")
+        if not isinstance(loaded, dict):
+            print(f"[PromptComposerStore] Skipping invalid type file '{type_file}'")
+            continue
+        normalized = _normalize_type_data(type_file, loaded)
+        library[CANONICAL_TYPES_KEY][type_file] = normalized
+    return library
+
+
 def _load_legacy_library(path):
     try:
         with open(path, "r", encoding="utf-8") as handle:
@@ -730,32 +761,14 @@ def _archive_legacy_file(source_path, backup_path):
     shutil.move(source_path, target_path)
 
 
-def _load_canonical_library_from_files(storage_dir, type_files, default_dir=None):
-    library = _new_canonical_library()
-    for type_file in type_files:
-        path = os.path.join(storage_dir, type_file)
-        loaded = None
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                loaded = json.load(handle)
-        except Exception as exc:
-            print(f"[PromptComposerStore] Error loading type file '{type_file}': {exc}")
-            check_backup(path)
-            loaded = load_with_fallback(path, "PromptComposerStore")
-        if not isinstance(loaded, dict):
-            print(f"[PromptComposerStore] Skipping invalid type file '{type_file}'")
-            continue
-        normalized = _normalize_type_data(type_file, loaded)
-        library[CANONICAL_TYPES_KEY][type_file] = normalized
-    return library
-
-
 def _convert_legacy_library_to_canonical(legacy_data):
     legacy = _normalize_prompts_data(legacy_data)
     library = _new_canonical_library()
     if isinstance(legacy.get("__meta__"), dict):
         library["__meta__"].update(dict(legacy["__meta__"]))
 
+    ordered_type_files = []
+    seen_type_files = set()
     for category_name, category_data in legacy.items():
         if category_name == "__meta__":
             continue
@@ -767,6 +780,9 @@ def _convert_legacy_library_to_canonical(legacy_data):
             "subject_type": _default_subject_type_for_type_file(type_file),
             "categories": {},
         })
+        if type_file not in seen_type_files:
+            ordered_type_files.append(type_file)
+            seen_type_files.add(type_file)
         if prompt_type:
             type_entry["name"] = _default_type_name_from_file(type_file)
             type_entry["subject_type"] = _default_subject_type_for_type_file(type_file)
@@ -778,12 +794,6 @@ def _convert_legacy_library_to_canonical(legacy_data):
             "_prompts_": _get_category_prompts_map(category_data),
         })
 
-    ordered_type_files = list(library[CANONICAL_TYPES_KEY].keys())
-    legacy_positions = {type_file: index for index, type_file in enumerate(ordered_type_files)}
-    ordered_type_files.sort(key=lambda type_file: (
-        LEGACY_TYPE_ORDER_INDEX.get(_type_stem(type_file), len(LEGACY_TYPE_ORDER_PRESET)),
-        legacy_positions.get(type_file, 0),
-    ))
     _assign_type_orders(library, ordered_type_files)
 
     return _normalize_canonical_library(library)
@@ -791,10 +801,10 @@ def _convert_legacy_library_to_canonical(legacy_data):
 
 def _normalize_library_input(data):
     if not isinstance(data, dict):
-        return _new_canonical_library()
-    if CANONICAL_TYPES_KEY in data:
-        return _normalize_canonical_library(data)
-    return _convert_legacy_library_to_canonical(data)
+        raise ValueError("Prompt Composer library must be a JSON object")
+    if CANONICAL_TYPES_KEY not in data:
+        raise ValueError("Prompt Composer requires canonical v2 library data with _types_")
+    return _normalize_canonical_library(data)
 
 
 def _type_nsfw(type_data):
@@ -803,6 +813,14 @@ def _type_nsfw(type_data):
 
 def _category_nsfw(category_data):
     return _coerce_bool(category_data.get("nsfw")) if isinstance(category_data, dict) else False
+
+
+def _flat_category_key(type_file, category_name):
+    normalized_category = str(category_name or "").strip()
+    normalized_type_file = _normalize_type_file_name(type_file) if type_file else ""
+    if not normalized_type_file:
+        return normalized_category
+    return f"{normalized_type_file}{COMPOSER_CATEGORY_KEY_SEPARATOR}{normalized_category}"
 
 
 def _flatten_canonical_library(library):
@@ -820,6 +838,7 @@ def _flatten_canonical_library(library):
         categories = type_data.get("categories", {}) if isinstance(type_data, dict) else {}
         for category_name, category_data in sorted(categories.items(), key=lambda item: item[0].lower()):
             flat_category = {"_prompts_": {}}
+            flat_category["_category_name_"] = category_name
             category_base_prompt = str(category_data.get("base_prompt") or "")
             category_prefix = str(category_data.get("prefix") or "")
             effective_base_prompt = str(category_data.get("base_prompt") or type_base_prompt or "")
@@ -851,7 +870,7 @@ def _flatten_canonical_library(library):
                 ((name, _normalize_prompt_entry(entry)) for name, entry in _get_category_prompts_map(category_data).items()),
                 key=lambda item: item[0].lower(),
             ))
-            flat[category_name] = flat_category
+            flat[_flat_category_key(type_file, category_name)] = flat_category
     return flat
 
 
@@ -1015,6 +1034,8 @@ def _normalize_uploaded_json_document(file_name, loaded):
         library = _new_canonical_library()
         library[CANONICAL_TYPES_KEY][type_file] = _normalize_type_data(type_file, loaded)
         return _normalize_canonical_library(library)
+    if CANONICAL_TYPES_KEY not in loaded:
+        raise ValueError("Only canonical v2 Prompt Composer libraries or single-type v2 JSON files are supported")
     return _normalize_library_input(loaded)
 
 
@@ -1145,15 +1166,15 @@ async def compose_save_category(request):
             return server.web.json_response({"success": False, "error": "Category name is required"})
 
         library = PromptComposerStore.load_canonical_prompts()
-        location, error = _locate_category(library, category_name, type_file=data.get("type_file"))
+        prompt_type = _normalize_optional_string(data.get("prompt_type"))
+        target_type_file = _normalize_type_file_name(data.get("type_file") or prompt_type or FALLBACK_TYPE_FILE)
+        location, error = _locate_category(library, category_name, type_file=target_type_file)
         if location:
             return server.web.json_response({
                 "success": False,
                 "error": f"Category already exists as '{location[2]}'",
             })
 
-        prompt_type = _normalize_optional_string(data.get("prompt_type"))
-        target_type_file = _normalize_type_file_name(data.get("type_file") or prompt_type or FALLBACK_TYPE_FILE)
         target_type = _ensure_type(
             library,
             target_type_file,
@@ -1167,7 +1188,7 @@ async def compose_save_category(request):
         if _coerce_bool(data.get("nsfw")):
             category_data["nsfw"] = True
 
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [target_type_file])
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -1200,7 +1221,7 @@ async def compose_save_category_base_prompt(request):
 
         type_data.setdefault("categories", {})[canonical_category] = category_data
         library[CANONICAL_TYPES_KEY][type_file] = type_data
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [type_file])
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -1227,6 +1248,12 @@ async def compose_save_category_settings(request):
 
         target_type_file = _resolve_target_type_file(current_type_file, data.get("prompt_type"), fallback_category=canonical_category)
         if target_type_file != current_type_file:
+            existing_target_location, _existing_target_error = _locate_category(library, canonical_category, type_file=target_type_file)
+            if existing_target_location:
+                return server.web.json_response({
+                    "success": False,
+                    "error": f"Category already exists as '{existing_target_location[2]}'",
+                })
             current_type_data.get("categories", {}).pop(canonical_category, None)
             target_type_data = _ensure_type(
                 library,
@@ -1264,7 +1291,11 @@ async def compose_save_category_settings(request):
         if not current_type_data.get("categories"):
             library[CANONICAL_TYPES_KEY].pop(current_type_file, None)
 
-        PromptComposerStore.save_prompts(library)
+        removed_type_files = [current_type_file] if current_type_file != target_type_file and not current_type_data.get("categories") else []
+        touched_type_files = [target_type_file]
+        if current_type_file != target_type_file and current_type_data.get("categories"):
+            touched_type_files.append(current_type_file)
+        library = PromptComposerStore.save_type_files(library, touched_type_files, removed_type_files=removed_type_files)
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -1302,6 +1333,12 @@ async def compose_save_type_settings(request):
         if is_new_type:
             target_type_data["order"] = len(library.get(CANONICAL_TYPES_KEY, {})) - 1
 
+        if "subject_type" in data:
+            target_type_data["subject_type"] = _normalize_subject_type(
+                data.get("subject_type"),
+                target_type_data.get("subject_type", _default_subject_type_for_type_file(target_type_file)),
+            )
+
         prefix = str(data.get("prefix", "") or "")
         if prefix.strip():
             target_type_data["prefix"] = prefix
@@ -1320,7 +1357,7 @@ async def compose_save_type_settings(request):
         else:
             target_type_data.pop("base_prompt", None)
 
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [target_type_file])
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -1346,25 +1383,47 @@ async def compose_rename_category(request):
         location, error = _locate_category(library, old_category, type_file=data.get("type_file"))
         if error:
             return server.web.json_response({"success": False, "error": error})
-        type_file, type_data, canonical_category, category_data = location
+        source_type_file, source_type_data, canonical_category, category_data = location
 
-        sibling_location, sibling_error = _locate_category(library, new_category, type_file=type_file)
-        if sibling_location and str(sibling_location[2]).lower() != str(canonical_category).lower():
+        requested_target_type_file = data.get("new_type_file") or data.get("type_file") or source_type_file
+        target_type_file = _find_type_case_insensitive(library, requested_target_type_file) or _normalize_type_file_name(requested_target_type_file)
+        target_type_data = _ensure_type(
+            library,
+            target_type_file,
+            name=_normalize_optional_string(data.get("target_type_name")) or _default_type_name_from_file(target_type_file),
+        )
+
+        conflicting_location, _conflict_error = _locate_category(library, new_category, type_file=target_type_file)
+        if conflicting_location:
+            same_category = (
+                str(conflicting_location[0]).lower() == str(source_type_file).lower()
+                and str(conflicting_location[2]).lower() == str(canonical_category).lower()
+            )
+            if same_category:
+                conflicting_location = None
+
+        if conflicting_location:
             return server.web.json_response({
                 "success": False,
-                "error": f"Category already exists as '{sibling_location[2]}'",
+                "error": f"Category already exists as '{conflicting_location[2]}'",
             })
 
-        categories = type_data.setdefault("categories", {})
-        categories.pop(canonical_category, None)
-        categories[new_category] = category_data
+        source_categories = source_type_data.setdefault("categories", {})
+        source_categories.pop(canonical_category, None)
+        target_categories = target_type_data.setdefault("categories", {})
+        target_categories[new_category] = category_data
 
-        PromptComposerStore.save_prompts(library)
+        removed_type_files = [source_type_file] if source_type_file != target_type_file and not source_type_data.get("categories") else []
+        touched_type_files = [target_type_file]
+        if source_type_file != target_type_file and source_type_data.get("categories"):
+            touched_type_files.append(source_type_file)
+        library = PromptComposerStore.save_type_files(library, touched_type_files, removed_type_files=removed_type_files)
         return server.web.json_response({
             "success": True,
             "library": library,
             "prompts": _flatten_canonical_library(library),
             "new_category": new_category,
+            "type_file": target_type_file,
         })
     except Exception as exc:
         print(f"[PromptComposerStore] Error in rename-category: {exc}")
@@ -1393,7 +1452,7 @@ async def compose_rename_type(request):
                 })
 
         library[CANONICAL_TYPES_KEY][target_type_file]["name"] = new_name
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [target_type_file])
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -1507,7 +1566,7 @@ async def compose_reorder_types(request):
         affected_end = max(source_index, insertion_index)
         _assign_type_orders(library, reordered_type_files, affected_start, affected_end)
 
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [current_type_file, source_type_file])
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -1881,7 +1940,7 @@ async def compose_save_prompt(request):
         if source_location:
             source_type_data.setdefault("categories", {})[source_category_name] = source_category_data
 
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [current_type_file, source_type_file])
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -1910,7 +1969,7 @@ async def compose_delete_prompt(request):
             if canonical_name:
                 prompt_entries.pop(canonical_name, None)
                 type_data.setdefault("categories", {})[canonical_category] = category_data
-                PromptComposerStore.save_prompts(library)
+                library = PromptComposerStore.save_type_files(library, [type_file])
 
         return server.web.json_response({
             "success": True,
@@ -1965,7 +2024,7 @@ async def compose_rename_prompt(request):
         new_prompt_entries[new_name] = entry
         old_type_data.setdefault("categories", {})[old_category_name] = old_category_data
         new_type_data.setdefault("categories", {})[new_category_name] = new_category_data
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [old_type_file, new_type_file])
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -2016,7 +2075,13 @@ async def compose_toggle_nsfw(request):
             prompt_entries[canonical_name] = _normalize_prompt_entry(entry)
             type_data.setdefault("categories", {})[canonical_category] = category_data
 
-        PromptComposerStore.save_prompts(library)
+        if toggle_type == "type":
+            touched_type_files = [target_type_file]
+        elif toggle_type == "category":
+            touched_type_files = [type_file]
+        else:
+            touched_type_files = [_type_file]
+        library = PromptComposerStore.save_type_files(library, touched_type_files)
         return server.web.json_response({
             "success": True,
             "library": library,
@@ -2043,9 +2108,10 @@ async def compose_save_thumbnail(request):
             inferred_type = _normalize_type_file_name(data.get("prompt_type") or category or FALLBACK_TYPE_FILE)
             type_data = _ensure_type(library, inferred_type)
             category_data = _ensure_type_category(type_data, category)
+            type_file = inferred_type
             canonical_category = category
         else:
-            _type_file, type_data, canonical_category, category_data = location
+            type_file, type_data, canonical_category, category_data = location
 
         prompt_entries = _ensure_category_prompts_map(category_data)
         entry, canonical_name = _find_prompt_case_insensitive(category_data, name)
@@ -2062,7 +2128,7 @@ async def compose_save_thumbnail(request):
 
         prompt_entries[canonical_name] = entry
         type_data.setdefault("categories", {})[canonical_category] = category_data
-        PromptComposerStore.save_prompts(library)
+        library = PromptComposerStore.save_type_files(library, [type_file])
         return server.web.json_response({
             "success": True,
             "library": library,

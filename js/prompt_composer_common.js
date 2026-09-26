@@ -1,14 +1,28 @@
 import { api } from "../../scripts/api.js";
 import { COMPOSER_ENDPOINT_PREFIX, getCategoryPromptEntries } from "./prompt_store_adapters.js";
 
+const COMPOSER_CATEGORY_KEY_SEPARATOR = "::";
+
+function newComposerLibrary() {
+    return { __meta__: { schema_version: 2, storage: "type_files" }, _types_: {} };
+}
+
+function isCanonicalComposerLibrary(library) {
+    return !!(
+        library
+        && typeof library === "object"
+        && !Array.isArray(library)
+        && library._types_
+        && typeof library._types_ === "object"
+        && !Array.isArray(library._types_)
+    );
+}
+
 function normalizeComposerLibrary(library) {
-    if (!library || typeof library !== "object" || Array.isArray(library)) {
-        return { __meta__: { schema_version: 2, storage: "type_files" }, _types_: {} };
+    if (!isCanonicalComposerLibrary(library)) {
+        throw new Error("Prompt Composer requires canonical v2 library data with _types_");
     }
-    if (library._types_ && typeof library._types_ === "object" && !Array.isArray(library._types_)) {
-        return library;
-    }
-    return { __meta__: { schema_version: 1, storage: "legacy_flat" }, _types_: {} };
+    return library;
 }
 
 function getComposerTypeOrder(typeData) {
@@ -27,6 +41,57 @@ function getOrderedComposerTypes(types) {
         if (orderDiff !== 0) return orderDiff;
         return String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" });
     });
+}
+
+function buildComposerCategoryKey(typeFile, categoryName) {
+    const normalizedTypeFile = String(typeFile || "").trim();
+    const normalizedCategory = String(categoryName || "").trim();
+    if (!normalizedTypeFile) return normalizedCategory;
+    return `${normalizedTypeFile}${COMPOSER_CATEGORY_KEY_SEPARATOR}${normalizedCategory}`;
+}
+
+function parseComposerCategoryKey(category) {
+    const raw = String(category || "").trim();
+    const separatorIndex = raw.indexOf(COMPOSER_CATEGORY_KEY_SEPARATOR);
+    if (separatorIndex <= 0) {
+        return { typeFile: "", categoryName: raw };
+    }
+    return {
+        typeFile: raw.slice(0, separatorIndex).trim(),
+        categoryName: raw.slice(separatorIndex + COMPOSER_CATEGORY_KEY_SEPARATOR.length).trim(),
+    };
+}
+
+function resolveComposerCategoryKey(data, category) {
+    const raw = String(category || "").trim();
+    if (!raw) return "";
+    if (data?.[raw] && typeof data[raw] === "object") {
+        return raw;
+    }
+
+    const parsed = parseComposerCategoryKey(raw);
+    const normalizedCategoryName = String(parsed.categoryName || raw).trim().toLowerCase();
+    const normalizedTypeFile = String(parsed.typeFile || "").trim().toLowerCase();
+    let fallback = "";
+
+    for (const [categoryKey, categoryData] of Object.entries(data || {})) {
+        if (categoryKey === "__meta__" || !categoryData || typeof categoryData !== "object") continue;
+        const candidateCategoryName = String(categoryData._category_name_ || categoryKey).trim().toLowerCase();
+        if (candidateCategoryName !== normalizedCategoryName) continue;
+        const candidateTypeFile = String(categoryData._type_file_ || "").trim().toLowerCase();
+        if (normalizedTypeFile && candidateTypeFile === normalizedTypeFile) {
+            return categoryKey;
+        }
+        if (!fallback) {
+            fallback = categoryKey;
+        }
+    }
+
+    if (fallback) return fallback;
+    if (parsed.typeFile && parsed.categoryName) {
+        return buildComposerCategoryKey(parsed.typeFile, parsed.categoryName);
+    }
+    return raw;
 }
 
 function flattenComposerType(typeFile, typeData, flatData) {
@@ -50,6 +115,7 @@ function flattenComposerType(typeFile, typeData, flatData) {
         const effectiveNsfw = categoryData.nsfw === true || typeNsfw;
         const flatCategory = {
             _prompts_: promptEntries,
+            _category_name_: String(categoryName || "").trim(),
             _prompt_type_: typeKey,
             _type_file_: String(typeFile || ""),
             _type_name_: typeName,
@@ -63,16 +129,12 @@ function flattenComposerType(typeFile, typeData, flatData) {
         if (typeBasePrompt.trim()) flatCategory._type_base_prompt_ = typeBasePrompt;
         if (typeNsfw) flatCategory._type_nsfw_ = true;
         if (effectiveNsfw) flatCategory.__meta__ = { nsfw: true };
-        flatData[categoryName] = flatCategory;
+        flatData[buildComposerCategoryKey(typeFile, categoryName)] = flatCategory;
     }
 }
 
 export function flattenComposerLibrary(library) {
     const normalized = normalizeComposerLibrary(library);
-    if (!Object.keys(normalized._types_ || {}).length) {
-        if (!library || typeof library !== "object" || Array.isArray(library)) return {};
-        if (!library._types_) return library;
-    }
 
     const flatData = { __meta__: normalized.__meta__ || { schema_version: 2, storage: "type_files" } };
     for (const [typeFile, typeData] of getOrderedComposerTypes(normalized._types_ || {})) {
@@ -93,7 +155,7 @@ export async function loadComposerPrompts(node) {
         node.prompts = node.composerPrompts;
     } catch (err) {
         console.error("[PromptComposer] Error loading composer prompts:", err);
-        node.composerPromptLibrary = { __meta__: { schema_version: 2, storage: "type_files" }, _types_: {} };
+        node.composerPromptLibrary = newComposerLibrary();
         node.composerPrompts = {};
         node.prompts = {};
     }
@@ -112,14 +174,14 @@ export function getComposerCategories(node) {
 
 export function getComposerNames(node, category) {
     const data = getComposerData(node);
-    const catData = data[category];
+    const catData = data[resolveComposerCategoryKey(data, category)];
     if (!catData || typeof catData !== "object") return [];
     return Object.keys(getCategoryPromptEntries(catData, "composer")).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
 export function getComposerEntry(node, category, name) {
     const data = getComposerData(node);
-    const catData = data[category];
+    const catData = data[resolveComposerCategoryKey(data, category)];
     if (!catData || typeof catData !== "object") return null;
     return getCategoryPromptEntries(catData, "composer")[name] || null;
 }
@@ -153,6 +215,7 @@ export async function saveComposerTypeSettings(settings) {
                 type_file: settings.typeFile || "",
                 prompt_type: settings.promptType || "",
                 type_name: settings.typeName || "",
+                subject_type: settings.subjectType || "subject",
                 prefix: settings.promptPrefix || "",
                 base_prompt: settings.basePrompt || "",
             }),

@@ -6069,7 +6069,17 @@ function createDropdownButton(text, items) {
     return container;
 }
 
-function showRenameCategoryDialog(title, message, categories, defaultCategory) {
+function _buildDialogOptionHtml(items, selectedValue) {
+    return (items || []).map((item) => {
+        const isObject = item && typeof item === "object";
+        const value = String(isObject ? item.value : item || "");
+        const label = String(isObject ? item.label : item || "");
+        const selected = value === String(selectedValue || "") ? " selected" : "";
+        return `<option value="${value}"${selected}>${label}</option>`;
+    }).join("");
+}
+
+function showRenameCategoryDialog(title, message, categories, defaultCategory, options = {}) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -6097,35 +6107,55 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory) {
             z-index: 9999;
         `;
 
-        // Build category options
-        const categoryOptions = categories.map(cat =>
-            `<option value="${cat}" ${cat === defaultCategory ? 'selected' : ''}>${cat}</option>`
-        ).join('');
+        const normalizedCategories = Array.isArray(categories) ? categories : [];
+        const showCategorySelect = normalizedCategories.length > 1;
+        const groupOptions = Array.isArray(options.groupOptions) ? options.groupOptions : null;
+        const fallbackGroupValue = groupOptions && groupOptions.length > 0
+            ? String(groupOptions[0]?.value || "")
+            : "";
+        const defaultGroupValue = String(options.defaultGroupValue || fallbackGroupValue || "");
+        const categorySelectHtml = showCategorySelect
+            ? `
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category to rename:</div>
+            <select class="category-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+                ${_buildDialogOptionHtml(normalizedCategories, defaultCategory)}
+            </select>
+            `
+            : "";
+        const groupSelectHtml = groupOptions && groupOptions.length > 0
+            ? `
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt Group</div>
+            <select class="group-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+                ${_buildDialogOptionHtml(groupOptions, defaultGroupValue)}
+            </select>
+            `
+            : "";
 
         dialog.innerHTML = `
             <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category to rename:</div>
-            <select style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
-                ${categoryOptions}
-            </select>
+            ${categorySelectHtml}
             <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
-            <input type="text" value="${defaultCategory}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <input type="text" value="${String(defaultCategory || "")}" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            ${groupSelectHtml}
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
             </div>
         `;
 
-        const selectEl = dialog.querySelector("select");
+        const selectEl = dialog.querySelector(".category-select");
         const input = dialog.querySelector("input");
+        const groupSelect = dialog.querySelector(".group-select");
         const okBtn = dialog.querySelector(".ok-btn");
         const cancelBtn = dialog.querySelector(".cancel-btn");
 
         // Update input when category selection changes
-        selectEl.onchange = () => {
-            input.value = selectEl.value;
-            input.select();
-        };
+        if (selectEl) {
+            selectEl.onchange = () => {
+                input.value = selectEl.value;
+                input.select();
+            };
+        }
 
         const cleanup = () => {
             document.body.removeChild(overlay);
@@ -6133,7 +6163,11 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory) {
         };
 
         const handleOk = () => {
-            resolve({ oldCategory: selectEl.value, newCategory: input.value });
+            resolve({
+                oldCategory: String(selectEl?.value || defaultCategory || ""),
+                newCategory: String(input?.value || ""),
+                typeFile: String(groupSelect?.value || defaultGroupValue || ""),
+            });
             cleanup();
         };
 

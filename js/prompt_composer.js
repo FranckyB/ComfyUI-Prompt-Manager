@@ -191,7 +191,9 @@ function getDefaultComposerPickerCategory(node) {
 }
 
 function getComposerExportData(node) {
-    return node?.composerPromptLibrary || node?.prompts || node?.composerPrompts || {};
+    return node?.composerPromptLibrary && typeof node.composerPromptLibrary === "object"
+        ? node.composerPromptLibrary
+        : { __meta__: { schema_version: 2, storage: "type_files" }, _types_: {} };
 }
 
 function normalizeComposerFilename(name, fallback = "prompt_composer_data.json") {
