@@ -131,6 +131,7 @@ export async function saveComposerCategorySettings(category, settings) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 category,
+                type_file: settings.typeFile || "",
                 base_prompt: settings.basePrompt || "",
                 prompt_type: settings.promptType || "",
                 prefix: settings.promptPrefix || "",

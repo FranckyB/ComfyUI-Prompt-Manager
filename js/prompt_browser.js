@@ -35,6 +35,8 @@ let showThumbnailRenderPicker = async () => null;
 let saveThumbnailRenderSelection = () => {};
 let _thumbnailLeafName = (path) => String(path || "");
 let getThumbnailRenderState = null;
+const COMPOSER_TYPE_PLACEHOLDER_URL = new URL("./placeholder.png", import.meta.url).href;
+const COMPOSER_TYPE_ALL_URL = new URL("./all.png", import.meta.url).href;
 
 function applyPromptPayloadToNode(node, payload) {
     if (!node || !payload || typeof payload !== "object") return;
@@ -594,6 +596,56 @@ function resizeImageToThumbnail(file, minSize = 200) {
     });
 }
 
+function resizeImageToCoverDataUrl(file, outputSize = 64, outputType = "image/png", quality = 0.92) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement("canvas");
+                canvas.width = outputSize;
+                canvas.height = outputSize;
+                const ctx = canvas.getContext("2d");
+                if (!ctx) {
+                    reject(new Error("Canvas context unavailable"));
+                    return;
+                }
+
+                const sourceWidth = Math.max(1, Number(img.width) || 1);
+                const sourceHeight = Math.max(1, Number(img.height) || 1);
+                const scale = Math.max(outputSize / sourceWidth, outputSize / sourceHeight);
+                const drawWidth = sourceWidth * scale;
+                const drawHeight = sourceHeight * scale;
+                const offsetX = (outputSize - drawWidth) / 2;
+                const offsetY = (outputSize - drawHeight) / 2;
+
+                ctx.clearRect(0, 0, outputSize, outputSize);
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = "high";
+                ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+
+                resolve(canvas.toDataURL(outputType, quality));
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+async function readClipboardImageFile() {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+        for (const type of item.types) {
+            if (!type.startsWith("image/")) continue;
+            const blob = await item.getType(type);
+            return new File([blob], "clipboard-image", { type: blob.type || type });
+        }
+    }
+    return null;
+}
+
 function _attachThumbnailDropHandlers(element, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced") {
     element.addEventListener("dragover", (e) => {
         const hasFiles = Array.from(e.dataTransfer?.types || []).includes("Files");
@@ -847,18 +899,12 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
 
     menu.appendChild(createMenuItem("📋 Paste Thumbnail", async () => {
         try {
-            const items = await navigator.clipboard.read();
-            for (const item of items) {
-                for (const type of item.types) {
-                    if (type.startsWith("image/")) {
-                        const blob = await item.getType(type);
-                        const file = new File([blob], "clipboard-image", { type: blob.type || type });
-                        const thumbnail = await resizeImageToThumbnail(file, 200);
-                        await saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix);
-                        onUpdate();
-                        return;
-                    }
-                }
+            const file = await readClipboardImageFile();
+            if (file) {
+                const thumbnail = await resizeImageToThumbnail(file, 200);
+                await saveThumbnailEntry(node, category, promptName, thumbnail, endpointPrefix);
+                onUpdate();
+                return;
             }
             await showInfo("No Image", "No image found in clipboard");
         } catch (error) {
@@ -1100,6 +1146,27 @@ function getComposerTypeDisplayName(node, typeValue) {
     return String(categoryMatch?._type_name_ || typeValue || "").trim();
 }
 
+function getComposerTypeIconValue(node, typeValue) {
+    const normalizedTypeValue = String(typeValue || "").trim().toLowerCase();
+    if (normalizedTypeValue === "__all__") return COMPOSER_TYPE_ALL_URL;
+
+    const typeFile = getComposerTypeFile(node, normalizedTypeValue);
+    const types = getComposerTypeLibrary(node);
+    const typeData = typeFile ? types?.[typeFile] : null;
+    const embeddedIcon = String(typeData?.icon || typeData?.icon_url || "").trim();
+    if (embeddedIcon) return embeddedIcon;
+
+    const categoryMatch = Object.values(node?.prompts || {}).find((categoryData) => (
+        categoryData
+        && typeof categoryData === "object"
+        && String(categoryData._prompt_type_ || "").trim().toLowerCase() === normalizedTypeValue
+        && String(categoryData._type_icon_ || categoryData._type_icon_url_ || "").trim()
+    ));
+    const categoryIcon = String(categoryMatch?._type_icon_ || categoryMatch?._type_icon_url_ || "").trim();
+    if (categoryIcon) return categoryIcon;
+    return COMPOSER_TYPE_PLACEHOLDER_URL;
+}
+
 function isComposerTypeNSFW(node, typeValue) {
     const typeFile = getComposerTypeFile(node, typeValue);
     const types = getComposerTypeLibrary(node);
@@ -1150,17 +1217,6 @@ function getOrderedComposerCategories(node, categories = null) {
         if (aIndex !== bIndex) return aIndex - bIndex;
         return a.localeCompare(b);
     });
-}
-
-const COMPOSER_TYPE_ICON_ENDPOINT = "/prompt-manager/compose/type-icon";
-
-function getPromptTypeIconUrl(node, typeValue, typeFile = "") {
-    const key = String(typeValue || "").trim().toLowerCase() || "__all__";
-    const resolvedTypeFile = String(typeFile || getComposerTypeFile(node, key) || "").trim();
-    if (resolvedTypeFile) {
-        return `${COMPOSER_TYPE_ICON_ENDPOINT}?type_file=${encodeURIComponent(resolvedTypeFile)}`;
-    }
-    return COMPOSER_TYPE_ICON_ENDPOINT;
 }
 
 function showEditBasePromptDialog(categoryName, currentValue) {
@@ -2256,7 +2312,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             value: normalizedValue,
                             label: String(typeData?.name || "").trim() || normalizedValue,
                             typeFile: String(typeFile || ""),
-                            iconUrl: String(typeData?.icon_url || "").trim() || getPromptTypeIconUrl(node, normalizedValue, typeFile),
+                            iconUrl: String(typeData?.icon || typeData?.icon_url || "").trim() || getComposerTypeIconValue(node, normalizedValue),
                         };
                     });
                 } else {
@@ -2268,14 +2324,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                 value: normalizedValue,
                                 label: getComposerTypeDisplayName(node, normalizedValue) || choice.label || choice.value,
                                 typeFile: getComposerTypeFile(node, normalizedValue),
-                                iconUrl: getPromptTypeIconUrl(node, choice.value),
+                                iconUrl: getComposerTypeIconValue(node, normalizedValue),
                             };
                         });
                 }
             }
 
             return [
-                { value: "__all__", label: "All Types", typeFile: "", iconUrl: getPromptTypeIconUrl(node, "__all__") },
+                { value: "__all__", label: "All Types", typeFile: "", iconUrl: getComposerTypeIconValue(node, "__all__") },
                 ...choices,
             ];
         };
@@ -2606,6 +2662,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 iconEl.className = "pm-type-rail-icon";
                 iconEl.src = choice.iconUrl;
                 iconEl.alt = choice.label;
+                iconEl.onerror = () => {
+                    iconEl.onerror = null;
+                    iconEl.src = getComposerTypeIconValue(node, choice.value);
+                };
                 iconEl.style.cssText = `
                     width: 38px;
                     height: 38px;
@@ -2913,7 +2973,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         ensureSelectedCategory();
-
         const updateCategoryButtons = () => {
             ensureSelectedCategory();
 
@@ -3397,6 +3456,44 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
 
             const isNSFW = isComposerTypeNSFW(node, typeValue);
+            menu.appendChild(createMenuItem("📋 Paste Icon", async () => {
+                try {
+                    const file = await readClipboardImageFile();
+                    if (!file) {
+                        await showInfo("No Image", "No image found in clipboard");
+                        return;
+                    }
+
+                    const icon = await resizeImageToCoverDataUrl(file, 64, "image/png");
+                    const resp = await fetch(`${endpointPrefix}/save-type-settings`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            type_file: typeFile,
+                            prompt_type: typeValue,
+                            type_name: typeLabel,
+                            icon,
+                        }),
+                    });
+                    const result = await resp.json();
+                    if (result.success) {
+                        applyPromptPayloadToNode(node, result);
+                        rebuildCategoryList();
+                        rebuildTypeRailButtons();
+                        renderContent(searchInput.value);
+                    } else {
+                        await showInfo("Error", result.error || "Failed to save prompt group icon.");
+                    }
+                } catch (error) {
+                    console.error("[PromptBrowser] Error pasting type icon:", error);
+                    await showInfo("Error", "Failed to paste prompt group icon. Make sure you have an image copied.");
+                }
+            }));
+
+            const pasteDivider = document.createElement("div");
+            pasteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(pasteDivider);
+
             menu.appendChild(createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
                 try {
                     const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
@@ -5877,7 +5974,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             `;
 
             const clearSelectionBtn = document.createElement("button");
-            clearSelectionBtn.textContent = "Clear Selection";
+            clearSelectionBtn.textContent = "Clear";
             clearSelectionBtn.style.cssText = `
                 background: #313843;
                 border: 1px solid #5f6773;

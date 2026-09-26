@@ -1604,7 +1604,10 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         const previousPromptType = loadedCategoryPromptType;
+        const currentTypeFile = String(node?.prompts?.[category]?._type_file_ || "").trim();
         const result = await saveComposerCategorySettings(category, {
+            typeFile: currentTypeFile,
+            promptType: loadedCategoryPromptType,
             basePrompt: categoryBasePromptInput.value,
             promptPrefix: prefixInput.value,
         });

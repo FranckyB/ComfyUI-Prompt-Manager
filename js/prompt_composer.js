@@ -821,9 +821,9 @@ function showComposerImportModeDialog({ duplicatePromptCount = 0, duplicateCateg
         }
 
         dialog.innerHTML = `
-            <div style="font-size: 16px; font-weight: 700; margin-bottom: 10px;">Merge Composer JSON</div>
+            <div style="font-size: 16px; font-weight: 700; margin-bottom: 10px;">Merge Composer JSONs</div>
             <div style="color: ${UI.textMuted || "hsl(0 0% 67%)"}; line-height: 1.45; margin-bottom: 14px; white-space: normal; word-break: break-word;">
-                The imported file contains entries that may overlap with your current Prompt Composer library.<br><br>
+                The imported file contains prompt-group JSONs that may overlap with your current Prompt Composer library.<br><br>
                 ${summaryLines.length ? summaryLines.join("<br>") : "Choose how overlapping entries should be handled."}
             </div>
             <div style="color: ${UI.textHint || "hsl(216 15% 65%)"}; line-height: 1.45; margin-bottom: 18px;">
@@ -873,124 +873,310 @@ function applyComposerPromptData(node, prompts) {
     app.graph.setDirtyCanvas(true, true);
 }
 
+function getOrderedComposerTypeEntriesForExport(node) {
+    const types = getComposerExportData(node)?._types_ || {};
+    const entries = Object.entries(types);
+    const hasExplicitOrder = entries.some(([, typeData]) => Number.isInteger(Number(typeData?.order)));
+    return entries.sort((a, b) => {
+        if (hasExplicitOrder) {
+            const aOrder = Number.isInteger(Number(a[1]?.order)) ? Number(a[1].order) : Number.POSITIVE_INFINITY;
+            const bOrder = Number.isInteger(Number(b[1]?.order)) ? Number(b[1].order) : Number.POSITIVE_INFINITY;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+        }
+        return String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" });
+    });
+}
+
+function triggerBrowserDownload(blob, filename) {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename || "prompt_composer_jsons.zip";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function getDownloadFilenameFromResponse(response, fallback = "prompt_composer_jsons.zip") {
+    const disposition = String(response.headers.get("content-disposition") || "");
+    const match = disposition.match(/filename="?([^";]+)"?/i);
+    return match?.[1] ? String(match[1]).trim() : fallback;
+}
+
+async function pickComposerImportFile() {
+    if (window.showOpenFilePicker) {
+        try {
+            const [handle] = await window.showOpenFilePicker({
+                multiple: false,
+                types: [{
+                    description: "Prompt Composer JSONs",
+                    accept: {
+                        "application/json": [".json"],
+                        "application/zip": [".zip"],
+                    },
+                }],
+            });
+            return handle ? await handle.getFile() : null;
+        } catch (error) {
+            if (error?.name === "AbortError") return null;
+            console.warn("[PromptComposer] Browser file picker failed, falling back to input element:", error);
+        }
+    }
+
+    return await new Promise((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".zip,.json,application/zip,application/json";
+        input.style.display = "none";
+        input.addEventListener("change", () => {
+            const [file] = Array.from(input.files || []);
+            input.remove();
+            resolve(file || null);
+        }, { once: true });
+        document.body.appendChild(input);
+        input.click();
+    });
+}
+
+async function inspectComposerImportFile(file) {
+    const formData = new FormData();
+    formData.set("file", file, file.name || "upload");
+    const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/inspect-import-file`, {
+        method: "POST",
+        body: formData,
+    });
+    const result = await response.json();
+    if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to inspect Prompt Composer JSONs.");
+    }
+    return result;
+}
+
+async function replaceComposerLibraryFromFile(file) {
+    const formData = new FormData();
+    formData.set("file", file, file.name || "upload");
+    formData.set("backup_existing", "true");
+    const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/replace-prompts`, {
+        method: "POST",
+        body: formData,
+    });
+    const result = await response.json();
+    if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to replace Prompt Composer JSONs.");
+    }
+    return result;
+}
+
+async function mergeComposerLibraryFromFile(file, mode) {
+    const formData = new FormData();
+    formData.set("file", file, file.name || "upload");
+    formData.set("mode", mode || "skip_existing");
+    const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/import-prompts`, {
+        method: "POST",
+        body: formData,
+    });
+    const result = await response.json();
+    if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to merge Prompt Composer JSONs.");
+    }
+    return result;
+}
+
+async function showComposerExportSelectionDialog(node) {
+    const entries = getOrderedComposerTypeEntriesForExport(node).map(([typeFile, typeData]) => ({
+        typeFile: String(typeFile || ""),
+        name: String(typeData?.name || "").trim() || String(typeFile || "").replace(/\.json$/i, "") || "Prompt Group",
+    }));
+    if (!entries.length) {
+        await showInfo("Save Failed", "There are no prompt-group JSONs to export.");
+        return null;
+    }
+
+    return await new Promise((resolve) => {
+        const selected = new Set(entries.map((entry) => entry.typeFile));
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `position:fixed; inset:0; background:rgba(0,0,0,0.72); z-index:9999; display:flex; align-items:center; justify-content:center;`;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `width:min(860px, calc(100vw - 48px)); max-height:min(760px, calc(100vh - 48px)); background:${UI.panel || "hsl(216 11% 15%)"}; border:1px solid ${UI.panelBorder || "hsl(216 20% 65% / 0.24)"}; border-radius:10px; box-shadow:0 10px 32px rgba(0,0,0,0.45); color:${UI.textPrimary || "hsl(0 0% 87%)"}; display:flex; flex-direction:column; overflow:hidden;`;
+
+        const header = document.createElement("div");
+        header.style.cssText = "padding:16px 18px 10px 18px; border-bottom:1px solid rgba(255,255,255,0.08);";
+        header.innerHTML = `
+            <div style="font-size:16px; font-weight:700; margin-bottom:8px;">Save JSONs</div>
+            <div style="color:${UI.textMuted || "hsl(0 0% 67%)"}; line-height:1.45;">Select one or more prompt-group JSONs to save as a ZIP.</div>
+        `;
+
+        const body = document.createElement("div");
+        body.style.cssText = "padding:16px 18px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:12px;";
+
+        const footer = document.createElement("div");
+        footer.style.cssText = "padding:12px 18px 18px 18px; border-top:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; gap:10px; flex-wrap:wrap;";
+        const selectionInfo = document.createElement("div");
+        selectionInfo.style.cssText = `margin-right:auto; font-size:12px; color:${UI.textMuted || "hsl(0 0% 67%)"};`;
+
+        const makeButton = (label, primary = false) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = label;
+            button.style.cssText = `padding:8px 12px; border-radius:7px; cursor:pointer; border:1px solid ${primary ? (UI.accentBorder || "hsl(208 73% 57% / 0.65)") : (UI.inputBorder || "hsl(218 10% 41%)")}; background:${primary ? (UI.accentSoft || "hsl(208 73% 57% / 0.16)") : (UI.buttonBg || "hsl(219 16% 18%)")}; color:${primary ? "#dbeafe" : (UI.textPrimary || "hsl(0 0% 87%)")};`;
+            return button;
+        };
+
+        const clearBtn = makeButton("Clear");
+        const selectAllBtn = makeButton("Select All");
+        const cancelBtn = makeButton("Cancel");
+        const saveBtn = makeButton("Save ZIP", true);
+
+        const cardEls = new Map();
+        const syncSelection = () => {
+            for (const entry of entries) {
+                const card = cardEls.get(entry.typeFile);
+                if (!card) continue;
+                const isSelected = selected.has(entry.typeFile);
+                card.style.background = isSelected ? (UI.accentSoft || "hsl(208 73% 57% / 0.16)") : (UI.cardBg || "hsl(219 16% 18%)");
+                card.style.borderColor = isSelected ? (UI.accentBorder || "hsl(208 73% 57% / 0.65)") : (UI.inputBorder || "hsl(218 10% 41%)");
+            }
+            selectionInfo.textContent = `${selected.size} selected`;
+            saveBtn.disabled = selected.size === 0;
+            saveBtn.style.opacity = selected.size === 0 ? "0.55" : "1";
+            saveBtn.style.cursor = selected.size === 0 ? "not-allowed" : "pointer";
+        };
+
+        for (const entry of entries) {
+            const card = document.createElement("button");
+            card.type = "button";
+            card.style.cssText = `text-align:left; min-height:96px; border:1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; border-radius:10px; background:${UI.cardBg || "hsl(219 16% 18%)"}; color:${UI.textPrimary || "hsl(0 0% 87%)"}; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:8px;`;
+            card.innerHTML = `
+                <div style="font-size:13px; font-weight:700; line-height:1.3; word-break:break-word;">${entry.name}</div>
+                <div style="font-size:11px; color:${UI.textMuted || "hsl(0 0% 67%)"}; word-break:break-word;">${entry.typeFile}</div>
+            `;
+            card.onclick = () => {
+                if (selected.has(entry.typeFile)) selected.delete(entry.typeFile);
+                else selected.add(entry.typeFile);
+                syncSelection();
+            };
+            cardEls.set(entry.typeFile, card);
+            body.appendChild(card);
+        }
+
+        const finish = (value) => {
+            overlay.remove();
+            resolve(value);
+        };
+
+        clearBtn.onclick = () => {
+            selected.clear();
+            syncSelection();
+        };
+        selectAllBtn.onclick = () => {
+            entries.forEach((entry) => selected.add(entry.typeFile));
+            syncSelection();
+        };
+        cancelBtn.onclick = () => finish(null);
+        saveBtn.onclick = () => finish(entries.filter((entry) => selected.has(entry.typeFile)).map((entry) => entry.typeFile));
+        overlay.onclick = (event) => {
+            if (event.target === overlay) finish(null);
+        };
+
+        footer.append(selectionInfo, clearBtn, selectAllBtn, cancelBtn, saveBtn);
+        dialog.append(header, body, footer);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+        syncSelection();
+    });
+}
+
 async function exportComposerJsonLibrary(node) {
     try {
-        const savePath = await showComposerJsonBrowser({
-            mode: "save",
-            title: "Save Prompt Composer JSON",
-            confirmLabel: "Save Here",
-            defaultFilename: "prompt_composer_data.json",
-        });
-        if (!savePath) return;
+        const selectedTypeFiles = await showComposerExportSelectionDialog(node);
+        if (!Array.isArray(selectedTypeFiles) || selectedTypeFiles.length === 0) return;
 
-        const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/export-prompts-file`, {
+        const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/export-selected-zip`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                path: savePath,
-                data: getComposerExportData(node),
-            }),
+            body: JSON.stringify({ type_files: selectedTypeFiles }),
         });
-        const result = await response.json();
-        if (!result?.success) {
-            await showInfo("Export Failed", result?.error || "Failed to export Prompt Composer JSON.");
+        if (!response.ok) {
+            let message = "Failed to export Prompt Composer JSONs.";
+            try {
+                const result = await response.json();
+                if (result?.error) message = String(result.error);
+            } catch {
+                // ignore
+            }
+            await showInfo("Export Failed", message);
             return;
         }
+        const blob = await response.blob();
+        triggerBrowserDownload(blob, getDownloadFilenameFromResponse(response, "prompt_composer_jsons.zip"));
     } catch (error) {
-        console.error("[PromptComposer] Error exporting JSON:", error);
-        await showInfo("Export Failed", error?.message || "Failed to export Prompt Composer JSON.");
+        console.error("[PromptComposer] Error exporting JSONs:", error);
+        await showInfo("Export Failed", error?.message || "Failed to export Prompt Composer JSONs.");
     }
 }
 
 async function openComposerJsonLibrary(node) {
-    const confirmed = await showConfirm(
-        "Open Prompt Composer JSON",
-        "This will replace the current Prompt Composer library with the selected JSON file. Continue?",
-        "Open JSON",
-        UI.accent || "hsl(208 73% 57% / 0.9)"
-    );
-    if (!confirmed) return;
-
-    const filePath = await showComposerJsonBrowser({
-        mode: "open",
-        title: "Open Prompt Composer JSON",
-        confirmLabel: "Open",
-    });
-    if (!filePath) return;
+    const file = await pickComposerImportFile();
+    if (!file) return;
 
     try {
-        const data = await loadComposerLibraryFile(filePath);
-        if (!data || typeof data !== "object" || Array.isArray(data)) {
-            await showInfo("Open Failed", "Invalid JSON structure. Expected an object with categories.");
-            return;
-        }
+        const inspected = await inspectComposerImportFile(file);
+        const confirmed = await showConfirm(
+            "Open Prompt Composer JSONs",
+            `You are about to replace all Prompt Composer prompts with "${file.name}" (${Number(inspected?.type_count || 0)} group${Number(inspected?.type_count || 0) === 1 ? "" : "s"}). Continue?`,
+            "Replace All",
+            UI.accent || "hsl(208 73% 57% / 0.9)"
+        );
+        if (!confirmed) return;
 
-        const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/replace-prompts`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ data }),
-        });
-        const result = await response.json();
-        if (!result?.success) {
-            await showInfo("Open Failed", result?.error || "Failed to replace Prompt Composer JSON.");
-            return;
-        }
+        const result = await replaceComposerLibraryFromFile(file);
 
         applyComposerPromptData(node, result.library || result.prompts || {});
+        await loadComposerPrompts(node);
+        const typeCount = Number(result?.type_count || inspected?.type_count || 0);
+        const categoryCount = Number(result?.category_count || inspected?.category_count || 0);
+        const promptCount = Number(result?.prompt_count || inspected?.prompt_count || 0);
+        await showInfo("Open Complete", `Replaced the library with ${typeCount} group${typeCount === 1 ? "" : "s"}, ${categoryCount} categor${categoryCount === 1 ? "y" : "ies"}, and ${promptCount} prompt${promptCount === 1 ? "" : "s"}.`);
     } catch (error) {
-        console.error("[PromptComposer] Error opening JSON:", error);
-        await showInfo("Open Failed", error?.message || "Failed to open Prompt Composer JSON.");
+        console.error("[PromptComposer] Error opening JSONs:", error);
+        await showInfo("Open Failed", error?.message || "Failed to open Prompt Composer JSONs.");
     }
 }
 
 async function mergeComposerJsonLibrary(node) {
-    const confirmed = await showConfirm(
-        "Merge Prompt Composer JSON",
-        "Import another Prompt Composer JSON file into the current library?",
-        "Merge JSON",
-        UI.accent || "hsl(208 73% 57% / 0.9)"
-    );
-    if (!confirmed) return;
-
-    const filePath = await showComposerJsonBrowser({
-        mode: "open",
-        title: "Merge Prompt Composer JSON",
-        confirmLabel: "Merge",
-    });
-    if (!filePath) return;
+    const file = await pickComposerImportFile();
+    if (!file) return;
 
     try {
-        const data = await loadComposerLibraryFile(filePath);
-        if (!data || typeof data !== "object" || Array.isArray(data)) {
-            await showInfo("Merge Failed", "Invalid JSON structure. Expected an object with categories.");
-            return;
-        }
+        const inspected = await inspectComposerImportFile(file);
+        const data = inspected.library;
 
         const conflicts = analyzeComposerImportConflicts(getComposerExportData(node), data);
-        const importMode = await showComposerImportModeDialog({
-            duplicatePromptCount: conflicts.duplicatePrompts.length,
-            duplicateCategorySettingsCount: conflicts.duplicateCategorySettings.length,
-        });
-        if (importMode === "cancel") return;
-
-        const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/import-prompts`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ data, mode: importMode }),
-        });
-        const result = await response.json();
-        if (!result?.success) {
-            await showInfo("Merge Failed", result?.error || "Failed to merge Prompt Composer JSON.");
-            return;
+        let importMode = "skip_existing";
+        if (conflicts.duplicatePrompts.length > 0 || conflicts.duplicateCategorySettings.length > 0) {
+            importMode = await showComposerImportModeDialog({
+                duplicatePromptCount: conflicts.duplicatePrompts.length,
+                duplicateCategorySettingsCount: conflicts.duplicateCategorySettings.length,
+            });
+            if (importMode === "cancel") return;
         }
 
+        const result = await mergeComposerLibraryFromFile(file, importMode);
+
         applyComposerPromptData(node, result.library || result.prompts || {});
+        await loadComposerPrompts(node);
+        const typeCount = Number(result?.type_count || inspected?.type_count || 0);
         const imported = Number(result?.imported_prompts || 0);
         const skippedPrompts = Number(result?.skipped_prompts || 0);
         const importedCategorySettings = Number(result?.imported_category_settings || 0);
         const skippedCategorySettings = Number(result?.skipped_category_settings || 0);
         const categoriesCreated = Number(result?.created_categories || 0);
         const summaryParts = [`Imported ${imported} prompt${imported === 1 ? "" : "s"}`];
+        if (typeCount > 0) {
+            summaryParts.push(`processed ${typeCount} group${typeCount === 1 ? "" : "s"}`);
+        }
         if (categoriesCreated > 0) {
             summaryParts.push(`created ${categoriesCreated} categor${categoriesCreated === 1 ? "y" : "ies"}`);
         }
@@ -1003,8 +1189,8 @@ async function mergeComposerJsonLibrary(node) {
         }
         await showInfo("Merge Complete", `${summaryParts.join(", ")}.`);
     } catch (error) {
-        console.error("[PromptComposer] Error merging JSON:", error);
-        await showInfo("Merge Failed", error?.message || "Failed to merge Prompt Composer JSON.");
+        console.error("[PromptComposer] Error merging JSONs:", error);
+        await showInfo("Merge Failed", error?.message || "Failed to merge Prompt Composer JSONs.");
     }
 }
 
@@ -1723,18 +1909,18 @@ function ensureComposerUi(node) {
     };
 
     actionRow.appendChild(createToolbarActionButton({
-        label: "Save JSON",
-        title: "Export the current Prompt Composer library to a JSON file",
+        label: "Save JSONs",
+        title: "Export selected Prompt Composer prompt-group JSONs as a ZIP file",
         onClick: () => exportComposerJsonLibrary(node),
     }));
     actionRow.appendChild(createToolbarActionButton({
-        label: "Open JSON",
-        title: "Replace the current Prompt Composer library with another JSON file",
+        label: "Open JSONs",
+        title: "Replace the current Prompt Composer library with prompt-group JSONs from a ZIP or JSON file",
         onClick: () => openComposerJsonLibrary(node),
     }));
     actionRow.appendChild(createToolbarActionButton({
-        label: "Merge JSON",
-        title: "Import another Prompt Composer JSON file into the current library",
+        label: "Import JSONs",
+        title: "Import prompt-group JSONs from a ZIP or JSON file into the current library",
         onClick: () => mergeComposerJsonLibrary(node),
     }));
     root.appendChild(actionRow);

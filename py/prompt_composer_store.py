@@ -7,11 +7,14 @@ Canonical storage lives in per-type JSON files under:
 Legacy single-file libraries are still accepted for import/export and are
 automatically migrated into the per-type layout on first load.
 """
+import io
 import json
 import os
 import re
 import shutil
-from urllib.parse import urlencode
+import zipfile
+import base64
+from datetime import datetime
 
 import folder_paths
 import server
@@ -29,6 +32,8 @@ FALLBACK_TYPE_FILE = "misc.json"
 TYPE_FILE_SUFFIX = ".json"
 TYPE_ICON_SUFFIX = ".png"
 DEFAULT_TYPE_ICON_FILENAME = "_default.png"
+GROUP_PLACEHOLDER_ICON_FILENAME = "placeholder.png"
+ALL_TYPES_ICON_FILENAME = "all.png"
 
 SUBJECT_START_TYPE_KEYS = {"character", "environment"}
 NON_SUBJECT_TYPE_KEYS = {"style", "effect", "lighting", "mood", "composition", "camera"}
@@ -74,6 +79,10 @@ class PromptComposerStore:
     def get_default_prompts_path():
         return os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", DEFAULT_LEGACY_FILENAME)
 
+    @staticmethod
+    def get_js_dir():
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "js")
+
     @classmethod
     def load_prompts(cls):
         """Return a flattened category-first view for legacy consumers."""
@@ -86,24 +95,22 @@ class PromptComposerStore:
         default_dir = cls.get_default_prompts_dir()
         type_files = _list_type_files(storage_dir)
         if type_files:
-            _copy_matching_type_icons(default_dir, storage_dir, type_files)
-            return _load_canonical_library_from_files(storage_dir, type_files)
+            return _load_canonical_library_from_files(storage_dir, type_files, default_dir=default_dir)
 
         legacy_path = cls.get_data_path()
         if os.path.exists(legacy_path):
             legacy_data = _load_legacy_library(legacy_path)
             canonical = _convert_legacy_library_to_canonical(legacy_data)
+            _populate_missing_type_icons(canonical, default_dir=default_dir, search_dirs=[storage_dir, default_dir])
             cls.save_prompts(canonical)
-            _copy_matching_type_icons(default_dir, storage_dir, _ordered_type_files(canonical))
             _archive_legacy_file(legacy_path, cls.get_legacy_backup_path())
             return canonical
 
         default_type_files = _list_type_files(default_dir)
         if default_type_files:
             try:
-                canonical = _load_canonical_library_from_files(default_dir, default_type_files)
+                canonical = _load_canonical_library_from_files(default_dir, default_type_files, default_dir=default_dir)
                 cls.save_prompts(canonical)
-                _copy_matching_type_icons(default_dir, storage_dir, _ordered_type_files(canonical))
                 return canonical
             except Exception as exc:
                 print(f"[PromptComposerStore] Error loading bundled defaults: {exc}")
@@ -114,8 +121,8 @@ class PromptComposerStore:
                 with open(default_path, "r", encoding="utf-8") as handle:
                     default_data = json.load(handle)
                 canonical = _convert_legacy_library_to_canonical(_normalize_prompts_data(default_data))
+                _populate_missing_type_icons(canonical, default_dir=default_dir, search_dirs=[default_dir])
                 cls.save_prompts(canonical)
-                _copy_matching_type_icons(default_dir, storage_dir, _ordered_type_files(canonical))
                 return canonical
             except Exception as exc:
                 print(f"[PromptComposerStore] Error loading legacy bundled defaults: {exc}")
@@ -223,12 +230,6 @@ def _type_icon_file_name(type_file):
     return f"{stem}{TYPE_ICON_SUFFIX}" if stem else DEFAULT_TYPE_ICON_FILENAME
 
 
-def _composer_type_icon_url(type_file=None):
-    normalized = _normalize_type_file_name(type_file) if type_file else ""
-    query = urlencode({"type_file": normalized}) if normalized else ""
-    return f"/prompt-manager/compose/type-icon?{query}" if query else "/prompt-manager/compose/type-icon"
-
-
 def _copy_file_if_missing(source_path, target_path):
     if not source_path or not target_path:
         return
@@ -255,8 +256,76 @@ def _copy_matching_type_icons(source_dir, target_dir, type_files):
         )
 
 
-def _resolve_type_icon_path(type_file=None, storage_dir=None, fallback_dirs=None):
+def _read_icon_data_url(path):
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "rb") as handle:
+            encoded = base64.b64encode(handle.read()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    except Exception as exc:
+        print(f"[PromptComposerStore] Failed to read icon '{path}': {exc}")
+        return ""
+
+
+def _resolve_legacy_icon_path(type_file=None, search_dirs=None):
     icon_name = _type_icon_file_name(type_file)
+    search_dirs = [directory for directory in (search_dirs or []) if directory]
+
+    for directory in search_dirs:
+        specific_path = os.path.join(directory, icon_name)
+        if os.path.isfile(specific_path):
+            return specific_path
+
+    for directory in search_dirs:
+        default_path = os.path.join(directory, DEFAULT_TYPE_ICON_FILENAME)
+        if os.path.isfile(default_path):
+            return default_path
+
+    return None
+
+
+def _normalize_type_icon(value):
+    normalized = str(value or "").strip()
+    return normalized if normalized.startswith("data:image/") else ""
+
+
+def _load_packaged_type_icon(type_file, default_dir=None):
+    if not default_dir or not type_file:
+        return ""
+    path = os.path.join(default_dir, _normalize_type_file_name(type_file))
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except Exception as exc:
+        print(f"[PromptComposerStore] Failed to load packaged type JSON '{path}': {exc}")
+        return ""
+    if not isinstance(loaded, dict):
+        return ""
+    return _normalize_type_icon(loaded.get("icon") or loaded.get("icon_url") or loaded.get("_type_icon_"))
+
+
+def _populate_missing_type_icons(library, default_dir=None, search_dirs=None):
+    if not isinstance(library, dict):
+        return False
+
+    changed = False
+    for type_file, type_data in _iter_type_items(library):
+        if not isinstance(type_data, dict) or _normalize_type_icon(type_data.get("icon")):
+            continue
+        icon_data = _load_packaged_type_icon(type_file, default_dir=default_dir)
+        if icon_data:
+            type_data["icon"] = icon_data
+            changed = True
+
+    return changed
+
+
+def _resolve_type_icon_path(type_file=None, storage_dir=None, fallback_dirs=None):
+    normalized_type_file = _normalize_optional_string(type_file)
+    icon_name = _type_icon_file_name(normalized_type_file)
     search_dirs = []
     if storage_dir:
         search_dirs.append(storage_dir)
@@ -264,10 +333,21 @@ def _resolve_type_icon_path(type_file=None, storage_dir=None, fallback_dirs=None
         if directory and directory not in search_dirs:
             search_dirs.append(directory)
 
+    if not normalized_type_file:
+        for directory in search_dirs:
+            all_path = os.path.join(directory, ALL_TYPES_ICON_FILENAME)
+            if os.path.isfile(all_path):
+                return all_path
+
     for directory in search_dirs:
         specific_path = os.path.join(directory, icon_name)
         if os.path.isfile(specific_path):
             return specific_path
+
+    for directory in search_dirs:
+        placeholder_path = os.path.join(directory, GROUP_PLACEHOLDER_ICON_FILENAME)
+        if os.path.isfile(placeholder_path):
+            return placeholder_path
 
     for directory in search_dirs:
         default_path = os.path.join(directory, DEFAULT_TYPE_ICON_FILENAME)
@@ -456,6 +536,10 @@ def _normalize_type_data(type_file, type_data):
     if _coerce_bool(type_data.get("nsfw")):
         normalized["nsfw"] = True
 
+    icon = _normalize_type_icon(type_data.get("icon") or type_data.get("icon_url") or type_data.get("_type_icon_"))
+    if icon:
+        normalized["icon"] = icon
+
     order = _normalize_optional_int(type_data.get("order"))
     if order is not None:
         normalized["order"] = order
@@ -502,6 +586,8 @@ def _serialize_type_data(type_file, type_data):
         payload["base_prompt"] = normalized["base_prompt"]
     if normalized.get("nsfw"):
         payload["nsfw"] = True
+    if normalized.get("icon"):
+        payload["icon"] = normalized["icon"]
     if "order" in normalized:
         payload["order"] = normalized["order"]
 
@@ -644,9 +730,8 @@ def _archive_legacy_file(source_path, backup_path):
     shutil.move(source_path, target_path)
 
 
-def _load_canonical_library_from_files(storage_dir, type_files):
+def _load_canonical_library_from_files(storage_dir, type_files, default_dir=None):
     library = _new_canonical_library()
-    mutated = False
     for type_file in type_files:
         path = os.path.join(storage_dir, type_file)
         loaded = None
@@ -662,10 +747,6 @@ def _load_canonical_library_from_files(storage_dir, type_files):
             continue
         normalized = _normalize_type_data(type_file, loaded)
         library[CANONICAL_TYPES_KEY][type_file] = normalized
-        if normalized != {**normalized, "file": type_file}:
-            mutated = True
-    if mutated:
-        PromptComposerStore.save_prompts(library)
     return library
 
 
@@ -730,7 +811,7 @@ def _flatten_canonical_library(library):
     for type_file, type_data in _iter_type_items(canonical):
         type_key = _type_stem(type_file)
         type_name = type_data.get("name") or _default_type_name_from_file(type_file)
-        type_icon_url = _composer_type_icon_url(type_file)
+        type_icon = _normalize_type_icon(type_data.get("icon"))
         type_prefix = str(type_data.get("prefix") or "")
         type_base_prompt = str(type_data.get("base_prompt") or "")
         type_subject_type = _normalize_subject_type(type_data.get("subject_type"), _default_subject_type_for_type_file(type_file))
@@ -739,16 +820,24 @@ def _flatten_canonical_library(library):
         categories = type_data.get("categories", {}) if isinstance(type_data, dict) else {}
         for category_name, category_data in sorted(categories.items(), key=lambda item: item[0].lower()):
             flat_category = {"_prompts_": {}}
+            category_base_prompt = str(category_data.get("base_prompt") or "")
+            category_prefix = str(category_data.get("prefix") or "")
             effective_base_prompt = str(category_data.get("base_prompt") or type_base_prompt or "")
             effective_prefix = str(category_data.get("prefix") or type_prefix or "")
             if effective_base_prompt.strip():
                 flat_category["_base_prompt_"] = effective_base_prompt
             if effective_prefix.strip():
                 flat_category["_prompt_prefix_"] = effective_prefix
+            if category_base_prompt.strip():
+                flat_category["_category_base_prompt_"] = category_base_prompt
+            if category_prefix.strip():
+                flat_category["_category_prefix_"] = category_prefix
             flat_category["_prompt_type_"] = type_key
             flat_category["_type_file_"] = type_file
             flat_category["_type_name_"] = type_name
-            flat_category["_type_icon_url_"] = type_icon_url
+            if type_icon:
+                flat_category["_type_icon_"] = type_icon
+                flat_category["_type_icon_url_"] = type_icon
             flat_category["_subject_type_"] = type_subject_type
             if type_prefix.strip():
                 flat_category["_type_prefix_"] = type_prefix
@@ -902,6 +991,116 @@ def _normalize_export_path(raw_path):
     return candidate
 
 
+def _looks_like_single_type_payload(data):
+    return (
+        isinstance(data, dict)
+        and not isinstance(data.get(CANONICAL_TYPES_KEY), dict)
+        and isinstance(data.get("categories"), dict)
+        and any(key in data for key in {"name", "subject_type", "categories", "prefix", "base_prompt", "nsfw", "order"})
+    )
+
+
+def _merge_canonical_libraries(base_library, incoming_library):
+    merged = _normalize_canonical_library(base_library)
+    incoming = _normalize_canonical_library(incoming_library)
+    target_types = merged.setdefault(CANONICAL_TYPES_KEY, {})
+    for type_file, type_data in _iter_type_items(incoming):
+        target_types[type_file] = _normalize_type_data(type_file, type_data)
+    return _normalize_canonical_library(merged)
+
+
+def _normalize_uploaded_json_document(file_name, loaded):
+    if _looks_like_single_type_payload(loaded):
+        type_file = _normalize_type_file_name(os.path.basename(file_name or "") or FALLBACK_TYPE_FILE)
+        library = _new_canonical_library()
+        library[CANONICAL_TYPES_KEY][type_file] = _normalize_type_data(type_file, loaded)
+        return _normalize_canonical_library(library)
+    return _normalize_library_input(loaded)
+
+
+def _load_uploaded_library(file_name, raw_bytes):
+    if not raw_bytes:
+        raise ValueError("Uploaded file is empty")
+
+    normalized_name = str(file_name or "upload").strip()
+    lower_name = normalized_name.lower()
+
+    if lower_name.endswith(".zip"):
+        combined_library = _new_canonical_library()
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+            json_members = [
+                member for member in archive.namelist()
+                if member and not member.endswith("/") and member.lower().endswith(TYPE_FILE_SUFFIX)
+            ]
+            if not json_members:
+                raise ValueError("ZIP file does not contain any JSON files")
+            for member in json_members:
+                with archive.open(member, "r") as handle:
+                    member_bytes = handle.read()
+                try:
+                    loaded = json.loads(member_bytes.decode("utf-8"))
+                except Exception as exc:
+                    raise ValueError(f"Failed to parse '{member}': {exc}") from exc
+                if not isinstance(loaded, dict):
+                    raise ValueError(f"Invalid JSON structure in '{member}'")
+                combined_library = _merge_canonical_libraries(
+                    combined_library,
+                    _normalize_uploaded_json_document(member, loaded),
+                )
+        return _normalize_canonical_library(combined_library)
+
+    try:
+        loaded = json.loads(raw_bytes.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Failed to parse JSON: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError("Invalid JSON structure")
+    return _normalize_uploaded_json_document(normalized_name, loaded)
+
+
+def _backup_composer_storage(storage_dir):
+    normalized_storage_dir = _safe_abspath(storage_dir)
+    if not normalized_storage_dir or not os.path.isdir(normalized_storage_dir):
+        return None
+
+    existing_entries = [
+        name for name in os.listdir(normalized_storage_dir)
+        if name and name != "_backup"
+    ]
+    if not existing_entries:
+        return None
+
+    backup_root = os.path.join(normalized_storage_dir, "_backup")
+    os.makedirs(backup_root, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = os.path.join(backup_root, timestamp)
+    counter = 1
+    while os.path.exists(backup_dir):
+        counter += 1
+        backup_dir = os.path.join(backup_root, f"{timestamp}_{counter:02d}")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    for entry_name in existing_entries:
+        shutil.move(
+            os.path.join(normalized_storage_dir, entry_name),
+            os.path.join(backup_dir, entry_name),
+        )
+
+    return backup_dir
+
+
+async def _read_uploaded_library_request(request):
+    post_data = await request.post()
+    upload = post_data.get("file")
+    if not upload:
+        raise ValueError("File upload is required")
+
+    raw_bytes = upload.file.read() if getattr(upload, "file", None) else upload
+    file_name = getattr(upload, "filename", "upload")
+    library = _load_uploaded_library(file_name, raw_bytes)
+    return post_data, file_name, library
+
+
 def _resolve_target_type_file(current_type_file, requested_prompt_type, fallback_category="misc"):
     normalized_prompt_type = _normalize_optional_string(requested_prompt_type)
     if normalized_prompt_type:
@@ -927,7 +1126,7 @@ async def compose_get_type_icon(request):
         icon_path = _resolve_type_icon_path(
             requested_type_file or None,
             storage_dir=PromptComposerStore.get_storage_dir(),
-            fallback_dirs=[PromptComposerStore.get_default_prompts_dir()],
+            fallback_dirs=[PromptComposerStore.get_default_prompts_dir(), PromptComposerStore.get_js_dir()],
         )
         if not icon_path:
             return server.web.Response(text="Type icon not found", status=404)
@@ -1108,6 +1307,12 @@ async def compose_save_type_settings(request):
             target_type_data["prefix"] = prefix
         else:
             target_type_data.pop("prefix", None)
+
+        icon = _normalize_type_icon(data.get("icon"))
+        if icon:
+            target_type_data["icon"] = icon
+        elif "icon" in data:
+            target_type_data.pop("icon", None)
 
         base_prompt = str(data.get("base_prompt", "") or "")
         if base_prompt.strip():
@@ -1316,9 +1521,14 @@ async def compose_reorder_types(request):
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/import-prompts")
 async def compose_import_prompts(request):
     try:
-        data = await request.json()
-        imported_library = _normalize_library_input(data.get("data", {}))
-        mode = str(data.get("mode", "skip_existing") or "skip_existing").strip().lower()
+        content_type = str(request.headers.get("Content-Type", "") or "").lower()
+        if "multipart/form-data" in content_type:
+            post_data, _file_name, imported_library = await _read_uploaded_library_request(request)
+            mode = str(post_data.get("mode", "skip_existing") or "skip_existing").strip().lower()
+        else:
+            data = await request.json()
+            imported_library = _normalize_library_input(data.get("data", {}))
+            mode = str(data.get("mode", "skip_existing") or "skip_existing").strip().lower()
         if mode not in {"skip_existing", "replace_existing"}:
             mode = "skip_existing"
 
@@ -1394,10 +1604,12 @@ async def compose_import_prompts(request):
                     imported_prompts += 1
 
         PromptComposerStore.save_prompts(library)
+        type_count = len(library.get(CANONICAL_TYPES_KEY, {})) if isinstance(library, dict) else 0
         return server.web.json_response({
             "success": True,
             "library": library,
             "prompts": _flatten_canonical_library(library),
+            "type_count": type_count,
             "imported_prompts": imported_prompts,
             "skipped_prompts": skipped_prompts,
             "imported_category_settings": imported_category_settings,
@@ -1412,16 +1624,28 @@ async def compose_import_prompts(request):
 @server.PromptServer.instance.routes.post("/prompt-manager/compose/replace-prompts")
 async def compose_replace_prompts(request):
     try:
-        data = await request.json()
-        library = _normalize_library_input(data.get("data", {}))
+        content_type = str(request.headers.get("Content-Type", "") or "").lower()
+        if "multipart/form-data" in content_type:
+            post_data, _file_name, library = await _read_uploaded_library_request(request)
+            backup_existing = _coerce_bool(post_data.get("backup_existing", False))
+        else:
+            data = await request.json()
+            library = _normalize_library_input(data.get("data", {}))
+            backup_existing = _coerce_bool(data.get("backup_existing", False))
+        backup_dir = None
+        if backup_existing:
+            backup_dir = _backup_composer_storage(PromptComposerStore.get_storage_dir())
         PromptComposerStore.save_prompts(library)
         category_count, prompt_count = _count_prompt_totals(library)
+        type_count = len(library.get(CANONICAL_TYPES_KEY, {})) if isinstance(library, dict) else 0
         return server.web.json_response({
             "success": True,
             "library": library,
             "prompts": _flatten_canonical_library(library),
+            "type_count": type_count,
             "category_count": category_count,
             "prompt_count": prompt_count,
+            "backup_dir": backup_dir,
         })
     except Exception as exc:
         print(f"[PromptComposerStore] Error in replace-prompts: {exc}")
@@ -1448,6 +1672,68 @@ async def compose_export_prompts_file(request):
         return server.web.json_response({"success": True, "path": export_path})
     except Exception as exc:
         print(f"[PromptComposerStore] Error in export-prompts-file: {exc}")
+        return server.web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/export-selected-zip")
+async def compose_export_selected_zip(request):
+    try:
+        data = await request.json()
+        requested_type_files = data.get("type_files") if isinstance(data, dict) else []
+        if not isinstance(requested_type_files, list) or not requested_type_files:
+            return server.web.json_response({"success": False, "error": "At least one prompt-group JSON is required"}, status=400)
+
+        library = PromptComposerStore.load_canonical_prompts()
+        ordered_selection = []
+        seen = set()
+        for requested in requested_type_files:
+            type_file = _find_type_case_insensitive(library, requested)
+            if not type_file or type_file in seen:
+                continue
+            seen.add(type_file)
+            ordered_selection.append(type_file)
+
+        if not ordered_selection:
+            return server.web.json_response({"success": False, "error": "No matching prompt-group JSON files were found"}, status=404)
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for type_file in ordered_selection:
+                type_data = library.get(CANONICAL_TYPES_KEY, {}).get(type_file, {})
+                payload = _serialize_type_data(type_file, type_data)
+                archive.writestr(type_file, json.dumps(payload, indent=2, ensure_ascii=False))
+
+        zip_bytes = zip_buffer.getvalue()
+        filename = f"prompt_composer_jsons_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        return server.web.Response(
+            body=zip_bytes,
+            headers={
+                "Content-Type": "application/zip",
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+    except Exception as exc:
+        print(f"[PromptComposerStore] Error in export-selected-zip: {exc}")
+        return server.web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-manager/compose/inspect-import-file")
+async def compose_inspect_import_file(request):
+    try:
+        _post_data, file_name, imported_library = await _read_uploaded_library_request(request)
+        category_count, prompt_count = _count_prompt_totals(imported_library)
+        type_count = len(imported_library.get(CANONICAL_TYPES_KEY, {})) if isinstance(imported_library, dict) else 0
+        return server.web.json_response({
+            "success": True,
+            "library": imported_library,
+            "type_count": type_count,
+            "category_count": category_count,
+            "prompt_count": prompt_count,
+            "file_name": file_name,
+        })
+    except Exception as exc:
+        print(f"[PromptComposerStore] Error in inspect-import-file: {exc}")
         return server.web.json_response({"success": False, "error": str(exc)}, status=500)
 
 
