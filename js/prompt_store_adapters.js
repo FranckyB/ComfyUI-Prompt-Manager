@@ -9,7 +9,17 @@ export const SOURCE_SYSTEM_PROMPTS = "System Prompts";
 
 export function isHiddenPromptEntryKey(name) {
     const normalized = String(name || "").trim().toLowerCase();
-    return normalized === "__meta__" || normalized === "_base_prompt_" || normalized === "_prompt_prefix_" || normalized === "_prompt_type_" || normalized === "_prompts_";
+    return normalized === "__meta__"
+        || normalized === "_base_prompt_"
+        || normalized === "_prompt_prefix_"
+        || normalized === "_prompt_type_"
+        || normalized === "_prompts_"
+        || normalized === "_type_file_"
+        || normalized === "_type_name_"
+        || normalized === "_subject_type_"
+        || normalized === "_type_prefix_"
+        || normalized === "_type_base_prompt_"
+        || normalized === "_type_nsfw_";
 }
 
 export function getPromptStoreKindFromSource(source) {

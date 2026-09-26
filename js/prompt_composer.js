@@ -3,7 +3,7 @@ import { api } from "../../scripts/api.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import { DEFAULT_THUMBNAIL, showInfo, showConfirm } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
-import { loadComposerPrompts, getComposerEntry, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
+import { loadComposerPrompts, getComposerEntry, flattenComposerLibrary, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
 
 const PARTS_PROP_KEY = "prompt_composer_parts";
 const THUMB_ZOOM_PROP_KEY = "prompt_composer_thumb_zoom";
@@ -159,7 +159,7 @@ function getDefaultComposerPickerCategory(node) {
 }
 
 function getComposerExportData(node) {
-    return node?.prompts || node?.composerPrompts || {};
+    return node?.composerPromptLibrary || node?.prompts || node?.composerPrompts || {};
 }
 
 function normalizeComposerFilename(name, fallback = "prompt_composer_data.json") {
@@ -718,14 +718,16 @@ function findExistingComposerPromptName(categoryData, promptName) {
 }
 
 function analyzeComposerImportConflicts(promptsData, importedData) {
+    const existingPromptsData = flattenComposerLibrary(promptsData);
+    const nextPromptsData = flattenComposerLibrary(importedData);
     const conflicts = {
         duplicatePrompts: [],
         duplicateCategorySettings: [],
     };
 
-    for (const [category, entries] of Object.entries(importedData || {})) {
+    for (const [category, entries] of Object.entries(nextPromptsData || {})) {
         if (category === "__meta__" || !entries || typeof entries !== "object") continue;
-        const existingCategory = findExistingComposerCategoryName(promptsData, category);
+        const existingCategory = findExistingComposerCategoryName(existingPromptsData, category);
         const basePrompt = typeof entries?._base_prompt_ === "string" ? entries._base_prompt_.trim() : "";
         const promptType = typeof entries?._prompt_type_ === "string" ? entries._prompt_type_.trim() : "";
         const promptPrefix = typeof entries?._prompt_prefix_ === "string" ? entries._prompt_prefix_.trim() : "";
@@ -734,7 +736,7 @@ function analyzeComposerImportConflicts(promptsData, importedData) {
             conflicts.duplicateCategorySettings.push({ category, existingCategory });
         }
 
-        const existingCategoryData = existingCategory ? promptsData?.[existingCategory] : null;
+        const existingCategoryData = existingCategory ? existingPromptsData?.[existingCategory] : null;
         for (const [promptName] of Object.entries(getComposerPromptEntries(entries))) {
             const existingPrompt = findExistingComposerPromptName(existingCategoryData, promptName);
             if (existingPrompt) {
@@ -831,7 +833,9 @@ function showComposerImportModeDialog({ duplicatePromptCount = 0, duplicateCateg
 }
 
 function applyComposerPromptData(node, prompts) {
-    node.composerPrompts = prompts && typeof prompts === "object" ? prompts : {};
+    const library = prompts && typeof prompts === "object" ? prompts : {};
+    node.composerPromptLibrary = library;
+    node.composerPrompts = flattenComposerLibrary(library);
     node.prompts = node.composerPrompts;
     node._composerUiRender?.();
     app.graph.setDirtyCanvas(true, true);
@@ -900,7 +904,7 @@ async function openComposerJsonLibrary(node) {
             return;
         }
 
-        applyComposerPromptData(node, result.prompts || {});
+        applyComposerPromptData(node, result.library || result.prompts || {});
     } catch (error) {
         console.error("[PromptComposer] Error opening JSON:", error);
         await showInfo("Open Failed", error?.message || "Failed to open Prompt Composer JSON.");
@@ -948,7 +952,7 @@ async function mergeComposerJsonLibrary(node) {
             return;
         }
 
-        applyComposerPromptData(node, result.prompts || {});
+        applyComposerPromptData(node, result.library || result.prompts || {});
         const imported = Number(result?.imported_prompts || 0);
         const skippedPrompts = Number(result?.skipped_prompts || 0);
         const importedCategorySettings = Number(result?.imported_category_settings || 0);
@@ -1287,11 +1291,20 @@ function getCategoryPromptType(node, category) {
     return String(raw || "").trim().toLowerCase();
 }
 
+function getCategorySubjectType(node, category) {
+    const raw = node?.prompts?.[category]?._subject_type_;
+    return String(raw || "").trim().toLowerCase();
+}
+
 function categoryShouldBeNonSubject(node, category) {
+    const subjectType = getCategorySubjectType(node, category);
+    if (subjectType) return subjectType === "non_subject";
     return NON_SUBJECT_PROMPT_TYPES.has(getCategoryPromptType(node, category));
 }
 
 function categoryStartsNewSubject(node, category) {
+    const subjectType = getCategorySubjectType(node, category);
+    if (subjectType) return subjectType === "new_subject";
     return SUBJECT_START_PROMPT_TYPES.has(getCategoryPromptType(node, category));
 }
 
@@ -1995,7 +2008,7 @@ function ensureComposerUi(node) {
         const currentPrompt = promptRefs[0]?.name || part.prompts[0] || "";
         const hasMultiSelection = promptRefs.length > 1 || (Array.isArray(part.prompts) && part.prompts.length > 1);
         const initialCategory = promptRefs[0]?.category || part.category || getDefaultComposerPickerCategory(node);
-        const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__none__";
+        const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__all__";
         const selection = await showThumbnailBrowser(node, initialCategory, currentPrompt, {
             title: "Select Prompt Composer Part",
             multiSelect: true,
@@ -2031,7 +2044,7 @@ function ensureComposerUi(node) {
         const basePart = parts[index] || null;
         const inheritedSubject = getInheritedSubjectDefaults(parts.slice(0, index + 1));
         const initialCategory = basePart?.category || getDefaultComposerPickerCategory(node);
-        const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__none__";
+        const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__all__";
         const selection = await showThumbnailBrowser(node, initialCategory, "", {
             title: "Add Prompt Composer Part",
             multiSelect: true,
@@ -2573,7 +2586,7 @@ function ensureComposerUi(node) {
             const parts = readParts(node);
             const inheritedSubject = getInheritedSubjectDefaults(parts);
             const initialCategory = getDefaultComposerPickerCategory(node);
-            const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__none__";
+            const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__all__";
             const selection = await showThumbnailBrowser(node, initialCategory, "", {
                 title: "Add Prompt Composer Part",
                 multiSelect: true,

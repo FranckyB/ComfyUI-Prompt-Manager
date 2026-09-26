@@ -36,6 +36,16 @@ let saveThumbnailRenderSelection = () => {};
 let _thumbnailLeafName = (path) => String(path || "");
 let getThumbnailRenderState = null;
 
+function applyPromptPayloadToNode(node, payload) {
+    if (!node || !payload || typeof payload !== "object") return;
+    if (payload.library && typeof payload.library === "object") {
+        node.composerPromptLibrary = payload.library;
+    }
+    if (payload.prompts && typeof payload.prompts === "object") {
+        node.prompts = payload.prompts;
+    }
+}
+
 let _thumbnailRenderFamily = null;
 let _thumbnailRenderModel = null;
 let _thumbnailRenderLora1 = null;
@@ -81,6 +91,29 @@ function _syncThumbnailRenderState() {
     _thumbnailRenderModel = state.model || null;
     _thumbnailRenderLora1 = state.lora1 || null;
     _thumbnailRenderLora2 = state.lora2 || null;
+}
+
+function getThumbnailRenderLabelParts() {
+    _syncThumbnailRenderState();
+    const selectedLoras = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
+    if (_thumbnailRenderFamily && _thumbnailRenderModel) {
+        const leafName = _thumbnailLeafName(_thumbnailRenderModel);
+        return {
+            shortLabel: typeSafeTruncate(`🔧 ${leafName}`, 18),
+            fullLabel: `Thumbnail: ${_thumbnailRenderFamily} : ${leafName}${selectedLoras.length ? ` + ${selectedLoras.length} LoRA${selectedLoras.length > 1 ? "s" : ""}` : ""}`,
+        };
+    }
+    return {
+        shortLabel: "🔧 Model",
+        fullLabel: "Select thumbnail family and model",
+    };
+}
+
+function typeSafeTruncate(value, maxLength) {
+    const text = String(value || "");
+    const limit = Number(maxLength) || 0;
+    if (!limit || text.length <= limit) return text;
+    return `${text.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 function _getComposerImageThumbnailLoras(promptData) {
@@ -448,7 +481,7 @@ async function deletePromptEntry(node, category, promptName, endpointPrefix = "/
         });
         const data = await response.json();
         if (data.success) {
-            node.prompts = data.prompts;
+            applyPromptPayloadToNode(node, data);
         } else {
             await showInfo("Error", data.error || "Failed to delete prompt");
         }
@@ -796,22 +829,6 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
         });
     }));
 
-    const selectedLorasForLabel = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
-    const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
-        ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}${selectedLorasForLabel.length ? ` + ${selectedLorasForLabel.length} LoRA` + (selectedLorasForLabel.length > 1 ? "s" : "") : ""}`
-        : "🔧 Select Thumbnail Family + Model";
-    menu.appendChild(createMenuItem(modelLabel, async () => {
-        const picked = await showThumbnailRenderPicker(
-            _thumbnailRenderFamily,
-            _thumbnailRenderModel,
-            _thumbnailRenderLora1,
-            _thumbnailRenderLora2,
-        );
-        if (picked) {
-            saveThumbnailRenderSelection(picked);
-        }
-    }));
-
     const promptData = getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix);
     if (promptData?.thumbnail) {
         const divider = document.createElement("div");
@@ -838,7 +855,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
             });
             const result = await resp.json();
             if (result.success) {
-                node.prompts = result.prompts;
+                applyPromptPayloadToNode(node, result);
                 onUpdate();
             }
         } catch (err) {
@@ -867,7 +884,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
                 });
                 const data = await resp.json();
                 if (data.success) {
-                    node.prompts = data.prompts;
+                    applyPromptPayloadToNode(node, data);
                     onUpdate();
                 } else {
                     await showInfo("Error", data.error || "Failed to rename prompt");
@@ -954,6 +971,70 @@ function prependCategoryPromptPrefix(prefix, promptText) {
 function getCategoryPromptType(node, category) {
     const raw = node?.prompts?.[category]?._prompt_type_;
     return typeof raw === "string" ? raw : "";
+}
+
+function getComposerTypeLibrary(node) {
+    const types = node?.composerPromptLibrary?._types_;
+    return types && typeof types === "object" && !Array.isArray(types) ? types : null;
+}
+
+function getComposerTypeFile(node, typeValue) {
+    const normalized = String(typeValue || "").trim().toLowerCase();
+    if (!normalized) return "";
+    const types = getComposerTypeLibrary(node);
+    if (types) {
+        for (const typeFile of Object.keys(types)) {
+            if (String(typeFile || "").replace(/\.json$/i, "").trim().toLowerCase() === normalized) {
+                return String(typeFile || "");
+            }
+        }
+    }
+    const categoryMatch = Object.values(node?.prompts || {}).find((categoryData) => (
+        categoryData
+        && typeof categoryData === "object"
+        && String(categoryData._prompt_type_ || "").trim().toLowerCase() === normalized
+        && String(categoryData._type_file_ || "").trim()
+    ));
+    return String(categoryMatch?._type_file_ || `${normalized}.json`);
+}
+
+function getComposerTypeDisplayName(node, typeValue) {
+    const typeFile = getComposerTypeFile(node, typeValue);
+    const types = getComposerTypeLibrary(node);
+    const typeData = typeFile ? types?.[typeFile] : null;
+    if (typeData && String(typeData.name || "").trim()) {
+        return String(typeData.name || "").trim();
+    }
+    const categoryMatch = Object.values(node?.prompts || {}).find((categoryData) => (
+        categoryData
+        && typeof categoryData === "object"
+        && String(categoryData._prompt_type_ || "").trim().toLowerCase() === String(typeValue || "").trim().toLowerCase()
+        && String(categoryData._type_name_ || "").trim()
+    ));
+    return String(categoryMatch?._type_name_ || typeValue || "").trim();
+}
+
+function isComposerTypeNSFW(node, typeValue) {
+    const typeFile = getComposerTypeFile(node, typeValue);
+    const types = getComposerTypeLibrary(node);
+    const typeData = typeFile ? types?.[typeFile] : null;
+    if (typeData && typeData.nsfw === true) {
+        return true;
+    }
+    return Object.values(node?.prompts || {}).some((categoryData) => (
+        categoryData
+        && typeof categoryData === "object"
+        && String(categoryData._prompt_type_ || "").trim().toLowerCase() === String(typeValue || "").trim().toLowerCase()
+        && categoryData._type_nsfw_ === true
+    ));
+}
+
+function getCategoriesForComposerType(node, typeValue) {
+    const normalized = String(typeValue || "").trim().toLowerCase();
+    if (!normalized) return [];
+    return Object.keys(node?.prompts || {})
+        .filter((category) => category !== "__meta__")
+        .filter((category) => String(getCategoryPromptType(node, category) || "").trim().toLowerCase() === normalized);
 }
 
 const PROMPT_TYPE_ICON_URLS = {
@@ -1236,6 +1317,16 @@ export function getVisibleCategories(node, options = {}) {
 
     const categories = Object.keys(node?.prompts || {})
         .filter((c) => c !== "__meta__")
+        .filter((category) => {
+            if (!hideNSFW || endpointPrefix !== "/prompt-manager/compose") {
+                return true;
+            }
+            const categoryData = node?.prompts?.[category];
+            if (!categoryData || typeof categoryData !== "object") {
+                return true;
+            }
+            return categoryData["__meta__"]?.nsfw !== true && categoryData._type_nsfw_ !== true;
+        })
         .sort((a, b) => a.localeCompare(b));
 
     if (!filterEmptyCategories) return categories;
@@ -1705,6 +1796,29 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
         updateContentFilterBtn();
         updateNsfwBtn();
+        const thumbnailModelBtn = document.createElement("button");
+        const updateThumbnailModelBtn = () => {
+            const label = getThumbnailRenderLabelParts();
+            thumbnailModelBtn.textContent = label.shortLabel;
+            thumbnailModelBtn.title = label.fullLabel;
+            thumbnailModelBtn.style.cssText = btnStyle;
+        };
+        thumbnailModelBtn.onmouseover = () => { thumbnailModelBtn.style.background = '#38414c'; thumbnailModelBtn.style.color = '#fff'; };
+        thumbnailModelBtn.onmouseout = () => { thumbnailModelBtn.style.background = '#313843'; thumbnailModelBtn.style.color = '#aaa'; };
+        thumbnailModelBtn.onclick = async () => {
+            const picked = await showThumbnailRenderPicker(
+                _thumbnailRenderFamily,
+                _thumbnailRenderModel,
+                _thumbnailRenderLora1,
+                _thumbnailRenderLora2,
+            );
+            if (picked) {
+                saveThumbnailRenderSelection(picked);
+                updateThumbnailModelBtn();
+                editPanel?.refreshThumbnailModelButton?.();
+            }
+        };
+        updateThumbnailModelBtn();
         contentFilterBtn.onmouseover = () => {
             if (contentFilterState === "all") {
                 contentFilterBtn.style.background = "#38414c";
@@ -1884,6 +1998,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         if (!allowedCategories && !promptOnly) {
             controlsBar.appendChild(contentFilterBtn);
         }
+        controlsBar.appendChild(thumbnailModelBtn);
         controlsBar.appendChild(nsfwBtn);
         controlsBar.appendChild(viewModeBtn);
         if (multiSelectBtn) {
@@ -1952,7 +2067,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     });
                     const data = await resp.json();
                     if (data.success) {
-                        node.prompts = data.prompts;
+                        applyPromptPayloadToNode(node, data);
                         const canProceed = await canChangeEditorContext();
                         if (!canProceed) {
                             rebuildCategoryList();
@@ -2016,28 +2131,52 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let categoryButtons = [];
         let editModeLastClickPrompt = "";
         let editModeLastClickAt = 0;
+        let promptTypeFilters = [];
 
-        const promptTypeChoices = getPromptTypeChoices(node?.prompts)
-            .filter((choice) => String(choice?.value || "").trim())
-            .map((choice) => ({
-                value: String(choice.value).trim().toLowerCase(),
-                label: choice.label || choice.value,
-                iconUrl: getPromptTypeIconUrl(choice.value),
-            }));
-        const promptTypeFilters = [
-            { value: "__all__", label: "All Types", iconUrl: getPromptTypeIconUrl("__all__") },
-            ...promptTypeChoices,
-        ];
-        const validCategoryTypeValues = new Set(promptTypeFilters.map((choice) => choice.value));
-        categoryTypeFilter = validCategoryTypeValues.has(String(categoryTypeFilter || "").trim().toLowerCase())
-            ? (String(categoryTypeFilter || "__all__").trim().toLowerCase() || "__all__")
-            : "__all__";
+        const buildPromptTypeFilters = () => {
+            const choices = showCategoryTypeFilter
+                ? getPromptTypeChoices(node?.prompts)
+                    .filter((choice) => String(choice?.value || "").trim())
+                    .map((choice) => {
+                        const normalizedValue = String(choice.value || "").trim().toLowerCase();
+                        return {
+                            value: normalizedValue,
+                            label: showCategoryTypeFilter
+                                ? (getComposerTypeDisplayName(node, normalizedValue) || choice.label || choice.value)
+                                : (choice.label || choice.value),
+                            typeFile: getComposerTypeFile(node, normalizedValue),
+                            iconUrl: getPromptTypeIconUrl(choice.value),
+                        };
+                    })
+                : [];
+
+            return [
+                { value: "__all__", label: "All Types", typeFile: "", iconUrl: getPromptTypeIconUrl("__all__") },
+                ...choices,
+            ];
+        };
+
+        const refreshPromptTypeFilters = () => {
+            promptTypeFilters = buildPromptTypeFilters().filter((choice, index, array) => (
+                index === 0 || array.findIndex((candidate) => candidate.value === choice.value) === index
+            ));
+            const validCategoryTypeValues = new Set(promptTypeFilters.map((choice) => choice.value));
+            categoryTypeFilter = validCategoryTypeValues.has(String(categoryTypeFilter || "").trim().toLowerCase())
+                ? (String(categoryTypeFilter || "__all__").trim().toLowerCase() || "__all__")
+                : "__all__";
+            if (hideNSFWState && categoryTypeFilter !== "__all__" && isComposerTypeNSFW(node, categoryTypeFilter)) {
+                categoryTypeFilter = "__all__";
+            }
+        };
+
+        refreshPromptTypeFilters();
 
         const isCategoryNSFW = (cat) => {
             return node.prompts?.[cat]?.["__meta__"]?.nsfw === true;
         };
 
         const applyCategoryTypeFilter = () => {
+            refreshPromptTypeFilters();
             if (categoryTypeFilter === "__all__") {
                 categories = [...allCategories];
             } else {
@@ -2094,6 +2233,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         let typeRail = null;
         let typeRailToggle = null;
+        let typeRailList = null;
         let typeRailButtons = [];
         let typeRailTooltip = null;
 
@@ -2153,8 +2293,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             if (!typeRailButtons.length) return;
             for (const btn of typeRailButtons) {
                 const isSelected = btn.dataset.typeValue === categoryTypeFilter;
+                const isHidden = hideNSFWState && btn.dataset.typeValue !== "__all__" && isComposerTypeNSFW(node, btn.dataset.typeValue);
                 const labelEl = btn.querySelector(".pm-type-rail-label");
                 const iconEl = btn.querySelector(".pm-type-rail-icon");
+                btn.style.display = isHidden ? "none" : "flex";
                 btn.style.background = isSelected ? "rgba(56, 130, 246, 0.22)" : "transparent";
                 btn.style.borderColor = isSelected ? "rgba(56, 130, 246, 0.85)" : "rgba(95, 103, 115, 0.75)";
                 btn.style.color = isSelected ? "#dbeafe" : "#c7d0db";
@@ -2179,56 +2321,17 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         };
 
-        const renderTypeRail = () => {
-            if (!showCategoryTypeFilter) return null;
-
-            const rail = document.createElement("div");
-            rail.style.cssText = `
-                display: flex;
-                flex-direction: column;
-                flex: 0 0 auto;
-                width: ${TYPE_RAIL_COLLAPSED_WIDTH}px;
-                min-width: ${TYPE_RAIL_COLLAPSED_WIDTH}px;
-                max-width: ${TYPE_RAIL_EXPANDED_WIDTH}px;
-                margin-right: 10px;
-                border-right: 1px solid ${UI.sectionBorder};
-                padding-right: 8px;
-                overflow: hidden;
-                transition: width 0.16s ease;
-            `;
-
-            const toggleBtn = document.createElement("button");
-            toggleBtn.type = "button";
-            toggleBtn.style.cssText = `
-                width: 100%;
-                height: 34px;
-                border-radius: 8px;
-                border: 1px solid ${UI.inputBorder};
-                background: ${UI.buttonBg};
-                color: #c7d0db;
-                cursor: pointer;
-                font-size: 14px;
-                margin-bottom: 8px;
-                flex-shrink: 0;
-            `;
-
-            const railList = document.createElement("div");
-            railList.className = "pm-type-rail-list";
-            railList.style.cssText = `
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-                overflow-y: auto;
-                min-height: 0;
-                padding-right: 2px;
-                scrollbar-width: thin;
-            `;
-
+        const rebuildTypeRailButtons = () => {
+            if (!typeRailList) return;
+            refreshPromptTypeFilters();
+            hideTypeRailTooltip();
+            typeRailList.replaceChildren();
             typeRailButtons = promptTypeFilters.map((choice) => {
                 const btn = document.createElement("button");
                 btn.type = "button";
                 btn.dataset.typeValue = choice.value;
                 btn.dataset.typeLabel = choice.label;
+                btn.dataset.typeFile = choice.typeFile || "";
                 btn.style.cssText = `
                     display: flex;
                     align-items: center;
@@ -2300,12 +2403,69 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     updateTypeRailButtons();
                     renderContent(searchInput.value);
                 };
+                if (choice.value !== "__all__") {
+                    btn.oncontextmenu = (evt) => {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        showTypeContextMenu(evt, choice.value);
+                    };
+                }
 
                 btn.appendChild(iconEl);
                 btn.appendChild(labelEl);
-                railList.appendChild(btn);
+                typeRailList.appendChild(btn);
                 return btn;
             });
+
+            updateTypeRailButtons();
+            typeRailList.getBoundingClientRect();
+            typeRail?.getBoundingClientRect();
+        };
+
+        const renderTypeRail = () => {
+            if (!showCategoryTypeFilter) return null;
+
+            const rail = document.createElement("div");
+            rail.style.cssText = `
+                display: flex;
+                flex-direction: column;
+                flex: 0 0 auto;
+                width: ${TYPE_RAIL_COLLAPSED_WIDTH}px;
+                min-width: ${TYPE_RAIL_COLLAPSED_WIDTH}px;
+                max-width: ${TYPE_RAIL_EXPANDED_WIDTH}px;
+                margin-right: 10px;
+                border-right: 1px solid ${UI.sectionBorder};
+                padding-right: 8px;
+                overflow: hidden;
+                transition: width 0.16s ease;
+            `;
+
+            const toggleBtn = document.createElement("button");
+            toggleBtn.type = "button";
+            toggleBtn.style.cssText = `
+                width: 100%;
+                height: 34px;
+                border-radius: 8px;
+                border: 1px solid ${UI.inputBorder};
+                background: ${UI.buttonBg};
+                color: #c7d0db;
+                cursor: pointer;
+                font-size: 14px;
+                margin-bottom: 8px;
+                flex-shrink: 0;
+            `;
+
+            typeRailList = document.createElement("div");
+            typeRailList.className = "pm-type-rail-list";
+            typeRailList.style.cssText = `
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                overflow-y: auto;
+                min-height: 0;
+                padding-right: 2px;
+                scrollbar-width: thin;
+            `;
 
             toggleBtn.onclick = () => {
                 typeRailExpanded = !typeRailExpanded;
@@ -2319,11 +2479,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
 
             rail.appendChild(toggleBtn);
-            rail.appendChild(railList);
+            rail.appendChild(typeRailList);
 
             typeRail = rail;
             typeRailToggle = toggleBtn;
-            updateTypeRailButtons();
+            rebuildTypeRailButtons();
             return rail;
         };
 
@@ -2372,7 +2532,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const showCategoryContextMenu = (event, cat) => {
             const existing = document.querySelector('.category-context-menu');
             if (existing) existing.remove();
-            const supportsCategoryPromptMetadata = endpointPrefix === "/prompt-manager/compose";
 
             const menu = document.createElement("div");
             menu.className = "category-context-menu";
@@ -2388,9 +2547,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 min-width: 150px;
                 box-shadow: 0 4px 12px rgba(0,0,0,0.4);
             `;
-
-            if (supportsCategoryPromptMetadata) {
-            }
 
             const isNSFW = isCategoryNSFW(cat);
             const item = document.createElement("div");
@@ -2413,7 +2569,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     });
                     const result = await resp.json();
                     if (result.success) {
-                        node.prompts = result.prompts;
+                        applyPromptPayloadToNode(node, result);
                         updateCategoryButtons();
                         renderContent(searchInput.value);
                     }
@@ -2457,7 +2613,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         });
                         const data = await resp.json();
                         if (data.success) {
-                            node.prompts = data.prompts;
+                            applyPromptPayloadToNode(node, data);
                             if (selectedCategory === cat) {
                                 if (multiCategorySelect && selectedByCategory[cat]) {
                                     selectedByCategory[data.new_category] = selectedByCategory[cat];
@@ -2642,85 +2798,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
             menu.appendChild(regenerateItem);
 
-            if (supportsCategoryPromptMetadata) {
-                const basePromptItem = document.createElement("div");
-                basePromptItem.textContent = "📝 Edit Base Prompt";
-                basePromptItem.style.cssText = `
-                    padding: 8px 16px;
-                    color: #ccc;
-                    cursor: pointer;
-                    font-size: 13px;
-                `;
-                basePromptItem.onmouseover = () => basePromptItem.style.background = '#3a3a3a';
-                basePromptItem.onmouseout = () => basePromptItem.style.background = 'transparent';
-                basePromptItem.onclick = async () => {
-                    menu.remove();
-                    const previousBasePrompt = getCategoryBasePrompt(node, cat);
-                    const edited = await showCategoryBasePromptDialog(cat, previousBasePrompt);
-                    if (edited === null) return;
-
-                    const hadPreviousBasePrompt = String(previousBasePrompt || "").trim().length > 0;
-                    const basePromptChanged = String(edited || "") !== String(previousBasePrompt || "");
-                    if (hadPreviousBasePrompt && basePromptChanged) {
-                        const confirmed = await showConfirm(
-                            "Overwrite Base Prompt",
-                            `Category "${cat}" already has a base prompt. Are you sure you want to replace it?`,
-                            "Replace",
-                            "#c00"
-                        );
-                        if (!confirmed) return;
-                    }
-
-                    try {
-                        const resp = await fetch(`${endpointPrefix}/save-category-base-prompt`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ category: cat, base_prompt: edited })
-                        });
-                        const data = await resp.json();
-                        if (data.success) {
-                            node.prompts = data.prompts;
-                            rebuildCategoryList();
-                            renderContent(searchInput.value);
-                        } else {
-                            await showInfo("Error", data.error || "Failed to save base prompt.");
-                        }
-                    } catch (err) {
-                        console.error("[PromptBrowser] Error saving category base prompt:", err);
-                    }
-                };
-                menu.appendChild(basePromptItem);
-            }
-
-            // Select Thumbnail Family + Model
-            const modelItem = document.createElement("div");
-            const selectedLorasForLabel = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
-            const modelLabel = (_thumbnailRenderFamily && _thumbnailRenderModel)
-                ? `🔧 ${_thumbnailRenderFamily} : ${_thumbnailLeafName(_thumbnailRenderModel)}${selectedLorasForLabel.length ? ` + ${selectedLorasForLabel.length} LoRA` + (selectedLorasForLabel.length > 1 ? "s" : "") : ""}`
-                : "🔧 Select Thumbnail Family + Model";
-            modelItem.textContent = modelLabel;
-            modelItem.style.cssText = `
-                padding: 8px 16px;
-                color: #ccc;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            modelItem.onmouseover = () => modelItem.style.background = '#3a3a3a';
-            modelItem.onmouseout = () => modelItem.style.background = 'transparent';
-            modelItem.onclick = async () => {
-                menu.remove();
-                const picked = await showThumbnailRenderPicker(
-                    _thumbnailRenderFamily,
-                    _thumbnailRenderModel,
-                    _thumbnailRenderLora1,
-                    _thumbnailRenderLora2,
-                );
-                if (picked) {
-                    saveThumbnailRenderSelection(picked);
-                }
-            };
-            menu.appendChild(modelItem);
-
             // Delete Category (always last, separated by a divider)
             const deleteDivider = document.createElement("div");
             deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
@@ -2747,7 +2824,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         });
                         const data = await resp.json();
                         if (data.success) {
-                            node.prompts = data.prompts;
+                            applyPromptPayloadToNode(node, data);
                             if (selectedCategory === cat) {
                                 if (multiCategorySelect) {
                                     delete selectedByCategory[cat];
@@ -2766,6 +2843,234 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             };
             menu.appendChild(deleteItem);
+
+            document.body.appendChild(menu);
+            const closeMenu = (e) => {
+                if (!menu.contains(e.target)) {
+                    menu.remove();
+                    document.removeEventListener("mousedown", closeMenu, true);
+                    document.removeEventListener("contextmenu", closeMenu, true);
+                }
+            };
+            setTimeout(() => {
+                document.addEventListener("mousedown", closeMenu, true);
+                document.addEventListener("contextmenu", closeMenu, true);
+            }, 0);
+        };
+
+        const showTypeContextMenu = (event, typeValue) => {
+            if (!showCategoryTypeFilter || !typeValue || typeValue === "__all__") return;
+            const existing = document.querySelector('.category-context-menu');
+            if (existing) existing.remove();
+
+            const typeFile = getComposerTypeFile(node, typeValue);
+            const typeLabel = getComposerTypeDisplayName(node, typeValue) || typeValue;
+            const menu = document.createElement("div");
+            menu.className = "category-context-menu";
+            menu.style.cssText = `
+                position: fixed;
+                left: ${event.clientX}px;
+                top: ${event.clientY}px;
+                background: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 6px;
+                padding: 4px 0;
+                z-index: 10001;
+                min-width: 170px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            `;
+
+            const createMenuItem = (label, onClick, danger = false) => {
+                const item = document.createElement("div");
+                item.textContent = label;
+                item.style.cssText = `
+                    padding: 8px 16px;
+                    color: ${danger ? '#f66' : '#ccc'};
+                    cursor: pointer;
+                    font-size: 13px;
+                `;
+                item.onmouseover = () => item.style.background = '#3a3a3a';
+                item.onmouseout = () => item.style.background = 'transparent';
+                item.onclick = async () => {
+                    menu.remove();
+                    await onClick();
+                };
+                return item;
+            };
+
+            const typeRefs = () => getCategoriesForComposerType(node, typeValue)
+                .flatMap((category) => getPromptNamesForCategory(node, category, {
+                    hideNSFW: false,
+                    workflowOnly: false,
+                    contentFilter: "all",
+                    endpointPrefix,
+                }).map((name) => ({ category, name })));
+
+            const runTypeBatchGeneration = async (title, options = {}) => {
+                const refs = typeRefs().filter((ref) => {
+                    const data = getCategoryPromptEntry(node?.prompts?.[ref.category], ref.name, endpointPrefix);
+                    if (!data || typeof data !== "object") return false;
+                    return options.regenerateAll === true ? true : !data.thumbnail;
+                });
+                if (!refs.length) {
+                    await showInfo(
+                        options.regenerateAll ? "No Prompts to Re-Generate" : "No Thumbnails to Generate",
+                        options.regenerateAll
+                            ? `No prompts were found in "${typeLabel}" to re-generate thumbnails for.`
+                            : `All prompts in "${typeLabel}" already have thumbnails.`
+                    );
+                    return;
+                }
+
+                const confirmed = await showConfirm(
+                    title,
+                    options.regenerateAll
+                        ? `Re-generate thumbnails for ${refs.length} prompt(s) in "${typeLabel}"? Existing thumbnails will be replaced.`
+                        : `Generate thumbnails for ${refs.length} prompt(s) in "${typeLabel}"?`,
+                    options.regenerateAll ? "Re-Generate" : "Generate",
+                    "#4CAF50"
+                );
+                if (!confirmed) return;
+
+                const renderSelection = await ensureThumbnailRenderSelection();
+                if (!renderSelection) return;
+                const fallbackBase = await resolveThumbnailFallbackBase(renderSelection);
+
+                for (const ref of refs) {
+                    _thumbQueueTotal++;
+                    _ensureThumbQueueProgress();
+                    _updateThumbQueueProgress(ref.name);
+
+                    _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
+                        if (_thumbQueueCancelled) {
+                            _thumbQueueDone++;
+                            if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                                _finishThumbQueueProgress();
+                            }
+                            return;
+                        }
+                        _updateThumbQueueProgress(ref.name);
+                        try {
+                            await _generateThumbnailForBrowserCategory(node, ref.category, ref.name, () => {
+                                renderContent(searchInput.value);
+                            }, {
+                                renderSelection,
+                                fallbackBase,
+                                endpointPrefix,
+                            });
+                            _thumbQueueDone++;
+                        } catch (err) {
+                            console.error(`[ThumbnailGen] Failed for "${ref.category}/${ref.name}":`, err);
+                            _thumbQueueFailed++;
+                        } finally {
+                            if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
+                                _finishThumbQueueProgress();
+                            }
+                        }
+                    });
+                }
+            };
+
+            const isNSFW = isComposerTypeNSFW(node, typeValue);
+            menu.appendChild(createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
+                try {
+                    const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ type: "type", type_file: typeFile })
+                    });
+                    const result = await resp.json();
+                    if (result.success) {
+                        applyPromptPayloadToNode(node, result);
+                        rebuildCategoryList();
+                        rebuildTypeRailButtons();
+                        renderContent(searchInput.value);
+                    }
+                } catch (err) {
+                    console.error("[PromptBrowser] Error toggling type NSFW:", err);
+                }
+            }, isNSFW));
+
+            const renameDivider = document.createElement("div");
+            renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(renameDivider);
+
+            menu.appendChild(createMenuItem("✏️ Rename", async () => {
+                const existingTypeNames = promptTypeFilters
+                    .filter((choice) => choice.value !== "__all__")
+                    .map((choice) => choice.label);
+                const result = await showRenameCategoryDialog(
+                    "Rename Type",
+                    "Enter new type name:",
+                    existingTypeNames,
+                    typeLabel,
+                );
+                if (!result?.newCategory || !String(result.newCategory).trim()) return;
+                const newName = String(result.newCategory).trim();
+                if (newName === typeLabel) return;
+                try {
+                    const resp = await fetch(`${endpointPrefix}/rename-type`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ type_file: typeFile, new_name: newName })
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        applyPromptPayloadToNode(node, data);
+                        categoryTypeFilter = typeValue;
+                        rebuildCategoryList();
+                        rebuildTypeRailButtons();
+                        renderContent(searchInput.value);
+                    } else {
+                        await showInfo("Error", data.error || "Failed to rename type.");
+                    }
+                } catch (err) {
+                    console.error("[PromptBrowser] Error renaming type:", err);
+                }
+            }));
+
+            const thumbDivider = document.createElement("div");
+            thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(thumbDivider);
+
+            menu.appendChild(createMenuItem("🎨 Generate Missing Thumbnails", async () => {
+                await runTypeBatchGeneration("Generate Missing Thumbnails");
+            }));
+
+            menu.appendChild(createMenuItem("🔄 Re-Generate All Thumbnails", async () => {
+                await runTypeBatchGeneration("Re-Generate All Thumbnails", { regenerateAll: true });
+            }));
+
+            const deleteDivider = document.createElement("div");
+            deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(deleteDivider);
+
+            menu.appendChild(createMenuItem("🗑️ Delete Type", async () => {
+                if (!await showConfirm("Delete Type", `Are you sure you want to delete type "${typeLabel}" and all its categories?`)) {
+                    return;
+                }
+                try {
+                    const resp = await fetch(`${endpointPrefix}/delete-type`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ type_file: typeFile })
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        applyPromptPayloadToNode(node, data);
+                        if (categoryTypeFilter === typeValue) {
+                            categoryTypeFilter = "__all__";
+                        }
+                        rebuildCategoryList();
+                        rebuildTypeRailButtons();
+                        renderContent(searchInput.value);
+                    } else {
+                        await showInfo("Error", data.error || "Failed to delete type.");
+                    }
+                } catch (err) {
+                    console.error("[PromptBrowser] Error deleting type:", err);
+                }
+            }, true));
 
             document.body.appendChild(menu);
             const closeMenu = (e) => {
@@ -2870,7 +3175,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         });
                         const data = await resp.json();
                         if (data.success) {
-                            node.prompts = data.prompts;
+                            applyPromptPayloadToNode(node, data);
                             const canProceed = await canChangeEditorContext();
                             if (!canProceed) {
                                 rebuildCategoryList();
@@ -2967,7 +3272,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         const result = await resp.json();
                         if (result?.success) {
                             if (result?.prompts && typeof result.prompts === "object") {
-                                node.prompts = result.prompts;
+                                applyPromptPayloadToNode(node, result);
                             }
                             setCurrentPromptSelection(body.name);
                         }
@@ -3075,6 +3380,21 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
                     renderContent(searchInput.value);
                 },
+                pickThumbnailModel: async () => {
+                    const picked = await showThumbnailRenderPicker(
+                        _thumbnailRenderFamily,
+                        _thumbnailRenderModel,
+                        _thumbnailRenderLora1,
+                        _thumbnailRenderLora2,
+                    );
+                    if (picked) {
+                        saveThumbnailRenderSelection(picked);
+                        updateThumbnailModelBtn();
+                        return true;
+                    }
+                    return false;
+                },
+                getThumbnailModelLabel: () => getThumbnailRenderLabelParts(),
                 compact: compactBrowser,
                 width: getEditPanelWidth(),
             });
@@ -3237,7 +3557,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         });
                         const data = await resp.json();
                         if (data.success) {
-                            node.prompts = data.prompts;
+                            applyPromptPayloadToNode(node, data);
                             movedCount++;
                         } else {
                             errors.push(`${promptName}: ${data.error || "move failed"}`);

@@ -35,23 +35,35 @@ const PROMPT_TYPE_CHOICES = [
     { value: "style", label: "Style" },
 ];
 
-function addPromptTypeChoice(choices, seen, value) {
+function addPromptTypeChoice(choices, seen, value, label = null) {
     const normalized = String(value || "").trim();
     if (!normalized) return;
     const key = normalized.toLowerCase();
-    if (seen.has(key)) return;
+    const normalizedLabel = String(label || normalized).trim() || normalized;
+    if (seen.has(key)) {
+        const existing = choices.find((choice) => String(choice?.value || "").trim().toLowerCase() === key);
+        if (existing) existing.label = normalizedLabel;
+        return;
+    }
     seen.add(key);
-    choices.push({ value: normalized, label: normalized });
+    choices.push({ value: normalized, label: normalizedLabel });
 }
 
 function collectPromptTypesFromData(promptsData) {
     if (!promptsData || typeof promptsData !== "object") return [];
     const discovered = [];
+    const seen = new Set();
     for (const categoryData of Object.values(promptsData)) {
         if (!categoryData || typeof categoryData !== "object" || Array.isArray(categoryData)) continue;
         const promptType = String(categoryData._prompt_type_ || "").trim();
         if (promptType) {
-            discovered.push(promptType);
+            const key = promptType.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            discovered.push({
+                value: promptType,
+                label: String(categoryData._type_name_ || promptType).trim() || promptType,
+            });
         }
     }
     return discovered;
@@ -74,7 +86,7 @@ export function getPromptTypeChoices(promptsData = null) {
     }
 
     for (const item of collectPromptTypesFromData(promptsData)) {
-        addPromptTypeChoice(choices, seen, item);
+        addPromptTypeChoice(choices, seen, item.value, item.label);
     }
 
     return choices;
@@ -713,6 +725,29 @@ function createSelect(value, options, styles = {}) {
     return select;
 }
 
+function replaceSelectOptions(select, options, value) {
+    if (!select) return;
+    const nextValue = String(value ?? "");
+    select.innerHTML = "";
+    for (const opt of Array.isArray(options) ? options : []) {
+        const option = document.createElement("option");
+        option.value = opt.value;
+        option.textContent = opt.label;
+        if (String(opt.value) === nextValue) option.selected = true;
+        select.appendChild(option);
+    }
+    if (nextValue && !Array.from(select.options).some((option) => option.value === nextValue)) {
+        const fallback = document.createElement("option");
+        fallback.value = nextValue;
+        fallback.textContent = nextValue;
+        fallback.selected = true;
+        select.appendChild(fallback);
+    }
+    if (!select.value && select.options.length) {
+        select.value = select.options[0].value;
+    }
+}
+
 function createNumberInput(value, options = {}, styles = {}) {
     const input = document.createElement("input");
     input.type = "number";
@@ -1104,6 +1139,10 @@ export function createPromptBrowserEditPanel(options) {
     const _loadPrompts = typeof loadPrompts === "function" ? loadPrompts : async () => {};
     const _syncPromptSelection = typeof syncPromptSelection === "function" ? syncPromptSelection : () => {};
     const _selectPrompt = typeof options?.selectPrompt === "function" ? options.selectPrompt : null;
+    const _pickThumbnailModel = typeof options?.pickThumbnailModel === "function" ? options.pickThumbnailModel : async () => false;
+    const _getThumbnailModelLabel = typeof options?.getThumbnailModelLabel === "function"
+        ? options.getThumbnailModelLabel
+        : (() => ({ shortLabel: "Model", fullLabel: "Select thumbnail model" }));
     const _onChange = typeof onChange === "function" ? onChange : () => {};
     const _onCategorySettingsSaved = typeof options?.onCategorySettingsSaved === "function" ? options.onCategorySettingsSaved : () => {};
 
@@ -1119,7 +1158,6 @@ export function createPromptBrowserEditPanel(options) {
     let loadedRefMod = "";
     let loadedRefModWeight = 1.0;
     let loadedCategoryPromptType = "";
-    let loadedCategoryBasePrompt = "";
     let loadedCategoryPromptPrefix = "";
 
     const root = el("div", {
@@ -1292,14 +1330,6 @@ export function createPromptBrowserEditPanel(options) {
     const typeSelect = createSelect("", getPromptTypeChoices(node?.prompts));
     settingsBody.appendChild(typeSelect);
 
-    const baseLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Base Prompt (for thumbnails)");
-    settingsBody.appendChild(baseLabel);
-
-    const baseTextArea = createTextarea("", "Base prompt used when generating thumbnails for this category");
-    baseTextArea.style.minHeight = isCompact ? "140px" : "260px";
-
-    settingsBody.appendChild(baseTextArea);
-
     const prefixInfoText = "Prepended once before grouped prompts\nfrom this category in text output.\nJSON output ignores this field.";
     const prefixLabelRow = el("div", {
         display: "flex",
@@ -1334,8 +1364,7 @@ export function createPromptBrowserEditPanel(options) {
             categoryData
             && typeof categoryData === "object"
             && (
-                String(categoryData._base_prompt_ || "").trim()
-                || String(categoryData._prompt_type_ || "").trim()
+                String(categoryData._prompt_type_ || "").trim()
                 || String(categoryData._prompt_prefix_ || "").trim()
             )
         );
@@ -1352,7 +1381,6 @@ export function createPromptBrowserEditPanel(options) {
 
         const previousPromptType = loadedCategoryPromptType;
         const result = await saveComposerCategorySettings(category, {
-            basePrompt: baseTextArea.value,
             promptType: typeSelect.value,
             promptPrefix: prefixInput.value,
         });
@@ -1364,7 +1392,6 @@ export function createPromptBrowserEditPanel(options) {
                 category,
                 previousPromptType,
                 promptType: String(typeSelect.value || "").trim(),
-                basePrompt: String(baseTextArea.value || ""),
                 promptPrefix: String(prefixInput.value || ""),
             });
         } else {
@@ -1709,11 +1736,18 @@ export function createPromptBrowserEditPanel(options) {
         gap: "8px",
         alignItems: "flex-end",
     });
+    const thumbnailModelBtn = createButton("Model", async () => {
+        const picked = await _pickThumbnailModel();
+        if (picked) {
+            refreshThumbnailModelButton();
+        }
+    }, { flex: "0 0 110px" });
+    thumbnailModelBtn.title = "Select thumbnail model";
     const thumbnailSeedWrap = el("div", {
         display: "flex",
         flexDirection: "column",
         gap: "4px",
-        width: "96px",
+        width: "84px",
         flexShrink: "0",
     });
     const thumbnailSeedLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "Seed");
@@ -1770,7 +1804,13 @@ export function createPromptBrowserEditPanel(options) {
         }
     });
     generateBtn.style.flex = "1";
-    thumbnailGenerateRow.append(generateBtn, thumbnailSeedWrap);
+    const refreshThumbnailModelButton = () => {
+        const label = _getThumbnailModelLabel() || {};
+        thumbnailModelBtn.textContent = String(label.shortLabel || "Model");
+        thumbnailModelBtn.title = String(label.fullLabel || "Select thumbnail model");
+    };
+    refreshThumbnailModelButton();
+    thumbnailGenerateRow.append(generateBtn, thumbnailModelBtn, thumbnailSeedWrap);
     promptBody.appendChild(thumbnailGenerateRow);
 
     const bulkPromptBtn = createButton("Bulk Prompt Importer", () => {
@@ -1848,7 +1888,6 @@ export function createPromptBrowserEditPanel(options) {
         const currentName = String(promptNameInput.value || "").trim();
         const currentText = String(promptTextArea.value || "").trim();
         const currentCategoryPromptType = String(typeSelect.value || "").trim();
-        const currentCategoryBasePrompt = String(baseTextArea.value || "").trim();
         const currentCategoryPromptPrefix = String(prefixInput.value || "").trim();
 
         if (!currentCategory) {
@@ -1856,7 +1895,6 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         if (currentCategoryPromptType !== String(loadedCategoryPromptType || "").trim()) return true;
-        if (currentCategoryBasePrompt !== String(loadedCategoryBasePrompt || "").trim()) return true;
         if (currentCategoryPromptPrefix !== String(loadedCategoryPromptPrefix || "").trim()) return true;
 
         const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[currentCategory], currentPromptName, endpointPrefix);
@@ -1960,21 +1998,18 @@ export function createPromptBrowserEditPanel(options) {
 
     function loadCategorySettings(category) {
         currentCategory = category || currentCategory || "";
+        replaceSelectOptions(typeSelect, getPromptTypeChoices(node?.prompts), String(typeSelect.value || loadedCategoryPromptType || ""));
         const catData = node?.prompts?.[category];
         if (catData && typeof catData === "object") {
             const promptType = String(catData._prompt_type_ || "").trim();
             typeSelect.value = promptType;
-            baseTextArea.value = String(catData._base_prompt_ || "");
             prefixInput.value = String(catData._prompt_prefix_ || "");
             loadedCategoryPromptType = promptType;
-            loadedCategoryBasePrompt = String(catData._base_prompt_ || "").trim();
             loadedCategoryPromptPrefix = String(catData._prompt_prefix_ || "").trim();
         } else {
             typeSelect.value = "";
-            baseTextArea.value = "";
             prefixInput.value = "";
             loadedCategoryPromptType = "";
-            loadedCategoryBasePrompt = "";
             loadedCategoryPromptPrefix = "";
         }
     }
@@ -2310,6 +2345,7 @@ export function createPromptBrowserEditPanel(options) {
         loadCategorySettings,
         showCategorySettings,
         showPromptSettings,
+        refreshThumbnailModelButton,
         clearPrompt,
         confirmDiscardChanges,
         getCurrentPromptName: () => String(promptNameInput.value || "").trim(),
