@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import { DEFAULT_THUMBNAIL, showInfo, showConfirm } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
@@ -316,57 +317,34 @@ async function selectComposerSaveTarget(defaultValue = "prompt_composer_data.jso
     return { mode: "download", filename };
 }
 
-async function selectComposerJsonFile() {
-    if (window.showOpenFilePicker) {
-        try {
-            const [handle] = await window.showOpenFilePicker({
-                multiple: false,
-                types: [{
-                    description: "JSON Files",
-                    accept: { "application/json": [".json"] },
-                }],
-            });
-            if (!handle) return null;
-            const file = await handle.getFile();
-            return {
-                file,
-                text: await file.text(),
-            };
-        } catch (err) {
-            if (err?.name === "AbortError") {
-                return null;
-            }
-            console.warn("[PromptComposer] Open picker failed, falling back to file input:", err);
-        }
-    }
-
-    return await new Promise((resolve) => {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = ".json,application/json";
-        input.onchange = async (evt) => {
-            const file = evt.target?.files?.[0];
-            if (!file) {
-                resolve(null);
-                return;
-            }
-            resolve({
-                file,
-                text: await file.text(),
-            });
-        };
-        input.click();
+async function loadComposerLibraryFile(filePath) {
+    const response = await api.fetchApi(`${COMPOSER_ENDPOINT_PREFIX}/load-prompts-file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: filePath }),
     });
+    const result = await response.json();
+    if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to load JSON file.");
+    }
+    return result.data;
 }
 
-async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data.json") {
+async function showComposerJsonBrowser({
+    mode = "save",
+    title = "Save Prompt Composer JSON",
+    confirmLabel = "Save Here",
+    defaultFilename = "prompt_composer_data.json",
+} = {}) {
     return await new Promise((resolve) => {
         const preferredStartDir = COMPOSER_BACKUP_BROWSER_DIR;
+        const isSaveMode = mode === "save";
         let currentDir = "";
         let currentParent = null;
         let roots = [];
         let currentFiles = [];
         let currentDirs = [];
+        let selectedFilePath = "";
 
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -404,7 +382,7 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
         const topRow = document.createElement("div");
         topRow.style.cssText = "display:flex; justify-content:space-between; align-items:center; gap:12px;";
         topRow.innerHTML = `
-            <h3 style="margin:0; color:#e5e7eb; font-size:14px; font-weight:600; letter-spacing:0.01em;">Save Prompt Composer JSON</h3>
+            <h3 style="margin:0; color:#e5e7eb; font-size:14px; font-weight:600; letter-spacing:0.01em;">${title}</h3>
             <button class="close-btn" style="background:none; border:none; color:#8b9098; font-size:22px; cursor:pointer; padding:0; width:28px; height:28px;">×</button>
         `;
         header.appendChild(topRow);
@@ -424,6 +402,7 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
         const refreshBtn = makeNavButton("↻");
         const inputBtn = makeNavButton("In");
         const outputBtn = makeNavButton("Out");
+        const homeBtn = makeNavButton("Home");
         const pathInput = document.createElement("input");
         pathInput.type = "text";
         pathInput.placeholder = "Paste folder path and press Enter";
@@ -432,6 +411,7 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
         navRow.appendChild(refreshBtn);
         navRow.appendChild(inputBtn);
         navRow.appendChild(outputBtn);
+        navRow.appendChild(homeBtn);
         navRow.appendChild(pathInput);
         header.appendChild(navRow);
 
@@ -460,7 +440,8 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
         filenameLabel.style.cssText = "font-size:12px; color:#d7dbe1; min-width:48px;";
         const filenameInput = document.createElement("input");
         filenameInput.type = "text";
-        filenameInput.value = normalizeComposerFilename(defaultFilename, "prompt_composer_data.json");
+        filenameInput.value = isSaveMode ? normalizeComposerFilename(defaultFilename, "prompt_composer_data.json") : "";
+        filenameInput.readOnly = !isSaveMode;
         filenameInput.style.cssText = "flex:1; height:32px; padding:0 10px; border-radius:3px; border:1px solid rgba(255,255,255,0.08); background:#111317; color:#e5e7eb; box-sizing:border-box;";
         filenameRow.appendChild(filenameLabel);
         filenameRow.appendChild(filenameInput);
@@ -474,7 +455,7 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
         cancelBtn.style.cssText = "padding:7px 12px; background:#2a2f36; color:#e5e7eb; border:1px solid rgba(255,255,255,0.14); border-radius:7px; cursor:pointer;";
         const saveBtn = document.createElement("button");
         saveBtn.type = "button";
-        saveBtn.textContent = "Save Here";
+        saveBtn.textContent = confirmLabel;
         saveBtn.style.cssText = "padding:7px 12px; background:#23262b; color:#e5e7eb; border:1px solid rgba(255,255,255,0.14); border-radius:3px; cursor:pointer;";
         footerButtons.appendChild(cancelBtn);
         footerButtons.appendChild(saveBtn);
@@ -543,6 +524,10 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
                 item.onmouseout = () => { item.style.background = "#17191d"; };
                 item.onclick = async () => {
                     currentDir = dir.path;
+                    selectedFilePath = "";
+                    if (!isSaveMode) {
+                        filenameInput.value = "";
+                    }
                     await loadListing(dir.path);
                 };
                 listing.appendChild(item);
@@ -556,12 +541,14 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
                 item.onmouseover = () => { item.style.background = "#125d90"; };
                 item.onmouseout = () => { item.style.background = "#17191d"; };
                 item.onclick = () => {
+                    selectedFilePath = file.path || joinComposerBrowserPath(currentDir, file.name);
                     filenameInput.value = file.name;
                     item.style.background = "#125d90";
                 };
                 item.ondblclick = async () => {
+                    selectedFilePath = file.path || joinComposerBrowserPath(currentDir, file.name);
                     filenameInput.value = file.name;
-                    await confirmSave();
+                    await confirmSelection();
                 };
                 listing.appendChild(item);
             });
@@ -601,7 +588,16 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
             }
         };
 
-        const confirmSave = async () => {
+        const confirmSelection = async () => {
+            if (!isSaveMode) {
+                if (!selectedFilePath) {
+                    await showInfo("Open Failed", "Choose a JSON file first.");
+                    return;
+                }
+                finish(selectedFilePath);
+                return;
+            }
+
             const filename = normalizeComposerFilename(filenameInput.value, defaultFilename);
             if (!currentDir) {
                 await showInfo("Save Failed", "Choose a target folder first.");
@@ -636,16 +632,16 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
                     currentDir = next;
                     await loadListing(next);
                 }
-            } else if (event.key === "Enter" && document.activeElement === filenameInput) {
+            } else if (event.key === "Enter" && (document.activeElement === filenameInput || !isSaveMode)) {
                 event.preventDefault();
-                await confirmSave();
+                await confirmSelection();
             }
         };
 
         topRow.querySelector(".close-btn").onclick = () => finish(null);
         cancelBtn.onclick = () => finish(null);
         saveBtn.onclick = async () => {
-            await confirmSave();
+            await confirmSelection();
         };
         overlay.onclick = (event) => {
             if (event.target === overlay) finish(null);
@@ -653,6 +649,10 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
         upBtn.onclick = async () => {
             if (!currentParent) return;
             currentDir = currentParent;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
             await loadListing(currentDir);
         };
         refreshBtn.onclick = async () => {
@@ -662,12 +662,28 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
             const inputRoot = Array.isArray(roots) ? roots[0] : "";
             if (!inputRoot) return;
             currentDir = inputRoot;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
             await loadListing(currentDir);
         };
         outputBtn.onclick = async () => {
             const outputRoot = Array.isArray(roots) ? roots[1] : "";
             if (!outputRoot) return;
             currentDir = outputRoot;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
+            await loadListing(currentDir);
+        };
+        homeBtn.onclick = async () => {
+            currentDir = COMPOSER_BACKUP_BROWSER_DIR;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
             await loadListing(currentDir);
         };
 
@@ -679,8 +695,12 @@ async function showComposerSaveAsBrowser(defaultFilename = "prompt_composer_data
                 await loadListing("");
             }
         })();
-        filenameInput.focus();
-        filenameInput.select();
+        if (isSaveMode) {
+            filenameInput.focus();
+            filenameInput.select();
+        } else {
+            pathInput.focus();
+        }
     });
 }
 
@@ -826,7 +846,12 @@ function applyComposerPromptData(node, prompts) {
 
 async function exportComposerJsonLibrary(node) {
     try {
-        const savePath = await showComposerSaveAsBrowser("prompt_composer_data.json");
+        const savePath = await showComposerJsonBrowser({
+            mode: "save",
+            title: "Save Prompt Composer JSON",
+            confirmLabel: "Save Here",
+            defaultFilename: "prompt_composer_data.json",
+        });
         if (!savePath) return;
 
         const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/export-prompts-file`, {
@@ -857,11 +882,15 @@ async function openComposerJsonLibrary(node) {
     );
     if (!confirmed) return;
 
-    const picked = await selectComposerJsonFile();
-    if (!picked) return;
+    const filePath = await showComposerJsonBrowser({
+        mode: "open",
+        title: "Open Prompt Composer JSON",
+        confirmLabel: "Open",
+    });
+    if (!filePath) return;
 
     try {
-        const data = JSON.parse(picked.text);
+        const data = await loadComposerLibraryFile(filePath);
         if (!data || typeof data !== "object" || Array.isArray(data)) {
             await showInfo("Open Failed", "Invalid JSON structure. Expected an object with categories.");
             return;
@@ -894,11 +923,15 @@ async function mergeComposerJsonLibrary(node) {
     );
     if (!confirmed) return;
 
-    const picked = await selectComposerJsonFile();
-    if (!picked) return;
+    const filePath = await showComposerJsonBrowser({
+        mode: "open",
+        title: "Merge Prompt Composer JSON",
+        confirmLabel: "Merge",
+    });
+    if (!filePath) return;
 
     try {
-        const data = JSON.parse(picked.text);
+        const data = await loadComposerLibraryFile(filePath);
         if (!data || typeof data !== "object" || Array.isArray(data)) {
             await showInfo("Merge Failed", "Invalid JSON structure. Expected an object with categories.");
             return;

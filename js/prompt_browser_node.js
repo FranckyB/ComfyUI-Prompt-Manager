@@ -352,6 +352,7 @@ async function showPromptLibraryBrowser({
         const refreshBtn = makeNavButton("↻");
         const inputBtn = makeNavButton("In");
         const outputBtn = makeNavButton("Out");
+        const homeBtn = makeNavButton("Home");
         const pathInput = document.createElement("input");
         pathInput.type = "text";
         pathInput.placeholder = "Paste folder path and press Enter";
@@ -360,6 +361,7 @@ async function showPromptLibraryBrowser({
         navRow.appendChild(refreshBtn);
         navRow.appendChild(inputBtn);
         navRow.appendChild(outputBtn);
+        navRow.appendChild(homeBtn);
         navRow.appendChild(pathInput);
         header.appendChild(navRow);
 
@@ -620,6 +622,14 @@ async function showPromptLibraryBrowser({
             const outputRoot = Array.isArray(roots) ? roots[1] : "";
             if (!outputRoot) return;
             currentDir = outputRoot;
+            selectedFilePath = "";
+            if (!isSaveMode) {
+                filenameInput.value = "";
+            }
+            await loadListing(currentDir);
+        };
+        homeBtn.onclick = async () => {
+            currentDir = PROMPT_BROWSER_BACKUP_DIR;
             selectedFilePath = "";
             if (!isSaveMode) {
                 filenameInput.value = "";
