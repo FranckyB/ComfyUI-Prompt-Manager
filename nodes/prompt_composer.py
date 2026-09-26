@@ -67,8 +67,6 @@ PROMPT_TYPE_CHOICES = [
     "composition",
     "camera",
     "motion",
-    "soundscape",
-    "dialogue",
 ]
 
 OUTPUT_FORMAT_CHOICES = ["text", "json"]

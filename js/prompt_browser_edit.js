@@ -19,23 +19,20 @@ const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
 const SYSTEM_PROMPT_CATEGORIES = ["Audio", "Image", "Video", "Other"];
 
 const PROMPT_TYPE_CHOICES = [
-    { value: "", label: "None" },
     { value: "character", label: "Character" },
     { value: "characteristic", label: "Characteristic" },
-    { value: "attire", label: "Attire" },
+    { value: "clothing", label: "Clothing" },
     { value: "hairstyle", label: "Hairstyle" },
     { value: "accessory", label: "Accessory" },
     { value: "expression", label: "Expression" },
     { value: "action", label: "Action" },
     { value: "environment", label: "Environment" },
     { value: "lighting", label: "Lighting" },
-    { value: "ambience", label: "Ambience" },
+    { value: "mood", label: "Mood" },
     { value: "camera", label: "Camera" },
     { value: "composition", label: "Composition" },
     { value: "effect", label: "Effect" },
-    { value: "soundscape", label: "Soundscape" },
     { value: "style", label: "Style" },
-    { value: "dialogue", label: "Dialogue" },
 ];
 
 function addPromptTypeChoice(choices, seen, value) {

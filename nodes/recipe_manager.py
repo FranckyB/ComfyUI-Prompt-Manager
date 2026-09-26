@@ -8,46 +8,12 @@ Differences from PromptManagerAdvanced:
 """
 
 import json
-import base64
-from io import BytesIO
 
 import server
 
+from ..py.thumbnail_utils import image_to_base64_thumbnail
 from ..py.workflow_data_utils import ensure_v2_recipe_data, get_v2_model_block, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 from .prompt_manager_adv import PromptManagerAdvanced
-
-try:
-    import numpy as np
-    from PIL import Image
-    IMAGE_SUPPORT = True
-except ImportError:
-    IMAGE_SUPPORT = False
-
-
-def _image_to_base64_thumbnail(image_tensor, max_size=200):
-    if not IMAGE_SUPPORT or image_tensor is None:
-        return None
-
-    try:
-        img_array = image_tensor[0] if len(image_tensor.shape) == 4 else image_tensor
-        if hasattr(img_array, "cpu"):
-            img_array = img_array.cpu().numpy()
-        img_array = (img_array * 255).astype(np.uint8)
-        img = Image.fromarray(img_array)
-
-        width, height = img.size
-        min_dim = min(width, height)
-        if min_dim > max_size:
-            scale = max_size / min_dim
-            img = img.resize((int(width * scale), int(height * scale)), Image.LANCZOS)
-
-        buffer = BytesIO()
-        img.save(buffer, format="JPEG", quality=85)
-        base64_str = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        return f"data:image/jpeg;base64,{base64_str}"
-    except Exception as e:
-        print(f"[RecipeManager] Thumbnail generation failed: {e}")
-        return None
 
 
 class WorkflowManager(PromptManagerAdvanced):
@@ -200,8 +166,8 @@ class WorkflowManager(PromptManagerAdvanced):
             incoming_models = incoming_v2.get("models", {}) if isinstance(incoming_v2.get("models"), dict) else {}
             incoming_has_model_b = isinstance(incoming_models.get("model_b"), dict)
         output_text = (wf_model_a.get("positive_prompt", "") or text or "")
-        generated_thumbnail = _image_to_base64_thumbnail(wf.get("IMAGE")) if isinstance(wf, dict) else None
-        incoming_thumbnail = _image_to_base64_thumbnail(incoming_wf.get("IMAGE")) if isinstance(incoming_wf, dict) else None
+        generated_thumbnail = image_to_base64_thumbnail(wf.get("IMAGE"), log_prefix="RecipeManager") if isinstance(wf, dict) else None
+        incoming_thumbnail = image_to_base64_thumbnail(incoming_wf.get("IMAGE"), log_prefix="RecipeManager") if isinstance(incoming_wf, dict) else None
         workflow_thumbnail = incoming_thumbnail if isinstance(incoming_thumbnail, str) and incoming_thumbnail else (
             generated_thumbnail if isinstance(generated_thumbnail, str) and generated_thumbnail else (
                 incoming_wf.get("thumbnail") if isinstance(incoming_wf, dict) and isinstance(incoming_wf.get("thumbnail"), str) else (

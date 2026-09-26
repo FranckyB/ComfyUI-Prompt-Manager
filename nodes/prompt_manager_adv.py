@@ -6,12 +6,11 @@ import os
 import json
 import shutil
 import time
-import base64
 from datetime import datetime
-from io import BytesIO
 import folder_paths
 import server
 from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
+from ..py.thumbnail_utils import image_to_base64_thumbnail
 from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 
 
@@ -26,16 +25,6 @@ def _normalize_export_path(raw_path):
     if not candidate.lower().endswith(".json"):
         candidate = f"{candidate}.json"
     return candidate
-
-# Import numpy and PIL for image processing (available in ComfyUI environment)
-try:
-    import numpy as np
-    from PIL import Image
-    IMAGE_SUPPORT = True
-except ImportError:
-    IMAGE_SUPPORT = False
-    print("[PromptManagerAdvanced] Warning: PIL/numpy not available, thumbnail from image input disabled")
-
 
 def _get_workflow_node(extra_pnginfo, node_id: str):
     """Find workflow node by id, including nested subgraphs (id chains like a:b:c)."""
@@ -96,57 +85,6 @@ def _patch_runtime_prompt_metadata(unique_id, output_text, extra_pnginfo=None, a
                 # self-contained prompt instead of a dangling link reference.
                 if "prompt" in inputs:
                     del inputs["prompt"]
-
-
-def image_to_base64_thumbnail(image_tensor, max_size=200):
-    """
-    Convert a ComfyUI image tensor to a base64 thumbnail string.
-
-    Args:
-        image_tensor: ComfyUI image tensor (B, H, W, C) in float32 0-1 range
-        max_size: Minimum dimension for the thumbnail (default 200px for smallest side)
-
-    Returns:
-        Base64 encoded JPEG string or None if conversion fails
-    """
-    if not IMAGE_SUPPORT or image_tensor is None:
-        return None
-
-    try:
-        # Get first image from batch
-        if len(image_tensor.shape) == 4:
-            img_array = image_tensor[0]
-        else:
-            img_array = image_tensor
-
-        # Convert to numpy and scale to 0-255
-        if hasattr(img_array, 'cpu'):
-            img_array = img_array.cpu().numpy()
-        img_array = (img_array * 255).astype(np.uint8)
-
-        # Create PIL Image
-        img = Image.fromarray(img_array)
-
-        # Resize maintaining aspect ratio, limiting smallest dimension to max_size
-        width, height = img.size
-        min_dim = min(width, height)
-
-        if min_dim > max_size:
-            scale = max_size / min_dim
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            img = img.resize((new_width, new_height), Image.LANCZOS)
-
-        # Convert to JPEG base64
-        buffer = BytesIO()
-        img.save(buffer, format='JPEG', quality=85)
-        base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return f"data:image/jpeg;base64,{base64_str}"
-    except Exception as e:
-        print(f"[PromptManagerAdvanced] Error converting image to thumbnail: {e}")
-        return None
-
 
 def _has_meaningful_workflow_data(workflow_data):
     """Return True when workflow_data contains authored prompt/model/lora content."""
@@ -1039,9 +977,9 @@ class PromptManagerAdvanced:
 
         # Convert thumbnail image to base64 if provided
         thumbnail_base64 = None
-        if thumbnail_image is not None and IMAGE_SUPPORT:
+        if thumbnail_image is not None:
             try:
-                thumbnail_base64 = image_to_base64_thumbnail(thumbnail_image)
+                thumbnail_base64 = image_to_base64_thumbnail(thumbnail_image, log_prefix="PromptManagerAdvanced")
             except Exception as e:
                 print(f"[PromptManagerAdvanced] Failed to convert thumbnail image: {e}")
 

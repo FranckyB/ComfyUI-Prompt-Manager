@@ -6704,8 +6704,8 @@ const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
 // Thumbnail Generation System
 // ========================
 
-const THUMB_RENDER_WIDTH = 768;
-const THUMB_RENDER_HEIGHT = 1024;
+const THUMB_RENDER_WIDTH = 576;
+const THUMB_RENDER_HEIGHT = 768;
 const THUMB_RENDER_BATCH = 1;
 const THUMB_RENDER_LENGTH = 1;
 const THUMB_DEFAULT_NEGATIVE = "blurry, bad quality, worst quality, low resolution, watermark, text, logo, deformed, ugly, disfigured";

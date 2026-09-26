@@ -958,11 +958,10 @@ function getCategoryPromptType(node, category) {
 
 const PROMPT_TYPE_ICON_URLS = {
     __all__: new URL("./icons/all.png", import.meta.url).href,
-    __none__: new URL("./icons/none.png", import.meta.url).href,
     action: new URL("./icons/action.png", import.meta.url).href,
     accessory: new URL("./icons/accessory.png", import.meta.url).href,
-    ambience: new URL("./icons/ambience.png", import.meta.url).href,
-    attire: new URL("./icons/attire.png", import.meta.url).href,
+    mood: new URL("./icons/mood.png", import.meta.url).href,
+    clothing: new URL("./icons/clothing.png", import.meta.url).href,
     hairstyle: new URL("./icons/hairstyle.png", import.meta.url).href,
     environment: new URL("./icons/environment.png", import.meta.url).href,
     effect: new URL("./icons/effect.png", import.meta.url).href,
@@ -970,10 +969,8 @@ const PROMPT_TYPE_ICON_URLS = {
     character: new URL("./icons/character.png", import.meta.url).href,
     characteristic: new URL("./icons/characteristic.png", import.meta.url).href,
     composition: new URL("./icons/composition.png", import.meta.url).href,
-    dialogue: new URL("./icons/dialogue.png", import.meta.url).href,
     expression: new URL("./icons/expression.png", import.meta.url).href,
     lighting: new URL("./icons/lighting.png", import.meta.url).href,
-    soundscape: new URL("./icons/soundscape.png", import.meta.url).href,
     style: new URL("./icons/style.png", import.meta.url).href,
 };
 
@@ -1945,7 +1942,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     return;
                 }
                 try {
-                    const promptType = showCategoryTypeFilter && categoryTypeFilter !== "__all__" && categoryTypeFilter !== "__none__"
+                    const promptType = showCategoryTypeFilter && categoryTypeFilter !== "__all__"
                         ? categoryTypeFilter
                         : "";
                     const resp = await fetch(`${endpointPrefix}/save-category`, {
@@ -2029,7 +2026,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }));
         const promptTypeFilters = [
             { value: "__all__", label: "All Types", iconUrl: getPromptTypeIconUrl("__all__") },
-            { value: "__none__", label: "No Type", iconUrl: getPromptTypeIconUrl("__none__") },
             ...promptTypeChoices,
         ];
         const validCategoryTypeValues = new Set(promptTypeFilters.map((choice) => choice.value));
@@ -2044,8 +2040,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const applyCategoryTypeFilter = () => {
             if (categoryTypeFilter === "__all__") {
                 categories = [...allCategories];
-            } else if (categoryTypeFilter === "__none__") {
-                categories = allCategories.filter(cat => !String(getCategoryPromptType(node, cat) || "").trim());
             } else {
                 categories = allCategories.filter(cat => String(getCategoryPromptType(node, cat) || "").trim().toLowerCase() === categoryTypeFilter);
             }
@@ -2866,7 +2860,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
                     try {
-                        const promptType = showCategoryTypeFilter && categoryTypeFilter !== "__all__" && categoryTypeFilter !== "__none__"
+                        const promptType = showCategoryTypeFilter && categoryTypeFilter !== "__all__"
                             ? categoryTypeFilter
                             : "";
                         const resp = await fetch(`${endpointPrefix}/save-category`, {
@@ -3063,7 +3057,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const typeChanged = previousType !== nextType;
 
                     if (showCategoryTypeFilter && typeChanged) {
-                        categoryTypeFilter = nextType || "__none__";
+                        categoryTypeFilter = nextType || "__all__";
                         updateTypeRailButtons();
                     }
 

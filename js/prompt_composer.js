@@ -35,23 +35,16 @@ const SUBJECT_NONE = 0;
 const SUBJECT_MIN = 1;
 const SUBJECT_MAX = 16;
 const SUBJECT_START_PROMPT_TYPES = new Set([
-    "animal",
     "character",
     "environment",
 ]);
 const NON_SUBJECT_PROMPT_TYPES = new Set([
     "style",
-    "action",
     "effect",
-    "motion",
     "lighting",
-    "ambience",
+    "mood",
     "composition",
     "camera",
-    "motion",
-    "soundscape",
-    "dialogue",
-    "weather",
 ]);
 const SUBJECT_ACCENTS = [
     { border: "hsla(205, 88%, 60%, 0.95)", soft: "hsla(205, 88%, 60%, 0.18)", strong: "hsla(205, 88%, 44%, 0.95)", text: "hsl(205, 100%, 96%)" },
