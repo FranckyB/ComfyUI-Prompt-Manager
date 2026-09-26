@@ -1123,6 +1123,35 @@ function getCategoriesForComposerType(node, typeValue) {
         .filter((category) => String(getCategoryPromptType(node, category) || "").trim().toLowerCase() === normalized);
 }
 
+function getOrderedComposerCategories(node, categories = null) {
+    const sourceCategories = Array.isArray(categories)
+        ? categories.filter((category) => String(category || "").trim() && String(category) !== "__meta__")
+        : Object.keys(node?.prompts || {}).filter((category) => String(category || "").trim() && String(category) !== "__meta__");
+
+    const canonicalEntries = getOrderedComposerTypeEntries(node);
+    if (!canonicalEntries.length) {
+        return [...sourceCategories].sort((a, b) => a.localeCompare(b));
+    }
+
+    const categoryOrder = new Map();
+    let nextIndex = 0;
+    for (const [typeFile, typeData] of canonicalEntries) {
+        const categoryNames = Object.keys(typeData?.categories || {}).sort((a, b) => a.localeCompare(b));
+        for (const categoryName of categoryNames) {
+            if (!categoryOrder.has(categoryName)) {
+                categoryOrder.set(categoryName, nextIndex++);
+            }
+        }
+    }
+
+    return [...sourceCategories].sort((a, b) => {
+        const aIndex = categoryOrder.has(a) ? categoryOrder.get(a) : Number.POSITIVE_INFINITY;
+        const bIndex = categoryOrder.has(b) ? categoryOrder.get(b) : Number.POSITIVE_INFINITY;
+        if (aIndex !== bIndex) return aIndex - bIndex;
+        return a.localeCompare(b);
+    });
+}
+
 const COMPOSER_TYPE_ICON_ENDPOINT = "/prompt-manager/compose/type-icon";
 
 function getPromptTypeIconUrl(node, typeValue, typeFile = "") {
@@ -1400,12 +1429,15 @@ export function getVisibleCategories(node, options = {}) {
                 return true;
             }
             return categoryData["__meta__"]?.nsfw !== true && categoryData._type_nsfw_ !== true;
-        })
-        .sort((a, b) => a.localeCompare(b));
+        });
 
-    if (!filterEmptyCategories) return categories;
+    const orderedCategories = endpointPrefix === "/prompt-manager/compose"
+        ? getOrderedComposerCategories(node, categories)
+        : [...categories].sort((a, b) => a.localeCompare(b));
 
-    return categories.filter((category) => {
+    if (!filterEmptyCategories) return orderedCategories;
+
+    return orderedCategories.filter((category) => {
         if (keepCategory && category === keepCategory) return true;
         const names = getPromptNamesForCategory(node, category, { hideNSFW, workflowOnly, contentFilter, endpointPrefix });
         return names.length > 0;

@@ -149,13 +149,45 @@ function getComposerCategories(node) {
         .filter((name) => String(name || "").trim() && String(name) !== "__meta__");
 }
 
-function getDefaultComposerPickerCategory(node) {
+function getOrderedComposerCategories(node) {
     const categories = getComposerCategories(node);
-    if (!categories.length) return "";
-    const preferredByType = categories.find((name) => getCategoryPromptType(node, name) === "character");
-    if (preferredByType) return preferredByType;
-    const preferredByName = categories.find((name) => String(name || "").trim().toLowerCase() === "character");
-    return preferredByName || categories[0] || "";
+    const typeEntries = Object.entries(node?.composerPromptLibrary?._types_ || {});
+    const hasExplicitTypeOrder = typeEntries.some(([, typeData]) => Number.isInteger(Number(typeData?.order)));
+    if (!typeEntries.length) {
+        return [...categories].sort((a, b) => a.localeCompare(b));
+    }
+
+    const orderedTypeEntries = [...typeEntries].sort((a, b) => {
+        if (hasExplicitTypeOrder) {
+            const aOrder = Number.isInteger(Number(a[1]?.order)) ? Number(a[1].order) : Number.POSITIVE_INFINITY;
+            const bOrder = Number.isInteger(Number(b[1]?.order)) ? Number(b[1].order) : Number.POSITIVE_INFINITY;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+        }
+        return String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" });
+    });
+
+    const categoryOrder = new Map();
+    let nextIndex = 0;
+    for (const [, typeData] of orderedTypeEntries) {
+        const categoryNames = Object.keys(typeData?.categories || {}).sort((a, b) => a.localeCompare(b));
+        for (const categoryName of categoryNames) {
+            if (!categoryOrder.has(categoryName)) {
+                categoryOrder.set(categoryName, nextIndex++);
+            }
+        }
+    }
+
+    return [...categories].sort((a, b) => {
+        const aIndex = categoryOrder.has(a) ? categoryOrder.get(a) : Number.POSITIVE_INFINITY;
+        const bIndex = categoryOrder.has(b) ? categoryOrder.get(b) : Number.POSITIVE_INFINITY;
+        if (aIndex !== bIndex) return aIndex - bIndex;
+        return a.localeCompare(b);
+    });
+}
+
+function getDefaultComposerPickerCategory(node) {
+    const categories = getOrderedComposerCategories(node);
+    return categories[0] || "";
 }
 
 function getComposerExportData(node) {
@@ -1732,6 +1764,33 @@ function ensureComposerUi(node) {
     scroller.appendChild(grid);
     root.appendChild(scroller);
 
+    const DRAG_SCROLL_EDGE_THRESHOLD = 96;
+    const DRAG_SCROLL_MAX_STEP = 42;
+
+    const maybeAutoScrollDuringDrag = (clientY) => {
+        if (!node._composerIsDragging) return;
+        const rect = scroller.getBoundingClientRect();
+        if (!rect || rect.height <= 0) return;
+
+        const distanceFromTop = clientY - rect.top;
+        const distanceFromBottom = rect.bottom - clientY;
+
+        if (distanceFromTop >= 0 && distanceFromTop < DRAG_SCROLL_EDGE_THRESHOLD) {
+            const intensity = 1 - (distanceFromTop / DRAG_SCROLL_EDGE_THRESHOLD);
+            scroller.scrollTop -= Math.max(6, Math.round(DRAG_SCROLL_MAX_STEP * intensity));
+            return;
+        }
+
+        if (distanceFromBottom >= 0 && distanceFromBottom < DRAG_SCROLL_EDGE_THRESHOLD) {
+            const intensity = 1 - (distanceFromBottom / DRAG_SCROLL_EDGE_THRESHOLD);
+            scroller.scrollTop += Math.max(6, Math.round(DRAG_SCROLL_MAX_STEP * intensity));
+        }
+    };
+
+    scroller.addEventListener("dragover", (evt) => {
+        maybeAutoScrollDuringDrag(evt.clientY);
+    });
+
     const zoomRow = document.createElement("div");
     zoomRow.className = "pm-composer-zoom-row";
 
@@ -2181,7 +2240,8 @@ function ensureComposerUi(node) {
             card.addEventListener("dragover", (evt) => {
                 if (node._composerDragSourceIndex === null || node._composerDragSourceIndex === index) return;
                 evt.preventDefault();
-                card.style.outline = `1px dashed ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"}`;
+                maybeAutoScrollDuringDrag(evt.clientY);
+                card.style.outline = `2px dashed ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"}`;
             });
 
             card.addEventListener("dragleave", () => {
@@ -2619,6 +2679,7 @@ function ensureComposerUi(node) {
         addCard.addEventListener("dragover", (evt) => {
             if (node._composerDragSourceIndex === null || node._composerDragSourceIndex === undefined) return;
             evt.preventDefault();
+            maybeAutoScrollDuringDrag(evt.clientY);
         });
 
         addCard.addEventListener("drop", (evt) => {
