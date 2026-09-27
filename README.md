@@ -22,7 +22,7 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
   - This node is how one modifies System Prompts used by **Prompt Generator**.
 - **Prompt Composer**:
   - For building prompts from reusable prompt fragments such as attire, expression, action, style, ambience, and more.
-  - Supports prompt fragment libraries with thumbnails, types, LoRAs, RefMods, random multi-prompt selection, subject grouping, and video/image composition modes.
+  - Supports the v2 Prompt Composer library format with thumbnails, prompt groups, subject-aware group behavior, LoRAs, RefMods, random multi-prompt selection, and video/image composition modes.
 - **Prompt Extractor**:
   - Read metadata from images/videos/JSON and output the prompt and LoRAs they use.
 - **Lora Preview integration**:
@@ -70,7 +70,7 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
 - Prompt Composer: Build prompts from reusable fragments, with random prompt groups, subject-aware composition, LoRA/RefMod support, and image/video generation modes.
 - Prompt Browser: A node meant to allow access and write prompts for:
   - System Prompts used by Prompt Generator.
-  - Compose Data used by Prompt Composer.
+  - Compose Data used by Prompt Composer, including v2 prompt-group libraries with export, open, and merge workflows.
   - Prompt Data used by our Prompt Manager.
 
 ### Recipe Toolset (Experimental)
@@ -103,14 +103,17 @@ Workflow examples are provided to help understand the basics.
 
 Prompt Composer is a visual prompt builder for assembling full prompts from reusable fragments such as characters, expressions, attire, action, lighting, ambience, style, environment, and camera.
 
+The Prompt Composer library now uses a more flexible v2 format built around prompt groups. This makes it much easier to add new groups, organize categories inside them, keep subject behavior per group, and manage larger prompt libraries without relying on the older flat composer JSON layout.
+
 - Compose output before or after an incoming prompt, or use it on its own.
 - Return output as plain text or JSON.
 - Works in both image and video modes. The Video mode being formatted for Minimax.
 - Prompt fragments can include LoRAs, RefMods, and thumbnails can be generate easily.
-- Categories support prompt types and prefixes for cleaner browsing and formatting.
+- Categories and prompt groups support prompt types, prefixes, and subject behavior for cleaner browsing and formatting.
 - Multi-select can become one random pool or multiple separate prompt parts.
 - Parts support subject-aware grouping, muting, reordering, merge/split actions, and per-part strength.
-- Prompt Browser integration supports direct editing, category settings, thumbnail generation, and reopen behavior that preserves browser state.
+- Prompt Browser integration supports direct editing, easy creation of new prompt groups, thumbnail generation, export, open, merge flows for older composer data, and reopen behavior that preserves browser state.
+- Includes an extensive collection of style prompts, including styles based on Reddit user Dear-Spend-2865 prompts.
 
 Node-side Prompt Composer controls include:
 
@@ -135,7 +138,7 @@ Node-side Prompt Composer controls include:
 
 The **Prompt Browser Node** lets you create and edit all three prompt libraries from a single interface:
   - **System prompts**: the instructions that steer the Prompt Generator's LLM
-  - **Compose prompts**: Prompt Composer fragment libraries, including category types, thumbnails, LoRAs, and RefMods
+  - **Compose prompts**: Prompt Composer v2 fragment libraries, including prompt groups, category types, thumbnails, LoRAs, RefMods, and tools to export, open, or merge existing composer libraries/workflows
   - **Prompt Manager prompts**: your saved user prompts
 
 System prompts now feed straight into the **Prompt Generator**, so you can author your own and pick them right in the node. Sample system prompts ship in the node's `/prompts` folder to get you started. If new prompts are added and you don't have them, you can use the Prompt Browser's Import JSON feature to add them.
