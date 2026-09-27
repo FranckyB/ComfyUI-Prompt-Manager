@@ -59,6 +59,8 @@ OUTPUT_FORMAT_CHOICES = ["text", "json"]
 COMPOSE_POSITION_CHOICES = ["after", "before"]
 GENERATION_MODE_CHOICES = ["image", "video"]
 RECIPE_SYNC_MODE_CHOICES = ["edit", "sync"]
+INPUT_PROMPT_MODE_CHOICES = ["no_prompt", "use_prompt"]
+INPUT_LORA_MODE_CHOICES = ["no_lora", "use_lora"]
 REFMOD_MAX_WEIGHT = 10.0
 SUBJECT_NONE = 0
 SUBJECT_MIN = 1
@@ -220,16 +222,27 @@ def _extract_prompt_composer_recipe_state(recipe_data):
             raw_parts_data = "[]"
 
     normalized_parts = _parse_parts(raw_parts_data)
+    input_payload = payload.get("input_data") if isinstance(payload.get("input_data"), dict) else {}
+    input_prompt = str(
+        input_payload.get("prompt", payload.get("input_prompt", "")) or ""
+    ).strip()
+    input_lora_stack = _recipe_lora_entries_from_stack(
+        input_payload.get("lora_stack", payload.get("input_lora_stack", []))
+    )
     return {
         "parts": normalized_parts,
         "parts_data": json.dumps(normalized_parts, ensure_ascii=False),
         "output_format": str(payload.get("output_format") or "text").strip().lower() or "text",
         "compose_position": str(payload.get("compose_position") or "before").strip().lower() or "before",
         "generation_mode": str(payload.get("generation_mode") or "image").strip().lower() or "image",
+        "input_prompt_mode": _normalize_input_prompt_mode(payload.get("input_prompt_mode", payload.get("input_mode", "no_input"))),
+        "input_lora_mode": _normalize_input_lora_mode(payload.get("input_lora_mode", payload.get("input_mode", "no_input"))),
+        "input_prompt": input_prompt,
+        "input_lora_stack": input_lora_stack,
     }
 
 
-def _serialize_prompt_composer_recipe_state(parts_data, output_format="text", compose_position="before", generation_mode="image"):
+def _serialize_prompt_composer_recipe_state(parts_data, output_format="text", compose_position="before", generation_mode="image", input_prompt_mode="no_prompt", input_lora_mode="no_lora", input_prompt="", input_lora_stack=None):
     normalized_parts = _parse_parts(parts_data)
     normalized_parts_data = json.dumps(normalized_parts, ensure_ascii=False)
     return {
@@ -239,11 +252,40 @@ def _serialize_prompt_composer_recipe_state(parts_data, output_format="text", co
         "output_format": str(output_format or "text").strip().lower() or "text",
         "compose_position": str(compose_position or "before").strip().lower() or "before",
         "generation_mode": str(generation_mode or "image").strip().lower() or "image",
+        "input_prompt_mode": _normalize_input_prompt_mode(input_prompt_mode),
+        "input_lora_mode": _normalize_input_lora_mode(input_lora_mode),
+        "input_data": {
+            "source": "upstream",
+            "prompt": str(input_prompt or ""),
+            "lora_stack": _recipe_lora_entries_from_stack(input_lora_stack),
+        },
     }
 
 
 def _is_recipe_sync_enabled(recipe_sync_mode):
     return str(recipe_sync_mode or "edit").strip().lower() == "sync"
+
+
+def _normalize_input_prompt_mode(input_mode):
+    value = str(input_mode or "no_prompt").strip().lower()
+    if value in {"use_prompt", "prompt", "use_input", "use", "input", "on", "true", "1"}:
+        return "use_prompt"
+    return "no_prompt"
+
+
+def _normalize_input_lora_mode(input_mode):
+    value = str(input_mode or "no_lora").strip().lower()
+    if value in {"use_lora", "lora", "use_input", "use", "input", "on", "true", "1"}:
+        return "use_lora"
+    return "no_lora"
+
+
+def _should_use_input_prompt_mode(input_mode):
+    return _normalize_input_prompt_mode(input_mode) == "use_prompt"
+
+
+def _should_use_input_lora_mode(input_mode):
+    return _normalize_input_lora_mode(input_mode) == "use_lora"
 
 
 def _resolve_effective_parts_for_change(parts_data, recipe_sync_mode="edit", recipe_data=None):
@@ -1014,6 +1056,14 @@ class PromptComposer:
                     "default": "edit",
                     "tooltip": "Choose whether Prompt Composer keeps local edits or follows connected compose_data on execute.",
                 }),
+                "input_prompt_mode": (INPUT_PROMPT_MODE_CHOICES, {
+                    "default": "no_prompt",
+                    "tooltip": "When enabled during compose_data sync, use the saved prompt input from compose_data instead of the live prompt input.",
+                }),
+                "input_lora_mode": (INPUT_LORA_MODE_CHOICES, {
+                    "default": "no_lora",
+                    "tooltip": "When enabled during compose_data sync, include the saved extra LoRA input data from compose_data in addition to the composed LoRAs.",
+                }),
             },
             "optional": {
                 "prompt": ("STRING", {
@@ -1057,17 +1107,17 @@ class PromptComposer:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", compose_data=None, lora_stack=None, mods=None, **kwargs):
+    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", input_prompt_mode="no_prompt", input_lora_mode="no_lora", compose_data=None, lora_stack=None, mods=None, **kwargs):
         recipe_data = compose_data if compose_data is not None else kwargs.get("recipe_data")
         parts = _resolve_effective_parts_for_change(parts_data, recipe_sync_mode=recipe_sync_mode, recipe_data=recipe_data)
         prompts_data = PromptComposerStore.load_prompts()
         prompt_library_signature = _build_prompt_library_signature(parts, prompts_data)
         if _has_multi_part_selection(parts):
             dynamic_seed = time.time_ns()
-            return (parts_data, dynamic_seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
-        return (parts_data, seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
+            return (parts_data, dynamic_seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, _normalize_input_prompt_mode(input_prompt_mode), _normalize_input_lora_mode(input_lora_mode), str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
+        return (parts_data, seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, _normalize_input_prompt_mode(input_prompt_mode), _normalize_input_lora_mode(input_lora_mode), str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
 
-    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", compose_data=None, lora_stack=None, mods=None, unique_id=None, **kwargs):
+    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", input_prompt_mode="no_prompt", input_lora_mode="no_lora", compose_data=None, lora_stack=None, mods=None, unique_id=None, **kwargs):
         recipe_data = compose_data if compose_data is not None else kwargs.get("recipe_data")
         prompts_data = PromptComposerStore.load_prompts()
         base_recipe_data = _coerce_recipe_data_payload(recipe_data, source="PromptComposer")
@@ -1077,14 +1127,22 @@ class PromptComposer:
         effective_output_format = str(output_format or "text").strip().lower() or "text"
         effective_compose_position = str(compose_position or "before").strip().lower() or "before"
         effective_generation_mode = str(generation_mode or "image").strip().lower() or "image"
+        effective_input_prompt_mode = _normalize_input_prompt_mode(input_prompt_mode)
+        effective_input_lora_mode = _normalize_input_lora_mode(input_lora_mode)
         if _is_recipe_sync_enabled(recipe_sync_mode) and composer_recipe_state:
             effective_parts_data = composer_recipe_state["parts_data"]
             parsed_parts = composer_recipe_state["parts"]
-            effective_output_format = composer_recipe_state["output_format"]
-            effective_compose_position = composer_recipe_state["compose_position"]
-            effective_generation_mode = composer_recipe_state["generation_mode"]
         parts = _resolve_subject_parts(parsed_parts)
         selected_generation_mode = effective_generation_mode
+
+        live_input_prompt = str(prompt or "").strip() if isinstance(prompt, str) else ""
+        live_input_lora_stack = list(_coerce_lora_stack(lora_stack))
+        saved_input_prompt = composer_recipe_state.get("input_prompt", "") if composer_recipe_state else ""
+        saved_input_lora_stack = list(_coerce_lora_stack(composer_recipe_state.get("input_lora_stack", []))) if composer_recipe_state else []
+        stored_input_prompt = live_input_prompt if live_input_prompt else saved_input_prompt
+        stored_input_lora_stack = live_input_lora_stack if live_input_lora_stack else saved_input_lora_stack
+        effective_input_prompt = saved_input_prompt if _should_use_input_prompt_mode(effective_input_prompt_mode) and saved_input_prompt else live_input_prompt
+        effective_input_lora_stack = stored_input_lora_stack if _should_use_input_lora_mode(effective_input_lora_mode) else []
 
         run_seed = _resolve_run_seed(seed)
         rng = random.Random(run_seed)
@@ -1183,7 +1241,7 @@ class PromptComposer:
                 except Exception as exc:
                     print(f"[PromptComposer] Skipping RefMod '{refmod_name}': {exc}")
 
-        base = str(prompt or "").strip() if isinstance(prompt, str) else ""
+        base = effective_input_prompt
         position = effective_compose_position
         format_name = effective_output_format
 
@@ -1258,7 +1316,7 @@ class PromptComposer:
             else:
                 text_output = fragments_text
             final_output = text_output
-        merged_lora_stack = _merge_lora_stacks(lora_stack, prompt_lora_stack)
+        merged_lora_stack = _merge_lora_stacks(effective_input_lora_stack, prompt_lora_stack)
         merged_mods = _merge_refmod_rows(mods, prompt_mods)
 
         out_recipe_data = build_v2_recipe_data_from_prompt(
@@ -1273,6 +1331,10 @@ class PromptComposer:
             output_format=effective_output_format,
             compose_position=effective_compose_position,
             generation_mode=effective_generation_mode,
+            input_prompt_mode=effective_input_prompt_mode,
+            input_lora_mode=effective_input_lora_mode,
+            input_prompt=stored_input_prompt,
+            input_lora_stack=stored_input_lora_stack,
         )
 
         if unique_id is not None:

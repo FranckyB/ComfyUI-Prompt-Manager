@@ -200,6 +200,7 @@ _MODEL_SLOT_KEYS = ("a", "b", "c", "d")
 _LORA_INPUT_MODE_PROMPT_ONLY = "Prompt LoRAs Only"
 _LORA_INPUT_MODE_COMBINE = "Combine LoRAs"
 _LORA_INPUT_MODE_INPUT_ONLY = "Input LoRAs Only"
+_PROMPT_COMPOSER_RECIPE_KEY = "prompt_composer"
 _LORA_INPUT_MODES = (
     _LORA_INPUT_MODE_PROMPT_ONLY,
     _LORA_INPUT_MODE_COMBINE,
@@ -289,6 +290,69 @@ def _combine_multi_lora_inputs(input_a, input_b):
     for slot in _MODEL_SLOT_KEYS:
         out[slot] = [*(normalized_a.get(slot) or []), *(normalized_b.get(slot) or [])]
     return out
+
+
+def _flatten_multi_lora_slots(multi_slots):
+    flat = []
+    if not isinstance(multi_slots, dict):
+        return flat
+    for slot in _MODEL_SLOT_KEYS:
+        flat.extend(_coerce_lora_stack(multi_slots.get(slot)))
+    return flat
+
+
+def _normalize_prompt_composer_input_loras(raw_loras):
+    normalized = []
+    for path, model_strength, clip_strength in _coerce_lora_stack(raw_loras):
+        normalized.append({
+            "name": str(os.path.splitext(os.path.basename(normalize_path_separators(path)))[0] or "").strip(),
+            "path": str(path or "").strip(),
+            "model_strength": float(model_strength),
+            "clip_strength": float(clip_strength),
+            "active": True,
+            "available": True,
+        })
+    return [entry for entry in normalized if entry.get("name")]
+
+
+def _merge_prompt_composer_input_data(recipe_data, input_prompt="", prompt_enabled=False, input_lora_stack=None):
+    if not isinstance(recipe_data, dict):
+        return recipe_data
+
+    payload = recipe_data.get(_PROMPT_COMPOSER_RECIPE_KEY)
+    if not isinstance(payload, dict):
+        return recipe_data
+
+    input_data = payload.get("input_data") if isinstance(payload.get("input_data"), dict) else {}
+    existing_prompt = str(input_data.get("prompt", payload.get("input_prompt", "")) or "").strip()
+    merged_prompt = str(input_prompt or "").strip() if prompt_enabled and str(input_prompt or "").strip() else existing_prompt
+
+    existing_loras = _normalize_prompt_composer_input_loras(
+        input_data.get("lora_stack", payload.get("input_lora_stack", []))
+    )
+    added_loras = _normalize_prompt_composer_input_loras(input_lora_stack or [])
+
+    merged_loras = []
+    seen = set()
+    for item in [*existing_loras, *added_loras]:
+        name = str(item.get("name", "")).strip().lower()
+        path = str(item.get("path", item.get("name", ""))).strip().lower()
+        if not name:
+            continue
+        key = (path, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_loras.append(item)
+
+    payload["input_data"] = {
+        **input_data,
+        "source": "upstream",
+        "prompt": merged_prompt,
+        "lora_stack": merged_loras,
+    }
+    recipe_data[_PROMPT_COMPOSER_RECIPE_KEY] = payload
+    return recipe_data
 
 
 class PromptManagerAdvanced:
@@ -1054,6 +1118,12 @@ class PromptManagerAdvanced:
             loras_d=loras_d_display,
             source='PromptManagerAdvanced',
             base_recipe_data=resolved_workflow_data,
+        )
+        out_workflow_data = _merge_prompt_composer_input_data(
+            out_workflow_data,
+            input_prompt=current_prompt_input_text,
+            prompt_enabled=bool(use_prompt_input and current_prompt_input_text),
+            input_lora_stack=_flatten_multi_lora_slots(combined_input_multi),
         )
 
         out_multi_stack = {

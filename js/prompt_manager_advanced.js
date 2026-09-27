@@ -231,6 +231,10 @@ app.registerExtension({
                 node.currentLorasB = [];
                 node.currentLorasC = [];
                 node.currentLorasD = [];
+                node.rawInputLorasA = [];
+                node.rawInputLorasB = [];
+                node.rawInputLorasC = [];
+                node.rawInputLorasD = [];
                 node.savedLorasA = [];
                 node.savedLorasB = [];
                 node.savedLorasC = [];
@@ -239,6 +243,7 @@ app.registerExtension({
                 node.originalStrengthsB = {};  // Map of lora_name -> original_strength (from Python)
                 node.originalStrengthsC = {};
                 node.originalStrengthsD = {};
+                node.currentPromptInputText = "";
                 node.currentTriggerWords = [];  // From connected input
                 node.savedTriggerWords = [];    // From saved prompt
                 node.connectedThumbnail = null; // Thumbnail from connected image (set during execution)
@@ -370,6 +375,10 @@ app.registerExtension({
                         const effectiveInputLorasB = shouldIngestWorkflowExecution ? newLorasB : inputLorasB;
                         const effectiveInputLorasC = shouldIngestWorkflowExecution ? newLorasC : inputLorasC;
                         const effectiveInputLorasD = shouldIngestWorkflowExecution ? newLorasD : inputLorasD;
+                        this.rawInputLorasA = inputLorasA.map((l) => ({ ...l, source: "current" }));
+                        this.rawInputLorasB = inputLorasB.map((l) => ({ ...l, source: "current" }));
+                        this.rawInputLorasC = inputLorasC.map((l) => ({ ...l, source: "current" }));
+                        this.rawInputLorasD = inputLorasD.map((l) => ({ ...l, source: "current" }));
                         // Explicit list of unavailable lora names from Python
                         const unavailableLorasA = new Set((event.detail.unavailable_loras_a || []).map(n => n.toLowerCase()));
                         const unavailableLorasB = new Set((event.detail.unavailable_loras_b || []).map(n => n.toLowerCase()));
@@ -586,6 +595,7 @@ app.registerExtension({
                             const useWorkflow = shouldIngestWorkflowExecution;
                             const llmInput = event.detail.prompt_input || "";
                             const wfData = event.detail.workflow_data || null;
+                            this.currentPromptInputText = String(llmInput || "").trim();
 
                             // Store workflow_data on node for saving
                             this.lastWorkflowData = wfData;
@@ -4824,6 +4834,77 @@ function buildLiveWorkflowData(baseWorkflowData, promptText, lorasA, lorasB, lor
     return base;
 }
 
+function mergePromptComposerInputMetadataIntoWorkflowData(node, workflowData) {
+    if (!workflowData || typeof workflowData !== "object" || Array.isArray(workflowData)) return workflowData;
+
+    const connectedInputLoras = [
+        ...(Array.isArray(node.rawInputLorasA) ? node.rawInputLorasA : []),
+        ...(Array.isArray(node.rawInputLorasB) ? node.rawInputLorasB : []),
+        ...(Array.isArray(node.rawInputLorasC) ? node.rawInputLorasC : []),
+        ...(Array.isArray(node.rawInputLorasD) ? node.rawInputLorasD : []),
+    ];
+    const incomingPromptText = String(node.currentPromptInputText || "").trim();
+    const hasIncomingComposerMetadata = incomingPromptText.length > 0 || connectedInputLoras.length > 0;
+
+    let payload = workflowData.prompt_composer;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        if (!hasIncomingComposerMetadata) return workflowData;
+        payload = {};
+    }
+
+    const inputData = payload.input_data && typeof payload.input_data === "object" && !Array.isArray(payload.input_data)
+        ? { ...payload.input_data }
+        : {};
+
+    const normalizeLoraRecord = (lora) => {
+        const name = String(lora?.name || "").trim();
+        if (!name) return null;
+        return {
+            name,
+            path: String(lora?.path || name),
+            model_strength: Number(lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+            clip_strength: Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
+            active: lora?.active !== false,
+            available: lora?.available !== false,
+        };
+    };
+
+    const mergeLoraRecords = (baseList, additions) => {
+        const merged = [];
+        const seen = new Set();
+        const push = (entry) => {
+            const normalized = normalizeLoraRecord(entry);
+            if (!normalized) return;
+            const key = `${normalized.path.toLowerCase()}::${normalized.name.toLowerCase()}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            merged.push(normalized);
+        };
+        (Array.isArray(baseList) ? baseList : []).forEach(push);
+        (Array.isArray(additions) ? additions : []).forEach(push);
+        return merged;
+    };
+
+    const existingPrompt = String(inputData.prompt || payload.input_prompt || "").trim();
+    const nextPrompt = incomingPromptText || existingPrompt;
+
+    const existingLoras = Array.isArray(inputData.lora_stack)
+        ? inputData.lora_stack
+        : (Array.isArray(payload.input_lora_stack) ? payload.input_lora_stack : []);
+
+    if (!payload.version) {
+        payload.version = 1;
+    }
+    payload.input_data = {
+        ...inputData,
+        source: "upstream",
+        prompt: nextPrompt,
+        lora_stack: mergeLoraRecords(existingLoras, connectedInputLoras),
+    };
+    workflowData.prompt_composer = payload;
+    return workflowData;
+}
+
 async function applyLoraFoundState(loras) {
     const list = Array.isArray(loras) ? loras : [];
     const names = [...new Set(list.map((l) => String(l?.name || "").trim()).filter(Boolean))];
@@ -6046,7 +6127,10 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, lorasC, lo
                 ? wfPrompt
                 : text;
 
-            const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB, lorasForSaveC, lorasForSaveD);
+            const liveWorkflowData = mergePromptComposerInputMetadataIntoWorkflowData(
+                node,
+                buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB, lorasForSaveC, lorasForSaveD)
+            );
             if (node?._isWorkflowManager) {
                 liveWorkflowData._source = node?._isComposerManager ? "PromptComposerManager" : "RecipeManager";
             }
