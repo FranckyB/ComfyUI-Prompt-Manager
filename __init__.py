@@ -23,6 +23,7 @@ from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
+from .nodes.composer_manager import ComposerManager
 from .nodes.multi_prompt import RecipeBuilderMultiPrompts
 from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter, LoraStackCombine
 
@@ -42,6 +43,7 @@ NODE_CLASS_MAPPINGS = {
     "RecipeModelLoader":         RecipeModelLoader,
     "RecipeModelPicker":         RecipeModelPicker,
     "RecipeManager":             RecipeManager,
+    "ComposerManager":           ComposerManager,
     "RecipeBuilderMultiPrompts": RecipeBuilderMultiPrompts,
     "MultiLoraStackerLM":        MultiLoraStackerLM,
     "MultiLoraCombine":          MultiLoraCombine,
@@ -65,6 +67,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeModelLoader":          "Recipe Model Loader",
     "RecipeModelPicker":          "Recipe Model Picker",
     "RecipeManager":              "Recipe Manager",
+    "ComposerManager":            "Composer Manager",
     "RecipeBuilderMultiPrompts":  "Multi Prompts",
     "MultiLoraStackerLM":         "Multi LoRA Stack",
     "MultiLoraCombine":           "Multi LoRA Combine",
@@ -83,4 +86,4 @@ try:
 except Exception as e:
     print(f"[PromptManager] Backup initialization skipped: {e}")
 
-print("[PromptManager] Nodes registered: Prompt Manager, Prompt Composer, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager")
+print("[PromptManager] Nodes registered: Prompt Manager, Prompt Composer, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager, Composer Manager")

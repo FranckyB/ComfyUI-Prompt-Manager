@@ -153,7 +153,7 @@ function attachPromptInputMaskShim() {
             if (!nodePayload || typeof nodePayload !== "object") continue;
 
             const classType = String(nodePayload.class_type || nodePayload.type || "");
-            if (classType !== "PromptManagerAdvanced" && classType !== "RecipeManager") continue;
+            if (classType !== "PromptManagerAdvanced" && classType !== "RecipeManager" && classType !== "ComposerManager") continue;
 
             const inputs = nodePayload.inputs;
             if (!inputs || typeof inputs !== "object") continue;
@@ -215,9 +215,10 @@ app.registerExtension({
     name: "PromptManagerAdvanced",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "RecipeManager") {
+        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "RecipeManager" || nodeData.name === "ComposerManager") {
             attachPromptInputMaskShim();
-            const isWorkflowManagerNode = nodeData.name === "RecipeManager";
+            const isComposerManagerNode = nodeData.name === "ComposerManager";
+            const isWorkflowManagerNode = nodeData.name === "RecipeManager" || isComposerManagerNode;
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
@@ -225,6 +226,8 @@ app.registerExtension({
 
                 const node = this;
                 node._isWorkflowManager = isWorkflowManagerNode;
+                node._isComposerManager = isComposerManagerNode;
+                node._supportsWorkflowImageInput = isComposerManagerNode;
                 ensurePmaMultiOutputSocket(node);
                 enforceWorkflowManagerCompactMode(node);
                 normalizeUseLoraInputWidget(node);
@@ -1113,7 +1116,7 @@ function enforceWorkflowManagerCompactMode(node) {
     if (Array.isArray(node.inputs) && typeof node.removeInput === "function") {
         for (let i = node.inputs.length - 1; i >= 0; i--) {
             const n = String(node.inputs[i]?.name || "").toLowerCase();
-            if (n === "thumbnail_image" || n === "image") {
+            if ((n === "thumbnail_image" || n === "image") && !node?._supportsWorkflowImageInput) {
                 try {
                     node.removeInput(i);
                 } catch {
@@ -1446,10 +1449,12 @@ function updateWorkflowManagerPreview(node) {
         return "";
     };
 
-    // Keep preview scoped to workflow/prompt data only.
-    // Do not fall back to connected execution thumbnails here, or unrelated
-    // generation runs can overwrite the visible composer preview.
-    const liveThumbnail = pickThumbnail(liveWorkflow);
+    // Keep preview scoped to workflow/prompt data only for RecipeManager.
+    // ComposerManager explicitly uses thumbnail_image as a dedicated thumbnail
+    // carrier, so prefer the execution-provided connected thumbnail there.
+    const liveThumbnail = node?._isComposerManager
+        ? (String(node.connectedThumbnail || "").trim() || pickThumbnail(liveWorkflow))
+        : pickThumbnail(liveWorkflow);
     const savedThumbnail = pickThumbnail(promptData);
 
     // In input-connected mode, never fall back to saved prompt thumbnails.
@@ -1472,7 +1477,7 @@ function updateWorkflowManagerPreview(node) {
         } else if (workflowInputConnected) {
             ui.emptyLabel.textContent = "Waiting for workflow_data input...";
         } else {
-            ui.emptyLabel.textContent = "No thumbnail for selected workflow";
+            ui.emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composer" : "No thumbnail for selected workflow";
         }
     }
 }
@@ -1518,7 +1523,7 @@ function addWorkflowManagerPreview(node) {
     `;
 
     const emptyLabel = document.createElement("div");
-    emptyLabel.textContent = "No thumbnail for selected workflow";
+    emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composer" : "No thumbnail for selected workflow";
     emptyLabel.style.cssText = `
         position: absolute;
         inset: 0;
@@ -1575,6 +1580,18 @@ function addWorkflowManagerPreview(node) {
     previewBox.appendChild(emptyLabel);
     previewBox.appendChild(infoBtn);
     container.appendChild(previewBox);
+
+    if (node?._isComposerManager) {
+        previewBox.style.cursor = "pointer";
+        const openFromPreview = async (evt) => {
+            evt?.preventDefault?.();
+            evt?.stopPropagation?.();
+            await node.openPromptSelectorBrowser?.();
+        };
+        previewBox.addEventListener("click", openFromPreview);
+        image.addEventListener("click", openFromPreview);
+        emptyLabel.addEventListener("click", openFromPreview);
+    }
 
     const widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
         hideOnZoom: false,
@@ -3615,8 +3632,8 @@ function addButtonBar(node) {
     // Forward wheel events to canvas for zooming
     forwardWheelToCanvas(buttonContainer);
 
-    const saveButtonLabel = node._isWorkflowManager ? "Save Workflow" : "Save Prompt";
-    const clearButtonLabel = node._isWorkflowManager ? "Clear Workflow" : "New Prompt";
+                const saveButtonLabel = node._isComposerManager ? "Save Composer" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt");
+                const clearButtonLabel = node._isComposerManager ? "Clear Composer" : (node._isWorkflowManager ? "Clear Workflow" : "New Prompt");
 
     // Save Prompt/Workflow button
     const savePromptBtn = createButton(saveButtonLabel, async () => {
@@ -3636,7 +3653,7 @@ function addButtonBar(node) {
             node,
             currentCategory,
             currentPrompt: promptWidget.value || "",
-            title: node._isWorkflowManager ? "Save Workflow" : "Save Prompt",
+            title: node._isComposerManager ? "Save Composer" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt"),
             saveButtonText: "Save",
             namePlaceholder: "Prompt name",
             initialName,
@@ -5699,7 +5716,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, lorasC, lo
 
             const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB, lorasForSaveC, lorasForSaveD);
             if (node?._isWorkflowManager) {
-                liveWorkflowData._source = "RecipeManager";
+                liveWorkflowData._source = node?._isComposerManager ? "ComposerManager" : "RecipeManager";
             }
             node.lastWorkflowData = liveWorkflowData;
             syncSavedWorkflowDataWidget(node);
@@ -8511,7 +8528,7 @@ function createPromptSelectorWidget(node) {
 
         if (wmInputMode) {
             nameDisplay.textContent = hasLiveWorkflow
-                ? "Input connected: save incoming workflow"
+                ? (node?._isComposerManager ? "Input connected: save incoming composer" : "Input connected: save incoming workflow")
                 : "Waiting for workflow_data input...";
             nameDisplay.title = nameDisplay.textContent;
             nameDisplay.style.cursor = "default";
@@ -8731,15 +8748,14 @@ function createPromptSelectorWidget(node) {
     };
 
     // Open thumbnail browser on click
-    nameDisplay.onclick = async (e) => {
-        e.stopPropagation();
+    const openPromptSelectorBrowser = async (e = null) => {
+        e?.stopPropagation?.();
 
         if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) {
             return;
         }
 
         try {
-            // Check for unsaved changes before opening browser
             const hasUnsaved = hasUnsavedChanges(node);
             const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
 
@@ -8751,7 +8767,7 @@ function createPromptSelectorWidget(node) {
                     "#f80"
                 );
                 if (!confirmed) {
-                    return;  // User cancelled, don't open browser
+                    return;
                 }
             }
 
@@ -8760,14 +8776,13 @@ function createPromptSelectorWidget(node) {
 
             const selection = await showThumbnailBrowser(node, category, currentPrompt, {
                 workflowOnly: node?._isWorkflowManager === true,
+                contentFilter: node?._isComposerManager ? "compose" : undefined,
+                filterEmptyCategories: node?._isComposerManager === true,
                 allowMultiSelect: false,
             });
 
             if (selection) {
-                // Navigate to the selected category/prompt (skip unsaved check since we already confirmed)
                 await navigateTo(selection, true);
-
-                // Clear new prompt flag after successful navigation
                 node.isNewUnsavedPrompt = false;
                 node.newPromptCategory = null;
                 node.newPromptName = null;
@@ -8775,6 +8790,10 @@ function createPromptSelectorWidget(node) {
         } catch (err) {
             console.error("[PromptManagerAdvanced] Error opening prompt browser:", err);
         }
+    };
+
+    nameDisplay.onclick = async (e) => {
+        await openPromptSelectorBrowser(e);
     };
 
     // Initial display update
@@ -8790,6 +8809,7 @@ function createPromptSelectorWidget(node) {
     node.promptSelectorWidget = widget;
     node._promptSelectorContainer = container;
     node.updatePromptSelectorDisplay = updateDisplay;
+    node.openPromptSelectorBrowser = openPromptSelectorBrowser;
 
     return widget;
 }

@@ -1741,11 +1741,26 @@ export function setThumbnailPreviewEnabled(value) {
 export function getBrowserContentFilter(runtimeApp = app) {
     if (_sessionBrowserContentFilter !== null) return _sessionBrowserContentFilter;
     const saved = String(runtimeApp?.ui?.settings?.getSettingValue("PromptManager.BrowserContentFilter") || "all").toLowerCase();
-    return (saved === "prompt" || saved === "recipe" || saved === "all") ? saved : "all";
+    return (saved === "prompt" || saved === "recipe" || saved === "compose" || saved === "all") ? saved : "all";
 }
 
 export function setBrowserContentFilter(value) {
     _sessionBrowserContentFilter = value;
+}
+
+function parseWorkflowDataCandidate(rawWorkflowData) {
+    if (rawWorkflowData && typeof rawWorkflowData === "object") {
+        return rawWorkflowData;
+    }
+    if (typeof rawWorkflowData === "string" && rawWorkflowData.trim()) {
+        try {
+            const parsed = JSON.parse(rawWorkflowData);
+            return parsed && typeof parsed === "object" ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+    return null;
 }
 
 export function hasWorkflowDataPayload(rawWorkflowData) {
@@ -1753,6 +1768,21 @@ export function hasWorkflowDataPayload(rawWorkflowData) {
         (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
         (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
     );
+}
+
+function hasComposeLikePayload(promptData) {
+    if (!promptData || typeof promptData !== "object") return false;
+    if (String(promptData.saved_from || "").trim() === "ComposerManager") return true;
+    const workflowData = parseWorkflowDataCandidate(promptData.workflow_data);
+    if (!workflowData || typeof workflowData !== "object") return false;
+    if (String(workflowData._source || "").trim() === "ComposerManager") return true;
+    return workflowData.prompt_composer && typeof workflowData.prompt_composer === "object";
+}
+
+function hasRecipeLikePayload(promptData) {
+    if (!promptData || typeof promptData !== "object") return false;
+    if (hasWorkflowDataPayload(promptData.workflow_data)) return true;
+    return Object.prototype.hasOwnProperty.call(promptData, "workflow_data");
 }
 
 export function hasPromptPresetPayload(promptData) {
@@ -1790,11 +1820,13 @@ export function getPromptNamesForCategory(node, category, options = {}) {
     if (workflowOnly || contentFilter !== "all") {
         promptNames = promptNames.filter((name) => {
             const entry = promptEntries?.[name];
-            const hasRecipeData = hasWorkflowDataPayload(entry?.workflow_data);
-            const hasPromptData = hasPromptPresetPayload(entry);
+            const hasComposeData = hasComposeLikePayload(entry);
+            const hasRecipeData = !hasComposeData && hasRecipeLikePayload(entry);
+            const hasPromptData = !hasComposeData && hasPromptPresetPayload(entry);
 
-            if (workflowOnly && !(hasRecipeData || hasPromptData)) return false;
+            if (workflowOnly && !(hasComposeData || hasRecipeData || hasPromptData)) return false;
             if (contentFilter === "prompt") return hasPromptData;
+            if (contentFilter === "compose") return hasComposeData;
             if (contentFilter === "recipe") return hasRecipeData;
             return true;
         });
@@ -1876,6 +1908,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         options?.preferenceScope || (promptOnly ? "composer" : "manager")
     );
     const allowEditMode = options?.allowEditMode !== false;
+    const initialContentFilter = (() => {
+        const raw = String(options?.contentFilter || "").trim().toLowerCase();
+        return raw === "prompt" || raw === "recipe" || raw === "compose" || raw === "all" ? raw : "";
+    })();
+    const filterEmptyCategories = options?.filterEmptyCategories === true;
     const useComposerMultiSelectActions = multiSelectActionMode === "composer-add";
     let editMode = allowEditMode && options?.editMode === true;
     let multiSelectMode = startInMultiSelect;
@@ -2329,8 +2366,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         searchWrapper.appendChild(searchInput);
         searchWrapper.appendChild(clearBtn);
 
-        // Prompt/Recipe/All filter button
-        let contentFilterState = getBrowserContentFilter(app);
+        // Prompt/Recipe/Compose/All filter button
+        let contentFilterState = initialContentFilter || getBrowserContentFilter(app);
         const contentFilterBtn = document.createElement("button");
 
         // For prompt-only stores (e.g. Prompt Composer) the content filter has no meaning.
@@ -2366,6 +2403,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 contentFilterBtn.textContent = "Type: Prompt";
                 contentFilterBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.18); border-color: rgba(56, 130, 246, 0.75); color: #dbeafe;`;
                 contentFilterBtn.title = "Showing prompt entries only";
+            } else if (contentFilterState === "compose") {
+                contentFilterBtn.textContent = "Type: Compose";
+                contentFilterBtn.style.cssText = btnStyle + `background: rgba(47, 111, 146, 0.18); border-color: rgba(47, 111, 146, 0.82); color: #d7edf8;`;
+                contentFilterBtn.title = "Showing compose entries only";
             } else if (contentFilterState === "recipe") {
                 contentFilterBtn.textContent = "Type: Recipe";
                 contentFilterBtn.style.cssText = btnStyle + `background: rgba(235, 140, 35, 0.18); border-color: rgba(235, 140, 35, 0.8); color: #ffe7c2;`;
@@ -2373,7 +2414,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             } else {
                 contentFilterBtn.textContent = "Type: All";
                 contentFilterBtn.style.cssText = btnStyle;
-                contentFilterBtn.title = "Showing prompts and recipes";
+                contentFilterBtn.title = "Showing prompts, recipes, and compose entries";
             }
         };
         updateContentFilterBtn();
@@ -2830,6 +2871,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 hideNSFW: hideNSFWState,
                 workflowOnly,
                 contentFilter: contentFilterState,
+                filterEmptyCategories,
                 endpointPrefix,
             }));
             applyCategoryTypeFilter();
@@ -6273,6 +6315,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 contentFilterState = "prompt";
             } else if (contentFilterState === "prompt") {
                 contentFilterState = "recipe";
+            } else if (contentFilterState === "recipe") {
+                contentFilterState = "compose";
             } else {
                 contentFilterState = "all";
             }

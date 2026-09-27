@@ -345,6 +345,7 @@ class PromptManagerAdvanced:
             },
             "optional": {
                 "prompt": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
+                "recipe_data": ("RECIPE_DATA", {"forceInput": True, "tooltip": "Optional saved workflow or Prompt Composer payload to preserve when saving prompts."}),
                 "lora_stack_a": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "First LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
                 "lora_stack_b": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "Second LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
@@ -635,7 +636,7 @@ class PromptManagerAdvanced:
         return lora_path, False
 
     def get_prompt(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
-                   text="", prompt=None, lora_stack_a=None, lora_stack_b=None,
+                   text="", prompt=None, recipe_data=None, lora_stack_a=None, lora_stack_b=None,
                    trigger_words=None, thumbnail_image=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None, trigger_words_toggle=None,
                    extra_pnginfo=None, api_prompt=None,
@@ -733,7 +734,8 @@ class PromptManagerAdvanced:
         prompts_data = self.load_prompts()
         prompt_entry = prompts_data.get(category, {}).get(name, {}) if isinstance(prompts_data, dict) else {}
         stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
-        resolved_workflow_data = ensure_v2_recipe_data(stored_prompt_wf, source="PromptManagerAdvanced") if isinstance(stored_prompt_wf, dict) else None
+        connected_recipe_data = ensure_v2_recipe_data(recipe_data, source="PromptManagerAdvanced") if isinstance(recipe_data, dict) else None
+        resolved_workflow_data = connected_recipe_data or (ensure_v2_recipe_data(stored_prompt_wf, source="PromptManagerAdvanced") if isinstance(stored_prompt_wf, dict) else None)
         workflow_fields = _derive_prompt_fields_from_workflow_data(resolved_workflow_data)
 
         # Choose which text to use based on the toggles
@@ -1759,7 +1761,7 @@ async def save_prompt_advanced(request):
                 prompt_data["prompt"] = model_a_block.get("positive_prompt", "")
             if isinstance(model_a_block.get("negative_prompt"), str):
                 prompt_data["negative_prompt"] = model_a_block.get("negative_prompt", "")
-            prompt_data["saved_from"] = "RecipeManager"
+            prompt_data["saved_from"] = str(wf_to_save.get("_source") or "RecipeManager")
             prompt_data["saved_at"] = datetime.utcnow().isoformat() + "Z"
 
         if wf_to_save:

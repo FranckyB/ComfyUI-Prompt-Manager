@@ -16,11 +16,14 @@ const THUMB_ZOOM_PROP_KEY = "prompt_composer_thumb_zoom";
 const OUTPUT_FORMAT_PROP_KEY = "prompt_composer_output_format";
 const COMPOSE_POSITION_PROP_KEY = "prompt_composer_compose_position";
 const GENERATION_MODE_PROP_KEY = "prompt_composer_generation_mode";
+const RECIPE_SYNC_MODE_PROP_KEY = "prompt_composer_recipe_sync_mode";
 const PARTS_WIDGET_NAME = "parts_data";
 const OUTPUT_FORMAT_WIDGET_NAME = "output_format";
 const COMPOSE_POSITION_WIDGET_NAME = "compose_position";
 const GENERATION_MODE_WIDGET_NAME = "generation_mode";
-const MIN_NODE_WIDTH = 500;
+const RECIPE_SYNC_MODE_WIDGET_NAME = "recipe_sync_mode";
+const PROMPT_COMPOSER_RECIPE_KEY = "prompt_composer";
+const MIN_NODE_WIDTH = 620;
 const MIN_NODE_HEIGHT = 600;
 const HOLD_TO_DRAG_MS = 140;
 const COMPOSER_DRAG_STYLE_ID = "pm-composer-drag-style";
@@ -103,6 +106,26 @@ function readGenerationMode(node) {
 
 function writeGenerationMode(node, value) {
     writeToggleValue(node, GENERATION_MODE_WIDGET_NAME, GENERATION_MODE_PROP_KEY, value);
+}
+
+function readRecipeSyncMode(node) {
+    return readToggleValue(node, RECIPE_SYNC_MODE_WIDGET_NAME, RECIPE_SYNC_MODE_PROP_KEY, "edit");
+}
+
+function writeRecipeSyncMode(node, value) {
+    writeToggleValue(node, RECIPE_SYNC_MODE_WIDGET_NAME, RECIPE_SYNC_MODE_PROP_KEY, value);
+}
+
+function hasConnectedRecipeInput(node) {
+    return node?.inputs?.some((input) => input?.name === "recipe_data" && input.link != null) === true;
+}
+
+function isRecipeSyncEnabled(node) {
+    return readRecipeSyncMode(node) === "sync";
+}
+
+function isComposerEditLocked(node) {
+    return isRecipeSyncEnabled(node) && hasConnectedRecipeInput(node);
 }
 
 function snapThumbZoom(value) {
@@ -1596,6 +1619,85 @@ function serializeParts(parts) {
     return JSON.stringify(normalized);
 }
 
+function parseJsonObjectSafe(value, fallback = null) {
+    if (!value) return fallback;
+    if (typeof value === "object") return value;
+    if (typeof value !== "string") return fallback;
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === "object" ? parsed : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function extractComposerRecipeState(rawRecipeData) {
+    const recipeData = parseJsonObjectSafe(rawRecipeData, null);
+    if (!recipeData || typeof recipeData !== "object") return null;
+    const state = recipeData[PROMPT_COMPOSER_RECIPE_KEY];
+    if (!state || typeof state !== "object") return null;
+
+    let partsPayload = "[]";
+    if (typeof state.parts_data === "string" && state.parts_data.trim()) {
+        partsPayload = state.parts_data;
+    } else if (Array.isArray(state.parts)) {
+        partsPayload = JSON.stringify(state.parts);
+    }
+
+    const parts = parseParts(partsPayload);
+    return {
+        parts,
+        partsData: serializeParts(parts),
+        outputFormat: String(state.output_format || "").trim().toLowerCase() || "text",
+        composePosition: String(state.compose_position || "").trim().toLowerCase() || "before",
+        generationMode: String(state.generation_mode || "").trim().toLowerCase() || "image",
+    };
+}
+
+function applyComposerRecipeState(node, state) {
+    if (!node || !state || typeof state !== "object") return false;
+
+    let changed = false;
+    const nextPartsData = String(state.partsData || serializeParts(state.parts || [])).trim() || "[]";
+    const currentPartsData = serializeParts(readParts(node));
+    if (nextPartsData !== currentPartsData) {
+        writeParts(node, state.parts || parseParts(nextPartsData));
+        clearSelectedPartIndices(node);
+        changed = true;
+    }
+
+    if (state.outputFormat && state.outputFormat !== readOutputFormat(node)) {
+        writeOutputFormat(node, state.outputFormat);
+        changed = true;
+    }
+    if (state.composePosition && state.composePosition !== readComposePosition(node)) {
+        writeComposePosition(node, state.composePosition);
+        changed = true;
+    }
+    if (state.generationMode && state.generationMode !== readGenerationMode(node)) {
+        writeGenerationMode(node, state.generationMode);
+        changed = true;
+    }
+
+    if (changed) {
+        node._composerUiSyncSwitches?.();
+        node._composerUiRender?.();
+        app.graph.setDirtyCanvas(true, true);
+    }
+    return changed;
+}
+
+function rememberComposerRecipeState(node, state) {
+    if (!node || !state || typeof state !== "object") return;
+    node._composerLastRecipeState = {
+        parts: Array.isArray(state.parts) ? state.parts.map((part) => ({ ...part })) : [],
+        partsData: String(state.partsData || "[]"),
+        outputFormat: String(state.outputFormat || "text"),
+        composePosition: String(state.composePosition || "before"),
+        generationMode: String(state.generationMode || "image"),
+    };
+}
+
 function getPartsWidget(node) {
     return getWidgetByName(node, PARTS_WIDGET_NAME);
 }
@@ -1758,6 +1860,7 @@ function ensureHiddenComposerWidgets(node) {
     hideWidget(getWidgetByName(node, OUTPUT_FORMAT_WIDGET_NAME));
     hideWidget(getWidgetByName(node, COMPOSE_POSITION_WIDGET_NAME));
     hideWidget(getWidgetByName(node, GENERATION_MODE_WIDGET_NAME));
+    hideWidget(getWidgetByName(node, RECIPE_SYNC_MODE_WIDGET_NAME));
 }
 
 function ensureComposerUi(node) {
@@ -1794,7 +1897,22 @@ function ensureComposerUi(node) {
         flex: 0 0 auto;
     `;
 
-    const createInlineSwitch = ({ title, leftLabel, rightLabel, getValue, onToggle, isRightActive }) => {
+    const lockNotice = document.createElement("div");
+    lockNotice.style.cssText = `
+        display: none;
+        margin: 0 0 8px 0;
+        padding: 6px 10px;
+        border: 1px solid rgba(47, 111, 146, 0.85);
+        border-radius: 8px;
+        background: rgba(25, 53, 68, 0.78);
+        color: #d7edf8;
+        font-size: 11px;
+        line-height: 1.3;
+        flex: 0 0 auto;
+    `;
+    lockNotice.textContent = "Recipe Sync is active. Execute reloads from connected recipe_data and card editing is locked.";
+
+    const createInlineSwitch = ({ title, leftLabel, rightLabel, getValue, onToggle, isRightActive, isDisabled = null }) => {
         const group = document.createElement("div");
         group.style.cssText = `
             display: flex;
@@ -1845,16 +1963,25 @@ function ensureComposerUi(node) {
         const sync = () => {
             const current = getValue();
             const active = typeof isRightActive === "function" ? !!isRightActive(current) : false;
+            const disabled = typeof isDisabled === "function" ? !!isDisabled() : false;
             button.dataset.active = active ? "1" : "0";
             button.style.background = active ? "#2f6f92" : "transparent";
             knob.style.transform = active ? "translateX(16px)" : "translateX(0)";
             left.style.color = active ? "#8d97a5" : "#f3f4f6";
             right.style.color = active ? "#f3f4f6" : "#8d97a5";
+            button.disabled = disabled;
+            button.style.opacity = disabled ? "0.45" : "1";
+            button.style.cursor = disabled ? "default" : "pointer";
+            group.style.opacity = disabled ? "0.72" : "1";
         };
 
         button.onclick = (evt) => {
             evt.preventDefault();
             evt.stopPropagation();
+            if (typeof isDisabled === "function" && isDisabled()) {
+                sync();
+                return;
+            }
             onToggle(getValue());
             sync();
             node._composerUiRender?.();
@@ -1873,6 +2000,7 @@ function ensureComposerUi(node) {
         getValue: () => readOutputFormat(node),
         onToggle: (current) => writeOutputFormat(node, current === "json" ? "text" : "json"),
         isRightActive: (current) => current === "json",
+        isDisabled: () => isComposerEditLocked(node),
     });
     const positionSwitch = createInlineSwitch({
         title: "Switch whether composed parts go before or after the incoming prompt",
@@ -1881,6 +2009,7 @@ function ensureComposerUi(node) {
         getValue: () => readComposePosition(node),
         onToggle: (current) => writeComposePosition(node, current === "after" ? "before" : "after"),
         isRightActive: (current) => current === "after",
+        isDisabled: () => isComposerEditLocked(node),
     });
     const generationModeSwitch = createInlineSwitch({
         title: "Switch whether Prompt Composer uses Image or Video LoRAs",
@@ -1889,12 +2018,29 @@ function ensureComposerUi(node) {
         getValue: () => readGenerationMode(node),
         onToggle: (current) => writeGenerationMode(node, current === "video" ? "image" : "video"),
         isRightActive: (current) => current === "video",
+        isDisabled: () => isComposerEditLocked(node),
+    });
+    const recipeSyncSwitch = createInlineSwitch({
+        title: "When enabled, execute clears local card edits and reloads the Prompt Composer state from connected recipe_data",
+        leftLabel: "Edit",
+        rightLabel: "Sync",
+        getValue: () => readRecipeSyncMode(node),
+        onToggle: () => {
+            const nextValue = isRecipeSyncEnabled(node) ? "edit" : "sync";
+            writeRecipeSyncMode(node, nextValue);
+            if (nextValue === "sync" && node._composerLastRecipeState) {
+                applyComposerRecipeState(node, node._composerLastRecipeState);
+            }
+        },
+        isRightActive: (current) => current === "sync",
     });
 
     switchRow.appendChild(formatSwitch.group);
     switchRow.appendChild(positionSwitch.group);
     switchRow.appendChild(generationModeSwitch.group);
+    switchRow.appendChild(recipeSyncSwitch.group);
     root.appendChild(switchRow);
+    root.appendChild(lockNotice);
 
     const actionRow = document.createElement("div");
     actionRow.style.cssText = `
@@ -2056,6 +2202,78 @@ function ensureComposerUi(node) {
         clearSelectedPartIndices(node);
         render();
         return true;
+    };
+
+    const clearComposerNode = () => {
+        if (isComposerEditLocked(node)) return false;
+        const parts = readParts(node);
+        if (!parts.length) return false;
+        writeParts(node, []);
+        clearSelectedPartIndices(node);
+        render();
+        return true;
+    };
+
+    const showBackgroundContextMenu = (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        removeContextMenu();
+
+        const menu = document.createElement("div");
+        menu.style.cssText = `
+            position: fixed;
+            left: ${evt.clientX}px;
+            top: ${evt.clientY}px;
+            background: ${UI.panel || "#2a2a2a"};
+            border: 1px solid ${UI.inputBorder || "#444"};
+            border-radius: 6px;
+            padding: 4px 0;
+            z-index: 10050;
+            min-width: 130px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+        `;
+
+        const hasParts = readParts(node).length > 0;
+        const disabled = !hasParts || isComposerEditLocked(node);
+
+        const item = document.createElement("div");
+        item.textContent = "Clear Node";
+        item.style.cssText = `
+            padding: 7px 12px;
+            font-size: 12px;
+            color: ${disabled ? "#666" : "#ddd"};
+            cursor: ${disabled ? "default" : "pointer"};
+            user-select: none;
+        `;
+        if (!disabled) {
+            item.onmouseenter = () => {
+                item.style.background = UI.accentSoft || "rgba(56,130,246,0.2)";
+            };
+            item.onmouseleave = () => {
+                item.style.background = "transparent";
+            };
+            item.onclick = () => {
+                removeContextMenu();
+                clearComposerNode();
+            };
+        }
+        menu.appendChild(item);
+
+        document.body.appendChild(menu);
+        node._composerContextMenu = menu;
+
+        const close = (e) => {
+            if (!menu.contains(e.target)) {
+                removeContextMenu();
+                document.removeEventListener("mousedown", close, true);
+                document.removeEventListener("contextmenu", close, true);
+            }
+        };
+
+        setTimeout(() => {
+            document.addEventListener("mousedown", close, true);
+            document.addEventListener("contextmenu", close, true);
+        }, 0);
     };
 
     const resolveContextPartIndices = (parts, partIndex) => {
@@ -2438,6 +2656,7 @@ function ensureComposerUi(node) {
         const resolvedParts = resolveSubjectAssignments(parts);
         const selectedPartIndexSet = new Set(getSelectedPartIndices(node, resolvedParts.length));
         const isVideoMode = readGenerationMode(node) === "video";
+        const isEditLocked = isComposerEditLocked(node);
         const thumbZoom = readThumbZoom(node);
         zoomSlider.value = String(Math.round(thumbZoom * 100));
         syncZoomLabel();
@@ -2447,7 +2666,10 @@ function ensureComposerUi(node) {
 
         // Flexible tracks keep rows filled while min width controls scale steps.
         grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${minCardWidth}px, 1fr))`;
+        grid.style.pointerEvents = isEditLocked ? "none" : "auto";
+        grid.style.opacity = isEditLocked ? "0.74" : "1";
         grid.innerHTML = "";
+        lockNotice.style.display = isEditLocked ? "block" : "none";
 
         resolvedParts.forEach((part, index) => {
             const promptRefs = getPartPromptRefs(part);
@@ -2997,6 +3219,13 @@ function ensureComposerUi(node) {
         clearPartSelection();
     }, true);
 
+    root.addEventListener("contextmenu", (evt) => {
+        if (evt.target?.closest?.("[data-composer-part-card='1']")) return;
+        if (evt.target?.closest?.("[data-composer-part-add='1']")) return;
+        if (evt.target?.closest?.("input, button, textarea, select")) return;
+        showBackgroundContextMenu(evt);
+    }, true);
+
     const computeComposerHeight = () => {
         const nodeHeight = Number(node?.size?.[1]) || MIN_NODE_HEIGHT;
         return Math.max(180, nodeHeight - NODE_CHROME_HEIGHT);
@@ -3026,6 +3255,7 @@ function ensureComposerUi(node) {
         formatSwitch.sync();
         positionSwitch.sync();
         generationModeSwitch.sync();
+        recipeSyncSwitch.sync();
     };
 
     refreshComposerHeight();
@@ -3058,6 +3288,9 @@ app.registerExtension({
             if (node.properties[GENERATION_MODE_PROP_KEY] === undefined) {
                 node.properties[GENERATION_MODE_PROP_KEY] = readGenerationMode(node);
             }
+            if (node.properties[RECIPE_SYNC_MODE_PROP_KEY] === undefined) {
+                node.properties[RECIPE_SYNC_MODE_PROP_KEY] = readRecipeSyncMode(node);
+            }
 
             node.setSize([
                 Math.max(MIN_NODE_WIDTH, node.size?.[0] || MIN_NODE_WIDTH),
@@ -3065,6 +3298,19 @@ app.registerExtension({
             ]);
 
             ensureComposerUi(node);
+
+            api.addEventListener("prompt-composer-update", (event) => {
+                if (String(event?.detail?.node_id) !== String(node.id)) return;
+                const state = extractComposerRecipeState({
+                    [PROMPT_COMPOSER_RECIPE_KEY]: event?.detail?.prompt_composer,
+                });
+                if (state) {
+                    rememberComposerRecipeState(node, state);
+                    if (isRecipeSyncEnabled(node)) {
+                        applyComposerRecipeState(node, state);
+                    }
+                }
+            });
 
             loadComposerPrompts(node).then(() => {
                 node._composerUiSyncSwitches?.();
@@ -3093,6 +3339,7 @@ app.registerExtension({
             node.properties[OUTPUT_FORMAT_PROP_KEY] = readOutputFormat(node);
             node.properties[COMPOSE_POSITION_PROP_KEY] = readComposePosition(node);
             node.properties[GENERATION_MODE_PROP_KEY] = readGenerationMode(node);
+            node.properties[RECIPE_SYNC_MODE_PROP_KEY] = readRecipeSyncMode(node);
 
             node._composerUiSyncSwitches?.();
             node._composerUiRefreshHeight?.();
