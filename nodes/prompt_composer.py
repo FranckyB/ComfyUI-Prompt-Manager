@@ -544,6 +544,19 @@ def _ordinal_word(index):
     return words.get(normalized, f"Subject {normalized}")
 
 
+def _normalize_subject_kind(value, fallback="other"):
+    normalized = str(value or "").strip().lower()
+    if normalized == "person":
+        return "character"
+    if normalized in {"character", "animal", "environment", "other"}:
+        return normalized
+    return fallback
+
+
+def _default_subject_kind(subject_type="subject"):
+    return "character" if str(subject_type or "").strip().lower() == "new_subject" else "other"
+
+
 def _first_labeled_text_bucket(sections):
     if not isinstance(sections, dict):
         return None
@@ -560,22 +573,42 @@ def _first_labeled_text_bucket(sections):
     return None
 
 
-def _image_subject_label(text_sections):
+def _image_subject_label(text_sections, subject_kind="other"):
+    normalized_kind = _normalize_subject_kind(subject_kind, "other")
+    if normalized_kind == "character":
+        return "person"
+    if normalized_kind == "animal":
+        return "animal"
     bucket = _first_labeled_text_bucket(text_sections)
     if bucket:
         return bucket["label"]
-    return "Subject"
+    if normalized_kind == "environment":
+        return "The environment is"
+    return "subject"
 
 
-def _image_subject_prefix(position, total, subject_label="Subject"):
+def _image_subject_prefix(position, total, subject_label="Subject", subject_kind="other"):
     normalized_label = str(subject_label or "").strip() or "Subject"
+    normalized_kind = _normalize_subject_kind(subject_kind, "other")
+    if normalized_kind == "environment":
+        return normalized_label
     if int(total or 0) <= 1:
         return ""
     return f"{_ordinal_word(position)} {normalized_label} is"
 
 
-def _image_subject_name(position, total, subject_label="Subject"):
-    normalized_label = str(subject_label or "").strip() or "Subject"
+def _image_subject_name(position, total, subject_label="Subject", subject_kind="other"):
+    normalized_kind = _normalize_subject_kind(subject_kind, "other")
+    if normalized_kind == "character":
+        normalized_label = "Person"
+    elif normalized_kind == "animal":
+        normalized_label = "Animal"
+    elif normalized_kind == "environment":
+        normalized_label = "Environment"
+    else:
+        normalized_label = "Subject"
+    if normalized_kind == "environment":
+        return normalized_label
     if int(total or 0) <= 1:
         return normalized_label
     return f"{_ordinal_word(position)} {normalized_label}"
@@ -622,7 +655,12 @@ def _render_image_subject_groups(subject_groups):
     typed_groups = _prepare_image_subject_groups(subject_groups)
 
     for group in typed_groups:
-        prefix = _image_subject_prefix(group["position"], group["total"], group.get("subject_label", "Subject"))
+        prefix = _image_subject_prefix(
+            group["position"],
+            group["total"],
+            group.get("subject_label", "Subject"),
+            group.get("subject_kind", "other"),
+        )
         rendered_groups.append(
             f"{prefix} {group['body']}".strip() if prefix else group["body"]
         )
@@ -634,25 +672,49 @@ def _prepare_image_subject_groups(subject_groups):
     prepared_groups = []
     for group in subject_groups:
         text_sections = group.get("text_sections", {})
-        subject_label = _image_subject_label(text_sections)
+        subject_kind = _normalize_subject_kind(
+            group.get("subject_kind"),
+            _default_subject_kind(group.get("subject_type")),
+        )
+        subject_label = _image_subject_label(text_sections, subject_kind)
         body = _render_image_subject_body(text_sections, subject_label)
         if not body:
             continue
         prepared_groups.append({
             "body": body,
+            "text_sections": text_sections,
             "sections": group.get("sections", {}),
+            "subject_kind": subject_kind,
+            "subject_type": group.get("subject_type"),
             "subject_label": subject_label,
         })
 
-    total = len(prepared_groups)
-    return [
-        {
+    kind_totals = {}
+    for group in prepared_groups:
+        subject_kind = group["subject_kind"]
+        if subject_kind == "environment":
+            continue
+        kind_totals[subject_kind] = kind_totals.get(subject_kind, 0) + 1
+
+    kind_positions = {}
+    typed_groups = []
+    for group in prepared_groups:
+        subject_kind = group["subject_kind"]
+        if subject_kind == "environment":
+            position = 1
+            total = 1
+        else:
+            next_position = kind_positions.get(subject_kind, 0) + 1
+            kind_positions[subject_kind] = next_position
+            position = next_position
+            total = kind_totals.get(subject_kind, 1)
+        typed_groups.append({
             **group,
-            "position": index,
+            "position": position,
             "total": total,
-        }
-        for index, group in enumerate(prepared_groups, start=1)
-    ]
+        })
+
+    return typed_groups
 
 
 def _get_subject_group(subject_groups, subject_number):
@@ -661,6 +723,8 @@ def _get_subject_group(subject_groups, subject_number):
             return group
     group = {
         "number": subject_number,
+        "subject_type": "subject",
+        "subject_kind": "other",
         "text_sections": {},
         "sections": {},
     }
@@ -895,6 +959,11 @@ class PromptComposer:
             formatted_plain = _format_fragment(text, part.get("strength", 1.0)) if use_strength else str(text or "").strip()
             formatted_json = _format_json_description(text, part.get("strength", 1.0), use_strength=use_strength)
             subject_number = part.get("effective_subject_number", SUBJECT_MIN)
+            subject_type = str(category_data.get("_subject_type_") or "subject").strip().lower() or "subject"
+            subject_kind = _normalize_subject_kind(
+                category_data.get("_subject_kind_"),
+                _default_subject_kind(subject_type),
+            )
             if subject_number == SUBJECT_NONE:
                 if formatted_plain:
                     _append_text_section(
@@ -911,6 +980,10 @@ class PromptComposer:
                     )
             else:
                 subject_group = _get_subject_group(subject_groups, subject_number)
+                if subject_type == "new_subject" and not subject_group.get("subject_kind_locked"):
+                    subject_group["subject_type"] = subject_type
+                    subject_group["subject_kind"] = subject_kind
+                    subject_group["subject_kind_locked"] = True
                 if formatted_plain:
                     _append_text_section(
                         subject_group["text_sections"],
@@ -965,7 +1038,12 @@ class PromptComposer:
                     section_values = group["sections"]
                 else:
                     subject_entry = {
-                        "name": _image_subject_name(group["position"], group["total"])
+                        "name": _image_subject_name(
+                            group["position"],
+                            group["total"],
+                            group.get("subject_label", "Subject"),
+                            group.get("subject_kind", "other"),
+                        )
                     }
                     section_values = group["sections"]
                 for key, values in section_values.items():

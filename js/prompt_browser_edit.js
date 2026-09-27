@@ -1,5 +1,4 @@
 import { saveComposerCategorySettings, saveComposerTypeSettings } from "./prompt_composer_common.js";
-import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { getCategoryPromptEntries, getCategoryPromptEntriesForEndpoint, getCategoryPromptEntryForEndpoint } from "./prompt_store_adapters.js";
 import { mediaFileUrl } from "./path_browser.js";
@@ -12,12 +11,30 @@ import { mediaFileUrl } from "./path_browser.js";
 const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
 const IMAGE_PREVIEW_EXTS = [".png", ".jpg", ".jpeg", ".webp"];
 
-const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
-
 // Per-prompt category for system prompts (Prompt Generator). Stored on each
 // prompt entry as "category"; distinct from the category-level _prompt_type_.
 const SYSTEM_PROMPT_CATEGORIES = ["Audio", "Image", "Video", "Other"];
 const COMPOSER_CATEGORY_KEY_SEPARATOR = "::";
+
+const COMPOSER_SUBJECT_KIND_CHOICES = [
+    { value: "character", label: "Character" },
+    { value: "animal", label: "Animal" },
+    { value: "environment", label: "Environment" },
+    { value: "other", label: "Other" },
+];
+
+function normalizeComposerSubjectKind(value, fallback = "other") {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (COMPOSER_SUBJECT_KIND_CHOICES.some((choice) => choice.value === normalized)) {
+        return normalized;
+    }
+    if (normalized === "person") return "character";
+    return fallback;
+}
+
+function defaultComposerSubjectKind(subjectType) {
+    return String(subjectType || "").trim().toLowerCase() === "new_subject" ? "character" : "other";
+}
 
 function addPromptTypeChoice(choices, seen, value, label = null) {
     const normalized = String(value || "").trim();
@@ -57,18 +74,6 @@ export function getPromptTypeChoices(promptsData = null) {
     const choices = [];
     const seen = new Set();
 
-    const raw = String(app?.ui?.settings?.getSettingValue?.(SETTING_COMPOSER_EXTRA_TYPES) || "");
-    if (raw.trim()) {
-        const extras = raw
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
-
-        for (const item of extras) {
-            addPromptTypeChoice(choices, seen, item);
-        }
-    }
-
     for (const item of collectPromptTypesFromData(promptsData)) {
         addPromptTypeChoice(choices, seen, item.value, item.label);
     }
@@ -85,6 +90,7 @@ function getPromptTypeMetadata(promptsData, promptType, composerLibrary = null) 
             typeFile: "",
             typeName: "",
             subjectType: "subject",
+            subjectKind: "other",
             promptPrefix: "",
             basePrompt: "",
         };
@@ -105,6 +111,10 @@ function getPromptTypeMetadata(promptsData, promptType, composerLibrary = null) 
                 typeFile: String(typeFile || `${normalizedKey}.json`).trim(),
                 typeName: String(typeData.name || normalizedPromptType).trim() || normalizedPromptType,
                 subjectType: String(typeData.subject_type || "subject").trim().toLowerCase() || "subject",
+                subjectKind: normalizeComposerSubjectKind(
+                    typeData.subject_kind,
+                    defaultComposerSubjectKind(typeData.subject_type || "subject")
+                ),
                 promptPrefix: String(typeData.prefix || ""),
                 basePrompt: String(typeData.base_prompt || ""),
             };
@@ -120,6 +130,7 @@ function getPromptTypeMetadata(promptsData, promptType, composerLibrary = null) 
         typeFile: `${normalizedKey}.json`,
         typeName: String(fallbackChoice?.label || normalizedPromptType).trim() || normalizedPromptType,
         subjectType: "subject",
+        subjectKind: defaultComposerSubjectKind("subject"),
         promptPrefix: "",
         basePrompt: "",
     };
@@ -156,6 +167,7 @@ function getComposerCategoryMetadata(composerLibrary, category, promptType = "")
             typeFile: "",
             typeName: "",
             subjectType: "subject",
+            subjectKind: "other",
             typePromptPrefix: "",
             typeBasePrompt: "",
             categoryPromptPrefix: "",
@@ -174,6 +186,7 @@ function getComposerCategoryMetadata(composerLibrary, category, promptType = "")
             typeFile: "",
             typeName: "",
             subjectType: "subject",
+            subjectKind: "other",
             typePromptPrefix: "",
             typeBasePrompt: "",
             categoryPromptPrefix: "",
@@ -199,6 +212,10 @@ function getComposerCategoryMetadata(composerLibrary, category, promptType = "")
                 typeFile: String(typeFile || "").trim(),
                 typeName: String(typeData.name || typeStem || normalizedCategory).trim() || typeStem || normalizedCategory,
                 subjectType: String(typeData.subject_type || "subject").trim().toLowerCase() || "subject",
+                subjectKind: normalizeComposerSubjectKind(
+                    typeData.subject_kind,
+                    defaultComposerSubjectKind(typeData.subject_type || "subject")
+                ),
                 typePromptPrefix: String(typeData.prefix || ""),
                 typeBasePrompt: String(typeData.base_prompt || ""),
                 categoryPromptPrefix: String(categoryData?.prefix || ""),
@@ -216,6 +233,7 @@ function getComposerCategoryMetadata(composerLibrary, category, promptType = "")
         typeFile: "",
         typeName: "",
         subjectType: "subject",
+        subjectKind: "other",
         typePromptPrefix: "",
         typeBasePrompt: "",
         categoryPromptPrefix: "",
@@ -1290,6 +1308,7 @@ export function createPromptBrowserEditPanel(options) {
     let loadedRefModWeight = 1.0;
     let loadedGroupPromptType = "";
     let loadedGroupSubjectType = "subject";
+    let loadedGroupSubjectKind = "other";
     let loadedGroupPromptPrefix = "";
     let loadedGroupBasePrompt = "";
     let loadedCategoryPromptType = "";
@@ -1553,6 +1572,49 @@ export function createPromptBrowserEditPanel(options) {
     groupSubjectTypeSelect.addEventListener("change", () => _onChange());
     groupBody.appendChild(groupSubjectTypeSelect);
 
+    const groupSubjectKindWrap = el("div", {
+        display: "none",
+        flexDirection: "column",
+        gap: "4px",
+    });
+    const groupSubjectKindInfoText = "Only used for New Subject groups. Character and Animal each get their own First/Second numbering. Environment stays separate from character numbering.";
+    const groupSubjectKindLabelRow = el("div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+    });
+    const groupSubjectKindLabel = el("label", { color: STYLE.textMuted, fontSize: "12px" }, "New Subject Kind");
+    groupSubjectKindLabel.title = groupSubjectKindInfoText;
+    const groupSubjectKindHint = el("span", {
+        color: STYLE.textMuted,
+        fontSize: "12px",
+        userSelect: "none",
+    }, "ⓘ");
+    groupSubjectKindHint.title = groupSubjectKindInfoText;
+    groupSubjectKindLabelRow.append(groupSubjectKindLabel, groupSubjectKindHint);
+    const groupSubjectKindSelect = createSelect("character", COMPOSER_SUBJECT_KIND_CHOICES);
+    groupSubjectKindSelect.addEventListener("change", () => _onChange());
+    groupSubjectKindWrap.append(groupSubjectKindLabelRow, groupSubjectKindSelect);
+    groupBody.appendChild(groupSubjectKindWrap);
+
+    function syncGroupSubjectKindVisibility() {
+        const isNewSubject = String(groupSubjectTypeSelect.value || "subject").trim().toLowerCase() === "new_subject";
+        groupSubjectKindWrap.style.display = isNewSubject ? "flex" : "none";
+    }
+
+    groupSubjectTypeSelect.addEventListener("change", () => {
+        if (String(groupSubjectTypeSelect.value || "subject").trim().toLowerCase() === "new_subject") {
+            groupSubjectKindSelect.value = normalizeComposerSubjectKind(
+                groupSubjectKindSelect.value,
+                defaultComposerSubjectKind(groupSubjectTypeSelect.value)
+            );
+        } else {
+            groupSubjectKindSelect.value = "other";
+        }
+        syncGroupSubjectKindVisibility();
+    });
+    syncGroupSubjectKindVisibility();
+
     const groupBasePromptInfoText = "Thumbnail prompt for this prompt group.";
     const groupBasePromptLabelRow = el("div", {
         display: "flex",
@@ -1622,6 +1684,7 @@ export function createPromptBrowserEditPanel(options) {
             promptType,
             typeName: groupMeta.typeName || promptType,
             subjectType: groupSubjectTypeSelect.value,
+            subjectKind: groupSubjectKindSelect.value,
             promptPrefix: groupPrefixInput.value,
             basePrompt: groupBasePromptInput.value,
         });
@@ -2264,12 +2327,20 @@ export function createPromptBrowserEditPanel(options) {
         const currentName = String(promptNameInput.value || "").trim();
         const currentText = String(promptTextArea.value || "").trim();
         const currentGroupSubjectType = String(groupSubjectTypeSelect.value || "subject").trim().toLowerCase() || "subject";
+        const currentGroupSubjectKind = normalizeComposerSubjectKind(
+            groupSubjectKindSelect.value,
+            defaultComposerSubjectKind(currentGroupSubjectType)
+        );
+        const currentUsesSubjectKind = currentGroupSubjectType === "new_subject";
+        const loadedUsesSubjectKind = String(loadedGroupSubjectType || "subject").trim().toLowerCase() === "new_subject";
         const currentGroupPromptPrefix = String(groupPrefixInput.value || "").trim();
         const currentGroupBasePrompt = String(groupBasePromptInput.value || "").trim();
         const currentCategoryBasePrompt = String(categoryBasePromptInput.value || "").trim();
         const currentCategoryPromptPrefix = String(prefixInput.value || "").trim();
 
         if (currentGroupSubjectType !== String(loadedGroupSubjectType || "subject").trim().toLowerCase()) return true;
+        if ((currentUsesSubjectKind || loadedUsesSubjectKind)
+            && currentGroupSubjectKind !== normalizeComposerSubjectKind(loadedGroupSubjectKind, defaultComposerSubjectKind(loadedGroupSubjectType))) return true;
         if (currentGroupPromptPrefix !== String(loadedGroupPromptPrefix || "").trim()) return true;
         if (currentGroupBasePrompt !== String(loadedGroupBasePrompt || "").trim()) return true;
 
@@ -2387,23 +2458,35 @@ export function createPromptBrowserEditPanel(options) {
         if (!selectedPromptType || selectedPromptType === "__all__") {
             groupNameValue.textContent = "No prompt group selected";
             groupSubjectTypeSelect.value = "subject";
+            groupSubjectKindSelect.value = "other";
             groupPrefixInput.value = "";
             groupBasePromptInput.value = "";
             loadedGroupPromptType = "";
             loadedGroupSubjectType = "subject";
+            loadedGroupSubjectKind = "other";
             loadedGroupPromptPrefix = "";
             loadedGroupBasePrompt = "";
+            syncGroupSubjectKindVisibility();
             return;
         }
         const typeMeta = getPromptTypeMetadata(node?.prompts, selectedPromptType || loadedGroupPromptType || "", node?.composerPromptLibrary);
         groupNameValue.textContent = String(typeMeta.typeName || typeMeta.promptType || "").trim() || "No prompt group selected";
         groupSubjectTypeSelect.value = String(typeMeta.subjectType || "subject").trim().toLowerCase() || "subject";
+        groupSubjectKindSelect.value = normalizeComposerSubjectKind(
+            typeMeta.subjectKind,
+            defaultComposerSubjectKind(typeMeta.subjectType || "subject")
+        );
         groupPrefixInput.value = String(typeMeta.promptPrefix || "");
         groupBasePromptInput.value = String(typeMeta.basePrompt || "");
         loadedGroupPromptType = String(typeMeta.promptType || "").trim();
         loadedGroupSubjectType = String(typeMeta.subjectType || "subject").trim().toLowerCase() || "subject";
+        loadedGroupSubjectKind = normalizeComposerSubjectKind(
+            typeMeta.subjectKind,
+            defaultComposerSubjectKind(typeMeta.subjectType || "subject")
+        );
         loadedGroupPromptPrefix = String(typeMeta.promptPrefix || "").trim();
         loadedGroupBasePrompt = String(typeMeta.basePrompt || "").trim();
+        syncGroupSubjectKindVisibility();
     }
 
     function loadCategorySettings(category) {

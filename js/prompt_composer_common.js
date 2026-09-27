@@ -50,6 +50,19 @@ function buildComposerCategoryKey(typeFile, categoryName) {
     return `${normalizedTypeFile}${COMPOSER_CATEGORY_KEY_SEPARATOR}${normalizedCategory}`;
 }
 
+function normalizeComposerSubjectKind(value, fallback = "other") {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (["character", "animal", "environment", "other"].includes(normalized)) {
+        return normalized;
+    }
+    if (normalized === "person") return "character";
+    return fallback;
+}
+
+function defaultComposerSubjectKind(subjectType) {
+    return String(subjectType || "").trim().toLowerCase() === "new_subject" ? "character" : "other";
+}
+
 function parseComposerCategoryKey(category) {
     const raw = String(category || "").trim();
     const separatorIndex = raw.indexOf(COMPOSER_CATEGORY_KEY_SEPARATOR);
@@ -101,6 +114,7 @@ function flattenComposerType(typeFile, typeData, flatData) {
     const typePrefix = String(typeData.prefix || "");
     const typeBasePrompt = String(typeData.base_prompt || "");
     const typeSubjectType = String(typeData.subject_type || "subject").trim().toLowerCase() || "subject";
+    const typeSubjectKind = normalizeComposerSubjectKind(typeData.subject_kind, defaultComposerSubjectKind(typeSubjectType));
     const typeNsfw = typeData.nsfw === true;
     const categories = typeData.categories;
     if (!categories || typeof categories !== "object" || Array.isArray(categories)) return;
@@ -120,6 +134,7 @@ function flattenComposerType(typeFile, typeData, flatData) {
             _type_file_: String(typeFile || ""),
             _type_name_: typeName,
             _subject_type_: typeSubjectType,
+            _subject_kind_: typeSubjectKind,
         };
         if (effectivePrefix.trim()) flatCategory._prompt_prefix_ = effectivePrefix;
         if (effectiveBasePrompt.trim()) flatCategory._base_prompt_ = effectiveBasePrompt;
@@ -216,6 +231,10 @@ export async function saveComposerTypeSettings(settings) {
                 prompt_type: settings.promptType || "",
                 type_name: settings.typeName || "",
                 subject_type: settings.subjectType || "subject",
+                subject_kind: normalizeComposerSubjectKind(
+                    settings.subjectKind,
+                    defaultComposerSubjectKind(settings.subjectType || "subject")
+                ),
                 prefix: settings.promptPrefix || "",
                 base_prompt: settings.basePrompt || "",
             }),

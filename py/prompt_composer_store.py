@@ -358,6 +358,10 @@ def _default_subject_type():
     return "subject"
 
 
+def _default_subject_kind(subject_type="subject"):
+    return "character" if _normalize_subject_type(subject_type, _default_subject_type()) == "new_subject" else "other"
+
+
 def _legacy_subject_type_for_name(name):
     stem = _type_stem(_normalize_type_file_name(name or ""))
     if stem in {"character", "environment"}:
@@ -367,9 +371,31 @@ def _legacy_subject_type_for_name(name):
     return _default_subject_type()
 
 
+def _legacy_subject_kind_for_name(name, subject_type="subject"):
+    if _normalize_subject_type(subject_type, _default_subject_type()) != "new_subject":
+        return "other"
+    stem = _type_stem(_normalize_type_file_name(name or ""))
+    if stem == "environment":
+        return "environment"
+    if stem == "animal":
+        return "animal"
+    if stem == "other":
+        return "other"
+    return "character"
+
+
 def _normalize_subject_type(value, fallback="subject"):
     normalized = str(value or "").strip().lower()
     if normalized in {"new_subject", "subject", "non_subject"}:
+        return normalized
+    return fallback
+
+
+def _normalize_subject_kind(value, fallback="other"):
+    normalized = str(value or "").strip().lower()
+    if normalized == "person":
+        return "character"
+    if normalized in {"character", "animal", "environment", "other"}:
         return normalized
     return fallback
 
@@ -385,6 +411,7 @@ def _is_hidden_category_entry_key(name):
         "_type_file_",
         "_type_name_",
         "_subject_type_",
+        "_subject_kind_",
         "_type_prefix_",
         "_type_base_prompt_",
         "_type_nsfw_",
@@ -515,10 +542,16 @@ def _normalize_type_data(type_file, type_data):
     if not isinstance(type_data, dict):
         type_data = {}
 
+    normalized_subject_type = _normalize_subject_type(type_data.get("subject_type"), _default_subject_type())
+
     normalized = {
         "file": type_file,
         "name": _normalize_optional_string(type_data.get("name")) or _default_type_name_from_file(type_file),
-        "subject_type": _normalize_subject_type(type_data.get("subject_type"), _default_subject_type()),
+        "subject_type": normalized_subject_type,
+        "subject_kind": _normalize_subject_kind(
+            type_data.get("subject_kind"),
+            _legacy_subject_kind_for_name(type_data.get("name") or type_file, normalized_subject_type),
+        ),
         "categories": {},
     }
 
@@ -574,6 +607,7 @@ def _serialize_type_data(type_file, type_data):
     payload = {
         "name": normalized["name"],
         "subject_type": normalized["subject_type"],
+        "subject_kind": normalized["subject_kind"],
         "categories": {},
     }
 
@@ -834,6 +868,10 @@ def _flatten_canonical_library(library):
         type_prefix = str(type_data.get("prefix") or "")
         type_base_prompt = str(type_data.get("base_prompt") or "")
         type_subject_type = _normalize_subject_type(type_data.get("subject_type"), _default_subject_type())
+        type_subject_kind = _normalize_subject_kind(
+            type_data.get("subject_kind"),
+            _default_subject_kind(type_subject_type),
+        )
         type_is_nsfw = _type_nsfw(type_data)
 
         categories = type_data.get("categories", {}) if isinstance(type_data, dict) else {}
@@ -859,6 +897,7 @@ def _flatten_canonical_library(library):
                 flat_category["_type_icon_"] = type_icon
                 flat_category["_type_icon_url_"] = type_icon
             flat_category["_subject_type_"] = type_subject_type
+            flat_category["_subject_kind_"] = type_subject_kind
             if type_prefix.strip():
                 flat_category["_type_prefix_"] = type_prefix
             if type_base_prompt.strip():
@@ -953,10 +992,12 @@ def _ensure_type(library, type_file, name=None, subject_type=None, nsfw=False, p
     types = library.setdefault(CANONICAL_TYPES_KEY, {})
     type_data = types.get(normalized_type_file)
     if not isinstance(type_data, dict):
+        normalized_subject_type = _normalize_subject_type(subject_type, _default_subject_type())
         type_data = {
             "file": normalized_type_file,
             "name": _normalize_optional_string(name) or _default_type_name_from_file(normalized_type_file),
-            "subject_type": _normalize_subject_type(subject_type, _default_subject_type()),
+            "subject_type": normalized_subject_type,
+            "subject_kind": _legacy_subject_kind_for_name(name or normalized_type_file, normalized_subject_type),
             "categories": {},
         }
         types[normalized_type_file] = type_data
@@ -964,6 +1005,10 @@ def _ensure_type(library, type_file, name=None, subject_type=None, nsfw=False, p
         type_data["name"] = _normalize_optional_string(name)
     if subject_type is not None:
         type_data["subject_type"] = _normalize_subject_type(subject_type, type_data.get("subject_type", "subject"))
+        type_data["subject_kind"] = _normalize_subject_kind(
+            type_data.get("subject_kind"),
+            _default_subject_kind(type_data.get("subject_type", _default_subject_type())),
+        )
     if _coerce_bool(nsfw):
         type_data["nsfw"] = True
     if str(prefix or "").strip():
@@ -1016,7 +1061,7 @@ def _looks_like_single_type_payload(data):
         isinstance(data, dict)
         and not isinstance(data.get(CANONICAL_TYPES_KEY), dict)
         and isinstance(data.get("categories"), dict)
-        and any(key in data for key in {"name", "subject_type", "categories", "prefix", "base_prompt", "nsfw", "order"})
+        and any(key in data for key in {"name", "subject_type", "subject_kind", "categories", "prefix", "base_prompt", "nsfw", "order"})
     )
 
 
@@ -1338,6 +1383,16 @@ async def compose_save_type_settings(request):
             target_type_data["subject_type"] = _normalize_subject_type(
                 data.get("subject_type"),
                 target_type_data.get("subject_type", _default_subject_type()),
+            )
+        if "subject_kind" in data:
+            target_type_data["subject_kind"] = _normalize_subject_kind(
+                data.get("subject_kind"),
+                _default_subject_kind(target_type_data.get("subject_type", _default_subject_type())),
+            )
+        elif "subject_type" in data:
+            target_type_data["subject_kind"] = _normalize_subject_kind(
+                target_type_data.get("subject_kind"),
+                _default_subject_kind(target_type_data.get("subject_type", _default_subject_type())),
             )
 
         prefix = str(data.get("prefix", "") or "")
