@@ -4886,7 +4886,7 @@ function mergePromptComposerInputMetadataIntoWorkflowData(node, workflowData) {
     };
 
     const existingPrompt = String(inputData.prompt || payload.input_prompt || "").trim();
-    const nextPrompt = incomingPromptText || existingPrompt;
+    const nextPrompt = existingPrompt || incomingPromptText;
 
     const existingLoras = Array.isArray(inputData.lora_stack)
         ? inputData.lora_stack

@@ -325,7 +325,8 @@ def _merge_prompt_composer_input_data(recipe_data, input_prompt="", prompt_enabl
 
     input_data = payload.get("input_data") if isinstance(payload.get("input_data"), dict) else {}
     existing_prompt = str(input_data.get("prompt", payload.get("input_prompt", "")) or "").strip()
-    merged_prompt = str(input_prompt or "").strip() if prompt_enabled and str(input_prompt or "").strip() else existing_prompt
+    incoming_prompt = str(input_prompt or "").strip()
+    merged_prompt = existing_prompt if existing_prompt else (incoming_prompt if prompt_enabled and incoming_prompt else "")
 
     existing_loras = _normalize_prompt_composer_input_loras(
         input_data.get("lora_stack", payload.get("input_lora_stack", []))
