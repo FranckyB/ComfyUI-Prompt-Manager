@@ -3,7 +3,13 @@ import { api } from "../../scripts/api.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
 import { DEFAULT_THUMBNAIL, showInfo, showConfirm } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
-import { loadComposerPrompts, getComposerEntry, flattenComposerLibrary, COMPOSER_ENDPOINT_PREFIX } from "./prompt_composer_common.js";
+import {
+    loadComposerPrompts,
+    getComposerEntry,
+    flattenComposerLibrary,
+    COMPOSER_ENDPOINT_PREFIX,
+    resolveComposerCategoryKey,
+} from "./prompt_composer_common.js";
 
 const PARTS_PROP_KEY = "prompt_composer_parts";
 const THUMB_ZOOM_PROP_KEY = "prompt_composer_thumb_zoom";
@@ -154,7 +160,7 @@ function getOrderedComposerCategories(node) {
     const typeEntries = Object.entries(node?.composerPromptLibrary?._types_ || {});
     const hasExplicitTypeOrder = typeEntries.some(([, typeData]) => Number.isInteger(Number(typeData?.order)));
     if (!typeEntries.length) {
-        return [...categories].sort((a, b) => a.localeCompare(b));
+        return [...categories].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
     }
 
     const orderedTypeEntries = [...typeEntries].sort((a, b) => {
@@ -168,20 +174,23 @@ function getOrderedComposerCategories(node) {
 
     const categoryOrder = new Map();
     let nextIndex = 0;
-    for (const [, typeData] of orderedTypeEntries) {
-        const categoryNames = Object.keys(typeData?.categories || {}).sort((a, b) => a.localeCompare(b));
+    for (const [typeFile, typeData] of orderedTypeEntries) {
+        const categoryNames = Object.keys(typeData?.categories || {}).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
         for (const categoryName of categoryNames) {
-            if (!categoryOrder.has(categoryName)) {
-                categoryOrder.set(categoryName, nextIndex++);
+            const resolvedKey = resolveComposerCategoryKey(node?.prompts || {}, `${typeFile}::${categoryName}`);
+            if (resolvedKey && !categoryOrder.has(resolvedKey)) {
+                categoryOrder.set(resolvedKey, nextIndex++);
             }
         }
     }
 
     return [...categories].sort((a, b) => {
-        const aIndex = categoryOrder.has(a) ? categoryOrder.get(a) : Number.POSITIVE_INFINITY;
-        const bIndex = categoryOrder.has(b) ? categoryOrder.get(b) : Number.POSITIVE_INFINITY;
+        const resolvedA = resolveComposerCategoryKey(node?.prompts || {}, a);
+        const resolvedB = resolveComposerCategoryKey(node?.prompts || {}, b);
+        const aIndex = categoryOrder.has(resolvedA) ? categoryOrder.get(resolvedA) : Number.POSITIVE_INFINITY;
+        const bIndex = categoryOrder.has(resolvedB) ? categoryOrder.get(resolvedB) : Number.POSITIVE_INFINITY;
         if (aIndex !== bIndex) return aIndex - bIndex;
-        return a.localeCompare(b);
+        return String(resolvedA || a).localeCompare(String(resolvedB || b), undefined, { sensitivity: "base" });
     });
 }
 
@@ -1507,12 +1516,14 @@ function nextSubjectNumber(value, delta) {
 }
 
 function getCategoryPromptType(node, category) {
-    const raw = node?.prompts?.[category]?._prompt_type_;
+    const resolvedCategory = resolveComposerCategoryKey(node?.prompts || {}, category);
+    const raw = node?.prompts?.[resolvedCategory]?._prompt_type_;
     return String(raw || "").trim().toLowerCase();
 }
 
 function getCategorySubjectType(node, category) {
-    const raw = node?.prompts?.[category]?._subject_type_;
+    const resolvedCategory = resolveComposerCategoryKey(node?.prompts || {}, category);
+    const raw = node?.prompts?.[resolvedCategory]?._subject_type_;
     return String(raw || "").trim().toLowerCase();
 }
 
@@ -1657,6 +1668,7 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
         return [];
     }
 
+    const normalizedPreferredCategory = resolveComposerCategoryKey(node?.prompts || {}, preferredCategory) || String(preferredCategory || "").trim();
     const normalizedBasePart = basePart ? normalizePart(basePart) : null;
     const selectionMode = String(selection.selectionMode || "combine").trim().toLowerCase();
     let currentInheritedSubject = {
@@ -1683,33 +1695,39 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
     };
 
     const buildPartsForCategory = (category, prompts) => {
+        const resolvedCategory = resolveComposerCategoryKey(node?.prompts || {}, category) || String(category || "").trim();
         const refs = Array.isArray(prompts)
             ? prompts
-                .map((name) => ({ category, name: String(name || "").trim() }))
+                .map((name) => ({ category: resolvedCategory, name: String(name || "").trim() }))
                 .filter((ref) => ref.name.length > 0)
             : [];
         if (!refs.length) return [];
 
-        const shouldBumpSubject = !normalizedBasePart && categoryStartsNewSubject(node, category);
+        const shouldBumpSubject = !normalizedBasePart && categoryStartsNewSubject(node, resolvedCategory);
         if (selectionMode === "split") {
-            return refs.map((ref, promptIndex) => buildPart(category, [ref.name], shouldBumpSubject && promptIndex === 0, [ref]));
+            return refs.map((ref, promptIndex) => buildPart(resolvedCategory, [ref.name], shouldBumpSubject && promptIndex === 0, [ref]));
         }
-        return [buildPart(category, refs.map((ref) => ref.name), shouldBumpSubject, refs)];
+        return [buildPart(resolvedCategory, refs.map((ref) => ref.name), shouldBumpSubject, refs)];
     };
 
     if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
         const entries = Object.entries(selection.selectionsByCategory)
             .filter(([, prompts]) => Array.isArray(prompts) && prompts.length > 0)
             .sort((a, b) => {
-                if (!preferredCategory) return 0;
-                if (a[0] === preferredCategory) return -1;
-                if (b[0] === preferredCategory) return 1;
+                if (!normalizedPreferredCategory) return 0;
+                const resolvedA = resolveComposerCategoryKey(node?.prompts || {}, a[0]) || a[0];
+                const resolvedB = resolveComposerCategoryKey(node?.prompts || {}, b[0]) || b[0];
+                if (resolvedA === normalizedPreferredCategory) return -1;
+                if (resolvedB === normalizedPreferredCategory) return 1;
                 return 0;
             });
         if (selectionMode !== "split" && entries.length > 1) {
-            const primaryCategory = normalizedBasePart?.category || preferredCategory || entries[0]?.[0] || "";
+            const primaryCategory = normalizedBasePart?.category || normalizedPreferredCategory || resolveComposerCategoryKey(node?.prompts || {}, entries[0]?.[0] || "") || entries[0]?.[0] || "";
             const promptRefs = entries.flatMap(([category, prompts]) => (Array.isArray(prompts) ? prompts : [])
-                .map((name) => ({ category, name: String(name || "").trim() }))
+                .map((name) => ({
+                    category: resolveComposerCategoryKey(node?.prompts || {}, category) || String(category || "").trim(),
+                    name: String(name || "").trim(),
+                }))
                 .filter((ref) => ref.name.length > 0));
             if (!promptRefs.length) return [];
             const shouldBumpSubject = !normalizedBasePart && categoryStartsNewSubject(node, primaryCategory);
@@ -1718,7 +1736,8 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
         return entries.flatMap(([category, prompts]) => buildPartsForCategory(category, prompts));
     }
 
-    const category = selection.category || normalizedBasePart?.category || "";
+    const category = resolveComposerCategoryKey(node?.prompts || {}, selection.category || normalizedBasePart?.category || "")
+        || String(selection.category || normalizedBasePart?.category || "").trim();
     const prompts = selection.prompts.filter((name) => String(name || "").trim());
     return buildPartsForCategory(category, prompts);
 }

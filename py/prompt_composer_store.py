@@ -1582,7 +1582,11 @@ async def compose_reorder_types(request):
         affected_end = max(source_index, insertion_index)
         _assign_type_orders(library, reordered_type_files, affected_start, affected_end)
 
-        library = PromptComposerStore.save_type_files(library, [current_type_file, source_type_file])
+        touched_type_files = []
+        for type_file in reordered_type_files[affected_start:affected_end + 1]:
+            if type_file not in touched_type_files:
+                touched_type_files.append(type_file)
+        library = PromptComposerStore.save_type_files(library, touched_type_files)
         return server.web.json_response({
             "success": True,
             "library": library,

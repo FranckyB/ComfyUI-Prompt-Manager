@@ -2401,6 +2401,17 @@ export function createPromptBrowserEditPanel(options) {
 
     function loadTypeSettings(promptType) {
         const selectedPromptType = String(promptType || "").trim();
+        if (!selectedPromptType || selectedPromptType === "__all__") {
+            groupNameValue.textContent = "No prompt group selected";
+            groupSubjectTypeSelect.value = "subject";
+            groupPrefixInput.value = "";
+            groupBasePromptInput.value = "";
+            loadedGroupPromptType = "";
+            loadedGroupSubjectType = "subject";
+            loadedGroupPromptPrefix = "";
+            loadedGroupBasePrompt = "";
+            return;
+        }
         const typeMeta = getPromptTypeMetadata(node?.prompts, selectedPromptType || loadedGroupPromptType || "", node?.composerPromptLibrary);
         groupNameValue.textContent = String(typeMeta.typeName || typeMeta.promptType || "").trim() || "No prompt group selected";
         groupSubjectTypeSelect.value = String(typeMeta.subjectType || "subject").trim().toLowerCase() || "subject";

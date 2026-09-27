@@ -202,6 +202,37 @@ def _parse_parts(parts_data):
     return normalized
 
 
+def _resolve_part_category(prompts_data, raw_category, prompt_name=""):
+    if not isinstance(prompts_data, dict):
+        return str(raw_category or "").strip()
+
+    exact = _find_category_case_insensitive(prompts_data, raw_category)
+    if exact:
+        return exact
+
+    target = str(raw_category or "").strip().lower()
+    if not target:
+        return ""
+
+    prompt_target = str(prompt_name or "").strip()
+    matches = []
+    for existing_category, category_data in prompts_data.items():
+        if existing_category == "__meta__" or not isinstance(category_data, dict):
+            continue
+        display_name = str(category_data.get("_category_name_") or existing_category).strip().lower()
+        if display_name != target:
+            continue
+        if prompt_target:
+            entry, _canonical_name = _find_prompt_case_insensitive(category_data, prompt_target)
+            if isinstance(entry, dict):
+                return existing_category
+        matches.append(existing_category)
+
+    if len(matches) == 1:
+        return matches[0]
+    return matches[0] if matches else str(raw_category or "").strip()
+
+
 def _normalize_subject_number(value, default=SUBJECT_MIN):
     try:
         numeric = int(round(float(value)))
@@ -849,7 +880,7 @@ class PromptComposer:
 
             chosen_ref = prompt_refs[0] if len(prompt_refs) == 1 else rng.choice(prompt_refs)
             raw_category = chosen_ref.get("category") or part.get("category") or ""
-            category = _find_category_case_insensitive(prompts_data, raw_category) or raw_category
+            category = _resolve_part_category(prompts_data, raw_category, chosen_ref.get("name") or "")
             category_data = prompts_data.get(category, {})
             chosen_name = chosen_ref.get("name") or ""
             entry, canonical_name = _find_prompt_case_insensitive(category_data, chosen_name)

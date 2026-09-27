@@ -62,7 +62,7 @@ function parseComposerCategoryKey(category) {
     };
 }
 
-function resolveComposerCategoryKey(data, category) {
+export function resolveComposerCategoryKey(data, category) {
     const raw = String(category || "").trim();
     if (!raw) return "";
     if (data?.[raw] && typeof data[raw] === "object") {

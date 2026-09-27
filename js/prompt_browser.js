@@ -1936,6 +1936,27 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             currentPromptCategory = "";
             blankPromptExplicitSelection = true;
         };
+        const clearPromptBrowserSelection = async (options = {}) => {
+            const {
+                clearMulti = true,
+                categoryKey = selectedCategory,
+            } = options || {};
+
+            setBlankPromptSelection();
+
+            if (clearMulti) {
+                selectedNames?.clear?.();
+                if (multiCategorySelect && categoryKey) {
+                    delete selectedByCategory[categoryKey];
+                }
+                multiSelectAnchorName = "";
+                updateSelectButton();
+            }
+
+            if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
+                await editPanel.clearPrompt({ skipConfirm: true });
+            }
+        };
         const getResultCategoryName = (category = selectedCategory) => showCategoryTypeFilter
             ? getComposerCategoryDisplayName(node, category)
             : String(category || "").trim();
@@ -3087,11 +3108,20 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     categoryTypeFilter = choice.value;
                     rebuildCategoryList();
                     if (editMode && editPanel) {
-                        if (typeof editPanel.loadTypeSettings === "function") {
-                            editPanel.loadTypeSettings(choice.value);
-                        }
-                        if (typeof editPanel.showTypeSettings === "function") {
-                            editPanel.showTypeSettings();
+                        if (choice.value === "__all__") {
+                            if (typeof editPanel.loadCategorySettings === "function") {
+                                editPanel.loadCategorySettings(selectedCategory);
+                            }
+                            if (typeof editPanel.showCategorySettings === "function") {
+                                editPanel.showCategorySettings();
+                            }
+                        } else {
+                            if (typeof editPanel.loadTypeSettings === "function") {
+                                editPanel.loadTypeSettings(choice.value);
+                            }
+                            if (typeof editPanel.showTypeSettings === "function") {
+                                editPanel.showTypeSettings();
+                            }
                         }
                     }
                     updateTypeRailButtons();
@@ -3716,10 +3746,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         const data = await resp.json();
                         if (data.success) {
                             applyPromptPayloadToNode(node, data);
+                            await clearPromptBrowserSelection({ categoryKey: cat });
                             if (selectedCategory === cat) {
-                                if (multiCategorySelect) {
-                                    delete selectedByCategory[cat];
-                                }
                                 const cats = Object.keys(node.prompts).filter(c => c !== "__meta__");
                                 setSelectedCategory(cats[0] || "");
                             }
@@ -4568,9 +4596,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 for (const promptName of selectedList) {
                     await deletePromptEntry(node, selectedCategory, promptName, endpointPrefix);
                 }
-                selectedNames.clear();
-                multiSelectAnchorName = "";
-                updateSelectButton();
+                await clearPromptBrowserSelection();
                 updateEditModeLayout();
                 renderContent(searchInput.value);
             }, true));
@@ -4606,11 +4632,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 endpointPrefix,
                 {
                     onDelete: async (deletedCategory, deletedPromptName) => {
-                        if (deletedPromptName !== currentPrompt || deletedCategory !== currentPromptCategory) return;
-                        setBlankPromptSelection();
-                        if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
-                            await editPanel.clearPrompt({ skipConfirm: true });
-                        }
+                        await clearPromptBrowserSelection({ categoryKey: deletedCategory || selectedCategory });
                     },
                 }
             );
