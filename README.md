@@ -105,10 +105,10 @@ Prompt Composer is a visual prompt builder for assembling full prompts from reus
 
 The Prompt Composer library now uses a more flexible v2 format built around prompt groups. This makes it much easier to add new groups, organize categories inside them, keep subject behavior per group, and manage larger prompt libraries without relying on the older flat composer JSON layout.
 
-- Compose output before or after an incoming prompt, or use it on its own.
+- Compose output before or after the selected prompt source, or use it on its own.
 - Return output as plain text or JSON.
 - Works in both image and video modes. The Video mode being formatted for Minimax.
-- Prompt fragments can include LoRAs, RefMods, and thumbnails can be generate easily.
+- Prompt fragments can include LoRAs, RefMods, and thumbnails can be generated easily.
 - Categories and prompt groups support prompt types, prefixes, and subject behavior for cleaner browsing and formatting.
 - Multi-select can become one random pool or multiple separate prompt parts.
 - Parts support subject-aware grouping, muting, reordering, merge/split actions, and per-part strength.
@@ -123,6 +123,18 @@ Node-side Prompt Composer controls include:
 - Right-click a merged part to split it back into separate prompts.
 - Drag and drop parts to reorder them.
 - Adjust fragment strength directly on the card.
+
+### Saving And Reloading Composer Workflows
+
+The **Compose Manager** node lets you save and reload full Prompt Composer workflows using **Compose Data**.
+
+To restore a saved Composer setup in **Prompt Composer**, use the **second row of toggles** on the node:
+
+- **Sync** rebuilds the Prompt Composer graph from the incoming `compose_data`
+- **Prompt** uses the prompt stored in the incoming `compose_data`
+- **LoRA** uses the LoRAs stored in the incoming `compose_data`
+
+This allows `compose_data` to take priority over directly connected prompt and LoRA inputs when those toggles are enabled.
 
 <div align="center">
   <figcaption>Use Prompt Composer to build prompts from reusable fragments, including random multi-prompt groups.</figcaption>

@@ -1084,6 +1084,10 @@ class PromptComposer:
                     "forceInput": True,
                     "tooltip": "Optional incoming prompt. Composed parts can be placed before or after it.",
                 }),
+                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {
+                    "forceInput": True,
+                    "tooltip": "Optional saved Prompt Composer payload. Connect recipe or compose data to restore Prompt Composer parts and reuse them.",
+                }),
                 "lora_stack": ("LORA_STACK", {
                     "forceInput": True,
                     "tooltip": "Optional incoming LoRA stack. Prompt Composer either uses this live input or the saved compose_data LoRA input, then appends per-prompt LoRAs.",
@@ -1091,10 +1095,6 @@ class PromptComposer:
                 "mods": ("H3_REF_MODS", {
                     "forceInput": True,
                     "tooltip": "Optional incoming RefMod bundle. Prompt Composer appends per-prompt RefMods to it.",
-                }),
-                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {
-                    "forceInput": True,
-                    "tooltip": "Optional saved Prompt Composer payload. Connect recipe or compose data to restore Prompt Composer parts and reuse them.",
                 }),
 
             },
@@ -1110,8 +1110,8 @@ class PromptComposer:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Compose multiple prompt fragments with per-part strength in one node."
-    RETURN_TYPES = ("STRING", "LORA_STACK", "H3_REF_MODS", "COMPOSE_DATA")
-    RETURN_NAMES = ("Prompt", "lora_stack", "mods", "compose_data")
+    RETURN_TYPES = ("STRING", "COMPOSE_DATA", "LORA_STACK", "H3_REF_MODS")
+    RETURN_NAMES = ("Prompt", "compose_data", "lora_stack", "mods")
     FUNCTION = "compose"
     OUTPUT_NODE = True
 
@@ -1372,4 +1372,4 @@ class PromptComposer:
                 "prompt_composer": out_recipe_data.get(PROMPT_COMPOSER_RECIPE_KEY),
             })
 
-        return (final_output, merged_lora_stack, merged_mods, out_recipe_data)
+        return (final_output, out_recipe_data, merged_lora_stack, merged_mods)
