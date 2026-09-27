@@ -639,6 +639,7 @@ app.registerExtension({
 
                 // IMPORTANT: Add DOM widgets SYNCHRONOUSLY during node creation
                 // to ensure proper positioning within the node bounds
+                ensureWorkflowManagerPersistenceWidgets(node);
                 if (node._isWorkflowManager) {
                     addWorkflowManagerPreview(node);
                 }
@@ -700,6 +701,8 @@ app.registerExtension({
                 // Flag that this node is being restored from a workflow,
                 // so onNodeCreated's async loadPromptData won't overwrite state
                 node._configuredFromWorkflow = true;
+                ensureWorkflowManagerPersistenceWidgets(node);
+                node._suspendWorkflowLinkReset = true;
 
                 // Detect if this is a fresh workflow load (page refresh) vs tab switch
                 // If widgets_values doesn't have current_loras_a or it's a fresh session, clear currentLoras
@@ -717,6 +720,8 @@ app.registerExtension({
                     const currentLorasBIndex = node.widgets?.findIndex(w => w.name === "current_loras_b");
                     const currentLorasCIndex = node.widgets?.findIndex(w => w.name === "current_loras_c");
                     const currentLorasDIndex = node.widgets?.findIndex(w => w.name === "current_loras_d");
+                    const savedWorkflowDataIndex = node.widgets?.findIndex(w => w.name === "saved_workflow_data");
+                    const connectedThumbnailIndex = node.widgets?.findIndex(w => w.name === "connected_thumbnail_state");
 
                     if (lorasAIndex >= 0 && info.widgets_values[lorasAIndex]) {
                         try {
@@ -752,6 +757,17 @@ app.registerExtension({
                         } catch (e) {
                             node.savedTriggerWords = [];
                         }
+                    }
+                    if (savedWorkflowDataIndex >= 0 && info.widgets_values[savedWorkflowDataIndex]) {
+                        try {
+                            const parsed = JSON.parse(info.widgets_values[savedWorkflowDataIndex]);
+                            node.lastWorkflowData = parsed && typeof parsed === "object" ? parsed : null;
+                        } catch (e) {
+                            node.lastWorkflowData = null;
+                        }
+                    }
+                    if (connectedThumbnailIndex >= 0) {
+                        node.connectedThumbnail = String(info.widgets_values[connectedThumbnailIndex] || "").trim() || null;
                     }
 
                     // Restore current loras for tab-switch persistence, but clear on fresh load
@@ -855,6 +871,7 @@ app.registerExtension({
 
                         app.graph.setDirtyCanvas(true, true);
                     } finally {
+                        node._suspendWorkflowLinkReset = false;
                         node._restoringFromWorkflow = false;
                     }
                 });
@@ -3092,6 +3109,25 @@ function updateToggleWidgets(node) {
             fromInput: tw.fromInput === true
         })));
     }
+
+    if (node.savedWorkflowDataWidget) {
+        const workflowData = node.lastWorkflowData;
+        if (!workflowData) {
+            node.savedWorkflowDataWidget.value = "";
+        } else if (typeof workflowData === "string") {
+            node.savedWorkflowDataWidget.value = workflowData;
+        } else {
+            try {
+                node.savedWorkflowDataWidget.value = JSON.stringify(workflowData);
+            } catch {
+                node.savedWorkflowDataWidget.value = "";
+            }
+        }
+    }
+
+    if (node.connectedThumbnailStateWidget) {
+        node.connectedThumbnailStateWidget.value = String(node.connectedThumbnail || "");
+    }
 }
 
 // ========================
@@ -4227,24 +4263,45 @@ function setupCategoryChangeHandler(node) {
 }
 
 function syncSavedWorkflowDataWidget(node) {
-    const w = node.widgets?.find((x) => x.name === "saved_workflow_data");
-    if (!w) return;
+    const w = node.savedWorkflowDataWidget || node.widgets?.find((x) => x.name === "saved_workflow_data");
+    const thumbnailWidget = node.connectedThumbnailStateWidget || node.widgets?.find((x) => x.name === "connected_thumbnail_state");
+    if (!w && !thumbnailWidget) return;
 
     const wf = node.lastWorkflowData;
-    if (!wf) {
+    if (w && !wf) {
         w.value = "";
-        return;
-    }
-
-    if (typeof wf === "string") {
+    } else if (w && typeof wf === "string") {
         w.value = wf;
-        return;
+    } else if (w) {
+        try {
+            w.value = JSON.stringify(wf);
+        } catch {
+            w.value = "";
+        }
     }
 
-    try {
-        w.value = JSON.stringify(wf);
-    } catch {
-        w.value = "";
+    if (thumbnailWidget) {
+        thumbnailWidget.value = String(node.connectedThumbnail || "");
+    }
+}
+
+function ensureWorkflowManagerPersistenceWidgets(node) {
+    if (!node?._isWorkflowManager) return;
+
+    if (!node.savedWorkflowDataWidget) {
+        const savedWorkflowDataWidget = node.addWidget('text', 'saved_workflow_data', '');
+        savedWorkflowDataWidget.type = "converted-widget";
+        savedWorkflowDataWidget.hidden = true;
+        savedWorkflowDataWidget.computeSize = () => [0, -4];
+        node.savedWorkflowDataWidget = savedWorkflowDataWidget;
+    }
+
+    if (!node.connectedThumbnailStateWidget) {
+        const connectedThumbnailStateWidget = node.addWidget('text', 'connected_thumbnail_state', '');
+        connectedThumbnailStateWidget.type = "converted-widget";
+        connectedThumbnailStateWidget.hidden = true;
+        connectedThumbnailStateWidget.computeSize = () => [0, -4];
+        node.connectedThumbnailStateWidget = connectedThumbnailStateWidget;
     }
 }
 
@@ -4777,7 +4834,9 @@ function setupWorkflowLivePickupHandler(node) {
         if (workflowLinkChanged) {
             this._lastLiveWorkflowPickupSig = null;
 
-            if (this._isWorkflowManager && currentWorkflowLink != null) {
+            const shouldPreserveSerializedWorkflowState = this._isWorkflowManager && this._suspendWorkflowLinkReset === true;
+
+            if (this._isWorkflowManager && currentWorkflowLink != null && !shouldPreserveSerializedWorkflowState) {
                 // New input connection: clear local cached workflow state so
                 // upstream workflow_data becomes authoritative.
                 this.lastWorkflowData = null;
