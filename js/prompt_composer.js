@@ -29,8 +29,8 @@ const INPUT_PROMPT_MODE_WIDGET_NAME = "input_prompt_mode";
 const INPUT_LORA_MODE_WIDGET_NAME = "input_lora_mode";
 const LEGACY_INPUT_MODE_WIDGET_NAME = "input_mode";
 const PROMPT_COMPOSER_RECIPE_KEY = "prompt_composer";
-const MIN_NODE_WIDTH = 620;
-const MIN_NODE_HEIGHT = 600;
+const MIN_NODE_WIDTH = 500;
+const MIN_NODE_HEIGHT = 560;
 const HOLD_TO_DRAG_MS = 140;
 const COMPOSER_DRAG_STYLE_ID = "pm-composer-drag-style";
 const THUMB_BASE_WIDTH = 128;
@@ -43,9 +43,9 @@ const THUMB_ZOOM_STEPS = [0.75, 1.0, 1.25, 1.5];
 const GRID_GAP = 8;
 const CARD_META_HEIGHT = 62;
 const CARD_META_HEIGHT_VIDEO = 36;
-const NODE_CHROME_HEIGHT = 86;
-const SCROLLER_PADDING_TOP = 8;
-const SCROLLER_PADDING_BOTTOM = 24;
+const NODE_CHROME_HEIGHT = 74;
+const SCROLLER_PADDING_TOP = 6;
+const SCROLLER_PADDING_BOTTOM = 16;
 const SUBJECT_NONE = 0;
 const SUBJECT_MIN = 1;
 const SUBJECT_MAX = 16;
@@ -1948,10 +1948,10 @@ function ensureComposerUi(node) {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        min-height: 24px;
-        margin: 0 0 8px 0;
-        padding: 0 10px;
+        gap: 8px;
+        min-height: 22px;
+        margin: 0 0 5px 0;
+        padding: 0 8px;
         border: 1px solid rgba(78, 90, 108, 0.72);
         border-radius: 10px;
         background: rgba(34, 39, 48, 0.98);
@@ -1963,15 +1963,16 @@ function ensureComposerUi(node) {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        min-height: 24px;
-        margin: 0 0 8px 0;
-        padding: 0 10px;
-        border: 1px solid rgba(57, 96, 124, 0.78);
-        border-radius: 10px;
-        background: rgba(24, 38, 50, 0.98);
+        gap: 8px;
+        min-height: 22px;
+        margin: 0 0 5px 0;
+        padding: 0 8px;
+        border: 1px solid rgb(53, 118, 220);
+        border-radius: 4px;
+        background: rgb(32, 49, 74);
         box-sizing: border-box;
         flex: 0 0 auto;
+        transition: background 0.15s ease;
     `;
 
     const lockNotice = document.createElement("div");
@@ -2070,13 +2071,13 @@ function ensureComposerUi(node) {
         return { group, sync };
     };
 
-    const createLabeledToggle = ({ title, label, getValue, onToggle, isActive, isDisabled = null }) => {
+    const createLabeledToggle = ({ title, label, getValue, onToggle, isActive, isDisabled = null, activeBackground = "#2f6f92", activeLabelColor = "#f3f4f6", inactiveLabelColor = "#8fb0c6", defaultLabelColor = "#d7edf8" }) => {
         const group = document.createElement("div");
         group.style.cssText = `
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
+            gap: 6px;
             min-width: 0;
             flex: 1 1 0;
         `;
@@ -2084,7 +2085,7 @@ function ensureComposerUi(node) {
 
         const text = document.createElement("span");
         text.textContent = label;
-        text.style.cssText = "font-size: 12px; color: #d7edf8; white-space: nowrap; user-select: none;";
+        text.style.cssText = `font-size: 12px; color: ${defaultLabelColor}; white-space: nowrap; user-select: none;`;
 
         const button = document.createElement("button");
         button.type = "button";
@@ -2119,9 +2120,9 @@ function ensureComposerUi(node) {
             const active = typeof isActive === "function" ? !!isActive(current) : false;
             const disabled = typeof isDisabled === "function" ? !!isDisabled() : false;
             button.dataset.active = active ? "1" : "0";
-            button.style.background = active ? "#2f6f92" : "transparent";
+            button.style.background = active ? activeBackground : "transparent";
             knob.style.transform = active ? "translateX(16px)" : "translateX(0)";
-            text.style.color = active ? "#f3f4f6" : "#8fb0c6";
+            text.style.color = active ? activeLabelColor : inactiveLabelColor;
             button.disabled = disabled;
             button.style.opacity = disabled ? "0.45" : "1";
             button.style.cursor = disabled ? "default" : "pointer";
@@ -2203,7 +2204,7 @@ function ensureComposerUi(node) {
         isActive: (current) => current === "json",
     });
     const positionSwitch = createLabeledToggle({
-        title: "Switch whether composed parts go before or after the incoming prompt",
+        title: "Switch whether composed parts go before or after the selected prompt source",
         label: "After",
         getValue: () => readComposePosition(node),
         onToggle: (current) => writeComposePosition(node, current === "after" ? "before" : "after"),
@@ -2228,9 +2229,10 @@ function ensureComposerUi(node) {
             }
         },
         isActive: (current) => current === "sync",
+        activeBackground: "#8a2f3b",
     });
     const inputPromptSwitch = createLabeledToggle({
-        title: "When enabled, use the saved prompt input from compose_data instead of the live incoming prompt",
+        title: "When enabled, use the prompt from compose_data instead of the live incoming prompt",
         label: "Prompt",
         getValue: () => readInputPromptMode(node),
         onToggle: () => {
@@ -2238,6 +2240,8 @@ function ensureComposerUi(node) {
             writeInputPromptMode(node, nextValue);
         },
         isActive: (current) => current === "use_prompt",
+        defaultLabelColor: "#dbeafe",
+        inactiveLabelColor: "#dbeafe",
     });
     const inputLoraSwitch = createLabeledToggle({
         title: "When enabled, add the saved extra LoRAs from compose_data on top of the composed LoRAs",
@@ -2248,6 +2252,8 @@ function ensureComposerUi(node) {
             writeInputLoraMode(node, nextValue);
         },
         isActive: (current) => current === "use_lora",
+        defaultLabelColor: "#dbeafe",
+        inactiveLabelColor: "#dbeafe",
     });
 
     switchRow.appendChild(formatSwitch.group);
@@ -2258,14 +2264,13 @@ function ensureComposerUi(node) {
     secondarySwitchRow.appendChild(inputLoraSwitch.group);
     root.appendChild(switchRow);
     root.appendChild(secondarySwitchRow);
-    root.appendChild(lockNotice);
 
     const actionRow = document.createElement("div");
     actionRow.style.cssText = `
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin: 0 0 8px 0;
+        gap: 6px;
+        margin: 0 0 6px 0;
         padding: 0 2px;
         flex: 0 0 auto;
     `;
@@ -2278,8 +2283,8 @@ function ensureComposerUi(node) {
         button.style.cssText = `
             flex: 1 1 0;
             min-width: 70px;
-            min-height: 28px;
-            padding: 6px 8px;
+            min-height: 26px;
+            padding: 5px 8px;
             border-radius: 6px;
             border: 1px solid #444;
             background: #222;
@@ -2887,8 +2892,6 @@ function ensureComposerUi(node) {
         grid.style.pointerEvents = isEditLocked ? "none" : "auto";
         grid.style.opacity = isEditLocked ? "0.74" : "1";
         grid.innerHTML = "";
-        lockNotice.style.display = isEditLocked ? "block" : "none";
-
         resolvedParts.forEach((part, index) => {
             const promptRefs = getPartPromptRefs(part);
             const primaryRef = promptRefs[0] || null;
