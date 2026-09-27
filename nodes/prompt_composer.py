@@ -544,16 +544,77 @@ def _ordinal_word(index):
     return words.get(normalized, f"Subject {normalized}")
 
 
-def _image_subject_prefix(position, total):
+def _first_labeled_text_bucket(sections):
+    if not isinstance(sections, dict):
+        return None
+    for bucket in sections.values():
+        if not isinstance(bucket, dict):
+            continue
+        label = str(bucket.get("label") or "").strip()
+        descriptions = [str(value or "").strip() for value in bucket.get("descriptions", []) if str(value or "").strip()]
+        if label and descriptions:
+            return {
+                "label": label,
+                "descriptions": descriptions,
+            }
+    return None
+
+
+def _image_subject_label(text_sections):
+    bucket = _first_labeled_text_bucket(text_sections)
+    if bucket:
+        return bucket["label"]
+    return "Subject"
+
+
+def _image_subject_prefix(position, total, subject_label="Subject"):
+    normalized_label = str(subject_label or "").strip() or "Subject"
     if int(total or 0) <= 1:
         return ""
-    return f"{_ordinal_word(position)} Subject is"
+    return f"{_ordinal_word(position)} {normalized_label} is"
 
 
-def _image_subject_name(position, total):
+def _image_subject_name(position, total, subject_label="Subject"):
+    normalized_label = str(subject_label or "").strip() or "Subject"
     if int(total or 0) <= 1:
-        return "Subject"
-    return f"{_ordinal_word(position)} Subject"
+        return normalized_label
+    return f"{_ordinal_word(position)} {normalized_label}"
+
+
+def _render_image_subject_body(text_sections, subject_label):
+    normalized_subject_label = str(subject_label or "").strip()
+    fragments = []
+    suppressed_subject_label = False
+    for bucket in (text_sections or {}).values():
+        descriptions = [str(value or "").strip() for value in bucket.get("descriptions", []) if str(value or "").strip()]
+        if not descriptions:
+            continue
+        joined = _join_text_descriptions(descriptions)
+        label = str(bucket.get("label") or "").strip()
+        fragment_label = label
+        if (
+            normalized_subject_label
+            and not suppressed_subject_label
+            and label.lower() == normalized_subject_label.lower()
+        ):
+            fragment_label = ""
+            suppressed_subject_label = True
+        fragment_text = f"{fragment_label} {joined}".strip() if fragment_label else joined
+        if fragment_text:
+            fragments.append({
+                "text": fragment_text,
+                "has_label": bool(fragment_label),
+            })
+    if not fragments:
+        return ""
+    if len(fragments) == 1:
+        return fragments[0]["text"]
+
+    rendered = fragments[0]["text"]
+    for index, fragment in enumerate(fragments[1:], start=1):
+        separator = ", "
+        rendered = f"{rendered}{separator}{fragment['text']}"
+    return rendered
 
 
 def _render_image_subject_groups(subject_groups):
@@ -561,7 +622,7 @@ def _render_image_subject_groups(subject_groups):
     typed_groups = _prepare_image_subject_groups(subject_groups)
 
     for group in typed_groups:
-        prefix = _image_subject_prefix(group["position"], group["total"])
+        prefix = _image_subject_prefix(group["position"], group["total"], group.get("subject_label", "Subject"))
         rendered_groups.append(
             f"{prefix} {group['body']}".strip() if prefix else group["body"]
         )
@@ -572,12 +633,15 @@ def _render_image_subject_groups(subject_groups):
 def _prepare_image_subject_groups(subject_groups):
     prepared_groups = []
     for group in subject_groups:
-        body = _render_text_sections(group.get("text_sections", {}))
+        text_sections = group.get("text_sections", {})
+        subject_label = _image_subject_label(text_sections)
+        body = _render_image_subject_body(text_sections, subject_label)
         if not body:
             continue
         prepared_groups.append({
             "body": body,
             "sections": group.get("sections", {}),
+            "subject_label": subject_label,
         })
 
     total = len(prepared_groups)

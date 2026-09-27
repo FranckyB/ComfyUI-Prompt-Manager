@@ -1553,9 +1553,13 @@ function inferPartSubjectState(node, category, basePart = null, inheritedDefault
             ? nextSubjectNumber(subjectNumber, 1)
             : SUBJECT_MIN;
     }
+
+    // A new-subject category must persist the bumped number as a subject anchor.
+    // Leaving it unlocked makes both the UI resolver and backend runtime collapse
+    // it back onto the previously active subject.
     return {
         subject_number: subjectNumber,
-        subject_locked: false,
+        subject_locked: shouldBumpSubject,
     };
 }
 
@@ -2922,6 +2926,12 @@ function ensureComposerUi(node) {
         addCard.title = "Add prompt part";
         addCard.onclick = async (evt) => {
             const parts = readParts(node);
+            if (parts.length > 0) {
+                clearSelectedPartIndices(node);
+                await insertBrowserPartAfter(parts.length - 1);
+                return;
+            }
+
             const inheritedSubject = getInheritedSubjectDefaults(parts);
             const initialCategory = getDefaultComposerPickerCategory(node);
             const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__all__";
@@ -2944,7 +2954,7 @@ function ensureComposerUi(node) {
             }
 
             const next = [...parts];
-            const addedParts = buildPartsFromBrowserSelection(node, selection, inheritedSubject, null, "");
+            const addedParts = buildPartsFromBrowserSelection(node, selection, inheritedSubject, null, initialCategory || "");
             if (!addedParts.length) {
                 return;
             }
