@@ -168,6 +168,97 @@ function isComposerEditLocked(node) {
     return isRecipeSyncEnabled(node) && hasConnectedRecipeInput(node);
 }
 
+let composerPromptTextTooltip = null;
+
+function ensureComposerPromptTextTooltip() {
+    if (composerPromptTextTooltip) return composerPromptTextTooltip;
+    composerPromptTextTooltip = document.createElement("div");
+    composerPromptTextTooltip.setAttribute("data-pm-composer-prompt-tooltip", "true");
+    composerPromptTextTooltip.style.cssText = `
+        position: fixed;
+        display: none;
+        max-width: min(560px, 70vw);
+        max-height: min(340px, 52vh);
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: ${UI.panel};
+        border: 1px solid ${UI.accentBorder};
+        border-radius: 8px;
+        color: ${UI.textPrimary || "#ddd"};
+        font-size: 13px;
+        line-height: 1.45;
+        padding: 12px 14px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+        z-index: 10003;
+        pointer-events: none;
+    `;
+    document.body.appendChild(composerPromptTextTooltip);
+    return composerPromptTextTooltip;
+}
+
+function moveComposerPromptTextTooltip(x, y) {
+    if (!composerPromptTextTooltip || composerPromptTextTooltip.style.display === "none") return;
+    const margin = 14;
+    const width = composerPromptTextTooltip.offsetWidth || 360;
+    const height = composerPromptTextTooltip.offsetHeight || 180;
+    let left = x + margin;
+    let top = y + margin;
+    if (left + width > window.innerWidth - 8) {
+        left = Math.max(8, x - width - margin);
+    }
+    if (top + height > window.innerHeight - 8) {
+        top = Math.max(8, y - height - margin);
+    }
+    composerPromptTextTooltip.style.left = `${left}px`;
+    composerPromptTextTooltip.style.top = `${top}px`;
+}
+
+function showComposerPromptTextTooltip(text, x, y) {
+    const tip = ensureComposerPromptTextTooltip();
+    tip.textContent = text;
+    tip.style.display = "block";
+    moveComposerPromptTextTooltip(x, y);
+}
+
+function hideComposerPromptTextTooltip() {
+    if (composerPromptTextTooltip) {
+        composerPromptTextTooltip.style.display = "none";
+    }
+}
+
+function getComposerRefPromptText(node, ref, fallbackCategory = "") {
+    if (!ref?.name) return "";
+    const entry = getComposerEntry(node, ref.category || fallbackCategory, ref.name);
+    return String(entry?.prompt || "").trim();
+}
+
+function buildComposerPartHoverText(node, part, promptRefs, displayCategory) {
+    const refs = Array.isArray(promptRefs) ? promptRefs : [];
+    if (!refs.length) return "";
+
+    const formatHeading = (ref) => {
+        const rawCategory = String(ref.category || displayCategory || "").trim();
+        const visibleCategory = rawCategory.includes("::") ? rawCategory.split("::").pop().trim() : rawCategory;
+        return `${visibleCategory || displayCategory} : ${ref.name}`;
+    };
+
+    if (refs.length === 1) {
+        const ref = refs[0];
+        const promptText = getComposerRefPromptText(node, ref, part?.category || displayCategory);
+        if (!promptText) return formatHeading(ref);
+        return `${formatHeading(ref)}\n\n${promptText}`;
+    }
+
+    const blocks = refs.map((ref) => {
+        const promptText = getComposerRefPromptText(node, ref, part?.category || displayCategory);
+        return promptText
+            ? `${formatHeading(ref)}\n${promptText}`
+            : formatHeading(ref);
+    });
+    return blocks.join("\n\n---\n\n");
+}
+
 function snapThumbZoom(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return DEFAULT_THUMB_ZOOM;
@@ -2999,7 +3090,23 @@ function ensureComposerUi(node) {
                 display: block;
                 overflow: hidden;
             `;
-            thumbBtn.title = "Click to select prompt fragment(s)\nMiddle click to mute";
+            const hoverPromptText = buildComposerPartHoverText(node, part, promptRefs, getPartDisplayCategory(part) || "Category");
+            thumbBtn.title = "";
+
+            const attachPromptHoverTooltip = (el) => {
+                if (!el || !hoverPromptText) return;
+                el.addEventListener("mouseenter", (evt) => {
+                    showComposerPromptTextTooltip(hoverPromptText, evt.clientX, evt.clientY);
+                });
+                el.addEventListener("mousemove", (evt) => {
+                    moveComposerPromptTextTooltip(evt.clientX, evt.clientY);
+                });
+                el.addEventListener("mouseleave", () => {
+                    hideComposerPromptTextTooltip();
+                });
+            };
+
+            attachPromptHoverTooltip(thumbBtn);
 
             if (multiCount > 1) {
                 appendMultiPromptSlices(thumbBtn, previewThumbnails);
@@ -3177,9 +3284,7 @@ function ensureComposerUi(node) {
             label.textContent = multiCount > 1
                 ? `${displayCategory}: (Multi)`
                 : `${displayCategory}: ${primaryName}`;
-            label.title = multiCount > 1
-                ? `Subject #${padSubjectNumber(part.effective_subject_number)}\n${promptRefs.map((ref) => `${ref.category || displayCategory}: ${ref.name}`).join("\n")}`
-                : label.textContent;
+            label.title = "";
             label.style.cssText = `
                 font-size: 10px;
                 color: ${isMuted ? (UI.textMuted || "#9ca3af") : (UI.textPrimary || "#d1d5db")};
@@ -3191,6 +3296,7 @@ function ensureComposerUi(node) {
                 cursor: pointer;
                 text-decoration: ${isMuted ? "line-through" : "none"};
             `;
+            attachPromptHoverTooltip(label);
             const strengthRow = document.createElement("div");
             strengthRow.style.cssText = `
                 display: flex;
