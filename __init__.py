@@ -11,6 +11,7 @@ from .py.prompt_composer_store import PromptComposerStore
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.prompt_composer import PromptComposer
+from .nodes.prompt_composer_manager import PromptComposerManager
 from .nodes.prompt_browser import PromptBrowser
 from .nodes.prompt_generator import PromptGenerator, PromptGeneratorDataStore
 from .nodes.prompt_generator_options import PromptGenOptions
@@ -23,15 +24,15 @@ from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.recipe_manager import WorkflowManager as RecipeManager
-from .nodes.composer_manager import ComposerManager
 from .nodes.multi_prompt import RecipeBuilderMultiPrompts
 from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter, LoraStackCombine
 
 NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
-    "PromptComposer":            PromptComposer,
     "PromptBrowser":             PromptBrowser,
+    "PromptComposer":            PromptComposer,
+    "PromptComposerManager":     PromptComposerManager,
     "PromptGenerator":           PromptGenerator,
     "PromptGenOptions":          PromptGenOptions,
     "PromptGeneratorKillSwitch": PromptGeneratorKillSwitch,
@@ -43,7 +44,6 @@ NODE_CLASS_MAPPINGS = {
     "RecipeModelLoader":         RecipeModelLoader,
     "RecipeModelPicker":         RecipeModelPicker,
     "RecipeManager":             RecipeManager,
-    "ComposerManager":           ComposerManager,
     "RecipeBuilderMultiPrompts": RecipeBuilderMultiPrompts,
     "MultiLoraStackerLM":        MultiLoraStackerLM,
     "MultiLoraCombine":          MultiLoraCombine,
@@ -55,6 +55,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
     "PromptComposer":             "Prompt Composer",
+    "PromptComposerManager":      "Prompt Composer Manager",
     "PromptBrowser":              "Prompt Browser",
     "PromptGenerator":            "Prompt Generator",
     "PromptGenOptions":           "Prompt Generator Options",
@@ -67,7 +68,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeModelLoader":          "Recipe Model Loader",
     "RecipeModelPicker":          "Recipe Model Picker",
     "RecipeManager":              "Recipe Manager",
-    "ComposerManager":            "Composer Manager",
     "RecipeBuilderMultiPrompts":  "Multi Prompts",
     "MultiLoraStackerLM":         "Multi LoRA Stack",
     "MultiLoraCombine":           "Multi LoRA Combine",

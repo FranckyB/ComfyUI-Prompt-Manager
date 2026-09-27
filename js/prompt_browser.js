@@ -1772,10 +1772,12 @@ export function hasWorkflowDataPayload(rawWorkflowData) {
 
 function hasComposeLikePayload(promptData) {
     if (!promptData || typeof promptData !== "object") return false;
-    if (String(promptData.saved_from || "").trim() === "ComposerManager") return true;
+    const savedFrom = String(promptData.saved_from || "").trim();
+    if (savedFrom === "PromptComposerManager" || savedFrom === "ComposerManager") return true;
     const workflowData = parseWorkflowDataCandidate(promptData.workflow_data);
     if (!workflowData || typeof workflowData !== "object") return false;
-    if (String(workflowData._source || "").trim() === "ComposerManager") return true;
+    const workflowSource = String(workflowData._source || "").trim();
+    if (workflowSource === "PromptComposerManager" || workflowSource === "ComposerManager") return true;
     return workflowData.prompt_composer && typeof workflowData.prompt_composer === "object";
 }
 
@@ -4780,6 +4782,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
+                const hasComposeData = !promptOnly && hasComposeLikePayload(promptData);
                 const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
@@ -4811,9 +4814,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 };
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
-                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
-                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
-                if (isNSFW || showWorkflowBadge || showPromptBadge) {
+                const showComposeBadge = hasComposeData;
+                const showWorkflowBadge = !showComposeBadge && !workflowOnly && hasWorkflowData;
+                const showPromptBadge = !showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload;
+                if (isNSFW || showComposeBadge || showWorkflowBadge || showPromptBadge) {
                     const badgeStack = document.createElement("div");
                     badgeStack.style.cssText = `
                         position: absolute;
@@ -4839,6 +4843,26 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             line-height: 1.2;
                         `;
                         badgeStack.appendChild(badge);
+                    }
+
+                    if (showComposeBadge) {
+                        const composeBadge = document.createElement("div");
+                        composeBadge.textContent = "C";
+                        composeBadge.title = "Has Compose Data";
+                        composeBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(47, 146, 72, 0.95);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(composeBadge);
                     }
 
                     if (showWorkflowBadge) {
@@ -5163,6 +5187,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
                     (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
                 );
+                const hasComposeData = !promptOnly && hasComposeLikePayload(promptData);
                 const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
 
                 const card = document.createElement("div");
@@ -5194,9 +5219,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 };
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
-                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
-                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
-                if (isNSFW || showWorkflowBadge || showPromptBadge) {
+                const showComposeBadge = hasComposeData;
+                const showWorkflowBadge = !showComposeBadge && !workflowOnly && hasWorkflowData;
+                const showPromptBadge = !showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload;
+                if (isNSFW || showComposeBadge || showWorkflowBadge || showPromptBadge) {
                     const badgeStack = document.createElement("div");
                     badgeStack.style.cssText = `
                         position: absolute;
@@ -5222,6 +5248,26 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             line-height: 1.2;
                         `;
                         badgeStack.appendChild(badge);
+                    }
+
+                    if (showComposeBadge) {
+                        const composeBadge = document.createElement("div");
+                        composeBadge.textContent = "C";
+                        composeBadge.title = "Has Compose Data";
+                        composeBadge.style.cssText = `
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 50%;
+                            background: rgba(47, 146, 72, 0.95);
+                            color: #fff;
+                            font-size: 9px;
+                            font-weight: bold;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            line-height: 1;
+                        `;
+                        badgeStack.appendChild(composeBadge);
                     }
 
                     if (showWorkflowBadge) {
@@ -5773,8 +5819,34 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 thumbWrap.appendChild(thumbDiv);
 
-                const showWorkflowBadge = !workflowOnly && hasWorkflowData;
-                const showPromptBadge = workflowOnly && !hasWorkflowData && hasPromptPayload;
+                const hasComposeData = !promptOnly && hasComposeLikePayload(promptData);
+                const showComposeBadge = hasComposeData;
+                const showWorkflowBadge = !showComposeBadge && !workflowOnly && hasWorkflowData;
+                const showPromptBadge = !showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload;
+                if (showComposeBadge) {
+                    const composeBadge = document.createElement("div");
+                    composeBadge.textContent = "C";
+                    composeBadge.title = "Has Compose Data";
+                    composeBadge.style.cssText = `
+                        position: absolute;
+                        right: -2px;
+                        bottom: -2px;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 50%;
+                        background: rgba(47, 146, 72, 0.95);
+                        color: #fff;
+                        font-size: 8px;
+                        font-weight: bold;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        line-height: 1;
+                        border: 1px solid rgba(0, 0, 0, 0.4);
+                        z-index: 1;
+                    `;
+                    thumbWrap.appendChild(composeBadge);
+                }
                 if (showWorkflowBadge) {
                     const workflowBadge = document.createElement("div");
                     workflowBadge.textContent = "R";

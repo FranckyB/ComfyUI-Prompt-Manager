@@ -1,9 +1,9 @@
 """
-Composer Manager - recipe_data editor/save helper for Prompt Composer payloads.
+Prompt Composer Manager - recipe_data editor/save helper for Prompt Composer payloads.
 
 Differences from Recipe Manager:
 - accepts an IMAGE input to provide/save a thumbnail alongside recipe_data
-- tags saved/forwarded workflow metadata as ComposerManager
+- tags saved/forwarded workflow metadata as PromptComposerManager
 """
 
 import json
@@ -15,10 +15,10 @@ from ..py.workflow_data_utils import ensure_v2_recipe_data, get_v2_model_block, 
 from .prompt_manager_adv import PromptManagerAdvanced
 
 
-class ComposerManager(PromptManagerAdvanced):
+class PromptComposerManager(PromptManagerAdvanced):
     """Workflow-focused manager for Prompt Composer recipe_data with explicit thumbnail input."""
 
-    SOURCE_NAME = "ComposerManager"
+    SOURCE_NAME = "PromptComposerManager"
 
     @classmethod
     def INPUT_TYPES(cls):

@@ -153,7 +153,7 @@ function attachPromptInputMaskShim() {
             if (!nodePayload || typeof nodePayload !== "object") continue;
 
             const classType = String(nodePayload.class_type || nodePayload.type || "");
-            if (classType !== "PromptManagerAdvanced" && classType !== "RecipeManager" && classType !== "ComposerManager") continue;
+            if (classType !== "PromptManagerAdvanced" && classType !== "RecipeManager" && classType !== "PromptComposerManager" && classType !== "ComposerManager") continue;
 
             const inputs = nodePayload.inputs;
             if (!inputs || typeof inputs !== "object") continue;
@@ -215,9 +215,9 @@ app.registerExtension({
     name: "PromptManagerAdvanced",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "RecipeManager" || nodeData.name === "ComposerManager") {
+        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "RecipeManager" || nodeData.name === "PromptComposerManager" || nodeData.name === "ComposerManager") {
             attachPromptInputMaskShim();
-            const isComposerManagerNode = nodeData.name === "ComposerManager";
+            const isComposerManagerNode = nodeData.name === "PromptComposerManager" || nodeData.name === "ComposerManager";
             const isWorkflowManagerNode = nodeData.name === "RecipeManager" || isComposerManagerNode;
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
@@ -3658,6 +3658,8 @@ function addButtonBar(node) {
             namePlaceholder: "Prompt name",
             initialName,
             workflowOnly: node?._isWorkflowManager === true,
+            contentFilter: node?._isComposerManager ? "compose" : undefined,
+            filterEmptyCategories: node?._isComposerManager === true,
             onSave: async ({ category, name, overwrite }) => {
                 const promptName = String(name || "").trim();
                 const targetCategory = String(category || "").trim();
@@ -5716,7 +5718,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, lorasC, lo
 
             const liveWorkflowData = buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB, lorasForSaveC, lorasForSaveD);
             if (node?._isWorkflowManager) {
-                liveWorkflowData._source = node?._isComposerManager ? "ComposerManager" : "RecipeManager";
+                liveWorkflowData._source = node?._isComposerManager ? "PromptComposerManager" : "RecipeManager";
             }
             node.lastWorkflowData = liveWorkflowData;
             syncSavedWorkflowDataWidget(node);
