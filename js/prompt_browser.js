@@ -209,6 +209,97 @@ function showTextInputDialog(title, message, defaultValue = "") {
     });
 }
 
+function showNewPromptGroupDialog() {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 10000;
+            width: min(380px, calc(100vw - 36px));
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: #fff;
+        `;
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">New Prompt Group</div>
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt group name</div>
+            <input class="pm-group-name" type="text" value="" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Starting category</div>
+            <input class="pm-category-name" type="text" value="" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Create</button>
+            </div>
+        `;
+
+        const groupInput = dialog.querySelector(".pm-group-name");
+        const categoryInput = dialog.querySelector(".pm-category-name");
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            if (overlay.parentNode) document.body.removeChild(overlay);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        const handleOk = () => {
+            resolve({
+                groupName: String(groupInput?.value || ""),
+                categoryName: String(categoryInput?.value || ""),
+            });
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            resolve(null);
+            cleanup();
+        };
+
+        okBtn.onclick = handleOk;
+        cancelBtn.onclick = handleCancel;
+        overlay.onclick = handleCancel;
+        groupInput.onkeydown = (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                categoryInput.focus();
+                categoryInput.select();
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                handleCancel();
+            }
+        };
+        categoryInput.onkeydown = (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                handleOk();
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                handleCancel();
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        groupInput.focus();
+        groupInput.select();
+    });
+}
+
 function _getComposerImageThumbnailLoras(promptData) {
     const loraName = String(promptData?.lora_image || promptData?.lora || "").trim();
     if (!loraName) return [];
@@ -2502,6 +2593,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             renderContent(searchInput.value);
                             return;
                         }
+                        setBlankPromptSelection();
+                        if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
+                            await editPanel.clearPrompt({ skipConfirm: true });
+                        }
                         setSelectedCategory(resolveComposerCategoryKey(node, categoryName, data.type_file || ""));
                         rebuildCategoryList();
                         renderContent(searchInput.value);
@@ -3174,14 +3269,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const canProceed = await canChangeEditorContext();
                 if (!canProceed) return;
                 hideTypeRailTooltip();
-                const result = await showTextInputDialog(
-                    "New Prompt Group",
-                    "Enter new prompt group name:",
-                    "",
-                );
+                const result = await showNewPromptGroupDialog();
                 if (result === null) return;
-                const groupName = String(result || "").trim();
+                const groupName = String(result?.groupName || "").trim();
+                const categoryName = String(result?.categoryName || "").trim();
                 if (!groupName) return;
+                if (!categoryName) {
+                    await showInfo("Missing Category", "Please enter a starting category for the new prompt group.");
+                    return;
+                }
 
                 const existingChoice = promptTypeFilters.find((choice) => (
                     choice.value !== "__all__"
@@ -3202,6 +3298,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         body: JSON.stringify({
                             prompt_type: groupName,
                             type_name: groupName,
+                            initial_category_name: categoryName,
                         }),
                     });
                     const data = await resp.json();
@@ -3209,14 +3306,20 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         applyPromptPayloadToNode(node, data);
                         node.composerPrompts = data.prompts;
                         categoryTypeFilter = String(data.type_file || groupName).replace(/\.json$/i, "").trim().toLowerCase() || "__all__";
+                        setBlankPromptSelection();
+                        const nextCategoryKey = resolveComposerCategoryKey(node, categoryName, data.type_file || "");
+                        setSelectedCategory(nextCategoryKey);
                         rebuildCategoryList();
                         rebuildTypeRailButtons();
                         if (editMode && editPanel) {
-                            if (typeof editPanel.loadTypeSettings === "function") {
-                                editPanel.loadTypeSettings(categoryTypeFilter);
+                            if (typeof editPanel.clearPrompt === "function") {
+                                await editPanel.clearPrompt({ skipConfirm: true });
                             }
-                            if (typeof editPanel.showTypeSettings === "function") {
-                                editPanel.showTypeSettings();
+                            if (typeof editPanel.loadCategorySettings === "function") {
+                                editPanel.loadCategorySettings(nextCategoryKey);
+                            }
+                            if (typeof editPanel.showCategorySettings === "function") {
+                                editPanel.showCategorySettings();
                             }
                         }
                         renderContent(searchInput.value);
@@ -4008,6 +4111,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                 rebuildCategoryList();
                                 renderContent(searchInput.value);
                                 return;
+                            }
+                            setBlankPromptSelection();
+                            if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
+                                await editPanel.clearPrompt({ skipConfirm: true });
                             }
                             const nextCategoryKey = resolveComposerCategoryKey(node, categoryName, data.type_file || "");
                             syncComposerTypeFilterForCategory(nextCategoryKey, data.type_file || "");

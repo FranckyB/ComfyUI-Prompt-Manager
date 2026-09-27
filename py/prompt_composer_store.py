@@ -1357,6 +1357,22 @@ async def compose_save_type_settings(request):
         else:
             target_type_data.pop("base_prompt", None)
 
+        initial_category_name = str(data.get("initial_category_name", "") or "").strip()
+        if initial_category_name:
+            existing_category_location, _existing_category_error = _locate_category(
+                library,
+                initial_category_name,
+                type_file=target_type_file,
+            )
+            if existing_category_location:
+                return server.web.json_response({
+                    "success": False,
+                    "error": f"Category already exists as '{existing_category_location[2]}'",
+                })
+            initial_category_data = _ensure_type_category(target_type_data, initial_category_name)
+            if _coerce_bool(data.get("initial_category_nsfw")):
+                initial_category_data["nsfw"] = True
+
         library = PromptComposerStore.save_type_files(library, [target_type_file])
         return server.web.json_response({
             "success": True,
