@@ -5,13 +5,8 @@ import {
     configurePromptBrowserDeps,
     showThumbnailBrowser,
     openPromptBrowserForSave,
-    getHideNSFW,
-    setHideNSFW,
-    getViewMode,
-    setViewMode,
-    getThumbnailPreviewEnabled,
-    getBrowserContentFilter,
-    setBrowserContentFilter,
+    hasComposeLikePayload,
+    hasRecipeLikePayload,
     getPromptNamesForCategory,
     getVisibleCategories,
 } from "./prompt_browser.js";
@@ -1519,29 +1514,94 @@ function updateWorkflowManagerPreview(node) {
     }
 }
 
+function buildWorkflowManagerRoot(node) {
+    if (!node?._isWorkflowManager) return null;
+    if (node._workflowManagerRoot) return node._workflowManagerRoot;
+
+    const root = document.createElement("div");
+    root.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        box-sizing: border-box;
+        margin-top: -6px;
+        padding: 0;
+        overflow: hidden;
+        position: relative;
+    `;
+
+    const surface = document.createElement("div");
+    surface.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        gap: 8px;
+        box-sizing: border-box;
+        padding: 0;
+        overflow: hidden;
+    `;
+
+    const previewSection = document.createElement("div");
+    previewSection.style.cssText = "width: 100%; min-width: 0; min-height: 120px; flex: 1 1 auto; box-sizing: border-box;";
+
+    const selectorSection = document.createElement("div");
+    selectorSection.style.cssText = "width: 100%; min-width: 0; flex: 0 0 26px; height: 26px; display: flex; align-items: center; box-sizing: border-box;";
+
+    surface.appendChild(previewSection);
+    surface.appendChild(selectorSection);
+    root.appendChild(surface);
+
+    const widget = node.addDOMWidget("workflow_manager_root", "div", root, {
+        serialize: false,
+        hideOnZoom: false,
+    });
+    widget.getHeight = () => "100%";
+    const origDraw = widget.draw;
+    widget.draw = function (ctx, n, widgetWidth, y, H) {
+        if (typeof origDraw === "function") origDraw.apply(this, arguments);
+        if (!this.element || n.flags?.collapsed) return;
+        this.element.style.setProperty("width", (n.size[0] - 18) + "px", "important");
+        this.element.style.setProperty("left", "0px", "important");
+        this.element.style.setProperty("margin", "0px", "important");
+        this.element.style.setProperty("padding", "0px", "important");
+        this.element.style.setProperty("box-sizing", "border-box", "important");
+        this.element.style.setProperty("overflow", "hidden", "important");
+    };
+
+    node._workflowManagerRoot = {
+        root,
+        surface,
+        previewSection,
+        selectorSection,
+        widget,
+    };
+    return node._workflowManagerRoot;
+}
+
 function addWorkflowManagerPreview(node) {
     if (node.workflowManagerPreviewAttached) return;
+
+    const workflowRoot = buildWorkflowManagerRoot(node);
 
     const container = document.createElement("div");
     container.style.cssText = `
         display: flex;
-        flex-direction: column;
-        gap: 6px;
-        background: ${PMA_THEME.panel};
-        border: 1px solid ${PMA_THEME.panelBorder};
-        border-radius: 8px;
-        padding: 8px;
+        width: 100%;
+        height: 100%;
         box-sizing: border-box;
-        overflow: hidden;
     `;
 
     const previewBox = document.createElement("div");
     previewBox.style.cssText = `
         position: relative;
         width: 100%;
-        flex: 1;
-        min-height: 80px;
-        border-radius: 6px;
+        height: 100%;
+        min-height: 120px;
+        border-radius: 4px;
         background: ${PMA_THEME.inputBg};
         border: 1px solid ${PMA_THEME.inputBorder};
         overflow: hidden;
@@ -1618,7 +1678,7 @@ function addWorkflowManagerPreview(node) {
     previewBox.appendChild(infoBtn);
     container.appendChild(previewBox);
 
-    if (node?._isComposerManager) {
+    if (node?._isWorkflowManager) {
         previewBox.style.cursor = "pointer";
         const openFromPreview = async (evt) => {
             evt?.preventDefault?.();
@@ -1630,23 +1690,16 @@ function addWorkflowManagerPreview(node) {
         emptyLabel.addEventListener("click", openFromPreview);
     }
 
-    const widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
-        hideOnZoom: false,
-    });
-    // Let the DOM widget fill the remaining node height; do NOT override
-    // computeSize with a fixed height or vertical resize will be locked.
-    widget.getHeight = () => "100%";
-    const origDraw = widget.draw;
-    widget.draw = function (ctx, n, widgetWidth, y, H) {
-        if (typeof origDraw === "function") origDraw.apply(this, arguments);
-        if (!this.element || n.flags?.collapsed) return;
-        this.element.style.setProperty("width", (n.size[0] - 18) + "px", "important");
-        this.element.style.setProperty("left", "0px", "important");
-        this.element.style.setProperty("margin", "0px", "important");
-        this.element.style.setProperty("padding", "0px", "important");
-        this.element.style.setProperty("box-sizing", "border-box", "important");
-        this.element.style.setProperty("overflow", "hidden", "important");
-    };
+    let widget = null;
+    if (workflowRoot?.previewSection) {
+        workflowRoot.previewSection.innerHTML = "";
+        workflowRoot.previewSection.appendChild(container);
+    } else {
+        widget = node.addDOMWidget("workflow_manager_preview", "div", container, {
+            hideOnZoom: false,
+        });
+        widget.getHeight = () => "100%";
+    }
 
     node._workflowManagerPreview = { container, image, emptyLabel, infoBtn, widget };
     node.workflowManagerPreviewAttached = true;
@@ -3681,8 +3734,188 @@ function buildWorkflowDefaultName() {
     return `Workflow ${y}-${m}-${d} ${hh}-${mm}-${ss}`;
 }
 
+async function openSaveBrowserForNode(node) {
+    const textWidget = node.widgets.find(w => w.name === "text");
+    const categoryWidget = node.widgets.find(w => w.name === "category");
+    const promptWidget = node.widgets.find(w => w.name === "name");
+    if (!textWidget || !categoryWidget || !promptWidget) return;
+
+    const currentCategory = categoryWidget.value;
+    const currentName = (promptWidget.value || "").trim();
+    const useWorkflowDateDefault = node._isWorkflowManager && (
+        hasConnectedWorkflowInput(node) ||
+        !currentName ||
+        currentName.toLowerCase() === "new prompt" ||
+        node.isNewUnsavedPrompt === true
+    );
+    const initialName = useWorkflowDateDefault
+        ? buildWorkflowDefaultName()
+        : (currentName || "New Prompt");
+
+    await openPromptBrowserForSave({
+        node,
+        currentCategory,
+        currentPrompt: promptWidget.value || "",
+        title: node._isComposerManager ? "Save Composer" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt"),
+        saveButtonText: "Save",
+        namePlaceholder: "Prompt name",
+        initialName,
+        workflowOnly: node?._isWorkflowManager === true,
+        contentFilter: node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : undefined),
+        filterEmptyCategories: node?._isWorkflowManager === true,
+        showAllCategoriesToggle: node?._isWorkflowManager === true,
+        hideContentFilterControl: node?._isWorkflowManager === true,
+        onSave: async ({ category, name, overwrite }) => {
+            const promptName = String(name || "").trim();
+            const targetCategory = String(category || "").trim();
+            const promptText = textWidget.value;
+            if (!promptName || !targetCategory) {
+                return { success: false, error: "Category and prompt name are required." };
+            }
+
+            try {
+                const connectedLorasA = node.currentLorasA || [];
+                const connectedLorasB = node.currentLorasB || [];
+                const connectedLorasC = node.currentLorasC || [];
+                const connectedLorasD = node.currentLorasD || [];
+
+                const useLoraInput = shouldCombineLoras(node);
+                const useInputOnlyLoras = shouldUseInputOnlyLoras(node);
+
+                let allLorasA, allLorasB, allLorasC, allLorasD;
+                if (useInputOnlyLoras) {
+                    allLorasA = [...connectedLorasA.map(l => ({ ...l, source: "current", fromInput: true }))];
+                    allLorasB = [...connectedLorasB.map(l => ({ ...l, source: "current", fromInput: true }))];
+                    allLorasC = [...connectedLorasC.map(l => ({ ...l, source: "current", fromInput: true }))];
+                    allLorasD = [...connectedLorasD.map(l => ({ ...l, source: "current", fromInput: true }))];
+                } else if (!useLoraInput) {
+                    allLorasA = [...(node.savedLorasA || [])];
+                    allLorasB = [...(node.savedLorasB || [])];
+                    allLorasC = [...(node.savedLorasC || [])];
+                    allLorasD = [...(node.savedLorasD || [])];
+                } else {
+                    const mergedA = mergeLoraLists(
+                        connectedLorasA.map(l => ({ ...l, source: "current" })),
+                        node.savedLorasA || []
+                    );
+                    const mergedB = mergeLoraLists(
+                        connectedLorasB.map(l => ({ ...l, source: "current" })),
+                        node.savedLorasB || []
+                    );
+                    const mergedC = mergeLoraLists(
+                        connectedLorasC.map(l => ({ ...l, source: "current" })),
+                        node.savedLorasC || []
+                    );
+                    const mergedD = mergeLoraLists(
+                        connectedLorasD.map(l => ({ ...l, source: "current" })),
+                        node.savedLorasD || []
+                    );
+                    allLorasA = [...mergedA];
+                    allLorasB = [...mergedB];
+                    allLorasC = [...mergedC];
+                    allLorasD = [...mergedD];
+                }
+
+                const allTriggerWords = mergeTriggerWordLists(
+                    node.currentTriggerWords || [],
+                    node.savedTriggerWords || []
+                );
+
+                const thumbnail = node.connectedThumbnail || null;
+
+                let preservedNsfw = false;
+                const categoryPrompts = node.prompts?.[targetCategory];
+                if (categoryPrompts && typeof categoryPrompts === "object") {
+                    const existingName = Object.keys(categoryPrompts)
+                        .filter((k) => !isHiddenCategoryEntryKey(k))
+                        .find((k) => k.toLowerCase() === promptName.toLowerCase());
+                    if (existingName && categoryPrompts[existingName]?.nsfw === true) {
+                        preservedNsfw = true;
+                    }
+                }
+
+                await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allLorasC, allLorasD, allTriggerWords, thumbnail, preservedNsfw);
+
+                const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
+                if (useWorkflowWidget?.value === true) {
+                    const clone = (v, fb) => {
+                        try {
+                            return JSON.parse(JSON.stringify(v ?? fb));
+                        } catch {
+                            return fb;
+                        }
+                    };
+
+                    node._preWorkflowModeState = {
+                        text: promptText || "",
+                        savedLorasA: clone(allLorasA, []),
+                        savedLorasB: clone(allLorasB, []),
+                        savedLorasC: clone(allLorasC, []),
+                        savedLorasD: clone(allLorasD, []),
+                        currentLorasA: [],
+                        currentLorasB: [],
+                        currentLorasC: [],
+                        currentLorasD: [],
+                        savedTriggerWords: clone(allTriggerWords, []),
+                        currentTriggerWords: [],
+                        lastWorkflowData: clone(node.lastWorkflowData, null),
+                    };
+
+                    useWorkflowWidget.value = false;
+                    if (typeof useWorkflowWidget.callback === "function") {
+                        await useWorkflowWidget.callback(false);
+                    }
+                }
+
+                node._skipCallbackReload = true;
+                categoryWidget.value = targetCategory;
+                filterPromptDropdown(node);
+                promptWidget.value = promptName;
+                textWidget.value = promptText;
+                node._skipCallbackReload = false;
+
+                node._previousCategory = targetCategory;
+                node._previousPrompt = promptName;
+
+                node.savedLorasA = allLorasA;
+                node.savedLorasB = allLorasB;
+                node.savedLorasC = allLorasC;
+                node.savedLorasD = allLorasD;
+                node.savedTriggerWords = allTriggerWords;
+                updateLoraDisplays(node);
+                updateTriggerWordsDisplay(node);
+
+                if (node.updatePromptSelectorDisplay) {
+                    node.updatePromptSelectorDisplay();
+                }
+
+                updateLastSavedState(node);
+
+                return {
+                    success: true,
+                    category: targetCategory,
+                    name: promptName,
+                    overwritten: overwrite === true,
+                };
+            } catch (err) {
+                console.error("[PromptManagerAdvanced] Error during save:", err);
+                return { success: false, error: err?.message || "Error during save" };
+            } finally {
+                node.isNewUnsavedPrompt = false;
+                node.newPromptCategory = null;
+                node.newPromptName = null;
+            }
+        },
+    });
+}
+
 function addButtonBar(node) {
     if (node.buttonBarAttached) {
+        return;
+    }
+
+    if (node._isWorkflowManager) {
+        node.buttonBarAttached = true;
         return;
     }
 
@@ -3730,8 +3963,10 @@ function addButtonBar(node) {
             namePlaceholder: "Prompt name",
             initialName,
             workflowOnly: node?._isWorkflowManager === true,
-            contentFilter: node?._isComposerManager ? "compose" : undefined,
-            filterEmptyCategories: node?._isComposerManager === true,
+            contentFilter: node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : undefined),
+            filterEmptyCategories: node?._isWorkflowManager === true,
+            showAllCategoriesToggle: node?._isWorkflowManager === true,
+            hideContentFilterControl: node?._isWorkflowManager === true,
             onSave: async ({ category, name, overwrite }) => {
                 const promptName = String(name || "").trim();
                 const targetCategory = String(category || "").trim();
@@ -8443,11 +8678,13 @@ function createPromptSelectorWidget(node) {
         align-items: center;
         gap: 0;
         background: #1a1a1a;
-        border-radius: 4px;
+        border-radius: 6px;
         overflow: visible;
         height: 26px;
         margin: 0;
         position: relative;
+        width: 100%;
+        box-sizing: border-box;
     `;
 
     // Prevent default context menu on prompt selector
@@ -8679,11 +8916,8 @@ function createPromptSelectorWidget(node) {
             const promptData = node.prompts[category]?.[prompt] || null;
             const catIsNSFW = node.prompts[category]?.["__meta__"]?.nsfw === true;
             const promptIsNSFW = promptData?.nsfw === true;
-            const rawWorkflowData = promptData?.workflow_data;
-            const hasWorkflowData = (
-                (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
-                (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
-            );
+            const hasComposeData = hasComposeLikePayload(promptData);
+            const hasRecipeData = !hasComposeData && hasRecipeLikePayload(promptData);
 
             if (catIsNSFW || promptIsNSFW) {
                 createBadge("nsfw-selector-label", "NSFW", `
@@ -8699,12 +8933,12 @@ function createPromptSelectorWidget(node) {
                 `);
             }
 
-            if (hasWorkflowData && !node?._isWorkflowManager) {
-                createBadge("workflow-selector-label", "R", `
+            if ((hasComposeData || hasRecipeData) && !node?._isWorkflowManager) {
+                createBadge("workflow-selector-label", hasComposeData ? "C" : "R", `
                     width: 14px;
                     height: 14px;
                     border-radius: 50%;
-                    background: rgba(235, 140, 35, 0.95);
+                    background: ${hasComposeData ? "rgba(55, 165, 95, 0.95)" : "rgba(235, 140, 35, 0.95)"};
                     color: #fff;
                     font-size: 9px;
                     font-weight: bold;
@@ -8738,9 +8972,11 @@ function createPromptSelectorWidget(node) {
 
         const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
         const workflowOnly = node?._isWorkflowManager === true;
+        const contentFilter = node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : "all");
         const categories = getVisibleCategories(node, {
             hideNSFW: hideNSFW === true,
             workflowOnly,
+            contentFilter,
         });
         for (const cat of categories) {
             // Skip NSFW categories when preference is set to hide
@@ -8749,6 +8985,7 @@ function createPromptSelectorWidget(node) {
             const prompts = getPromptNamesForCategory(node, cat, {
                 hideNSFW: hideNSFW === true,
                 workflowOnly,
+                contentFilter,
             });
             for (const prompt of prompts) {
                 // Skip NSFW prompts when preference is set to hide
@@ -8849,6 +9086,7 @@ function createPromptSelectorWidget(node) {
         e?.stopPropagation?.();
 
         if (node._isWorkflowManager && hasConnectedWorkflowInput(node)) {
+            await openSaveBrowserForNode(node);
             return;
         }
 
@@ -8873,8 +9111,10 @@ function createPromptSelectorWidget(node) {
 
             const selection = await showThumbnailBrowser(node, category, currentPrompt, {
                 workflowOnly: node?._isWorkflowManager === true,
-                contentFilter: node?._isComposerManager ? "compose" : undefined,
-                filterEmptyCategories: node?._isComposerManager === true,
+                contentFilter: node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : undefined),
+                filterEmptyCategories: true,
+                showAllCategoriesToggle: true,
+                hideContentFilterControl: node?._isWorkflowManager === true,
                 allowMultiSelect: false,
             });
 
@@ -8897,10 +9137,21 @@ function createPromptSelectorWidget(node) {
     updateDisplay();
 
     // Add DOM widget
-    const widget = node.addDOMWidget("prompt_selector", "div", container);
-    widget.computeSize = function(width) {
-        return [width, 28];
-    };
+    let widget = null;
+    if (node._isWorkflowManager) {
+        const workflowRoot = buildWorkflowManagerRoot(node);
+        if (workflowRoot?.selectorSection) {
+            workflowRoot.selectorSection.innerHTML = "";
+            workflowRoot.selectorSection.appendChild(container);
+            widget = { element: container, _workflowRoot: true };
+        }
+    }
+    if (!widget) {
+        widget = node.addDOMWidget("prompt_selector", "div", container);
+        widget.computeSize = function(width) {
+            return [width, 28];
+        };
+    }
 
     // Store reference for updates
     node.promptSelectorWidget = widget;
