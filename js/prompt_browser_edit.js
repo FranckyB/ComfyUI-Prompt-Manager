@@ -19,23 +19,6 @@ const SETTING_COMPOSER_EXTRA_TYPES = "PromptManager.ComposerExtraPromptTypes";
 const SYSTEM_PROMPT_CATEGORIES = ["Audio", "Image", "Video", "Other"];
 const COMPOSER_CATEGORY_KEY_SEPARATOR = "::";
 
-const PROMPT_TYPE_CHOICES = [
-    { value: "character", label: "Character" },
-    { value: "characteristic", label: "Characteristic" },
-    { value: "clothing", label: "Clothing" },
-    { value: "hairstyle", label: "Hairstyle" },
-    { value: "accessory", label: "Accessory" },
-    { value: "expression", label: "Expression" },
-    { value: "action", label: "Action" },
-    { value: "environment", label: "Environment" },
-    { value: "lighting", label: "Lighting" },
-    { value: "mood", label: "Mood" },
-    { value: "camera", label: "Camera" },
-    { value: "composition", label: "Composition" },
-    { value: "effect", label: "Effect" },
-    { value: "style", label: "Style" },
-];
-
 function addPromptTypeChoice(choices, seen, value, label = null) {
     const normalized = String(value || "").trim();
     if (!normalized) return;
@@ -71,8 +54,8 @@ function collectPromptTypesFromData(promptsData) {
 }
 
 export function getPromptTypeChoices(promptsData = null) {
-    const choices = [...PROMPT_TYPE_CHOICES];
-    const seen = new Set(choices.map((c) => String(c.value || "").trim().toLowerCase()));
+    const choices = [];
+    const seen = new Set();
 
     const raw = String(app?.ui?.settings?.getSettingValue?.(SETTING_COMPOSER_EXTRA_TYPES) || "");
     if (raw.trim()) {

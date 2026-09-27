@@ -36,9 +36,6 @@ GROUP_PLACEHOLDER_ICON_FILENAME = "placeholder.png"
 ALL_TYPES_ICON_FILENAME = "all.png"
 COMPOSER_CATEGORY_KEY_SEPARATOR = "::"
 
-SUBJECT_START_TYPE_KEYS = {"character", "environment"}
-NON_SUBJECT_TYPE_KEYS = {"style", "effect", "lighting", "mood", "composition", "camera"}
-
 
 class PromptComposerStore:
     """Load/save Prompt Composer libraries."""
@@ -357,13 +354,17 @@ def _default_type_name_from_file(type_file):
     return " ".join(part.capitalize() for part in _type_stem(type_file).split("_") if part) or "Misc"
 
 
-def _default_subject_type_for_type_file(type_file):
-    stem = _type_stem(type_file)
-    if stem in SUBJECT_START_TYPE_KEYS:
-        return "new_subject"
-    if stem in NON_SUBJECT_TYPE_KEYS:
-        return "non_subject"
+def _default_subject_type():
     return "subject"
+
+
+def _legacy_subject_type_for_name(name):
+    stem = _type_stem(_normalize_type_file_name(name or ""))
+    if stem in {"character", "environment"}:
+        return "new_subject"
+    if stem in {"style", "effect", "lighting", "mood", "composition", "camera"}:
+        return "non_subject"
+    return _default_subject_type()
 
 
 def _normalize_subject_type(value, fallback="subject"):
@@ -517,7 +518,7 @@ def _normalize_type_data(type_file, type_data):
     normalized = {
         "file": type_file,
         "name": _normalize_optional_string(type_data.get("name")) or _default_type_name_from_file(type_file),
-        "subject_type": _normalize_subject_type(type_data.get("subject_type"), _default_subject_type_for_type_file(type_file)),
+        "subject_type": _normalize_subject_type(type_data.get("subject_type"), _default_subject_type()),
         "categories": {},
     }
 
@@ -777,7 +778,7 @@ def _convert_legacy_library_to_canonical(legacy_data):
         type_entry = library[CANONICAL_TYPES_KEY].setdefault(type_file, {
             "file": type_file,
             "name": _default_type_name_from_file(type_file),
-            "subject_type": _default_subject_type_for_type_file(type_file),
+            "subject_type": _legacy_subject_type_for_name(prompt_type or category_name),
             "categories": {},
         })
         if type_file not in seen_type_files:
@@ -785,7 +786,7 @@ def _convert_legacy_library_to_canonical(legacy_data):
             seen_type_files.add(type_file)
         if prompt_type:
             type_entry["name"] = _default_type_name_from_file(type_file)
-            type_entry["subject_type"] = _default_subject_type_for_type_file(type_file)
+            type_entry["subject_type"] = _legacy_subject_type_for_name(prompt_type)
 
         type_entry["categories"][category_name] = _normalize_type_category_data(category_name, {
             "base_prompt": category_data.get("_base_prompt_"),
@@ -832,7 +833,7 @@ def _flatten_canonical_library(library):
         type_icon = _normalize_type_icon(type_data.get("icon"))
         type_prefix = str(type_data.get("prefix") or "")
         type_base_prompt = str(type_data.get("base_prompt") or "")
-        type_subject_type = _normalize_subject_type(type_data.get("subject_type"), _default_subject_type_for_type_file(type_file))
+        type_subject_type = _normalize_subject_type(type_data.get("subject_type"), _default_subject_type())
         type_is_nsfw = _type_nsfw(type_data)
 
         categories = type_data.get("categories", {}) if isinstance(type_data, dict) else {}
@@ -955,7 +956,7 @@ def _ensure_type(library, type_file, name=None, subject_type=None, nsfw=False, p
         type_data = {
             "file": normalized_type_file,
             "name": _normalize_optional_string(name) or _default_type_name_from_file(normalized_type_file),
-            "subject_type": _normalize_subject_type(subject_type, _default_subject_type_for_type_file(normalized_type_file)),
+            "subject_type": _normalize_subject_type(subject_type, _default_subject_type()),
             "categories": {},
         }
         types[normalized_type_file] = type_data
@@ -1336,7 +1337,7 @@ async def compose_save_type_settings(request):
         if "subject_type" in data:
             target_type_data["subject_type"] = _normalize_subject_type(
                 data.get("subject_type"),
-                target_type_data.get("subject_type", _default_subject_type_for_type_file(target_type_file)),
+                target_type_data.get("subject_type", _default_subject_type()),
             )
 
         prefix = str(data.get("prefix", "") or "")

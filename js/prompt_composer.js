@@ -40,18 +40,6 @@ const SCROLLER_PADDING_BOTTOM = 24;
 const SUBJECT_NONE = 0;
 const SUBJECT_MIN = 1;
 const SUBJECT_MAX = 16;
-const SUBJECT_START_PROMPT_TYPES = new Set([
-    "character",
-    "environment",
-]);
-const NON_SUBJECT_PROMPT_TYPES = new Set([
-    "style",
-    "effect",
-    "lighting",
-    "mood",
-    "composition",
-    "camera",
-]);
 const SUBJECT_ACCENTS = [
     { border: "hsla(205, 88%, 60%, 0.95)", soft: "hsla(205, 88%, 60%, 0.18)", strong: "hsla(205, 88%, 44%, 0.95)", text: "hsl(205, 100%, 96%)" },
     { border: "hsla(40, 92%, 60%, 0.95)", soft: "hsla(40, 92%, 60%, 0.18)", strong: "hsla(40, 92%, 44%, 0.95)", text: "hsl(48, 100%, 96%)" },
@@ -1528,15 +1516,11 @@ function getCategorySubjectType(node, category) {
 }
 
 function categoryShouldBeNonSubject(node, category) {
-    const subjectType = getCategorySubjectType(node, category);
-    if (subjectType) return subjectType === "non_subject";
-    return NON_SUBJECT_PROMPT_TYPES.has(getCategoryPromptType(node, category));
+    return getCategorySubjectType(node, category) === "non_subject";
 }
 
 function categoryStartsNewSubject(node, category) {
-    const subjectType = getCategorySubjectType(node, category);
-    if (subjectType) return subjectType === "new_subject";
-    return SUBJECT_START_PROMPT_TYPES.has(getCategoryPromptType(node, category));
+    return getCategorySubjectType(node, category) === "new_subject";
 }
 
 function inferPartSubjectState(node, category, basePart = null, inheritedDefaults = null, options = null) {
@@ -1710,6 +1694,24 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
         return [buildPart(resolvedCategory, refs.map((ref) => ref.name), shouldBumpSubject, refs)];
     };
 
+    const pickPrimaryInsertedCategory = (entries) => {
+        const resolvedEntries = entries
+            .map(([category, prompts]) => ({
+                category: resolveComposerCategoryKey(node?.prompts || {}, category) || String(category || "").trim(),
+                prompts,
+            }))
+            .filter((entry) => entry.category && Array.isArray(entry.prompts) && entry.prompts.length > 0);
+        if (!resolvedEntries.length) return "";
+
+        const newSubjectEntry = resolvedEntries.find((entry) => categoryStartsNewSubject(node, entry.category));
+        if (newSubjectEntry) return newSubjectEntry.category;
+
+        const subjectEntry = resolvedEntries.find((entry) => !categoryShouldBeNonSubject(node, entry.category));
+        if (subjectEntry) return subjectEntry.category;
+
+        return resolvedEntries[0].category;
+    };
+
     if (selection.selectionsByCategory && Object.keys(selection.selectionsByCategory).length > 0) {
         const entries = Object.entries(selection.selectionsByCategory)
             .filter(([, prompts]) => Array.isArray(prompts) && prompts.length > 0)
@@ -1722,7 +1724,12 @@ function buildPartsFromBrowserSelection(node, selection, inheritedSubject, baseP
                 return 0;
             });
         if (selectionMode !== "split" && entries.length > 1) {
-            const primaryCategory = normalizedBasePart?.category || normalizedPreferredCategory || resolveComposerCategoryKey(node?.prompts || {}, entries[0]?.[0] || "") || entries[0]?.[0] || "";
+            const primaryCategory = normalizedBasePart?.category
+                || pickPrimaryInsertedCategory(entries)
+                || normalizedPreferredCategory
+                || resolveComposerCategoryKey(node?.prompts || {}, entries[0]?.[0] || "")
+                || entries[0]?.[0]
+                || "";
             const promptRefs = entries.flatMap(([category, prompts]) => (Array.isArray(prompts) ? prompts : [])
                 .map((name) => ({
                     category: resolveComposerCategoryKey(node?.prompts || {}, category) || String(category || "").trim(),
@@ -2040,6 +2047,48 @@ function ensureComposerUi(node) {
         node._composerContextMenu = null;
     };
 
+    const clearPartSelection = () => {
+        if (getSelectedPartIndices(node).length === 0) return false;
+        clearSelectedPartIndices(node);
+        render();
+        return true;
+    };
+
+    const resolveContextPartIndices = (parts, partIndex) => {
+        const selectedIndices = getSelectedPartIndices(node, parts.length);
+        if (selectedIndices.length > 1) {
+            return selectedIndices;
+        }
+        return [partIndex].filter((value) => Number.isInteger(value) && value >= 0 && value < parts.length);
+    };
+
+    const updateContextParts = (partIndex, updater) => {
+        const parts = readParts(node);
+        const contextIndices = resolveContextPartIndices(parts, partIndex);
+        if (!contextIndices.length || typeof updater !== "function") {
+            return { changed: false, contextIndices, parts };
+        }
+
+        const next = [...parts];
+        let changed = false;
+        for (const index of contextIndices) {
+            const currentPart = next[index];
+            if (!currentPart) continue;
+            const updatedPart = updater(currentPart, index, contextIndices, next);
+            if (!updatedPart) continue;
+            next[index] = normalizePart(updatedPart);
+            changed = true;
+        }
+
+        if (changed) {
+            writeParts(node, next);
+            setSelectedPartIndices(node, contextIndices, next.length);
+            render();
+        }
+
+        return { changed, contextIndices, parts: next };
+    };
+
     const mergeSelectedPromptParts = (indices = null) => {
         const parts = readParts(node);
         const selectedIndices = Array.isArray(indices) && indices.length > 0
@@ -2093,21 +2142,48 @@ function ensureComposerUi(node) {
         return true;
     };
 
-    const splitPromptPart = (partIndex) => {
+    const splitPromptParts = (indices = null) => {
         const parts = readParts(node);
-        const part = normalizePart(parts[partIndex]);
-        const promptRefs = getPartPromptRefs(part);
-        if (!part || promptRefs.length < 2) return false;
-        const splitParts = promptRefs.map((ref) => normalizePart({
-            ...part,
-            category: ref.category || part.category,
-            prompts: [ref.name],
-            prompt_refs: [ref],
-        }));
-        const next = [...parts];
-        next.splice(partIndex, 1, ...splitParts);
+        const targetIndices = Array.isArray(indices) && indices.length > 0
+            ? indices.filter((value) => Number.isInteger(value) && value >= 0 && value < parts.length).sort((a, b) => a - b)
+            : getSelectedPartIndices(node, parts.length);
+        if (!targetIndices.length) return false;
+
+        const replacementSelection = [];
+        const targetIndexSet = new Set(targetIndices);
+        const next = [];
+        let changed = false;
+
+        parts.forEach((rawPart, index) => {
+            if (!targetIndexSet.has(index)) {
+                next.push(rawPart);
+                return;
+            }
+
+            const normalizedPart = normalizePart(rawPart);
+            const promptRefs = getPartPromptRefs(normalizedPart);
+            if (promptRefs.length < 2) {
+                replacementSelection.push(next.length);
+                next.push(rawPart);
+                return;
+            }
+
+            changed = true;
+            promptRefs.forEach((ref) => {
+                replacementSelection.push(next.length);
+                next.push(normalizePart({
+                    ...normalizedPart,
+                    category: ref.category || normalizedPart.category,
+                    prompts: [ref.name],
+                    prompt_refs: [ref],
+                }));
+            });
+        });
+
+        if (!changed) return false;
+
         writeParts(node, next);
-        setSelectedPartIndices(node, splitParts.map((_, offset) => partIndex + offset), next.length);
+        setSelectedPartIndices(node, replacementSelection, next.length);
         render();
         return true;
     };
@@ -2159,14 +2235,16 @@ function ensureComposerUi(node) {
         const parts = readParts(node);
         const resolvedParts = resolveSubjectAssignments(parts);
         const resolvedPart = resolvedParts[partIndex] || null;
-        const selectedIndices = getSelectedPartIndices(node, parts.length);
-        const contextIndices = selectedIndices.length > 1 && selectedIndices.includes(partIndex)
-            ? selectedIndices
-            : [partIndex];
+        const contextIndices = resolveContextPartIndices(parts, partIndex);
         const canMergeContextParts = contextIndices.length > 1 && contextIndices.every((index) => {
             const current = normalizePart(parts[index]);
             return current.category === normalizePart(parts[contextIndices[0]]).category;
         });
+        const contextParts = contextIndices.map((index) => resolvedParts[index]).filter(Boolean);
+        const allMuted = contextParts.length > 0 && contextParts.every((part) => part?.muted === true);
+        const anySplitCandidate = contextParts.some((part) => (part?.prompts?.length || 0) >= 2);
+        const anyAutoEligible = contextParts.some((part) => part?.subject_locked && part?.effective_subject_number !== SUBJECT_NONE);
+        const anyNotSubjectEligible = contextParts.some((part) => part?.effective_subject_number !== SUBJECT_NONE);
 
         addItem(
             resolvedPart?.effective_subject_number === SUBJECT_NONE
@@ -2177,15 +2255,11 @@ function ensureComposerUi(node) {
             () => {},
             true,
         );
-        addItem(resolvedPart?.muted ? "Unmute Prompt" : "Mute Prompt", () => {
-            const next = [...parts];
-            if (!next[partIndex]) return;
-            next[partIndex] = normalizePart({
-                ...next[partIndex],
-                muted: !resolvedPart?.muted,
-            });
-            writeParts(node, next);
-            render();
+        addItem(contextIndices.length > 1 ? (allMuted ? "Unmute Prompts" : "Mute Prompts") : (resolvedPart?.muted ? "Unmute Prompt" : "Mute Prompt"), () => {
+            updateContextParts(partIndex, (currentPart) => ({
+                ...currentPart,
+                muted: !allMuted,
+            }));
         });
         if (contextIndices.length > 1) {
             addItem(`Merge Prompts (${contextIndices.length})`, () => {
@@ -2193,59 +2267,54 @@ function ensureComposerUi(node) {
             }, !canMergeContextParts);
         }
         addItem("Split Prompts", () => {
-            splitPromptPart(partIndex);
-        }, (resolvedPart?.prompts?.length || 0) < 2);
+            splitPromptParts(contextIndices);
+        }, !anySplitCandidate);
         addItem("Subject +1", () => {
-            const next = [...parts];
-            if (!next[partIndex]) return;
-            const baseSubject = resolvedPart?.effective_subject_number ?? SUBJECT_MIN;
-            next[partIndex] = normalizePart({
-                ...next[partIndex],
-                subject_number: nextSubjectNumber(baseSubject, 1),
-                subject_locked: true,
+            updateContextParts(partIndex, (currentPart, index) => {
+                const currentResolved = resolvedParts[index] || normalizePart(currentPart);
+                const baseSubject = currentResolved?.effective_subject_number ?? SUBJECT_MIN;
+                return {
+                    ...currentPart,
+                    subject_number: nextSubjectNumber(baseSubject, 1),
+                    subject_locked: true,
+                };
             });
-            writeParts(node, next);
-            render();
         });
         addItem("Subject -1", () => {
-            const next = [...parts];
-            if (!next[partIndex]) return;
-            const baseSubject = resolvedPart?.effective_subject_number ?? SUBJECT_MIN;
-            next[partIndex] = normalizePart({
-                ...next[partIndex],
-                subject_number: nextSubjectNumber(baseSubject, -1),
-                subject_locked: true,
+            updateContextParts(partIndex, (currentPart, index) => {
+                const currentResolved = resolvedParts[index] || normalizePart(currentPart);
+                const baseSubject = currentResolved?.effective_subject_number ?? SUBJECT_MIN;
+                return {
+                    ...currentPart,
+                    subject_number: nextSubjectNumber(baseSubject, -1),
+                    subject_locked: true,
+                };
             });
-            writeParts(node, next);
-            render();
         });
         addItem("Subject Auto", () => {
-            const next = [...parts];
-            if (!next[partIndex]) return;
-            next[partIndex] = normalizePart({
-                ...next[partIndex],
-                subject_number: resolvedPart?.effective_subject_number === SUBJECT_NONE
-                    ? SUBJECT_MIN
-                    : resolvedPart?.effective_subject_number,
-                subject_locked: false,
+            updateContextParts(partIndex, (currentPart, index) => {
+                const currentResolved = resolvedParts[index] || normalizePart(currentPart);
+                return {
+                    ...currentPart,
+                    subject_number: currentResolved?.effective_subject_number === SUBJECT_NONE
+                        ? SUBJECT_MIN
+                        : currentResolved?.effective_subject_number,
+                    subject_locked: false,
+                };
             });
-            writeParts(node, next);
-            render();
-        }, !resolvedPart?.subject_locked || resolvedPart?.effective_subject_number === SUBJECT_NONE);
+        }, !anyAutoEligible);
         addItem("Not Subject", () => {
-            const next = [...parts];
-            if (!next[partIndex]) return;
-            next[partIndex] = normalizePart({
-                ...next[partIndex],
+            updateContextParts(partIndex, (currentPart) => ({
+                ...currentPart,
                 subject_number: SUBJECT_NONE,
                 subject_locked: true,
-            });
-            writeParts(node, next);
-            render();
-        }, resolvedPart?.effective_subject_number === SUBJECT_NONE);
+            }));
+        }, !anyNotSubjectEligible);
         addItem("Delete", () => {
-            const next = parts.filter((_, idx) => idx !== partIndex);
+            const contextIndexSet = new Set(contextIndices);
+            const next = parts.filter((_, idx) => !contextIndexSet.has(idx));
             writeParts(node, next);
+            clearSelectedPartIndices(node);
             render();
         });
 
@@ -2393,6 +2462,7 @@ function ensureComposerUi(node) {
             const isSelectedPart = selectedPartIndexSet.has(index);
 
             const card = document.createElement("div");
+            card.dataset.composerPartCard = "1";
             const cardBorderColor = subjectAccent.border;
             const cardShadowParts = [];
             if (isSubjectAnchor) {
@@ -2837,6 +2907,7 @@ function ensureComposerUi(node) {
 
         const addCard = document.createElement("button");
         addCard.type = "button";
+        addCard.dataset.composerPartAdd = "1";
         addCard.style.cssText = `
             min-height: ${tileMinHeight}px;
             border: 1px dashed ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"};
@@ -2906,6 +2977,15 @@ function ensureComposerUi(node) {
 
         node._composerUiRefreshHeight?.();
     };
+
+    root.addEventListener("mousedown", (evt) => {
+        if (evt.button !== 0 || evt.ctrlKey || evt.metaKey) return;
+        if (evt.target?.closest?.("[data-composer-part-card='1']")) return;
+        if (evt.target?.closest?.("[data-composer-part-add='1']")) return;
+        if (evt.target?.closest?.("input, button, textarea, select")) return;
+        removeContextMenu();
+        clearPartSelection();
+    }, true);
 
     const computeComposerHeight = () => {
         const nodeHeight = Number(node?.size?.[1]) || MIN_NODE_HEIGHT;

@@ -53,22 +53,6 @@ def _prefix_with_category(category, text):
         return f"{trimmed_category} {trimmed_text}"
     return f"{trimmed_category}: {trimmed_text}"
 
-
-PROMPT_TYPE_CHOICES = [
-    "scene",
-    "character",
-    "accessory",
-    "ambience",
-    "attire",
-    "hairstyle",
-    "background",
-    "style",
-    "lighting",
-    "composition",
-    "camera",
-    "motion",
-]
-
 OUTPUT_FORMAT_CHOICES = ["text", "json"]
 COMPOSE_POSITION_CHOICES = ["after", "before"]
 GENERATION_MODE_CHOICES = ["image", "video"]
@@ -534,27 +518,6 @@ def _subject_label(subject_number):
     return f"Subject {int(subject_number)}"
 
 
-def _normalize_prompt_type_name(value):
-    return str(value or "").strip().lower()
-
-
-def _subject_role(subject_group):
-    prompt_types = [
-        _normalize_prompt_type_name(value)
-        for value in subject_group.get("prompt_types", [])
-        if _normalize_prompt_type_name(value)
-    ]
-    if prompt_types and all(value == "environment" for value in prompt_types):
-        return "environment"
-    if prompt_types and all(value == "animal" for value in prompt_types):
-        return "animal"
-    if "character" in prompt_types:
-        return "person"
-    if "animal" in prompt_types:
-        return "animal"
-    return "person"
-
-
 def _ordinal_word(index):
     words = {
         1: "First",
@@ -578,27 +541,19 @@ def _ordinal_word(index):
         normalized = int(index)
     except (TypeError, ValueError):
         normalized = 0
-    return words.get(normalized, f"Character {normalized}")
+    return words.get(normalized, f"Subject {normalized}")
 
 
-def _image_subject_prefix(role, position, total):
-    normalized_role = str(role or "character").strip().lower()
-    if normalized_role == "environment":
-        return "The Environment is"
-    noun = "Animal" if normalized_role == "animal" else "Character"
+def _image_subject_prefix(position, total):
     if int(total or 0) <= 1:
         return ""
-    return f"{_ordinal_word(position)} {noun} is"
+    return f"{_ordinal_word(position)} Subject is"
 
 
-def _image_subject_name(role, position, total):
-    normalized_role = str(role or "character").strip().lower()
-    if normalized_role == "environment":
-        return "The Environment"
-    noun = "Animal" if normalized_role == "animal" else "Character"
+def _image_subject_name(position, total):
     if int(total or 0) <= 1:
-        return noun
-    return f"{_ordinal_word(position)} {noun}"
+        return "Subject"
+    return f"{_ordinal_word(position)} Subject"
 
 
 def _render_image_subject_groups(subject_groups):
@@ -606,8 +561,7 @@ def _render_image_subject_groups(subject_groups):
     typed_groups = _prepare_image_subject_groups(subject_groups)
 
     for group in typed_groups:
-        role = group["role"]
-        prefix = _image_subject_prefix(role, group["position"], group["total"])
+        prefix = _image_subject_prefix(group["position"], group["total"])
         rendered_groups.append(
             f"{prefix} {group['body']}".strip() if prefix else group["body"]
         )
@@ -616,43 +570,25 @@ def _render_image_subject_groups(subject_groups):
 
 
 def _prepare_image_subject_groups(subject_groups):
-    typed_groups = []
+    prepared_groups = []
     for group in subject_groups:
         body = _render_text_sections(group.get("text_sections", {}))
         if not body:
             continue
-        typed_groups.append({
-            "role": _subject_role(group),
+        prepared_groups.append({
             "body": body,
             "sections": group.get("sections", {}),
         })
 
-    role_totals = {}
-    for group in typed_groups:
-        role = group["role"]
-        if role == "environment":
-            continue
-        role_totals[role] = role_totals.get(role, 0) + 1
-
-    role_positions = {}
-    prepared_groups = []
-    for group in typed_groups:
-        role = group["role"]
-        if role == "environment":
-            prepared_groups.append({
-                **group,
-                "position": 1,
-                "total": 1,
-            })
-            continue
-        role_positions[role] = role_positions.get(role, 0) + 1
-        prepared_groups.append({
+    total = len(prepared_groups)
+    return [
+        {
             **group,
-            "position": role_positions[role],
-            "total": role_totals.get(role, 1),
-        })
-
-    return prepared_groups
+            "position": index,
+            "total": total,
+        }
+        for index, group in enumerate(prepared_groups, start=1)
+    ]
 
 
 def _get_subject_group(subject_groups, subject_number):
@@ -663,7 +599,6 @@ def _get_subject_group(subject_groups, subject_number):
         "number": subject_number,
         "text_sections": {},
         "sections": {},
-        "prompt_types": [],
     }
     subject_groups.append(group)
     return group
@@ -912,7 +847,6 @@ class PromptComposer:
                     )
             else:
                 subject_group = _get_subject_group(subject_groups, subject_number)
-                subject_group["prompt_types"].append(prompt_type)
                 if formatted_plain:
                     _append_text_section(
                         subject_group["text_sections"],
@@ -967,7 +901,7 @@ class PromptComposer:
                     section_values = group["sections"]
                 else:
                     subject_entry = {
-                        "name": _image_subject_name(group["role"], group["position"], group["total"])
+                        "name": _image_subject_name(group["position"], group["total"])
                     }
                     section_values = group["sections"]
                 for key, values in section_values.items():
