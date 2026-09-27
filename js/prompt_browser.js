@@ -2124,9 +2124,57 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 : { ...baseEditBrowserLayout, cols: 6, itemWidth: 152, thumbWidth: 144, thumbHeight: 192, iconCols: 11, iconItemWidth: 82, iconThumbWidth: 72, iconThumbHeight: 96 })
             : editBrowserLayout;
         let typeRailExpanded = showCategoryTypeFilter ? getTypeRailExpanded(browserPrefScope) : false;
-        let browserLayout = editMode
-            ? (showCategoryTypeFilter && typeRailExpanded ? editBrowserLayoutExpandedRail : editBrowserLayout)
-            : (showCategoryTypeFilter && typeRailExpanded ? normalBrowserLayoutExpandedRail : normalBrowserLayout);
+        const DIALOG_VIEWPORT_MARGIN = compactBrowser ? 40 : 80;
+        const DIALOG_HORIZONTAL_PADDING = 32;
+        const DIALOG_HORIZONTAL_BORDER = 2;
+        const DIALOG_HORIZONTAL_CHROME = DIALOG_HORIZONTAL_PADDING + DIALOG_HORIZONTAL_BORDER;
+        const getViewportDialogWidthBudget = () => Math.max(320, window.innerWidth - DIALOG_VIEWPORT_MARGIN);
+        const getViewportDialogLeftMargin = () => Math.max(20, Math.floor(DIALOG_VIEWPORT_MARGIN / 2));
+        const getNormalLayout = () => (
+            showCategoryTypeFilter && typeRailExpanded ? normalBrowserLayoutExpandedRail : normalBrowserLayout
+        );
+        const getCompressedEditLayout = () => (
+            showCategoryTypeFilter && typeRailExpanded ? editBrowserLayoutExpandedRail : editBrowserLayout
+        );
+        const shouldExpandDialogForEditPanel = () => {
+            if (!editMode) return false;
+            const expandedWidth = getNormalLayout().width + getEditPanelWidth() + DIALOG_HORIZONTAL_CHROME;
+            return expandedWidth <= getViewportDialogWidthBudget();
+        };
+        const canExpandDialogForEditPanel = () => {
+            return shouldExpandDialogForEditPanel();
+        };
+        const getActiveBrowserLayout = () => {
+            if (!editMode) {
+                return getNormalLayout();
+            }
+            return shouldExpandDialogForEditPanel() ? getNormalLayout() : getCompressedEditLayout();
+        };
+        const getDialogContentWidth = () => {
+            const activeLayout = getActiveBrowserLayout();
+            return activeLayout.width + (shouldExpandDialogForEditPanel() ? getEditPanelWidth() : 0);
+        };
+        const getDialogOuterWidth = () => getDialogContentWidth() + DIALOG_HORIZONTAL_CHROME;
+        const getDialogLeftPosition = () => {
+            const viewportWidth = Math.max(320, window.innerWidth || 0);
+            const dialogOuterWidth = getDialogOuterWidth();
+            const minLeft = getViewportDialogLeftMargin();
+            const maxLeft = Math.max(minLeft, viewportWidth - dialogOuterWidth - minLeft);
+            const centeredLeft = Math.round((viewportWidth - dialogOuterWidth) / 2);
+
+            if (!editMode || !shouldExpandDialogForEditPanel()) {
+                return Math.min(maxLeft, Math.max(minLeft, centeredLeft));
+            }
+
+            const normalDialogOuterWidth = getNormalLayout().width + DIALOG_HORIZONTAL_CHROME;
+            const anchoredLeft = Math.round((viewportWidth - normalDialogOuterWidth) / 2);
+            if (anchoredLeft >= minLeft && anchoredLeft + dialogOuterWidth <= viewportWidth - minLeft) {
+                return anchoredLeft;
+            }
+
+            return Math.min(maxLeft, Math.max(minLeft, centeredLeft));
+        };
+        let browserLayout = getActiveBrowserLayout();
         const computeMinGridWidth = () => browserLayout.cols * browserLayout.itemWidth + Math.max(0, browserLayout.cols - 1) * browserLayout.gap;
         const getEditPanelWidth = () => {
             if (compactBrowser) return 280;
@@ -2137,14 +2185,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         dialog.style.cssText = `
             position: fixed;
             top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            left: ${getDialogLeftPosition()}px;
+            transform: translateY(-50%);
             background: ${UI.panel};
             border: 1px solid ${UI.panelBorder};
             border-radius: 12px;
             padding: 16px;
             z-index: 10000;
-            width: ${browserLayout.width}px;
+            width: ${getDialogContentWidth()}px;
             max-height: 95vh;
             display: flex;
             flex-direction: column;
@@ -2473,18 +2521,19 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
             editPanel.loadCategorySettings(selectedCategory);
         };
-        const getActiveBrowserLayout = () => {
-            if (editMode) {
-                return showCategoryTypeFilter && typeRailExpanded ? editBrowserLayoutExpandedRail : editBrowserLayout;
+        const applyBrowserLayout = () => {
+            browserLayout = getActiveBrowserLayout();
+            dialog.style.width = `${getDialogContentWidth()}px`;
+            dialog.style.left = `${getDialogLeftPosition()}px`;
+            gridContainer.style.minWidth = `${computeMinGridWidth()}px`;
+            gridContainer.style.height = `${browserLayout.height}px`;
+            if (editPanel) {
+                editPanel.element.style.width = `${getEditPanelWidth()}px`;
             }
-            return showCategoryTypeFilter && typeRailExpanded ? normalBrowserLayoutExpandedRail : normalBrowserLayout;
         };
         const updateEditModeLayout = () => {
             if (!editPanel) return;
-            browserLayout = getActiveBrowserLayout();
-            gridContainer.style.minWidth = `${computeMinGridWidth()}px`;
-            gridContainer.style.height = `${browserLayout.height}px`;
-            editPanel.element.style.width = `${getEditPanelWidth()}px`;
+            applyBrowserLayout();
             if (editMode) {
                 editPanel.element.style.display = "flex";
                 void syncEditPanelSelection();
@@ -3366,9 +3415,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 typeRailExpanded = !typeRailExpanded;
                 setTypeRailExpanded(typeRailExpanded, browserPrefScope);
                 localStorage.setItem(getTypeRailExpandedStorageKey(browserPrefScope), String(typeRailExpanded));
-                browserLayout = getActiveBrowserLayout();
-                gridContainer.style.minWidth = `${computeMinGridWidth()}px`;
-                gridContainer.style.height = `${browserLayout.height}px`;
+                applyBrowserLayout();
                 updateTypeRailButtons();
                 renderContent(searchInput.value);
             };
@@ -6652,6 +6699,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             clearTimeout(hoverTimer);
             clearTimeout(hideTimer);
             clearTimeout(resetTimer);
+            window.removeEventListener("resize", handleWindowResize);
             hidePromptTextTooltip();
             hidePreview();
             if (hoverPreview && hoverPreview.parentNode) {
@@ -6704,6 +6752,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }
         };
+
+        const handleWindowResize = () => {
+            applyBrowserLayout();
+            renderContent(searchInput.value);
+        };
+
+        window.addEventListener("resize", handleWindowResize);
 
         document.body.appendChild(overlay);
         document.body.appendChild(dialog);
