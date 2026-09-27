@@ -321,7 +321,7 @@ app.registerExtension({
                         const inputLorasD = event.detail.input_loras_d || [];
                         const wfDataEvent = event.detail.workflow_data || null;
                         const useWorkflowEvent = event.detail.use_workflow_data === true;
-                        const workflowInput = this.inputs?.find((inp) => inp.name === "recipe_data");
+                        const workflowInput = getWorkflowCarrierInput(this);
                         const hasWorkflowInputConnected = workflowInput?.link != null;
                         const shouldIngestWorkflowExecution = useWorkflowEvent && !this._isWorkflowManager;
 
@@ -1343,10 +1343,30 @@ function hasWorkflowDataPayload(rawWorkflowData) {
     return hasMeaningfulWorkflowData(rawWorkflowData);
 }
 
+function getWorkflowCarrierInput(node) {
+    if (!node?.inputs?.length) return null;
+    return node.inputs.find((inp) => inp?.name === "manager_data")
+        || node.inputs.find((inp) => inp?.name === "compose_data")
+        || node.inputs.find((inp) => inp?.name === "data")
+        || node.inputs.find((inp) => inp?.name === "recipe_data")
+        || null;
+}
+
+function getWorkflowCarrierOutputIndex(node) {
+    if (!node?.outputs?.length) return -1;
+    const preferredNames = ["manager_data", "compose_data", "data", "recipe_data"];
+    for (const name of preferredNames) {
+        const index = node.outputs.findIndex((output) => output?.name === name);
+        if (index >= 0) return index;
+    }
+    return -1;
+}
+
 function hasConnectedWorkflowInput(node) {
-    const wfInput = node?.inputs?.find((inp) => inp?.name === "recipe_data");
+    const wfInput = getWorkflowCarrierInput(node);
     return wfInput?.link != null;
 }
+    const workflowInput = getWorkflowCarrierInput(this);
 
 function isHiddenCategoryEntryKey(key) {
     const normalized = String(key || "").toLowerCase();
@@ -1987,7 +2007,7 @@ async function showWorkflowDiscoverySummary(node) {
         : resolveWorkflowDataForSave(node);
 
     if (!workflowData || typeof workflowData !== "object") {
-        await showInfo("Summary", "No recipe_data available yet. Execute upstream or select a saved workflow prompt.");
+        await showInfo("Summary", "No connected data available yet. Execute upstream or select a saved workflow prompt.");
         return;
     }
 
@@ -4525,7 +4545,7 @@ async function applyLoraFoundState(loras) {
 }
 
 async function pullWorkflowIntoNode(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
+    const wfInput = getWorkflowCarrierInput(node);
     if (!wfInput || wfInput.link == null) {
         await showInfo("Workflow Data", "No workflow_data is connected.");
         return;
@@ -4617,7 +4637,7 @@ function refreshPmaPromptGhosting(node) {
 
     const promptInputConnection = node.inputs?.find((inp) => inp.name === "prompt");
     const isLlmConnected = promptInputConnection && promptInputConnection.link != null;
-    const workflowConnection = node.inputs?.find((inp) => inp.name === "recipe_data");
+    const workflowConnection = getWorkflowCarrierInput(node);
     const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
     const useWorkflow = useWorkflowWidget?.value === true && isWorkflowConnected;
 
@@ -4666,7 +4686,7 @@ function getWorkflowDataLiveSig(workflowData) {
 
 async function tryLiveWorkflowPickup(node, { force = false } = {}) {
     const useWorkflowWidget = node.widgets?.find((w) => w.name === "use_workflow_data");
-    const workflowConnection = node.inputs?.find((inp) => inp.name === "recipe_data");
+    const workflowConnection = getWorkflowCarrierInput(node);
     if (!useWorkflowWidget?.value || workflowConnection?.link == null) return false;
 
     const wfData = (await resolveWorkflowDataForLive(node)) || resolveWorkflowDataForSave(node);
@@ -4713,7 +4733,7 @@ function setupWorkflowLivePickupHandler(node) {
     node._workflowLivePickupHandlerSetup = true;
 
     const getWorkflowInputLink = (n) => {
-        const wfInput = n.inputs?.find((inp) => inp.name === "recipe_data");
+        const wfInput = getWorkflowCarrierInput(n);
         return wfInput?.link ?? null;
     };
     node._lastWorkflowInputLink = getWorkflowInputLink(node);
@@ -4817,7 +4837,7 @@ function setupUseExternalToggleHandler(node) {
 
         // Also check use_workflow_data toggle
         const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
-        const workflowConnection = node.inputs?.find(inp => inp.name === "recipe_data");
+        const workflowConnection = getWorkflowCarrierInput(node);
         const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
         const useWorkflow = useWorkflowWidget?.value && isWorkflowConnected;
 
@@ -4957,7 +4977,7 @@ function setupUseWorkflowToggleHandler(node) {
     const originalCallback = useWorkflowWidget.callback;
     useWorkflowWidget.callback = async function(value) {
         // Prevent turning on if workflow_data is not connected
-        const workflowConnection = node.inputs?.find(inp => inp.name === "recipe_data");
+        const workflowConnection = getWorkflowCarrierInput(node);
         const isConnected = workflowConnection && workflowConnection.link != null;
 
         if (value && !isConnected) {
@@ -5513,12 +5533,12 @@ function buildWorkflowDataFromExtractorNode(extractorNode) {
 }
 
 function resolveWorkflowDataForSave(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
+    const wfInput = getWorkflowCarrierInput(node);
     if (wfInput?.link != null) {
         const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
         const sourceClass = upstream?.comfyClass || upstream?.type || "";
         if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
-            const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+            const wfOutIdx = getWorkflowCarrierOutputIndex(upstream);
             if (wfOutIdx >= 0) {
                 const out = upstream.outputs[wfOutIdx];
                 const data = out?._data ?? out?.value ?? null;
@@ -5538,7 +5558,7 @@ function resolveWorkflowDataForSave(node) {
             if (hasWorkflowDataPayload(fromExtractor)) return fromExtractor;
         }
 
-        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+        const wfOutIdx = getWorkflowCarrierOutputIndex(upstream);
         if (wfOutIdx >= 0) {
             const out = upstream.outputs[wfOutIdx];
             const data = out?._data ?? out?.value ?? null;
@@ -5564,7 +5584,7 @@ function resolveWorkflowDataForSave(node) {
 }
 
 async function resolveWorkflowDataForLive(node) {
-    const wfInput = node.inputs?.find((inp) => inp.name === "recipe_data");
+    const wfInput = getWorkflowCarrierInput(node);
     if (wfInput?.link == null) return null;
 
     const upstream = resolveUpstreamNodeThroughReroutes(node.graph, wfInput.link);
@@ -5574,7 +5594,7 @@ async function resolveWorkflowDataForLive(node) {
     const sourceClassLower = sourceClass.toLowerCase();
 
     if (sourceClass === "RecipeBuilder" || sourceClass === "RecipeBuilderWan") {
-        const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+        const wfOutIdx = getWorkflowCarrierOutputIndex(upstream);
         if (wfOutIdx >= 0) {
             const out = upstream.outputs[wfOutIdx];
             const data = out?._data ?? out?.value ?? null;
@@ -5617,7 +5637,7 @@ async function resolveWorkflowDataForLive(node) {
         }
     }
 
-    const wfOutIdx = upstream?.outputs?.findIndex((o) => o.name === "recipe_data");
+    const wfOutIdx = getWorkflowCarrierOutputIndex(upstream);
     if (wfOutIdx >= 0) {
         const out = upstream.outputs[wfOutIdx];
         const data = out?._data ?? out?.value ?? null;

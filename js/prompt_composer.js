@@ -117,7 +117,7 @@ function writeRecipeSyncMode(node, value) {
 }
 
 function hasConnectedRecipeInput(node) {
-    return node?.inputs?.some((input) => input?.name === "recipe_data" && input.link != null) === true;
+    return node?.inputs?.some((input) => (input?.name === "compose_data" || input?.name === "recipe_data") && input.link != null) === true;
 }
 
 function isRecipeSyncEnabled(node) {
@@ -1910,7 +1910,7 @@ function ensureComposerUi(node) {
         line-height: 1.3;
         flex: 0 0 auto;
     `;
-    lockNotice.textContent = "Recipe Sync is active. Execute reloads from connected recipe_data and card editing is locked.";
+    lockNotice.textContent = "Recipe Sync is active. Execute reloads from connected compose_data and card editing is locked.";
 
     const createInlineSwitch = ({ title, leftLabel, rightLabel, getValue, onToggle, isRightActive, isDisabled = null }) => {
         const group = document.createElement("div");
@@ -2021,7 +2021,7 @@ function ensureComposerUi(node) {
         isDisabled: () => isComposerEditLocked(node),
     });
     const recipeSyncSwitch = createInlineSwitch({
-        title: "When enabled, execute clears local card edits and reloads the Prompt Composer state from connected recipe_data",
+        title: "When enabled, execute clears local card edits and reloads the Prompt Composer state from connected compose_data",
         leftLabel: "Edit",
         rightLabel: "Sync",
         getValue: () => readRecipeSyncMode(node),

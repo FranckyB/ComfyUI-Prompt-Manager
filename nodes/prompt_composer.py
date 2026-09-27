@@ -1012,7 +1012,7 @@ class PromptComposer:
                 }),
                 "recipe_sync_mode": (RECIPE_SYNC_MODE_CHOICES, {
                     "default": "edit",
-                    "tooltip": "Choose whether Prompt Composer keeps local edits or follows connected recipe_data on execute.",
+                    "tooltip": "Choose whether Prompt Composer keeps local edits or follows connected compose_data on execute.",
                 }),
             },
             "optional": {
@@ -1021,9 +1021,9 @@ class PromptComposer:
                     "forceInput": True,
                     "tooltip": "Optional incoming prompt. Composed parts can be placed before or after it.",
                 }),
-                "recipe_data": ("RECIPE_DATA", {
+                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {
                     "forceInput": True,
-                    "tooltip": "Optional saved Prompt Composer payload. Connect saved recipe_data to restore Prompt Composer parts and reuse them.",
+                    "tooltip": "Optional saved Prompt Composer payload. Connect recipe or compose data to restore Prompt Composer parts and reuse them.",
                 }),
                 "lora_stack": ("LORA_STACK", {
                     "forceInput": True,
@@ -1047,8 +1047,8 @@ class PromptComposer:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Compose multiple prompt fragments with per-part strength in one node."
-    RETURN_TYPES = ("STRING", "RECIPE_DATA", "LORA_STACK", "H3_REF_MODS")
-    RETURN_NAMES = ("Prompt", "recipe_data", "lora_stack", "mods")
+    RETURN_TYPES = ("STRING", "COMPOSE_DATA", "LORA_STACK", "H3_REF_MODS")
+    RETURN_NAMES = ("Prompt", "compose_data", "lora_stack", "mods")
     FUNCTION = "compose"
     OUTPUT_NODE = True
 
@@ -1057,7 +1057,8 @@ class PromptComposer:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", recipe_data=None, lora_stack=None, mods=None, **kwargs):
+    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", compose_data=None, lora_stack=None, mods=None, **kwargs):
+        recipe_data = compose_data if compose_data is not None else kwargs.get("recipe_data")
         parts = _resolve_effective_parts_for_change(parts_data, recipe_sync_mode=recipe_sync_mode, recipe_data=recipe_data)
         prompts_data = PromptComposerStore.load_prompts()
         prompt_library_signature = _build_prompt_library_signature(parts, prompts_data)
@@ -1066,7 +1067,8 @@ class PromptComposer:
             return (parts_data, dynamic_seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
         return (parts_data, seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
 
-    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", recipe_data=None, lora_stack=None, mods=None, unique_id=None):
+    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", compose_data=None, lora_stack=None, mods=None, unique_id=None, **kwargs):
+        recipe_data = compose_data if compose_data is not None else kwargs.get("recipe_data")
         prompts_data = PromptComposerStore.load_prompts()
         base_recipe_data = _coerce_recipe_data_payload(recipe_data, source="PromptComposer")
         composer_recipe_state = _extract_prompt_composer_recipe_state(base_recipe_data)

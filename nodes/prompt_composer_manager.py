@@ -1,8 +1,8 @@
 """
-Prompt Composer Manager - recipe_data editor/save helper for Prompt Composer payloads.
+Prompt Composer Manager - compose_data editor/save helper for Prompt Composer payloads.
 
 Differences from Recipe Manager:
-- accepts an IMAGE input to provide/save a thumbnail alongside recipe_data
+- accepts an IMAGE input to provide/save a thumbnail alongside compose data
 - tags saved/forwarded workflow metadata as PromptComposerManager
 """
 
@@ -16,7 +16,7 @@ from .prompt_manager_adv import PromptManagerAdvanced
 
 
 class PromptComposerManager(PromptManagerAdvanced):
-    """Workflow-focused manager for Prompt Composer recipe_data with explicit thumbnail input."""
+    """Workflow-focused manager for Prompt Composer data with explicit thumbnail input."""
 
     SOURCE_NAME = "PromptComposerManager"
 
@@ -47,8 +47,8 @@ class PromptComposerManager(PromptManagerAdvanced):
                 }),
             },
             "optional": {
-                "recipe_data": ("RECIPE_DATA", {"forceInput": True, "tooltip": "Connected recipe_data to edit/forward"}),
-                "thumbnail_image": ("IMAGE", {"tooltip": "Optional image input used as the saved thumbnail when present."}),
+                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {"forceInput": True, "tooltip": "Connected compose data to edit/forward"}),
+                "image": ("IMAGE", {"tooltip": "Optional image input used as the saved thumbnail when present."}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -59,16 +59,18 @@ class PromptComposerManager(PromptManagerAdvanced):
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Recipe-data focused manager for Prompt Composer saves, with optional thumbnail image input."
-    RETURN_TYPES = ("RECIPE_DATA",)
-    RETURN_NAMES = ("recipe_data",)
+    DESCRIPTION = "Compose-data focused manager for Prompt Composer saves, with optional thumbnail image input."
+    RETURN_TYPES = ("COMPOSE_DATA",)
+    RETURN_NAMES = ("compose_data",)
     FUNCTION = "get_workflow"
     OUTPUT_NODE = True
 
     @classmethod
     def IS_CHANGED(cls, category, name, text="", **kwargs):
-        recipe_data = kwargs.get("recipe_data", None)
-        thumbnail_image = kwargs.get("thumbnail_image", None)
+        data = kwargs.get("compose_data", None)
+        if data is None:
+            data = kwargs.get("data", None)
+        thumbnail_image = kwargs.get("image", None)
         loras_a_toggle = kwargs.get("loras_a_toggle", "")
         loras_b_toggle = kwargs.get("loras_b_toggle", "")
         saved_workflow_data = kwargs.get("saved_workflow_data", "")
@@ -82,7 +84,7 @@ class PromptComposerManager(PromptManagerAdvanced):
             category,
             name,
             text,
-            str(recipe_data) if recipe_data else None,
+            str(data) if data else None,
             thumbnail_sig,
             loras_a_toggle or "",
             loras_b_toggle or "",
@@ -94,15 +96,21 @@ class PromptComposerManager(PromptManagerAdvanced):
         category,
         name,
         text="",
-        recipe_data=None,
+        compose_data=None,
         thumbnail_image=None,
         unique_id=None,
         loras_a_toggle=None,
         loras_b_toggle=None,
         saved_workflow_data=None,
+        **kwargs,
     ):
         prompts_data = self.load_prompts()
         source_name = self.SOURCE_NAME
+        recipe_data = compose_data
+        if recipe_data is None:
+            recipe_data = kwargs.get("data")
+        if recipe_data is None:
+            recipe_data = kwargs.get("recipe_data")
 
         def _as_workflow_dict(raw):
             if isinstance(raw, dict):

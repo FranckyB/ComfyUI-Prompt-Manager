@@ -10,7 +10,6 @@ from datetime import datetime
 import folder_paths
 import server
 from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
-from ..py.thumbnail_utils import image_to_base64_thumbnail
 from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 
 
@@ -345,11 +344,10 @@ class PromptManagerAdvanced:
             },
             "optional": {
                 "prompt": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
-                "recipe_data": ("RECIPE_DATA", {"forceInput": True, "tooltip": "Optional saved workflow or Prompt Composer payload to preserve when saving prompts."}),
+                "manager_data": ("RECIPE_DATA,COMPOSE_DATA", {"forceInput": True, "tooltip": "Optional saved recipe or composer payload."}),
                 "lora_stack_a": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "First LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
                 "lora_stack_b": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "Second LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
-                "thumbnail_image": ("IMAGE", {"tooltip": "Connect an image to use as thumbnail when saving the prompt"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -366,7 +364,8 @@ class PromptManagerAdvanced:
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Full-featured prompt manager with multi-slot LoRA stack support, trigger words, and thumbnail browser."
     RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA", "MULTI_LORA_STACK")
-    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "recipe_data", "multi_lora_stack")
+    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "manager_data", "multi_lora_stack")
+    OUTPUT_TOOLTIPS = ("", "", "", "Saved recipe or composer payload.", "")
     FUNCTION = "get_prompt"
     OUTPUT_NODE = True
 
@@ -636,12 +635,18 @@ class PromptManagerAdvanced:
         return lora_path, False
 
     def get_prompt(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
-                   text="", prompt=None, recipe_data=None, lora_stack_a=None, lora_stack_b=None,
-                   trigger_words=None, thumbnail_image=None,
+                   text="", prompt=None, manager_data=None, lora_stack_a=None, lora_stack_b=None,
+                   trigger_words=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None, trigger_words_toggle=None,
                    extra_pnginfo=None, api_prompt=None,
                    **kwargs):
         """Return the prompt text and filtered lora stacks based on toggle states"""
+
+        recipe_data = manager_data
+        if recipe_data is None:
+            recipe_data = kwargs.get("data")
+        if recipe_data is None:
+            recipe_data = kwargs.get("recipe_data")
 
         # ========================================
         # RESET LOGIC - Determine if we should clear toggles and start fresh
@@ -977,14 +982,6 @@ class PromptManagerAdvanced:
             loras_c_display = self._format_loras_for_display_with_unavailable(lora_stack_c, all_preset_loras_c)
             loras_d_display = self._format_loras_for_display_with_unavailable(lora_stack_d, all_preset_loras_d)
 
-        # Convert thumbnail image to base64 if provided
-        thumbnail_base64 = None
-        if thumbnail_image is not None:
-            try:
-                thumbnail_base64 = image_to_base64_thumbnail(thumbnail_image, log_prefix="PromptManagerAdvanced")
-            except Exception as e:
-                print(f"[PromptManagerAdvanced] Failed to convert thumbnail image: {e}")
-
         # Build explicit list of unavailable lora names for frontend
         if use_input_only_loras:
             unavailable_loras_a = [l.get('name') for l in loras_a_display if l.get('available') is False]
@@ -1017,7 +1014,7 @@ class PromptManagerAdvanced:
                 "unavailable_loras_c": unavailable_loras_c,
                 "unavailable_loras_d": unavailable_loras_d,
                 "trigger_words": trigger_words_display,
-                "connected_thumbnail": thumbnail_base64,
+                "connected_thumbnail": None,
                 "should_reset": should_reset,  # Python tells JavaScript when to reset toggles
                 "lora_input_mode": lora_input_mode,
                 "use_lora_input": use_combined_loras,
@@ -1070,7 +1067,7 @@ class PromptManagerAdvanced:
 
     def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
                           text="", prompt=None, lora_stack_a=None, lora_stack_b=None,
-                          trigger_words=None, thumbnail_image=None,
+                          trigger_words=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None,
                           trigger_words_toggle=None, extra_pnginfo=None, api_prompt=None,
                           **kwargs):
