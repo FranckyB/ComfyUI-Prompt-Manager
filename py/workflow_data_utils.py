@@ -275,6 +275,7 @@ def _coerce_prompt_loras(raw_loras):
             "clip_strength": clip_strength,
             "active": lora.get("active", True),
             "available": lora.get("available", True),
+            "source": lora.get("source") or None,
         })
 
     return out

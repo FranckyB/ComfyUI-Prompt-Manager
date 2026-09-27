@@ -167,6 +167,8 @@ class PromptComposerManager(PromptManagerAdvanced):
         wf_model_a = get_v2_model_block(wf, "model_a") or {}
         wf_model_b = get_v2_model_block(wf, "model_b") or {}
         wf_has_model_b = isinstance(get_v2_model_block(wf, "model_b"), dict)
+        composer_payload = wf.get("prompt_composer") if isinstance(wf.get("prompt_composer"), dict) else {}
+        composer_input_data = composer_payload.get("input_data") if isinstance(composer_payload.get("input_data"), dict) else {}
         incoming_wf = live_workflow_data if isinstance(live_workflow_data, dict) else None
         incoming_has_model_b = None
         if isinstance(incoming_wf, dict):
@@ -207,6 +209,16 @@ class PromptComposerManager(PromptManagerAdvanced):
                 if isinstance(lora, dict) and lora.get("name")
             ]
 
+        composer_input_loras_a = [
+            (
+                lora.get("path") or lora.get("name"),
+                lora.get("model_strength", 1.0),
+                lora.get("clip_strength", 1.0),
+            )
+            for lora in composer_input_data.get("lora_stack", [])
+            if isinstance(lora, dict) and (lora.get("path") or lora.get("name"))
+        ]
+
         merged_stack_a = list(wf_loras_a) if wf_loras_a else (list(preset_stack_a) if preset_stack_a else [])
         if wf_has_model_b:
             merged_stack_b = list(wf_loras_b) if wf_loras_b else (list(preset_stack_b) if preset_stack_b else [])
@@ -234,7 +246,7 @@ class PromptComposerManager(PromptManagerAdvanced):
                 ),
                 "loras_a": loras_a_display,
                 "loras_b": loras_b_display,
-                "input_loras_a": self._format_loras_for_display(wf_loras_a) if wf_loras_a else [],
+                "input_loras_a": self._format_loras_for_display(composer_input_loras_a) if composer_input_loras_a else [],
                 "input_loras_b": self._format_loras_for_display(wf_loras_b) if wf_loras_b else [],
                 "unavailable_loras_a": unavailable_loras_a,
                 "unavailable_loras_b": unavailable_loras_b,

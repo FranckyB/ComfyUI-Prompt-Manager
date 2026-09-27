@@ -5055,7 +5055,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             saveNameInput.select();
                         }
                         setCurrentPromptSelection(promptName);
-                        renderContent(searchInput.value);
+                        updateGridSelections();
                         return;
                     }
 
@@ -5080,27 +5080,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 if (mode === "save") {
                     card.ondblclick = async () => {
-                        if (!onSave) return;
-                        const overwriteOk = await showConfirm(
-                            "Overwrite Prompt",
-                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
-                            "Replace",
-                            "#c44"
-                        );
-                        if (!overwriteOk) return;
-
-                        const saveResult = await onSave({
-                            category: selectedCategory,
-                            name: promptName,
-                            overwrite: true,
-                        });
-
-                        if (saveResult?.success) {
-                            resolve(saveResult);
-                            cleanup();
-                        } else {
-                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
                         }
+                        setCurrentPromptSelection(promptName);
+                        await handleSaveAction();
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
@@ -5456,7 +5441,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             saveNameInput.select();
                         }
                         setCurrentPromptSelection(promptName);
-                        renderContent(searchInput.value);
+                        updateCompactGridSelections();
                         return;
                     }
 
@@ -5481,27 +5466,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 if (mode === "save") {
                     card.ondblclick = async () => {
-                        if (!onSave) return;
-                        const overwriteOk = await showConfirm(
-                            "Overwrite Prompt",
-                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
-                            "Replace",
-                            "#c44"
-                        );
-                        if (!overwriteOk) return;
-
-                        const saveResult = await onSave({
-                            category: selectedCategory,
-                            name: promptName,
-                            overwrite: true,
-                        });
-
-                        if (saveResult?.success) {
-                            resolve(saveResult);
-                            cleanup();
-                        } else {
-                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
                         }
+                        setCurrentPromptSelection(promptName);
+                        await handleSaveAction();
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
@@ -6080,7 +6050,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             saveNameInput.select();
                         }
                         setCurrentPromptSelection(promptName);
-                        renderContent(searchInput.value);
+                        updateListSelections();
                         return;
                     }
 
@@ -6105,27 +6075,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 if (mode === "save") {
                     row.ondblclick = async () => {
-                        if (!onSave) return;
-                        const overwriteOk = await showConfirm(
-                            "Overwrite Prompt",
-                            `Prompt "${promptName}" already exists in category "${selectedCategory}". Do you want to replace it?`,
-                            "Replace",
-                            "#c44"
-                        );
-                        if (!overwriteOk) return;
-
-                        const saveResult = await onSave({
-                            category: selectedCategory,
-                            name: promptName,
-                            overwrite: true,
-                        });
-
-                        if (saveResult?.success) {
-                            resolve(saveResult);
-                            cleanup();
-                        } else {
-                            await showInfo("Save Failed", saveResult?.error || "Failed to save workflow.");
+                        selectedSaveName = promptName;
+                        if (saveNameInput) {
+                            saveNameInput.value = promptName;
                         }
+                        setCurrentPromptSelection(promptName);
+                        await handleSaveAction();
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     row.ondblclick = () => {

@@ -4838,10 +4838,10 @@ function mergePromptComposerInputMetadataIntoWorkflowData(node, workflowData) {
     if (!workflowData || typeof workflowData !== "object" || Array.isArray(workflowData)) return workflowData;
 
     const connectedInputLoras = [
-        ...(Array.isArray(node.rawInputLorasA) ? node.rawInputLorasA : []),
-        ...(Array.isArray(node.rawInputLorasB) ? node.rawInputLorasB : []),
-        ...(Array.isArray(node.rawInputLorasC) ? node.rawInputLorasC : []),
-        ...(Array.isArray(node.rawInputLorasD) ? node.rawInputLorasD : []),
+        ...getWorkflowLorasBySlot(workflowData, "model_a"),
+        ...getWorkflowLorasBySlot(workflowData, "model_b"),
+        ...getWorkflowLorasBySlot(workflowData, "model_c"),
+        ...getWorkflowLorasBySlot(workflowData, "model_d"),
     ];
     const incomingPromptText = String(node.currentPromptInputText || "").trim();
     const hasIncomingComposerMetadata = incomingPromptText.length > 0 || connectedInputLoras.length > 0;
@@ -4855,6 +4855,9 @@ function mergePromptComposerInputMetadataIntoWorkflowData(node, workflowData) {
     const inputData = payload.input_data && typeof payload.input_data === "object" && !Array.isArray(payload.input_data)
         ? { ...payload.input_data }
         : {};
+    const promptData = payload.prompt_data && typeof payload.prompt_data === "object" && !Array.isArray(payload.prompt_data)
+        ? { ...payload.prompt_data }
+        : {};
 
     const normalizeLoraRecord = (lora) => {
         const name = String(lora?.name || "").trim();
@@ -4866,31 +4869,50 @@ function mergePromptComposerInputMetadataIntoWorkflowData(node, workflowData) {
             clip_strength: Number(lora?.clip_strength ?? lora?.strength ?? lora?.model_strength ?? 1.0) || 1.0,
             active: lora?.active !== false,
             available: lora?.available !== false,
+            source: "upstream",
         };
     };
 
-    const mergeLoraRecords = (baseList, additions) => {
+    const normalizeLoraRecords = (entries) => {
         const merged = [];
         const seen = new Set();
+        const assetKeyFor = (entry) => {
+            const normalized = normalizeLoraRecord(entry);
+            if (!normalized) return "";
+            const rawPath = String(normalized.path || normalized.name || "").replace(/\\/g, "/").trim().toLowerCase();
+            const leaf = rawPath.split("/").pop() || rawPath;
+            return leaf.replace(/\.safetensors$/i, "") || leaf;
+        };
         const push = (entry) => {
             const normalized = normalizeLoraRecord(entry);
             if (!normalized) return;
-            const key = `${normalized.path.toLowerCase()}::${normalized.name.toLowerCase()}`;
+            const key = assetKeyFor(normalized);
             if (seen.has(key)) return;
             seen.add(key);
             merged.push(normalized);
         };
-        (Array.isArray(baseList) ? baseList : []).forEach(push);
-        (Array.isArray(additions) ? additions : []).forEach(push);
+        (Array.isArray(entries) ? entries : []).forEach(push);
         return merged;
     };
 
     const existingPrompt = String(inputData.prompt || payload.input_prompt || "").trim();
     const nextPrompt = existingPrompt || incomingPromptText;
-
-    const existingLoras = Array.isArray(inputData.lora_stack)
-        ? inputData.lora_stack
-        : (Array.isArray(payload.input_lora_stack) ? payload.input_lora_stack : []);
+    const existingLoras = normalizeLoraRecords(
+        Array.isArray(inputData.lora_stack)
+            ? inputData.lora_stack
+            : (Array.isArray(payload.input_lora_stack) ? payload.input_lora_stack : [])
+    );
+    const addedLoras = normalizeLoraRecords(connectedInputLoras);
+    const promptLoras = normalizeLoraRecords(
+        Array.isArray(promptData.lora_stack)
+            ? promptData.lora_stack
+            : (Array.isArray(payload.prompt_lora_stack) ? payload.prompt_lora_stack : [])
+    );
+    const promptLoraKeys = new Set(promptLoras.map((entry) => {
+        const rawPath = String(entry?.path || entry?.name || "").replace(/\\/g, "/").trim().toLowerCase();
+        const leaf = rawPath.split("/").pop() || rawPath;
+        return leaf.replace(/\.safetensors$/i, "") || leaf;
+    }).filter(Boolean));
 
     if (!payload.version) {
         payload.version = 1;
@@ -4899,7 +4921,12 @@ function mergePromptComposerInputMetadataIntoWorkflowData(node, workflowData) {
         ...inputData,
         source: "upstream",
         prompt: nextPrompt,
-        lora_stack: mergeLoraRecords(existingLoras, connectedInputLoras),
+        lora_stack: normalizeLoraRecords([...existingLoras, ...addedLoras].filter((entry) => {
+            const rawPath = String(entry?.path || entry?.name || "").replace(/\\/g, "/").trim().toLowerCase();
+            const leaf = rawPath.split("/").pop() || rawPath;
+            const key = leaf.replace(/\.safetensors$/i, "") || leaf;
+            return key && !promptLoraKeys.has(key);
+        })),
     };
     workflowData.prompt_composer = payload;
     return workflowData;
@@ -6127,10 +6154,17 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, lorasC, lo
                 ? wfPrompt
                 : text;
 
-            const liveWorkflowData = mergePromptComposerInputMetadataIntoWorkflowData(
-                node,
-                buildLiveWorkflowData(workflowDataForSave, effectivePromptText, lorasForSaveA, lorasForSaveB, lorasForSaveC, lorasForSaveD)
+            const builtWorkflowData = buildLiveWorkflowData(
+                workflowDataForSave,
+                effectivePromptText,
+                lorasForSaveA,
+                lorasForSaveB,
+                lorasForSaveC,
+                lorasForSaveD,
             );
+            const liveWorkflowData = node?._isComposerManager
+                ? builtWorkflowData
+                : mergePromptComposerInputMetadataIntoWorkflowData(node, builtWorkflowData);
             if (node?._isWorkflowManager) {
                 liveWorkflowData._source = node?._isComposerManager ? "PromptComposerManager" : "RecipeManager";
             }

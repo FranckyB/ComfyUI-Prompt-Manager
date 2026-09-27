@@ -311,8 +311,16 @@ def _normalize_prompt_composer_input_loras(raw_loras):
             "clip_strength": float(clip_strength),
             "active": True,
             "available": True,
+            "source": "upstream",
         })
     return [entry for entry in normalized if entry.get("name")]
+
+
+def _prompt_composer_lora_key(item):
+    raw_path = str(item.get("path", item.get("name", "")) or "").replace("\\", "/").strip().lower()
+    leaf = os.path.basename(raw_path)
+    stem, _ext = os.path.splitext(leaf)
+    return stem or leaf
 
 
 def _merge_prompt_composer_input_data(recipe_data, input_prompt="", prompt_enabled=False, input_lora_stack=None):
@@ -324,6 +332,7 @@ def _merge_prompt_composer_input_data(recipe_data, input_prompt="", prompt_enabl
         return recipe_data
 
     input_data = payload.get("input_data") if isinstance(payload.get("input_data"), dict) else {}
+    prompt_data = payload.get("prompt_data") if isinstance(payload.get("prompt_data"), dict) else {}
     existing_prompt = str(input_data.get("prompt", payload.get("input_prompt", "")) or "").strip()
     incoming_prompt = str(input_prompt or "").strip()
     merged_prompt = existing_prompt if existing_prompt else (incoming_prompt if prompt_enabled and incoming_prompt else "")
@@ -331,16 +340,24 @@ def _merge_prompt_composer_input_data(recipe_data, input_prompt="", prompt_enabl
     existing_loras = _normalize_prompt_composer_input_loras(
         input_data.get("lora_stack", payload.get("input_lora_stack", []))
     )
-    added_loras = _normalize_prompt_composer_input_loras(input_lora_stack or [])
+    added_loras = _normalize_prompt_composer_input_loras(input_lora_stack or []) if input_lora_stack is not None else []
+    prompt_loras = _normalize_prompt_composer_input_loras(
+        prompt_data.get("lora_stack", payload.get("prompt_lora_stack", []))
+    )
+    prompt_lora_keys = {
+        _prompt_composer_lora_key(item)
+        for item in prompt_loras
+        if _prompt_composer_lora_key(item)
+    }
 
     merged_loras = []
     seen = set()
     for item in [*existing_loras, *added_loras]:
-        name = str(item.get("name", "")).strip().lower()
-        path = str(item.get("path", item.get("name", ""))).strip().lower()
-        if not name:
+        key = _prompt_composer_lora_key(item)
+        if not key:
             continue
-        key = (path, name)
+        if key in prompt_lora_keys:
+            continue
         if key in seen:
             continue
         seen.add(key)
@@ -1108,6 +1125,12 @@ class PromptManagerAdvanced:
         out_stack_b = processed_stack_b if processed_stack_b else []
         out_stack_c = processed_stack_c if processed_stack_c else []
         out_stack_d = processed_stack_d if processed_stack_d else []
+        active_used_input_loras = _flatten_multi_lora_slots({
+            "a": out_stack_a,
+            "b": out_stack_b,
+            "c": out_stack_c,
+            "d": out_stack_d,
+        })
 
         neg_prompt = str(workflow_fields.get('negative_prompt', '') or '')
         out_workflow_data = build_v2_recipe_data_from_prompt(
@@ -1124,7 +1147,7 @@ class PromptManagerAdvanced:
             out_workflow_data,
             input_prompt=current_prompt_input_text,
             prompt_enabled=bool(use_prompt_input and current_prompt_input_text),
-            input_lora_stack=_flatten_multi_lora_slots(combined_input_multi),
+            input_lora_stack=active_used_input_loras,
         )
 
         out_multi_stack = {

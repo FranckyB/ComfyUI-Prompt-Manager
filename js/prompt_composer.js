@@ -2240,11 +2240,12 @@ function ensureComposerUi(node) {
             writeInputPromptMode(node, nextValue);
         },
         isActive: (current) => current === "use_prompt",
+        activeBackground: "#8a2f3b",
         defaultLabelColor: "#dbeafe",
         inactiveLabelColor: "#dbeafe",
     });
     const inputLoraSwitch = createLabeledToggle({
-        title: "When enabled, add the saved extra LoRAs from compose_data on top of the composed LoRAs",
+        title: "When enabled, use the saved LoRA input from compose_data instead of the live connected LoRA input",
         label: "LoRA",
         getValue: () => readInputLoraMode(node),
         onToggle: () => {
@@ -2252,6 +2253,7 @@ function ensureComposerUi(node) {
             writeInputLoraMode(node, nextValue);
         },
         isActive: (current) => current === "use_lora",
+        activeBackground: "#8a2f3b",
         defaultLabelColor: "#dbeafe",
         inactiveLabelColor: "#dbeafe",
     });

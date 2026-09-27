@@ -242,7 +242,7 @@ def _extract_prompt_composer_recipe_state(recipe_data):
     }
 
 
-def _serialize_prompt_composer_recipe_state(parts_data, output_format="text", compose_position="before", generation_mode="image", input_prompt_mode="no_prompt", input_lora_mode="no_lora", input_prompt="", input_lora_stack=None):
+def _serialize_prompt_composer_recipe_state(parts_data, output_format="text", compose_position="before", generation_mode="image", input_prompt_mode="no_prompt", input_lora_mode="no_lora", input_prompt="", input_lora_stack=None, prompt_lora_stack=None):
     normalized_parts = _parse_parts(parts_data)
     normalized_parts_data = json.dumps(normalized_parts, ensure_ascii=False)
     return {
@@ -257,7 +257,11 @@ def _serialize_prompt_composer_recipe_state(parts_data, output_format="text", co
         "input_data": {
             "source": "upstream",
             "prompt": str(input_prompt or ""),
-            "lora_stack": _recipe_lora_entries_from_stack(input_lora_stack),
+            "lora_stack": _recipe_lora_entries_from_stack(input_lora_stack, source_type="upstream"),
+        },
+        "prompt_data": {
+            "source": "compose",
+            "lora_stack": _recipe_lora_entries_from_stack(prompt_lora_stack, source_type="compose"),
         },
     }
 
@@ -340,7 +344,7 @@ def _build_prompt_library_signature(parts, prompts_data):
     return json.dumps(signature_rows, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-def _recipe_lora_entries_from_stack(lora_stack):
+def _recipe_lora_entries_from_stack(lora_stack, source_type=None):
     entries = []
     for item in _coerce_lora_stack(lora_stack):
         if not isinstance(item, (list, tuple)) or len(item) < 1:
@@ -350,7 +354,7 @@ def _recipe_lora_entries_from_stack(lora_stack):
             continue
         model_strength = _normalize_scalar(item[1] if len(item) >= 2 else 1.0, default=1.0)
         clip_strength = _normalize_scalar(item[2] if len(item) >= 3 else model_strength, default=model_strength)
-        entries.append({
+        entry = {
             "name": path,
             "path": path,
             "strength": model_strength,
@@ -358,7 +362,10 @@ def _recipe_lora_entries_from_stack(lora_stack):
             "clip_strength": clip_strength,
             "active": True,
             "available": True,
-        })
+        }
+        if source_type:
+            entry["source"] = str(source_type)
+        entries.append(entry)
     return entries
 
 
@@ -517,8 +524,14 @@ def _lora_asset_key(path):
 
 
 def _merge_lora_stacks(base_stack, additions):
-    merged = list(_coerce_lora_stack(base_stack))
-    seen = {_lora_asset_key(item[0]) for item in merged if item and item[0]}
+    merged = []
+    seen = set()
+    for path, model_strength, clip_strength in _coerce_lora_stack(base_stack):
+        key = _lora_asset_key(path)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append((path, model_strength, clip_strength))
     for path, model_strength, clip_strength in _coerce_lora_stack(additions):
         key = _lora_asset_key(path)
         if not key or key in seen:
@@ -1071,17 +1084,17 @@ class PromptComposer:
                     "forceInput": True,
                     "tooltip": "Optional incoming prompt. Composed parts can be placed before or after it.",
                 }),
-                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {
-                    "forceInput": True,
-                    "tooltip": "Optional saved Prompt Composer payload. Connect recipe or compose data to restore Prompt Composer parts and reuse them.",
-                }),
                 "lora_stack": ("LORA_STACK", {
                     "forceInput": True,
-                    "tooltip": "Optional incoming LoRA stack. Prompt Composer appends per-prompt LoRAs to it.",
+                    "tooltip": "Optional incoming LoRA stack. Prompt Composer either uses this live input or the saved compose_data LoRA input, then appends per-prompt LoRAs.",
                 }),
                 "mods": ("H3_REF_MODS", {
                     "forceInput": True,
                     "tooltip": "Optional incoming RefMod bundle. Prompt Composer appends per-prompt RefMods to it.",
+                }),
+                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {
+                    "forceInput": True,
+                    "tooltip": "Optional saved Prompt Composer payload. Connect recipe or compose data to restore Prompt Composer parts and reuse them.",
                 }),
 
             },
@@ -1097,8 +1110,8 @@ class PromptComposer:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Compose multiple prompt fragments with per-part strength in one node."
-    RETURN_TYPES = ("STRING", "COMPOSE_DATA", "LORA_STACK", "H3_REF_MODS")
-    RETURN_NAMES = ("Prompt", "compose_data", "lora_stack", "mods")
+    RETURN_TYPES = ("STRING", "LORA_STACK", "H3_REF_MODS", "COMPOSE_DATA")
+    RETURN_NAMES = ("Prompt", "lora_stack", "mods", "compose_data")
     FUNCTION = "compose"
     OUTPUT_NODE = True
 
@@ -1140,9 +1153,9 @@ class PromptComposer:
         saved_input_prompt = composer_recipe_state.get("input_prompt", "") if composer_recipe_state else ""
         saved_input_lora_stack = list(_coerce_lora_stack(composer_recipe_state.get("input_lora_stack", []))) if composer_recipe_state else []
         stored_input_prompt = live_input_prompt if live_input_prompt else saved_input_prompt
-        stored_input_lora_stack = live_input_lora_stack if live_input_lora_stack else saved_input_lora_stack
+        stored_input_lora_stack = _merge_lora_stacks([], live_input_lora_stack if live_input_lora_stack else saved_input_lora_stack)
         effective_input_prompt = saved_input_prompt if _should_use_input_prompt_mode(effective_input_prompt_mode) and saved_input_prompt else live_input_prompt
-        effective_input_lora_stack = stored_input_lora_stack if _should_use_input_lora_mode(effective_input_lora_mode) else []
+        effective_input_lora_stack = saved_input_lora_stack if _should_use_input_lora_mode(effective_input_lora_mode) else live_input_lora_stack
 
         run_seed = _resolve_run_seed(seed)
         rng = random.Random(run_seed)
@@ -1319,10 +1332,25 @@ class PromptComposer:
         merged_lora_stack = _merge_lora_stacks(effective_input_lora_stack, prompt_lora_stack)
         merged_mods = _merge_refmod_rows(mods, prompt_mods)
 
+        input_lora_entries = _recipe_lora_entries_from_stack(effective_input_lora_stack, source_type="upstream")
+        prompt_lora_entries = _recipe_lora_entries_from_stack(prompt_lora_stack, source_type="compose")
+        input_lora_keys = {
+            _lora_asset_key(item.get("path") or item.get("name"))
+            for item in input_lora_entries
+            if item.get("path") or item.get("name")
+        }
+        merged_lora_entries = list(input_lora_entries)
+        for item in prompt_lora_entries:
+            key = _lora_asset_key(item.get("path") or item.get("name"))
+            if not key or key in input_lora_keys:
+                continue
+            input_lora_keys.add(key)
+            merged_lora_entries.append(item)
+
         out_recipe_data = build_v2_recipe_data_from_prompt(
             prompt_text=final_output,
             negative_prompt="",
-            loras_a=_recipe_lora_entries_from_stack(merged_lora_stack),
+            loras_a=merged_lora_entries,
             source="PromptComposer",
             base_recipe_data=base_recipe_data,
         )
@@ -1335,6 +1363,7 @@ class PromptComposer:
             input_lora_mode=effective_input_lora_mode,
             input_prompt=stored_input_prompt,
             input_lora_stack=stored_input_lora_stack,
+            prompt_lora_stack=prompt_lora_stack,
         )
 
         if unique_id is not None:
@@ -1343,4 +1372,4 @@ class PromptComposer:
                 "prompt_composer": out_recipe_data.get(PROMPT_COMPOSER_RECIPE_KEY),
             })
 
-        return (final_output, out_recipe_data, merged_lora_stack, merged_mods)
+        return (final_output, merged_lora_stack, merged_mods, out_recipe_data)
