@@ -70,14 +70,14 @@ class PromptComposerManager(PromptManagerAdvanced):
         data = kwargs.get("compose_data", None)
         if data is None:
             data = kwargs.get("data", None)
-        thumbnail_image = kwargs.get("image", None)
+        image = kwargs.get("image", None)
         loras_a_toggle = kwargs.get("loras_a_toggle", "")
         loras_b_toggle = kwargs.get("loras_b_toggle", "")
         saved_workflow_data = kwargs.get("saved_workflow_data", "")
         thumbnail_sig = None
         try:
-            if thumbnail_image is not None:
-                thumbnail_sig = tuple(getattr(thumbnail_image, "shape", []) or [])
+            if image is not None:
+                thumbnail_sig = tuple(getattr(image, "shape", []) or [])
         except Exception:
             thumbnail_sig = "image"
         return (
@@ -97,7 +97,7 @@ class PromptComposerManager(PromptManagerAdvanced):
         name,
         text="",
         compose_data=None,
-        thumbnail_image=None,
+        image=None,
         unique_id=None,
         loras_a_toggle=None,
         loras_b_toggle=None,
@@ -177,7 +177,7 @@ class PromptComposerManager(PromptManagerAdvanced):
         output_text = (wf_model_a.get("positive_prompt", "") or text or "")
         generated_thumbnail = image_to_base64_thumbnail(wf.get("IMAGE"), log_prefix=source_name) if isinstance(wf, dict) else None
         incoming_thumbnail = image_to_base64_thumbnail(incoming_wf.get("IMAGE"), log_prefix=source_name) if isinstance(incoming_wf, dict) else None
-        explicit_thumbnail = image_to_base64_thumbnail(thumbnail_image, log_prefix=source_name) if thumbnail_image is not None else None
+        explicit_thumbnail = image_to_base64_thumbnail(image, log_prefix=source_name) if image is not None else None
         workflow_thumbnail = explicit_thumbnail if isinstance(explicit_thumbnail, str) and explicit_thumbnail else (
             incoming_thumbnail if isinstance(incoming_thumbnail, str) and incoming_thumbnail else (
                 generated_thumbnail if isinstance(generated_thumbnail, str) and generated_thumbnail else (
