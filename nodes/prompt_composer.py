@@ -246,6 +246,58 @@ def _is_recipe_sync_enabled(recipe_sync_mode):
     return str(recipe_sync_mode or "edit").strip().lower() == "sync"
 
 
+def _resolve_effective_parts_for_change(parts_data, recipe_sync_mode="edit", recipe_data=None):
+    base_recipe_data = _coerce_recipe_data_payload(recipe_data, source="PromptComposer")
+    composer_recipe_state = _extract_prompt_composer_recipe_state(base_recipe_data)
+    parsed_parts = _parse_parts(parts_data)
+    if _is_recipe_sync_enabled(recipe_sync_mode) and composer_recipe_state:
+        return composer_recipe_state["parts"]
+    return parsed_parts
+
+
+def _build_prompt_library_signature(parts, prompts_data):
+    if not isinstance(prompts_data, dict):
+        return ""
+
+    signature_rows = []
+    for part in parts or []:
+        if not isinstance(part, dict) or bool(part.get("muted", False)):
+            continue
+        for prompt_ref in _get_part_prompt_refs(part):
+            raw_category = prompt_ref.get("category") or part.get("category") or ""
+            prompt_name = prompt_ref.get("name") or ""
+            resolved_category = _resolve_part_category(prompts_data, raw_category, prompt_name)
+            category_data = prompts_data.get(resolved_category, {}) if isinstance(prompts_data.get(resolved_category), dict) else {}
+            entry, canonical_name = _find_prompt_case_insensitive(category_data, prompt_name)
+            signature_rows.append({
+                "category": resolved_category,
+                "prompt": canonical_name or str(prompt_name or "").strip(),
+                "category_meta": {
+                    "prompt_type": category_data.get("_prompt_type_"),
+                    "prompt_prefix": category_data.get("_prompt_prefix_"),
+                    "subject_type": category_data.get("_subject_type_"),
+                    "subject_kind": category_data.get("_subject_kind_"),
+                },
+                "entry": {
+                    "prompt": entry.get("prompt") if isinstance(entry, dict) else None,
+                    "lora": entry.get("lora") if isinstance(entry, dict) else None,
+                    "lora_strength": entry.get("lora_strength") if isinstance(entry, dict) else None,
+                    "lora_image": entry.get("lora_image") if isinstance(entry, dict) else None,
+                    "lora_image_strength": entry.get("lora_image_strength") if isinstance(entry, dict) else None,
+                    "lora_video": entry.get("lora_video") if isinstance(entry, dict) else None,
+                    "lora_video_strength": entry.get("lora_video_strength") if isinstance(entry, dict) else None,
+                    "refmod": entry.get("refmod") if isinstance(entry, dict) else None,
+                    "refmod_weight": entry.get("refmod_weight") if isinstance(entry, dict) else None,
+                },
+                "missing": not isinstance(entry, dict),
+            })
+
+    if not signature_rows:
+        return ""
+
+    return json.dumps(signature_rows, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
 def _recipe_lora_entries_from_stack(lora_stack):
     entries = []
     for item in _coerce_lora_stack(lora_stack):
@@ -1006,11 +1058,13 @@ class PromptComposer:
 
     @classmethod
     def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", recipe_data=None, lora_stack=None, mods=None, **kwargs):
-        parts = _parse_parts(parts_data)
+        parts = _resolve_effective_parts_for_change(parts_data, recipe_sync_mode=recipe_sync_mode, recipe_data=recipe_data)
+        prompts_data = PromptComposerStore.load_prompts()
+        prompt_library_signature = _build_prompt_library_signature(parts, prompts_data)
         if _has_multi_part_selection(parts):
             dynamic_seed = time.time_ns()
-            return (parts_data, dynamic_seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, lora_stack, mods)
-        return (parts_data, seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, lora_stack, mods)
+            return (parts_data, dynamic_seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
+        return (parts_data, seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
 
     def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", recipe_data=None, lora_stack=None, mods=None, unique_id=None):
         prompts_data = PromptComposerStore.load_prompts()
