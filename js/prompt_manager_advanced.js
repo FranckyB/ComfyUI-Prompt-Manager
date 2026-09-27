@@ -2227,7 +2227,17 @@ function addLoraDisplays(node) {
         // can be left with a stale height and active pointer-events, creating an
         // invisible strip that blocks clicks/scroll/pan for everything below the node.
         // Force-collapse the wrapper and disable pointer-events whenever hidden.
+        //
+        // IMPORTANT: The wrapper is position:fixed and carries height:100% (via the
+        // `size-full` class). For fixed elements that percentage resolves against the
+        // viewport, so whenever the manager-written inline height is absent the card
+        // stretches to the full screen height. The manager only re-applies its style
+        // when widgetState.pos/size change (i.e. while the view is being panned), so
+        // never remove the height on visible stacks — pin it to the manager's own
+        // slot height (computedHeight - 2*margin; the draw() 5th arg is just
+        // NODE_WIDGET_HEIGHT, NOT the slot height) every draw.
         const origDraw = widget.draw;
+        let forcedCollapse = false;
         widget.draw = function (ctx, n, widgetWidth, y, H) {
             if (typeof origDraw === "function") origDraw.apply(this, arguments);
             if (!this.element) return;
@@ -2236,6 +2246,7 @@ function addLoraDisplays(node) {
             const wrapper = this.element.parentElement;
 
             if (hidden) {
+                forcedCollapse = true;
                 this.element.style.setProperty("display", "none", "important");
                 if (wrapper) {
                     wrapper.style.setProperty("pointer-events", "none", "important");
@@ -2246,12 +2257,17 @@ function addLoraDisplays(node) {
                 }
             } else {
                 this.element.style.removeProperty("display");
-                if (wrapper) {
+                if (wrapper && forcedCollapse) {
                     wrapper.style.removeProperty("pointer-events");
                     wrapper.style.removeProperty("height");
                     wrapper.style.removeProperty("max-height");
                     wrapper.style.removeProperty("min-height");
                     wrapper.style.removeProperty("overflow");
+                    forcedCollapse = false;
+                }
+                if (wrapper) {
+                    const slotHeight = Math.max(0, (this.computedHeight ?? 50) - 2 * (this.margin ?? 10));
+                    wrapper.style.setProperty("height", slotHeight + "px", "important");
                 }
             }
         };
