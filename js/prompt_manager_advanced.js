@@ -6548,6 +6548,7 @@ function _buildDialogOptionHtml(items, selectedValue) {
 
 function showRenameCategoryDialog(title, message, categories, defaultCategory, options = {}) {
     return new Promise((resolve) => {
+        const useOverlay = options.useOverlay !== false;
         const dialog = document.createElement("div");
         dialog.style.cssText = `
             position: fixed;
@@ -6625,7 +6626,9 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory, o
         }
 
         const cleanup = () => {
-            document.body.removeChild(overlay);
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
             document.body.removeChild(dialog);
         };
 
@@ -6659,7 +6662,9 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory, o
             }
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         input.focus();
         input.select();
@@ -6891,7 +6896,7 @@ function showImportOptions() {
     });
 }
 
-function showTextPrompt(title, message, defaultValue = "") {
+function showTextPrompt(title, message, defaultValue = "", useOverlay = true) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -6934,7 +6939,9 @@ function showTextPrompt(title, message, defaultValue = "") {
         const cancelBtn = dialog.querySelector(".cancel-btn");
 
         const cleanup = () => {
-            document.body.removeChild(overlay);
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
             document.body.removeChild(dialog);
         };
 
@@ -6964,14 +6971,16 @@ function showTextPrompt(title, message, defaultValue = "") {
             }
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         input.focus();
         input.select();
     });
 }
 
-function showNewCategoryDialog() {
+function showNewCategoryDialog(useOverlay = true) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -7019,7 +7028,9 @@ function showNewCategoryDialog() {
         const cancelBtn = dialog.querySelector(".cancel-btn");
 
         const cleanup = () => {
-            document.body.removeChild(overlay);
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
             document.body.removeChild(dialog);
         };
 
@@ -7049,7 +7060,9 @@ function showNewCategoryDialog() {
             }
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         input.focus();
     });
@@ -7126,7 +7139,7 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c4
     });
 }
 
-function showInfo(title, message) {
+function showInfo(title, message, useOverlay = true) {
     return new Promise((resolve) => {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -7166,7 +7179,9 @@ function showInfo(title, message) {
         const okBtn = dialog.querySelector(".ok-btn");
 
         const cleanup = () => {
-            document.body.removeChild(overlay);
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
             document.body.removeChild(dialog);
         };
 
@@ -7180,7 +7195,9 @@ function showInfo(title, message) {
             cleanup();
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         okBtn.focus();
     });
@@ -7221,6 +7238,7 @@ let _thumbnailFamiliesCache = null;
 let _thumbnailFamiliesPromise = null;
 const _thumbnailModelsCache = new Map();
 const _thumbnailModelsPromises = new Map();
+let _activeThumbnailRenderPicker = null;
 
 function getThumbnailRenderState() {
     return {
@@ -7881,6 +7899,10 @@ function saveThumbnailRenderSelection(selection) {
 }
 
 async function showThumbnailRenderPicker(preselectedFamily = null, preselectedModel = null, preselectedLora1 = null, preselectedLora2 = null) {
+    if (_activeThumbnailRenderPicker?.close) {
+        _activeThumbnailRenderPicker.close(null);
+    }
+
     let families = [];
     try {
         families = await fetchRendererFamilies();
@@ -7900,6 +7922,7 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         : families[0].key;
 
     return new Promise((resolve) => {
+        let isClosed = false;
         const dialog = document.createElement("div");
         dialog.style.cssText = `
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -7911,7 +7934,7 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         `;
 
         dialog.innerHTML = `
-            <div style="margin-bottom: 12px; font-size: 18px; font-weight: 600; color: #ddd;">Select Family + Model</div>
+            <div style="margin-bottom: 12px; font-size: 18px; font-weight: 600; color: #ddd;">Select Model for Thumbnail Generation</div>
             <div style="display: grid; grid-template-columns: 64px 1fr 34px; gap: 8px; align-items: center; margin-bottom: 8px;">
                 <label style="color: #c4ccd6; font-size: 13px; font-weight: 600;">Type</label>
                 <select class="family-select" style="padding: 7px; min-width: 0; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; font-family: inherit; font-size: 13px;"></select>
@@ -8040,12 +8063,28 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
 
             const sels = [lora1Sel, lora2Sel];
             const { sortedUngrouped, sortedGroups } = groupLoraOptions(filteredLoras);
+            const addUnresolvedSelectedOption = (sel, rawValue) => {
+                const value = String(rawValue || "").trim();
+                if (!value) return;
+                const opt = document.createElement("option");
+                opt.value = value;
+                opt.textContent = `${_thumbnailLeafName(value) || value} (saved)`;
+                opt.title = value;
+                opt.style.color = "#f5d28c";
+                sel.appendChild(opt);
+            };
             for (const sel of sels) {
                 sel.innerHTML = "";
                 const noneOpt = document.createElement("option");
                 noneOpt.value = "";
                 noneOpt.textContent = "(None)";
                 sel.appendChild(noneOpt);
+
+                const selectedValue = sel === lora1Sel ? preferredValues[0] : preferredValues[1];
+                const existsInAvailable = filteredLoras.some((entry) => entry.value === selectedValue);
+                if (selectedValue && !existsInAvailable) {
+                    addUnresolvedSelectedOption(sel, selectedValue);
+                }
 
                 sortedUngrouped.forEach((entry) => {
                     const opt = document.createElement("option");
@@ -8180,7 +8219,23 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         familySel.value = validFamily;
 
         const cleanup = () => {
+            if (isClosed) return;
+            isClosed = true;
+            if (_activeThumbnailRenderPicker?.dialog === dialog) {
+                _activeThumbnailRenderPicker = null;
+            }
             if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        const closePicker = (result = null) => {
+            if (isClosed) return;
+            cleanup();
+            resolve(result);
+        };
+
+        _activeThumbnailRenderPicker = {
+            dialog,
+            close: closePicker,
         };
 
         familySel.onchange = async () => {
@@ -8208,10 +8263,9 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
                 setHint("Please select a model before continuing.", "#c66");
                 return;
             }
-            resolve({ family, model, loras });
-            cleanup();
+            closePicker({ family, model, loras });
         };
-        cancelBtn.onclick = () => { resolve(null); cleanup(); };
+        cancelBtn.onclick = () => { closePicker(null); };
 
         dialog.onkeydown = (e) => {
             if (e.key === "Enter") {
@@ -8227,6 +8281,7 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
 
         document.body.appendChild(dialog);
         loadFamilyModels(validFamily, preselectedModel || "");
+        void ensureLorasLoaded(pendingPreferredLoras);
         modelSel.focus();
     });
 }
@@ -9285,10 +9340,10 @@ configurePromptBrowserDeps({
     UI,
     DEFAULT_THUMBNAIL,
     loadPrompts,
-    showInfo,
+    showInfo: (title, message) => showInfo(title, message, false),
     showConfirm: (title, message, confirmText, confirmColor) => showConfirm(title, message, confirmText, confirmColor, false),
-    showRenameCategoryDialog,
-    showNewCategoryDialog,
+    showRenameCategoryDialog: (title, message, categories, defaultCategory, options = {}) => showRenameCategoryDialog(title, message, categories, defaultCategory, { ...options, useOverlay: false }),
+    showNewCategoryDialog: () => showNewCategoryDialog(false),
     ensureThumbnailRenderSelection,
     resolveThumbnailFallbackBase,
     generateThumbnailForPrompt,

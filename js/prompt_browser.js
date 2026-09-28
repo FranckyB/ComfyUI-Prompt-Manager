@@ -35,6 +35,7 @@ let showThumbnailRenderPicker = async () => null;
 let saveThumbnailRenderSelection = () => {};
 let _thumbnailLeafName = (path) => String(path || "");
 let getThumbnailRenderState = null;
+const sessionBrowserEditMode = new Map();
 const COMPOSER_TYPE_PLACEHOLDER_URL = new URL("./placeholder.png", import.meta.url).href;
 const COMPOSER_TYPE_ALL_URL = new URL("./all.png", import.meta.url).href;
 const COMPOSER_CATEGORY_KEY_SEPARATOR = "::";
@@ -140,7 +141,7 @@ function typeSafeTruncate(value, maxLength) {
     return `${text.slice(0, Math.max(0, limit - 1))}…`;
 }
 
-function showTextInputDialog(title, message, defaultValue = "") {
+function showTextInputDialog(title, message, defaultValue = "", useOverlay = false) {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -202,14 +203,16 @@ function showTextInputDialog(title, message, defaultValue = "") {
             if (event.key === "Escape") handleCancel();
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         input.focus();
         input.select();
     });
 }
 
-function showNewPromptGroupDialog() {
+function showNewPromptGroupDialog(useOverlay = false) {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -293,7 +296,9 @@ function showNewPromptGroupDialog() {
             }
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         groupInput.focus();
         groupInput.select();
@@ -827,6 +832,7 @@ function buildDialogSelectOptionsHtml(items, selectedValue) {
 
 function showPromptWithCategoryDialog(title, defaultName, categories, defaultCategory, options = {}) {
     return new Promise((resolve) => {
+        const useOverlay = options.useOverlay === true;
         const overlay = document.createElement("div");
         overlay.style.cssText = `
             position: fixed;
@@ -945,7 +951,9 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
             }
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         syncCategoryOptions();
         nameInput.focus();
@@ -955,6 +963,7 @@ function showPromptWithCategoryDialog(title, defaultName, categories, defaultCat
 
 function showCategoryPickerDialog(title, categories, defaultCategory, options = {}) {
     return new Promise((resolve) => {
+        const useOverlay = options.useOverlay === true;
         const overlay = document.createElement("div");
         overlay.style.cssText = `
             position: fixed;
@@ -1069,7 +1078,9 @@ function showCategoryPickerDialog(title, categories, defaultCategory, options = 
             }
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         syncCategoryOptions();
         catSelect.focus();
@@ -1170,7 +1181,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
     if (promptData?.thumbnail) {
         const divider = document.createElement("div");
         divider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-        menu.appendChild(divider);
+        // menu.appendChild(divider);
 
         menu.appendChild(createMenuItem("🗑️ Remove Thumbnail", async () => {
             await saveThumbnailEntry(node, category, promptName, null, endpointPrefix);
@@ -1556,7 +1567,7 @@ function getOrderedComposerCategories(node, categories = null) {
     });
 }
 
-function showEditBasePromptDialog(categoryName, currentValue) {
+function showEditBasePromptDialog(categoryName, currentValue, useOverlay = false) {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -1627,7 +1638,9 @@ function showEditBasePromptDialog(categoryName, currentValue) {
             }
         };
 
-        document.body.appendChild(overlay);
+        if (useOverlay) {
+            document.body.appendChild(overlay);
+        }
         document.body.appendChild(dialog);
         textarea.focus();
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -1918,7 +1931,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const showAllCategoriesToggle = options?.showAllCategoriesToggle === true;
     const hideContentFilterControl = options?.hideContentFilterControl === true;
     const useComposerMultiSelectActions = multiSelectActionMode === "composer-add";
-    let editMode = allowEditMode && options?.editMode === true;
+    const rememberedEditMode = sessionBrowserEditMode.has(browserPrefScope)
+        ? sessionBrowserEditMode.get(browserPrefScope) === true
+        : null;
+    let editMode = allowEditMode && (rememberedEditMode ?? (options?.editMode === true));
     let multiSelectMode = startInMultiSelect;
     let updateSelectButton = () => {};
     let updateFooterText = () => {};
@@ -2178,6 +2194,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const getCompressedEditLayout = () => (
             showCategoryTypeFilter && typeRailExpanded ? editBrowserLayoutExpandedRail : editBrowserLayout
         );
+        function getEditPanelWidth() {
+            if (compactBrowser) return 280;
+            return showCategoryTypeFilter && typeRailExpanded ? 314 : 320;
+        }
         const shouldExpandDialogForEditPanel = () => {
             if (!editMode) return false;
             const expandedWidth = getNormalLayout().width + getEditPanelWidth() + DIALOG_HORIZONTAL_CHROME;
@@ -2218,10 +2238,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
         let browserLayout = getActiveBrowserLayout();
         const computeMinGridWidth = () => browserLayout.cols * browserLayout.itemWidth + Math.max(0, browserLayout.cols - 1) * browserLayout.gap;
-        const getEditPanelWidth = () => {
-            if (compactBrowser) return 280;
-            return showCategoryTypeFilter && typeRailExpanded ? 314 : 320;
-        };
 
         const dialog = document.createElement("div");
         dialog.style.cssText = `
@@ -2635,6 +2651,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     disableMultiSelect();
                 }
                 editMode = nextEditMode;
+                sessionBrowserEditMode.set(browserPrefScope, editMode);
                 updateMultiSelectBtn();
                 updateEditModeBtn();
                 updateEditModeLayout();
@@ -3578,114 +3595,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const isNSFW = isCategoryNSFW(cat);
             const categoryLabel = showCategoryTypeFilter ? getComposerCategoryDisplayName(node, cat) : cat;
-            const item = document.createElement("div");
-            item.textContent = isNSFW ? "✓ NSFW" : "Mark as NSFW";
-            item.style.cssText = `
-                padding: 8px 16px;
-                color: ${isNSFW ? '#f66' : '#ccc'};
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            item.onmouseover = () => item.style.background = '#3a3a3a';
-            item.onmouseout = () => item.style.background = 'transparent';
-            item.onclick = async () => {
-                menu.remove();
-                try {
-                    const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            type: "category",
-                            category: categoryLabel,
-                            ...(isComposerManager ? { type_file: getComposerCategoryTypeFile(node, cat) } : {}),
-                        })
-                    });
-                    const result = await resp.json();
-                    if (result.success) {
-                        applyPromptPayloadToNode(node, result);
-                        updateCategoryButtons();
-                        renderContent(searchInput.value);
-                    }
-                } catch (err) {
-                    console.error("[PromptManagerAdvanced] Error toggling category NSFW:", err);
-                }
-            };
-            menu.appendChild(item);
-
-            // Rename Category
-            const renameDivider = document.createElement("div");
-            renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(renameDivider);
-
-            const renameItem = document.createElement("div");
-            renameItem.textContent = isComposerManager ? "✏️ Rename / Move" : "✏️ Rename";
-            renameItem.style.cssText = `
-                padding: 8px 16px;
-                color: #ccc;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            renameItem.onmouseover = () => renameItem.style.background = '#3a3a3a';
-            renameItem.onmouseout = () => renameItem.style.background = 'transparent';
-            renameItem.onclick = async () => {
-                menu.remove();
-                const currentTypeFile = isComposerManager ? getComposerCategoryTypeFile(node, cat) : "";
-                const composerMoveTargets = isComposerManager ? getComposerMoveTargetOptions(node) : null;
-                const result = await showRenameCategoryDialog(
-                    isComposerManager ? "Rename / Move Category" : "Rename Category",
-                    "Enter new category name:",
-                    [categoryLabel],
-                    categoryLabel,
-                    isComposerManager ? {
-                        groupOptions: composerMoveTargets?.groupOptions || [],
-                        defaultGroupValue: currentTypeFile,
-                    } : {}
-                );
-                if (result && result.newCategory && result.newCategory.trim()) {
-                    const newCat = result.newCategory.trim();
-                    const newTypeFile = isComposerManager ? String(result.typeFile || currentTypeFile || "") : "";
-                    if (newCat === cat && (!isComposerManager || newTypeFile === currentTypeFile)) return;
-                    try {
-                        const resp = await fetch(`${endpointPrefix}/rename-category`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                old_category: categoryLabel,
-                                new_category: newCat,
-                                ...(isComposerManager ? {
-                                    type_file: currentTypeFile,
-                                    new_type_file: newTypeFile || currentTypeFile,
-                                } : {}),
-                            })
-                        });
-                        const data = await resp.json();
-                        if (data.success) {
-                            applyPromptPayloadToNode(node, data);
-                            if (selectedCategory === cat) {
-                                const nextCategoryKey = resolveComposerCategoryKey(node, data.new_category, data.type_file || newTypeFile || currentTypeFile);
-                                syncComposerTypeFilterForCategory(nextCategoryKey, data.type_file || newTypeFile || currentTypeFile);
-                                if (multiCategorySelect && selectedByCategory[cat]) {
-                                    selectedByCategory[nextCategoryKey] = selectedByCategory[cat];
-                                    delete selectedByCategory[cat];
-                                }
-                                setSelectedCategory(nextCategoryKey);
-                            }
-                            rebuildCategoryList();
-                            renderContent(searchInput.value);
-                        } else {
-                            await showInfo("Error", data.error);
-                        }
-                    } catch (err) {
-                        console.error("[PromptManagerAdvanced] Error renaming category:", err);
-                    }
-                }
-            };
-            menu.appendChild(renameItem);
 
             // Generate Missing Thumbnails
             const thumbDivider = document.createElement("div");
             thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(thumbDivider);
 
             const thumbItem = document.createElement("div");
             const buildProgressUI = () => {
@@ -3846,6 +3759,111 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 await runBatchGeneration(all, "Re-Generate All Thumbnails", { regenerateAll: true });
             };
             menu.appendChild(regenerateItem);
+
+            menu.appendChild(thumbDivider);
+
+            const item = document.createElement("div");
+            item.textContent = isNSFW ? "✓ NSFW" : "Mark as NSFW";
+            item.style.cssText = `
+                padding: 8px 16px;
+                color: ${isNSFW ? '#f66' : '#ccc'};
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            item.onmouseover = () => item.style.background = '#3a3a3a';
+            item.onmouseout = () => item.style.background = 'transparent';
+            item.onclick = async () => {
+                menu.remove();
+                try {
+                    const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            type: "category",
+                            category: categoryLabel,
+                            ...(isComposerManager ? { type_file: getComposerCategoryTypeFile(node, cat) } : {}),
+                        })
+                    });
+                    const result = await resp.json();
+                    if (result.success) {
+                        applyPromptPayloadToNode(node, result);
+                        updateCategoryButtons();
+                        renderContent(searchInput.value);
+                    }
+                } catch (err) {
+                    console.error("[PromptManagerAdvanced] Error toggling category NSFW:", err);
+                }
+            };
+            menu.appendChild(item);
+
+            const renameDivider = document.createElement("div");
+            renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+            menu.appendChild(renameDivider);
+
+            const renameItem = document.createElement("div");
+            renameItem.textContent = isComposerManager ? "✏️ Rename / Move" : "✏️ Rename";
+            renameItem.style.cssText = `
+                padding: 8px 16px;
+                color: #ccc;
+                cursor: pointer;
+                font-size: 13px;
+            `;
+            renameItem.onmouseover = () => renameItem.style.background = '#3a3a3a';
+            renameItem.onmouseout = () => renameItem.style.background = 'transparent';
+            renameItem.onclick = async () => {
+                menu.remove();
+                const currentTypeFile = isComposerManager ? getComposerCategoryTypeFile(node, cat) : "";
+                const composerMoveTargets = isComposerManager ? getComposerMoveTargetOptions(node) : null;
+                const result = await showRenameCategoryDialog(
+                    isComposerManager ? "Rename / Move Category" : "Rename Category",
+                    "Enter new category name:",
+                    [categoryLabel],
+                    categoryLabel,
+                    isComposerManager ? {
+                        groupOptions: composerMoveTargets?.groupOptions || [],
+                        defaultGroupValue: currentTypeFile,
+                    } : {}
+                );
+                if (result && result.newCategory && result.newCategory.trim()) {
+                    const newCat = result.newCategory.trim();
+                    const newTypeFile = isComposerManager ? String(result.typeFile || currentTypeFile || "") : "";
+                    if (newCat === cat && (!isComposerManager || newTypeFile === currentTypeFile)) return;
+                    try {
+                        const resp = await fetch(`${endpointPrefix}/rename-category`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                old_category: categoryLabel,
+                                new_category: newCat,
+                                ...(isComposerManager ? {
+                                    type_file: currentTypeFile,
+                                    new_type_file: newTypeFile || currentTypeFile,
+                                } : {}),
+                            })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            applyPromptPayloadToNode(node, data);
+                            if (selectedCategory === cat) {
+                                const nextCategoryKey = resolveComposerCategoryKey(node, data.new_category, data.type_file || newTypeFile || currentTypeFile);
+                                syncComposerTypeFilterForCategory(nextCategoryKey, data.type_file || newTypeFile || currentTypeFile);
+                                if (multiCategorySelect && selectedByCategory[cat]) {
+                                    selectedByCategory[nextCategoryKey] = selectedByCategory[cat];
+                                    delete selectedByCategory[cat];
+                                }
+                                setSelectedCategory(nextCategoryKey);
+                            }
+                            rebuildCategoryList();
+                            renderContent(searchInput.value);
+                        } else {
+                            await showInfo("Error", data.error);
+                        }
+                    } catch (err) {
+                        console.error("[PromptManagerAdvanced] Error renaming category:", err);
+                    }
+                }
+            };
+            menu.appendChild(renameItem);
 
             // Delete Category (always last, separated by a divider)
             const deleteDivider = document.createElement("div");
@@ -4060,6 +4078,19 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             pasteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
             menu.appendChild(pasteDivider);
 
+            const thumbDivider = document.createElement("div");
+            thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
+
+            menu.appendChild(createMenuItem("🎨 Generate Missing Thumbnails", async () => {
+                await runTypeBatchGeneration("Generate Missing Thumbnails");
+            }));
+
+            menu.appendChild(createMenuItem("🔄 Re-Generate All Thumbnails", async () => {
+                await runTypeBatchGeneration("Re-Generate All Thumbnails", { regenerateAll: true });
+            }));
+
+            menu.appendChild(thumbDivider);
+
             menu.appendChild(createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
                 try {
                     const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
@@ -4114,24 +4145,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }));
 
-            const thumbDivider = document.createElement("div");
-            thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(thumbDivider);
-
-            menu.appendChild(createMenuItem("🎨 Generate Missing Thumbnails", async () => {
-                await runTypeBatchGeneration("Generate Missing Thumbnails");
-            }));
-
-            menu.appendChild(createMenuItem("🔄 Re-Generate All Thumbnails", async () => {
-                await runTypeBatchGeneration("Re-Generate All Thumbnails", { regenerateAll: true });
-            }));
-
             const deleteDivider = document.createElement("div");
             deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
             menu.appendChild(deleteDivider);
 
-            menu.appendChild(createMenuItem("🗑️ Delete Type", async () => {
-                if (!await showConfirm("Delete Type", `Are you sure you want to delete type "${typeLabel}" and all its categories?`)) {
+            menu.appendChild(createMenuItem("🗑️ Delete Group", async () => {
+                if (!await showConfirm("Delete Group", `Are you sure you want to delete group "${typeLabel}" and all its categories?`)) {
                     return;
                 }
                 try {
@@ -4143,17 +4162,39 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const data = await resp.json();
                     if (data.success) {
                         applyPromptPayloadToNode(node, data);
-                        if (categoryTypeFilter === typeValue) {
-                            categoryTypeFilter = "__all__";
+                        refreshPromptTypeFilters();
+                        const remainingTypeChoices = promptTypeFilters.filter((choice) => choice.value !== "__all__");
+                        const hasCurrentType = promptTypeFilters.some((choice) => choice.value === categoryTypeFilter);
+                        if (categoryTypeFilter === typeValue || !hasCurrentType) {
+                            categoryTypeFilter = remainingTypeChoices[0]?.value || "__all__";
                         }
+                        await clearPromptBrowserSelection({ categoryKey: selectedCategory });
+                        ensureSelectedCategory();
                         rebuildCategoryList();
                         rebuildTypeRailButtons();
+                        if (editMode && editPanel) {
+                            if (categoryTypeFilter !== "__all__") {
+                                if (typeof editPanel.loadTypeSettings === "function") {
+                                    editPanel.loadTypeSettings(categoryTypeFilter);
+                                }
+                                if (typeof editPanel.showTypeSettings === "function") {
+                                    editPanel.showTypeSettings();
+                                }
+                            } else {
+                                if (typeof editPanel.loadCategorySettings === "function") {
+                                    editPanel.loadCategorySettings(selectedCategory);
+                                }
+                                if (typeof editPanel.showCategorySettings === "function") {
+                                    editPanel.showCategorySettings();
+                                }
+                            }
+                        }
                         renderContent(searchInput.value);
                     } else {
-                        await showInfo("Error", data.error || "Failed to delete type.");
+                        await showInfo("Error", data.error || "Failed to delete group.");
                     }
                 } catch (err) {
-                    console.error("[PromptBrowser] Error deleting type:", err);
+                    console.error("[PromptBrowser] Error deleting group:", err);
                 }
             }, true));
 
