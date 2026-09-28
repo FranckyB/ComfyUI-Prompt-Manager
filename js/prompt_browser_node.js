@@ -7,6 +7,13 @@ import {
     DEFAULT_THUMBNAIL,
 } from "./prompt_manager_advanced.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
+import {
+    inspectComposerImportFile,
+    mergeComposerLibraryFromFile,
+    pickComposerImportFile,
+    replaceComposerLibraryFromFile,
+    showComposerExportSelectionDialog,
+} from "./prompt_composer.js";
 import { saveComposerCategorySettings } from "./prompt_composer_common.js";
 import {
     buildSavePromptRequestBodyForSource,
@@ -2185,16 +2192,16 @@ function buildComposerButtonBar(node) {
             },
             { divider: true },
             {
-                label: "Save JSON",
+                label: getSourceValue(node) === SOURCE_COMPOSE ? "Save JSONs" : "Save JSON",
                 action: () => savePromptBrowserJSON(node),
             },
             {
-                label: "Open JSON",
-                action: () => openPromptBrowserJSON(node),
+                label: getSourceValue(node) === SOURCE_COMPOSE ? "Import JSONs" : "Import JSON",
+                action: () => mergePromptBrowserJSON(node),
             },
             {
-                label: "Merge JSON",
-                action: () => mergePromptBrowserJSON(node),
+                label: getSourceValue(node) === SOURCE_COMPOSE ? "Replace JSONs" : "Replace JSON",
+                action: () => openPromptBrowserJSON(node),
             },
         ];
         if (getSourceValue(node) === SOURCE_SYSTEM_PROMPTS) {
@@ -2472,6 +2479,44 @@ async function mergePromptBrowserLibraryData(node, libraryData) {
 
 async function savePromptBrowserJSON(node) {
     try {
+        if (getSourceValue(node) === SOURCE_COMPOSE) {
+            const selectedTypeFiles = await showComposerExportSelectionDialog(node);
+            if (!Array.isArray(selectedTypeFiles) || selectedTypeFiles.length === 0) return;
+
+            const response = await fetch(`${COMPOSER_ENDPOINT_PREFIX}/export-selected-zip`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type_files: selectedTypeFiles }),
+            });
+            if (!response.ok) {
+                let message = "Failed to export Prompt Composer JSONs.";
+                try {
+                    const result = await response.json();
+                    if (result?.error) message = String(result.error);
+                } catch {
+                    // ignore
+                }
+                throw new Error(message);
+            }
+
+            const blob = await response.blob();
+            const disposition = String(response.headers.get("content-disposition") || "");
+            const match = disposition.match(/filename="?([^";]+)"?/i);
+            const filename = match?.[1] ? String(match[1]).trim() : "prompt_composer_jsons.zip";
+            const url = URL.createObjectURL(blob);
+            try {
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+            return;
+        }
+
         const data = node.prompts || node.composerPrompts || {};
         const didSave = await savePromptLibraryJsonToBrowser(data, getSourceExportFilename(node));
         if (!didSave) return;
@@ -2483,6 +2528,33 @@ async function savePromptBrowserJSON(node) {
 }
 
 async function openPromptBrowserJSON(node) {
+    if (getSourceValue(node) === SOURCE_COMPOSE) {
+        const file = await pickComposerImportFile();
+        if (!file) return;
+
+        try {
+            const inspected = await inspectComposerImportFile(file);
+            const confirmed = await showConfirm(
+                "Open Prompt Composer JSONs",
+                `You are about to replace all Prompt Composer prompts with "${file.name}" (${Number(inspected?.type_count || 0)} group${Number(inspected?.type_count || 0) === 1 ? "" : "s"}). Continue?`,
+                "Replace All",
+                PMA_THEME.accent
+            );
+            if (!confirmed) return;
+
+            const result = await replaceComposerLibraryFromFile(file);
+            await refreshPromptBrowserAfterLibraryChange(node, { clearSelection: true });
+            const typeCount = Number(result?.type_count || inspected?.type_count || 0);
+            const categoryCount = Number(result?.category_count || inspected?.category_count || 0);
+            const promptCount = Number(result?.prompt_count || inspected?.prompt_count || 0);
+            await showInfo("Open Complete", `Replaced the library with ${typeCount} group${typeCount === 1 ? "" : "s"}, ${categoryCount} categor${categoryCount === 1 ? "y" : "ies"}, and ${promptCount} prompt${promptCount === 1 ? "" : "s"}.`);
+        } catch (err) {
+            console.error("[PromptBrowser] Open Prompt Composer JSONs error:", err);
+            await showInfo("Open Failed", err.message || "Failed to open Prompt Composer JSONs.");
+        }
+        return;
+    }
+
     const confirmed = await showConfirm(
         "Open JSON",
         "This will replace the current library for the active source with the selected JSON file. Continue?",
@@ -2562,6 +2634,53 @@ async function reimportBasicSystemPrompts(node) {
 }
 
 async function mergePromptBrowserJSON(node) {
+    if (getSourceValue(node) === SOURCE_COMPOSE) {
+        const file = await pickComposerImportFile();
+        if (!file) return;
+
+        try {
+            const inspected = await inspectComposerImportFile(file);
+            const data = inspected.library;
+            const conflicts = analyzeComposerImportConflicts(node, data);
+            let importMode = "skip_existing";
+            if (conflicts.duplicatePrompts.length > 0 || conflicts.duplicateCategorySettings.length > 0) {
+                importMode = await showComposerImportModeDialog({
+                    duplicatePromptCount: conflicts.duplicatePrompts.length,
+                    duplicateCategorySettingsCount: conflicts.duplicateCategorySettings.length,
+                });
+                if (importMode === "cancel") return;
+            }
+
+            const result = await mergeComposerLibraryFromFile(file, importMode);
+            await refreshPromptBrowserAfterLibraryChange(node);
+            const typeCount = Number(result?.type_count || inspected?.type_count || 0);
+            const imported = Number(result?.imported_prompts || 0);
+            const skippedPrompts = Number(result?.skipped_prompts || 0);
+            const skippedCategorySettings = Number(result?.skipped_category_settings || 0);
+            const importedCategorySettings = Number(result?.imported_category_settings || 0);
+            const categoriesCreated = Number(result?.created_categories || 0);
+            const summaryParts = [`Imported ${imported} prompt${imported === 1 ? "" : "s"}`];
+            if (typeCount > 0) {
+                summaryParts.push(`processed ${typeCount} group${typeCount === 1 ? "" : "s"}`);
+            }
+            if (categoriesCreated > 0) {
+                summaryParts.push(`created ${categoriesCreated} categor${categoriesCreated === 1 ? "y" : "ies"}`);
+            }
+            if (importedCategorySettings > 0) {
+                summaryParts.push(`updated ${importedCategorySettings} category setting${importedCategorySettings === 1 ? "" : "s"}`);
+            }
+            const keptExisting = skippedPrompts + skippedCategorySettings;
+            if (keptExisting > 0) {
+                summaryParts.push(`kept ${keptExisting} existing item${keptExisting === 1 ? "" : "s"}`);
+            }
+            await showInfo("Merge Complete", `${summaryParts.join(", ")}.`);
+        } catch (err) {
+            console.error("[PromptBrowser] Import Prompt Composer JSONs error:", err);
+            await showInfo("Merge Failed", err.message || "Failed to merge Prompt Composer JSONs.");
+        }
+        return;
+    }
+
     try {
         const endpointPrefix = getSourceImportEndpointPrefix(node);
         const filePath = await showPromptLibraryBrowser({

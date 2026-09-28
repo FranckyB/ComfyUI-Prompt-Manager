@@ -1839,7 +1839,7 @@ async def compose_export_selected_zip(request):
                 archive.writestr(type_file, json.dumps(payload, indent=2, ensure_ascii=False))
 
         zip_bytes = zip_buffer.getvalue()
-        filename = f"prompt_composer_jsons_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        filename = f"prompt_composer_jsons_{datetime.now().strftime('%y.%m.%d_%H.%M.%S')}.zip"
         return server.web.Response(
             body=zip_bytes,
             headers={

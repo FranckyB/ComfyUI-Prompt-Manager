@@ -773,7 +773,13 @@ function addButtonBar(node) {
         {
             label: "Import JSON",
             action: async () => {
-                await importPromptsJSON(node);
+                await importPromptsJSON(node, "merge");
+            }
+        },
+        {
+            label: "Replace JSON",
+            action: async () => {
+                await importPromptsJSON(node, "replace");
             }
         }
     ]);
@@ -1281,7 +1287,7 @@ async function exportPromptsJSON(node) {
     }
 }
 
-async function importPromptsJSON(node) {
+async function importPromptsJSON(node, importMode = "merge") {
     return new Promise((resolve) => {
         const input = document.createElement("input");
         input.type = "file";
@@ -1301,15 +1307,6 @@ async function importPromptsJSON(node) {
                 // Validate structure
                 if (typeof importedData !== 'object' || Array.isArray(importedData)) {
                     await showInfo("Error", "Invalid JSON structure. Expected an object with categories.");
-                    resolve(false);
-                    return;
-                }
-                
-                // Ask user how to handle import
-                const importMode = await showImportOptions();
-                
-                if (importMode === null) {
-                    // User cancelled
                     resolve(false);
                     return;
                 }
@@ -1346,10 +1343,10 @@ async function importPromptsJSON(node) {
                     node.serialize_widgets = true;
                     app.graph.setDirtyCanvas(true, true);
                     
-                    await showInfo("Import Complete", `Successfully imported prompts!`);
+                    await showInfo(importMode === "replace" ? "Replace Complete" : "Import Complete", importMode === "replace" ? "Successfully replaced prompts!" : "Successfully imported prompts!");
                     resolve(true);
                 } else {
-                    await showInfo("Error", result.error || "Failed to import prompts");
+                    await showInfo("Error", result.error || (importMode === "replace" ? "Failed to replace prompts" : "Failed to import prompts"));
                     resolve(false);
                 }
             } catch (error) {

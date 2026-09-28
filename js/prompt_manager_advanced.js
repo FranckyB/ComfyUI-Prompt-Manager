@@ -4228,7 +4228,13 @@ function addButtonBar(node) {
         {
             label: "Import JSON",
             action: async () => {
-                await importPromptsJSON(node);
+                await importPromptsJSON(node, "merge");
+            }
+        },
+        {
+            label: "Replace JSON",
+            action: async () => {
+                await importPromptsJSON(node, "replace");
             }
         }
     ]);
@@ -6675,65 +6681,30 @@ async function exportPromptsJSON(node) {
     try {
         const response = await fetch("/prompt-manager-advanced/get-prompts");
         const data = await response.json();
+        if (!response.ok || !data || typeof data !== "object") {
+            throw new Error(data?.error || "Failed to load prompts for export.");
+        }
 
-        const jsonStr = JSON.stringify(data, null, 2);
+        const selectedCategories = await showPromptExportSelectionDialog(data);
+        if (!Array.isArray(selectedCategories) || selectedCategories.length === 0) {
+            return;
+        }
+
+        const exportData = buildSelectedPromptExport(data, selectedCategories);
+        const filename = buildPromptExportFilename("prompts", "json");
+        const jsonStr = JSON.stringify(exportData, null, 2);
         const blob = new Blob([jsonStr], { type: "application/json" });
 
-        // Try File System Access API first (works on localhost and https)
-        if (window.showSaveFilePicker) {
-            try {
-                const handle = await window.showSaveFilePicker({
-                    suggestedName: "prompt_manager_data.json",
-                    types: [{
-                        description: "JSON Files",
-                        accept: { "application/json": [".json"] }
-                    }]
-                });
-                const writable = await handle.createWritable();
-                await writable.write(blob);
-                await writable.close();
-                await showInfo("Export Complete", "Prompts exported successfully!");
-                return;
-            } catch (err) {
-                // User cancelled the dialog
-                if (err.name === "AbortError") {
-                    return;
-                }
-                // Fall back to download method if API fails
-                console.log("[PromptManagerAdvanced] Save picker failed, falling back to download:", err);
-            }
-        }
+        triggerPromptExportDownload(blob, filename);
 
-        // Fallback: Prompt user for filename, then download
-        const filename = await showTextPrompt(
-            "Export Prompts",
-            "Enter filename for export:",
-            "prompt_manager_data.json"
-        );
-
-        if (!filename) {
-            return; // User cancelled
-        }
-
-        const finalFilename = filename.endsWith(".json") ? filename : filename + ".json";
-
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = finalFilename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        await showInfo("Export Complete", "Prompts exported successfully!");
+        await showInfo("Export Complete", `Exported ${selectedCategories.length} categor${selectedCategories.length === 1 ? "y" : "ies"} to ${filename}.`);
     } catch (error) {
         console.error("[PromptManagerAdvanced] Error exporting prompts:", error);
-        await showInfo("Error", "Failed to export prompts");
+        await showInfo("Error", error?.message || "Failed to export prompts");
     }
 }
 
-async function importPromptsJSON(node) {
+async function importPromptsJSON(node, importMode = "merge") {
     return new Promise((resolve) => {
         const input = document.createElement("input");
         input.type = "file";
@@ -6753,15 +6724,6 @@ async function importPromptsJSON(node) {
                 // Validate structure
                 if (typeof importedData !== 'object' || Array.isArray(importedData)) {
                     await showInfo("Error", "Invalid JSON structure. Expected an object with categories.");
-                    resolve(false);
-                    return;
-                }
-
-                // Ask user how to handle import
-                const importMode = await showImportOptions();
-
-                if (importMode === null) {
-                    // User cancelled
                     resolve(false);
                     return;
                 }
@@ -6803,10 +6765,10 @@ async function importPromptsJSON(node) {
                     node.serialize_widgets = true;
                     app.graph.setDirtyCanvas(true, true);
 
-                    await showInfo("Import Complete", `Successfully imported prompts!`);
+                    await showInfo(importMode === "replace" ? "Replace Complete" : "Import Complete", importMode === "replace" ? "Successfully replaced prompts!" : "Successfully imported prompts!");
                     resolve(true);
                 } else {
-                    await showInfo("Error", result.error || "Failed to import prompts");
+                    await showInfo("Error", result.error || (importMode === "replace" ? "Failed to replace prompts" : "Failed to import prompts"));
                     resolve(false);
                 }
             } catch (error) {
@@ -6977,6 +6939,158 @@ function showTextPrompt(title, message, defaultValue = "", useOverlay = true) {
         document.body.appendChild(dialog);
         input.focus();
         input.select();
+    });
+}
+
+function buildReadableExportTimestamp(date = new Date()) {
+    const pad = (value) => String(value).padStart(2, "0");
+    const year = pad(Number(date?.getFullYear?.() || 0) % 100);
+    const month = pad((date?.getMonth?.() || 0) + 1);
+    const day = pad(date?.getDate?.() || 1);
+    const hours = pad(date?.getHours?.() || 0);
+    const minutes = pad(date?.getMinutes?.() || 0);
+    const seconds = pad(date?.getSeconds?.() || 0);
+    return `${year}.${month}.${day}_${hours}.${minutes}.${seconds}`;
+}
+
+function buildPromptExportFilename(prefix = "prompt_manager_categories", extension = "json") {
+    const safeExtension = String(extension || "json").replace(/^\./, "") || "json";
+    return `${prefix}_${buildReadableExportTimestamp()}.${safeExtension}`;
+}
+
+function triggerPromptExportDownload(blob, filename) {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function getPromptExportableCategories(promptData) {
+    return Object.entries(promptData || {})
+        .filter(([categoryName, categoryData]) => categoryName !== "__meta__" && categoryData && typeof categoryData === "object")
+        .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), undefined, { sensitivity: "base" }))
+        .map(([categoryName, categoryData]) => ({
+            categoryName: String(categoryName || ""),
+            promptCount: Object.keys(categoryData || {}).filter((key) => !isHiddenCategoryEntryKey(key)).length,
+            nsfw: categoryData?.["__meta__"]?.nsfw === true,
+        }));
+}
+
+function buildSelectedPromptExport(promptData, selectedCategories) {
+    const exportData = {};
+    if (promptData?.__meta__ && typeof promptData.__meta__ === "object") {
+        exportData.__meta__ = promptData.__meta__;
+    }
+    for (const categoryName of selectedCategories || []) {
+        if (!(categoryName in (promptData || {}))) continue;
+        exportData[categoryName] = promptData[categoryName];
+    }
+    return exportData;
+}
+
+async function showPromptExportSelectionDialog(promptData) {
+    const entries = getPromptExportableCategories(promptData);
+    if (!entries.length) {
+        await showInfo("Save Failed", "There are no categories to export.");
+        return null;
+    }
+
+    return await new Promise((resolve) => {
+        const selected = new Set(entries.map((entry) => entry.categoryName));
+        const overlay = document.createElement("div");
+        overlay.style.cssText = "position:fixed; inset:0; background:rgba(0,0,0,0.72); z-index:9999; display:flex; align-items:center; justify-content:center;";
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `width:min(860px, calc(100vw - 48px)); max-height:min(760px, calc(100vh - 48px)); background:${UI.panel || "hsl(216 11% 15%)"}; border:1px solid ${UI.panelBorder || "hsl(216 20% 65% / 0.24)"}; border-radius:10px; box-shadow:0 10px 32px rgba(0,0,0,0.45); color:${UI.textPrimary || "hsl(0 0% 87%)"}; display:flex; flex-direction:column; overflow:hidden;`;
+
+        const header = document.createElement("div");
+        header.style.cssText = "padding:16px 18px 10px 18px; border-bottom:1px solid rgba(255,255,255,0.08);";
+        header.innerHTML = `
+            <div style="font-size:16px; font-weight:700; margin-bottom:8px;">Save JSON</div>
+            <div style="color:${UI.textMuted || "hsl(0 0% 67%)"}; line-height:1.45;">Select one or more categories to export into a single JSON file.</div>
+        `;
+
+        const body = document.createElement("div");
+        body.style.cssText = "padding:16px 18px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:12px;";
+
+        const footer = document.createElement("div");
+        footer.style.cssText = "padding:12px 18px 18px 18px; border-top:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; gap:10px; flex-wrap:wrap;";
+        const selectionInfo = document.createElement("div");
+        selectionInfo.style.cssText = `margin-right:auto; font-size:12px; color:${UI.textMuted || "hsl(0 0% 67%)"};`;
+
+        const makeButton = (label, primary = false) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = label;
+            button.style.cssText = `padding:8px 12px; border-radius:7px; cursor:pointer; border:1px solid ${primary ? (UI.accentBorder || "hsl(208 73% 57% / 0.65)") : (UI.inputBorder || "hsl(218 10% 41%)")}; background:${primary ? (UI.accentSoft || "hsl(208 73% 57% / 0.16)") : (UI.buttonBg || "hsl(219 16% 18%)")}; color:${primary ? "#dbeafe" : (UI.textPrimary || "hsl(0 0% 87%)")};`;
+            return button;
+        };
+
+        const clearBtn = makeButton("Clear");
+        const selectAllBtn = makeButton("Select All");
+        const cancelBtn = makeButton("Cancel");
+        const saveBtn = makeButton("Save JSON", true);
+
+        const cardEls = new Map();
+        const syncSelection = () => {
+            for (const entry of entries) {
+                const card = cardEls.get(entry.categoryName);
+                if (!card) continue;
+                const isSelected = selected.has(entry.categoryName);
+                card.style.background = isSelected ? (UI.accentSoft || "hsl(208 73% 57% / 0.16)") : (UI.cardBg || "hsl(219 16% 18%)");
+                card.style.borderColor = isSelected ? (UI.accentBorder || "hsl(208 73% 57% / 0.65)") : (UI.inputBorder || "hsl(218 10% 41%)");
+            }
+            selectionInfo.textContent = `${selected.size} selected`;
+            saveBtn.disabled = selected.size === 0;
+            saveBtn.style.opacity = selected.size === 0 ? "0.55" : "1";
+            saveBtn.style.cursor = selected.size === 0 ? "not-allowed" : "pointer";
+        };
+
+        for (const entry of entries) {
+            const card = document.createElement("button");
+            card.type = "button";
+            card.style.cssText = `text-align:left; min-height:96px; border:1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; border-radius:10px; background:${UI.cardBg || "hsl(219 16% 18%)"}; color:${UI.textPrimary || "hsl(0 0% 87%)"}; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:8px;`;
+            card.innerHTML = `
+                <div style="font-size:13px; font-weight:700; line-height:1.3; word-break:break-word;">${entry.categoryName}</div>
+                <div style="font-size:11px; color:${UI.textMuted || "hsl(0 0% 67%)"}; word-break:break-word;">${entry.promptCount} prompt${entry.promptCount === 1 ? "" : "s"}${entry.nsfw ? " • NSFW" : ""}</div>
+            `;
+            card.onclick = () => {
+                if (selected.has(entry.categoryName)) selected.delete(entry.categoryName);
+                else selected.add(entry.categoryName);
+                syncSelection();
+            };
+            cardEls.set(entry.categoryName, card);
+            body.appendChild(card);
+        }
+
+        const finish = (value) => {
+            overlay.remove();
+            resolve(value);
+        };
+
+        clearBtn.onclick = () => {
+            selected.clear();
+            syncSelection();
+        };
+        selectAllBtn.onclick = () => {
+            entries.forEach((entry) => selected.add(entry.categoryName));
+            syncSelection();
+        };
+        cancelBtn.onclick = () => finish(null);
+        saveBtn.onclick = () => finish(entries.filter((entry) => selected.has(entry.categoryName)).map((entry) => entry.categoryName));
+        overlay.onclick = (event) => {
+            if (event.target === overlay) finish(null);
+        };
+
+        footer.append(selectionInfo, clearBtn, selectAllBtn, cancelBtn, saveBtn);
+        dialog.append(header, body, footer);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+        syncSelection();
     });
 }
 
