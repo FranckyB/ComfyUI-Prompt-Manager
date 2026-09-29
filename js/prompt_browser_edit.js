@@ -1038,8 +1038,8 @@ function groupPickerItems(items) {
     return { ungrouped, sortedGroups };
 }
 
-async function fetchAvailableComposerLoras() {
-    if (Array.isArray(_composerLoraPickerCache)) {
+async function fetchAvailableComposerLoras(refresh = false) {
+    if (!refresh && Array.isArray(_composerLoraPickerCache)) {
         return [..._composerLoraPickerCache];
     }
     if (_composerLoraPickerPromise) {
@@ -1049,7 +1049,7 @@ async function fetchAvailableComposerLoras() {
         try {
             let rawPaths = [];
             try {
-                const resp = await api.fetchApi("/object_info/LoraLoader");
+                const resp = await api.fetchApi("/object_info/LoraLoader", { cache: "no-store" });
                 if (resp?.ok) {
                     const data = await resp.json();
                     const options = data?.LoraLoader?.input?.required?.lora_name?.[0];
@@ -1062,7 +1062,7 @@ async function fetchAvailableComposerLoras() {
             }
 
             if (!rawPaths.length) {
-                const resp = await fetch("/prompt-manager-advanced/available-loras");
+                const resp = await fetch("/prompt-manager-advanced/available-loras", { cache: "no-store" });
                 const data = await resp.json();
                 if (resp.ok && data?.success && Array.isArray(data?.loras)) {
                     rawPaths = [...new Set(data.loras.map((x) => String(x || "").trim()).filter(Boolean))];
@@ -1856,7 +1856,7 @@ export function createPromptBrowserEditPanel(options) {
     const imageLoraControls = el("div", { display: "flex", gap: "8px", alignItems: "center" });
     const imageLoraTrigger = createPickerTrigger("(None)", { flex: "1" });
     imageLoraTrigger.addEventListener("click", async () => {
-        const loras = await fetchAvailableComposerLoras();
+        const loras = await fetchAvailableComposerLoras(true);
         const selected = await showTextAssetPicker({
             title: "Select Image LoRA",
             items: loras,
@@ -1885,7 +1885,7 @@ export function createPromptBrowserEditPanel(options) {
     const videoLoraControls = el("div", { display: "flex", gap: "8px", alignItems: "center" });
     const videoLoraTrigger = createPickerTrigger("(None)", { flex: "1" });
     videoLoraTrigger.addEventListener("click", async () => {
-        const loras = await fetchAvailableComposerLoras();
+        const loras = await fetchAvailableComposerLoras(true);
         const selected = await showTextAssetPicker({
             title: "Select Video LoRA",
             items: loras,

@@ -3194,9 +3194,13 @@ function ensureComposerUi(node) {
                 evt.stopPropagation();
                 const next = [...readParts(node)];
                 if (!next[index]) return;
+                const newSubject = categoryStartsNewSubject(node, next[index].category);
+                const resetSubject = newSubject
+                    ? inferPartSubjectState(node, next[index].category, null, getInheritedSubjectDefaults(next.slice(0, index)), { bumpSubject: true })
+                    : { subject_locked: false };
                 next[index] = normalizePart({
                     ...next[index],
-                    subject_locked: false,
+                    ...resetSubject,
                 });
                 writeParts(node, next);
                 render();
