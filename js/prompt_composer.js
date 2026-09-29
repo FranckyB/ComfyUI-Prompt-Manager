@@ -3146,7 +3146,7 @@ function ensureComposerUi(node) {
             subjectBadge.type = "button";
             subjectBadge.textContent = `#${padSubjectNumber(part.effective_subject_number)}`;
             subjectBadge.title = part.effective_subject_number === SUBJECT_NONE
-                ? "Not a subject. Click to assign Subject 01, right-click for options."
+                ? "Not a subject. Click to attach to the previous subject, right-click for options."
                 : part.subject_locked
                 ? "Custom subject. Click to advance, Shift-click to go back, right-click for auto mode."
                 : "Auto subject. Click to create a custom subject, right-click for options.";
@@ -3180,10 +3180,12 @@ function ensureComposerUi(node) {
                 const delta = evt.shiftKey ? -1 : 1;
                 const next = [...readParts(node)];
                 if (!next[index]) return;
-                const baseSubject = part.effective_subject_number === SUBJECT_NONE ? SUBJECT_MIN : part.effective_subject_number;
+                const subjectNumber = part.effective_subject_number === SUBJECT_NONE
+                    ? getInheritedSubjectDefaults(next.slice(0, index)).subject_number
+                    : nextSubjectNumber(part.effective_subject_number, delta);
                 next[index] = normalizePart({
                     ...next[index],
-                    subject_number: nextSubjectNumber(baseSubject, delta),
+                    subject_number: subjectNumber,
                     subject_locked: true,
                 });
                 writeParts(node, next);
@@ -3194,10 +3196,11 @@ function ensureComposerUi(node) {
                 evt.stopPropagation();
                 const next = [...readParts(node)];
                 if (!next[index]) return;
-                const newSubject = categoryStartsNewSubject(node, next[index].category);
-                const resetSubject = newSubject
-                    ? inferPartSubjectState(node, next[index].category, null, getInheritedSubjectDefaults(next.slice(0, index)), { bumpSubject: true })
-                    : { subject_locked: false };
+                const resetSubject = categoryShouldBeNonSubject(node, next[index].category)
+                    ? { subject_number: SUBJECT_NONE, subject_locked: true }
+                    : categoryStartsNewSubject(node, next[index].category)
+                        ? inferPartSubjectState(node, next[index].category, null, getInheritedSubjectDefaults(next.slice(0, index)), { bumpSubject: true })
+                        : { subject_locked: false };
                 next[index] = normalizePart({
                     ...next[index],
                     ...resetSubject,

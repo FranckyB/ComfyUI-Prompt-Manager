@@ -100,8 +100,9 @@ def _json_section_key(category, prompt_type):
     return str(category or "").strip()
 
 
-def _text_section_key(category):
-    return str(category or "").strip()
+def _text_section_key(category, category_data, prompt_prefix):
+    group = category_data.get("_type_file_") or category
+    return (str(group or "").strip(), str(prompt_prefix or "").strip())
 
 
 def _normalize_prompt_ref(value, fallback_category=""):
@@ -811,8 +812,8 @@ def _render_image_subject_body(text_sections, subject_label):
         descriptions = [str(value or "").strip() for value in bucket.get("descriptions", []) if str(value or "").strip()]
         if not descriptions:
             continue
-        joined = _join_text_descriptions(descriptions)
         label = str(bucket.get("label") or "").strip()
+        joined = ", ".join(descriptions) if label else _join_text_descriptions(descriptions)
         fragment_label = label
         if (
             normalized_subject_label
@@ -922,7 +923,7 @@ def _get_subject_group(subject_groups, subject_number):
 
 
 def _append_text_section(sections, section_key, section_label, text):
-    key = str(section_key or "").strip()
+    key = section_key if isinstance(section_key, tuple) else str(section_key or "").strip()
     fragment_text = str(text or "").strip()
     if not fragment_text:
         return
@@ -955,8 +956,8 @@ def _render_text_sections(sections, break_on_labeled_sections=False):
         descriptions = [str(value or "").strip() for value in bucket.get("descriptions", []) if str(value or "").strip()]
         if not descriptions:
             continue
-        joined = _join_text_descriptions(descriptions)
         label = str(bucket.get("label") or "").strip()
+        joined = ", ".join(descriptions) if label else _join_text_descriptions(descriptions)
         fragment_text = f"{label} {joined}".strip() if label else joined
         if fragment_text:
             fragments.append({
@@ -1184,7 +1185,7 @@ class PromptComposer:
             text = entry.get("prompt", "") or ""
             prompt_type = _resolve_prompt_type(category_data, category)
             prompt_prefix = _resolve_prompt_prefix(category_data, category)
-            text_section_key = _text_section_key(category)
+            text_section_key = _text_section_key(category, category_data, prompt_prefix)
             json_section_key = _json_section_key(category, prompt_type)
             use_strength = selected_generation_mode != "video"
             formatted_plain = _format_fragment(text, part.get("strength", 1.0)) if use_strength else str(text or "").strip()
