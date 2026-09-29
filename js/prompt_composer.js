@@ -1619,7 +1619,9 @@ function resolveSubjectAssignments(parts) {
         if (part.muted) {
             return {
                 ...part,
-                effective_subject_number: clampSubjectNumber(currentSubject, SUBJECT_MIN),
+                effective_subject_number: part.subject_locked
+                    ? part.subject_number
+                    : clampSubjectNumber(currentSubject, SUBJECT_MIN),
             };
         }
         if (part.subject_locked && part.subject_number !== SUBJECT_NONE) {
@@ -3146,10 +3148,10 @@ function ensureComposerUi(node) {
             subjectBadge.type = "button";
             subjectBadge.textContent = `#${padSubjectNumber(part.effective_subject_number)}`;
             subjectBadge.title = part.effective_subject_number === SUBJECT_NONE
-                ? "Not a subject. Click to attach to the previous subject, right-click for options."
+                ? "Not a subject. Click to attach to the previous subject, middle- or right-click to reset."
                 : part.subject_locked
-                ? "Custom subject. Click to advance, Shift-click to go back, right-click for auto mode."
-                : "Auto subject. Click to create a custom subject, right-click for options.";
+                ? "Custom subject. Click to advance, Shift-click to go back, middle- or right-click to reset."
+                : "Auto subject. Click to create a custom subject, middle- or right-click to reset.";
             subjectBadge.style.cssText = `
                 position: absolute;
                 left: 4px;
@@ -3168,7 +3170,25 @@ function ensureComposerUi(node) {
                 box-sizing: border-box;
                 cursor: pointer;
             `;
+            const resetSubjectBadge = () => {
+                const next = [...readParts(node)];
+                if (!next[index]) return;
+                const resetSubject = categoryShouldBeNonSubject(node, next[index].category)
+                    ? { subject_number: SUBJECT_NONE, subject_locked: true }
+                    : categoryStartsNewSubject(node, next[index].category)
+                        ? inferPartSubjectState(node, next[index].category, null, getInheritedSubjectDefaults(next.slice(0, index)), { bumpSubject: true })
+                        : { subject_locked: false };
+                next[index] = normalizePart({
+                    ...next[index],
+                    ...resetSubject,
+                });
+                writeParts(node, next);
+                render();
+            };
             subjectBadge.addEventListener("mousedown", (evt) => {
+                if (evt.button === 1) {
+                    evt.preventDefault();
+                }
                 evt.stopPropagation();
             });
             subjectBadge.addEventListener("mouseup", (evt) => {
@@ -3191,22 +3211,16 @@ function ensureComposerUi(node) {
                 writeParts(node, next);
                 render();
             });
+            subjectBadge.addEventListener("auxclick", (evt) => {
+                if (evt.button !== 1) return;
+                evt.preventDefault();
+                evt.stopPropagation();
+                resetSubjectBadge();
+            });
             subjectBadge.addEventListener("contextmenu", (evt) => {
                 evt.preventDefault();
                 evt.stopPropagation();
-                const next = [...readParts(node)];
-                if (!next[index]) return;
-                const resetSubject = categoryShouldBeNonSubject(node, next[index].category)
-                    ? { subject_number: SUBJECT_NONE, subject_locked: true }
-                    : categoryStartsNewSubject(node, next[index].category)
-                        ? inferPartSubjectState(node, next[index].category, null, getInheritedSubjectDefaults(next.slice(0, index)), { bumpSubject: true })
-                        : { subject_locked: false };
-                next[index] = normalizePart({
-                    ...next[index],
-                    ...resetSubject,
-                });
-                writeParts(node, next);
-                render();
+                resetSubjectBadge();
             });
             thumbBtn.appendChild(subjectBadge);
 

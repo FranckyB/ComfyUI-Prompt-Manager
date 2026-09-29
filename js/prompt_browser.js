@@ -2018,6 +2018,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const getResultCategoryName = (category = selectedCategory) => showCategoryTypeFilter
             ? getComposerCategoryDisplayName(node, category)
             : String(category || "").trim();
+        const getSelectionCategory = () => String(selectedCategory || "").trim();
         let editPanel = null;
         let selectedByCategory = {};
         let selectedNames;
@@ -5069,7 +5070,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                            resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -5115,7 +5116,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                    resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -5130,7 +5131,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
-                        resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                        resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                         cleanup();
                     };
                 }
@@ -5455,7 +5456,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                            resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -5501,7 +5502,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                    resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -5516,7 +5517,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     card.ondblclick = () => {
-                        resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                        resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                         cleanup();
                     };
                 }
@@ -6064,7 +6065,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (editMode && editPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 1000) {
-                            resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                            resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                             cleanup();
                             return;
                         }
@@ -6110,7 +6111,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                    resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                     cleanup();
                 };
 
@@ -6125,7 +6126,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     };
                 } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
                     row.ondblclick = () => {
-                        resolve({ category: getResultCategoryName(), prompt: promptName, prompts: [promptName] });
+                        resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
                         cleanup();
                     };
                 }
