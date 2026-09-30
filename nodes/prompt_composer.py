@@ -1187,7 +1187,14 @@ class PromptComposer:
             prompt_prefix = _resolve_prompt_prefix(category_data, category)
             text_section_key = _text_section_key(category, category_data, prompt_prefix)
             json_section_key = _json_section_key(category, prompt_type)
-            use_strength = selected_generation_mode != "video"
+            part_strength = part.get("strength", 1.0)
+            if selected_generation_mode == "video":
+                lora_name = _normalize_lora_path(entry.get("lora_video") or "")
+                lora_strength = _scale_prompt_asset_weight(entry.get("lora_video_strength", 1.0), part_strength)
+            else:
+                lora_name = _normalize_lora_path(entry.get("lora_image") or entry.get("lora") or "")
+                lora_strength = _scale_prompt_asset_weight(entry.get("lora_image_strength", entry.get("lora_strength", 1.0)), part_strength)
+            use_strength = selected_generation_mode != "video" and not lora_name
             formatted_plain = _format_fragment(text, part.get("strength", 1.0)) if use_strength else str(text or "").strip()
             formatted_json = _format_json_description(text, part.get("strength", 1.0), use_strength=use_strength)
             subject_number = part.get("effective_subject_number", SUBJECT_MIN)
@@ -1227,13 +1234,6 @@ class PromptComposer:
                 if key:
                     _append_json_section(subject_group["sections"], key, formatted_json)
 
-            part_strength = part.get("strength", 1.0)
-            if selected_generation_mode == "video":
-                lora_name = _normalize_lora_path(entry.get("lora_video") or "")
-                lora_strength = _scale_prompt_asset_weight(entry.get("lora_video_strength", 1.0), part_strength)
-            else:
-                lora_name = _normalize_lora_path(entry.get("lora_image") or entry.get("lora") or "")
-                lora_strength = _scale_prompt_asset_weight(entry.get("lora_image_strength", entry.get("lora_strength", 1.0)), part_strength)
             if lora_name:
                 prompt_lora_stack = _merge_lora_stacks(
                     prompt_lora_stack,
