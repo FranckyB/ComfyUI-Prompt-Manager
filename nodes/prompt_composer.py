@@ -616,6 +616,27 @@ def _load_python_package(package_dir, package_name):
     return module
 
 
+def _load_picker_refmod_core():
+    core_path = Path(__file__).resolve().parents[2] / "ComfyUI-H3RefModPicker" / "py" / "refmod_core.py"
+    if not core_path.is_file():
+        raise RuntimeError(f"RefMod support unavailable: {core_path} not found")
+    package_name = "prompt_composer_refmod_core"
+    existing = sys.modules.get(package_name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(package_name, core_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"RefMod support unavailable: could not load {core_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[package_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(package_name, None)
+        raise
+    return module
+
+
 def _load_refmod_backend_module():
     global _REFMOD_CORE_MODULE, _REFMOD_CORE_IMPORT_ERROR
     if _REFMOD_CORE_MODULE is not None:
@@ -632,14 +653,7 @@ def _load_refmod_backend_module():
         return _REFMOD_CORE_MODULE
     except Exception as official_exc:
         try:
-            core_path = Path(__file__).resolve().parents[2] / "ComfyUI-H3RefModPicker" / "py" / "refmod_core.py"
-            if not core_path.is_file():
-                raise RuntimeError(f"RefMod support unavailable: {core_path} not found")
-            spec = importlib.util.spec_from_file_location("prompt_composer_refmod_core", core_path)
-            if spec is None or spec.loader is None:
-                raise RuntimeError(f"RefMod support unavailable: could not load {core_path}")
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            module = _load_picker_refmod_core()
             _REFMOD_CORE_MODULE = ("legacy", module)
             return _REFMOD_CORE_MODULE
         except Exception as legacy_exc:
@@ -667,16 +681,29 @@ def _refmod_asset_key(mod):
 
 def _merge_refmod_rows(base_rows, additions):
     merged = list(base_rows) if isinstance(base_rows, (list, tuple)) else []
-    seen = {_refmod_asset_key(item[0]) for item in merged if isinstance(item, (list, tuple)) and item}
+    seen = {(_refmod_asset_key(item[0]), getattr(item[0], "kind", None))
+            for item in merged if isinstance(item, (list, tuple)) and item}
     for item in additions or []:
         if not isinstance(item, (list, tuple)) or len(item) < 2:
             continue
-        key = _refmod_asset_key(item[0])
-        if not key or key in seen:
+        key = (_refmod_asset_key(item[0]), getattr(item[0], "kind", None))
+        if not key[0] or key in seen:
             continue
         seen.add(key)
         merged.append(item)
     return merged
+
+
+def _expand_refmod_rows(rows):
+    expanded = []
+    for item in rows:
+        weight = _normalize_scalar(item[1], default=1.0, minimum=0.0, maximum=REFMOD_MAX_WEIGHT)
+        copies = int(weight)
+        expanded.extend((item[0], 1.0, *item[2:]) for _ in range(copies))
+        remainder = weight - copies
+        if remainder > 1e-6:
+            expanded.append((item[0], remainder, *item[2:]))
+    return expanded
 
 
 def _override_refmod_row_descriptions(rows, description):
@@ -1023,6 +1050,18 @@ def _load_prompt_refmods(mod_name, weight):
 
     if backend_kind == "official":
         meta = backend_module.read_refmod_meta(path_no_ext)
+        members = meta.get("members", []) if isinstance(meta, dict) and meta.get("kind") == "bundle" else [meta]
+        has_encoder_images = any(isinstance(member, dict) and (member.get("enc_times") or member.get("encoder_images"))
+                                 for member in members)
+        picker_core_path = Path(__file__).resolve().parents[2] / "ComfyUI-H3RefModPicker" / "py" / "refmod_core.py"
+        if has_encoder_images and picker_core_path.is_file():
+            image_backend = _load_picker_refmod_core()
+            loaded = list(image_backend.load_refmods_from_file(path_no_ext, device="cpu"))
+            if not any(getattr(mod, "kind", None) == "audio" for mod in loaded):
+                paired_audio = _paired_refmod_path(path_no_ext, "audio")
+                if paired_audio:
+                    loaded.extend(image_backend.load_refmods_from_file(paired_audio[:-len(".safetensors")], device="cpu"))
+            return [(mod, clipped_weight) for mod in loaded]
         if isinstance(meta, dict) and meta.get("kind") == "bundle":
             return list(backend_module.load_bundle(path_no_ext, "All", clipped_weight, clipped_weight))
 
@@ -1331,7 +1370,7 @@ class PromptComposer:
                 text_output = fragments_text
             final_output = text_output
         merged_lora_stack = _merge_lora_stacks(effective_input_lora_stack, prompt_lora_stack)
-        merged_mods = _merge_refmod_rows(mods, prompt_mods)
+        merged_mods = _expand_refmod_rows(_merge_refmod_rows(mods, prompt_mods))
 
         input_lora_entries = _recipe_lora_entries_from_stack(effective_input_lora_stack, source_type="upstream")
         prompt_lora_entries = _recipe_lora_entries_from_stack(prompt_lora_stack, source_type="compose")
