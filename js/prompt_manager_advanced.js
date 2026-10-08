@@ -3763,6 +3763,57 @@ async function openSaveBrowserForNode(node) {
         : (currentName || "New Prompt");
     const existingPromptEntry = node.prompts?.[currentCategory]?.[currentName] || null;
     const initialThumbnail = node.connectedThumbnail || existingPromptEntry?.thumbnail || null;
+    const hasWorkflowInput = hasConnectedWorkflowInput(node);
+    const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
+    const draftWorkflowData = hasWorkflowDataPayload(liveWorkflowData)
+        ? liveWorkflowData
+        : (resolveWorkflowDataForSave(node) || existingPromptEntry?.workflow_data || null);
+
+    const connectedLorasA = node.currentLorasA || [];
+    const connectedLorasB = node.currentLorasB || [];
+    const connectedLorasC = node.currentLorasC || [];
+    const connectedLorasD = node.currentLorasD || [];
+
+    const useLoraInput = shouldCombineLoras(node);
+    const useInputOnlyLoras = shouldUseInputOnlyLoras(node);
+
+    let draftLorasA;
+    let draftLorasB;
+    let draftLorasC;
+    let draftLorasD;
+    if (useInputOnlyLoras) {
+        draftLorasA = [...connectedLorasA.map(l => ({ ...l, source: "current", fromInput: true }))];
+        draftLorasB = [...connectedLorasB.map(l => ({ ...l, source: "current", fromInput: true }))];
+        draftLorasC = [...connectedLorasC.map(l => ({ ...l, source: "current", fromInput: true }))];
+        draftLorasD = [...connectedLorasD.map(l => ({ ...l, source: "current", fromInput: true }))];
+    } else if (!useLoraInput) {
+        draftLorasA = [...(node.savedLorasA || [])];
+        draftLorasB = [...(node.savedLorasB || [])];
+        draftLorasC = [...(node.savedLorasC || [])];
+        draftLorasD = [...(node.savedLorasD || [])];
+    } else {
+        draftLorasA = [...mergeLoraLists(
+            connectedLorasA.map(l => ({ ...l, source: "current" })),
+            node.savedLorasA || []
+        )];
+        draftLorasB = [...mergeLoraLists(
+            connectedLorasB.map(l => ({ ...l, source: "current" })),
+            node.savedLorasB || []
+        )];
+        draftLorasC = [...mergeLoraLists(
+            connectedLorasC.map(l => ({ ...l, source: "current" })),
+            node.savedLorasC || []
+        )];
+        draftLorasD = [...mergeLoraLists(
+            connectedLorasD.map(l => ({ ...l, source: "current" })),
+            node.savedLorasD || []
+        )];
+    }
+
+    const draftTriggerWords = mergeTriggerWordLists(
+        node.currentTriggerWords || [],
+        node.savedTriggerWords || []
+    );
 
     await openPromptBrowserForSave({
         node,
@@ -3778,13 +3829,31 @@ async function openSaveBrowserForNode(node) {
         showAllCategoriesToggle: node?._isWorkflowManager === true,
         hideContentFilterControl: node?._isWorkflowManager === true,
         saveWithEditPanel: true,
+        saveMode: true,
         saveDraft: {
             category: currentCategory,
             name: initialName,
             text: textWidget.value || "",
             thumbnail: initialThumbnail,
+            workflow_data: draftWorkflowData,
+            loras_a: draftLorasA,
+            loras_b: draftLorasB,
+            loras_c: draftLorasC,
+            loras_d: draftLorasD,
+            trigger_words: draftTriggerWords,
         },
-        onSave: async ({ category, name, overwrite, text: editedText, thumbnail: editedThumbnail }) => {
+        onSave: async ({
+            category,
+            name,
+            overwrite,
+            text: editedText,
+            thumbnail: editedThumbnail,
+            loras_a: draftSavedLorasA,
+            loras_b: draftSavedLorasB,
+            loras_c: draftSavedLorasC,
+            loras_d: draftSavedLorasD,
+            trigger_words: draftSavedTriggerWords,
+        }) => {
             const promptName = String(name || "").trim();
             const targetCategory = String(category || "").trim();
             const promptText = typeof editedText === "string" ? editedText : String(textWidget.value || "");
@@ -3793,52 +3862,15 @@ async function openSaveBrowserForNode(node) {
             }
 
             try {
-                const connectedLorasA = node.currentLorasA || [];
-                const connectedLorasB = node.currentLorasB || [];
-                const connectedLorasC = node.currentLorasC || [];
-                const connectedLorasD = node.currentLorasD || [];
-
-                const useLoraInput = shouldCombineLoras(node);
-                const useInputOnlyLoras = shouldUseInputOnlyLoras(node);
-
                 let allLorasA, allLorasB, allLorasC, allLorasD;
-                if (useInputOnlyLoras) {
-                    allLorasA = [...connectedLorasA.map(l => ({ ...l, source: "current", fromInput: true }))];
-                    allLorasB = [...connectedLorasB.map(l => ({ ...l, source: "current", fromInput: true }))];
-                    allLorasC = [...connectedLorasC.map(l => ({ ...l, source: "current", fromInput: true }))];
-                    allLorasD = [...connectedLorasD.map(l => ({ ...l, source: "current", fromInput: true }))];
-                } else if (!useLoraInput) {
-                    allLorasA = [...(node.savedLorasA || [])];
-                    allLorasB = [...(node.savedLorasB || [])];
-                    allLorasC = [...(node.savedLorasC || [])];
-                    allLorasD = [...(node.savedLorasD || [])];
-                } else {
-                    const mergedA = mergeLoraLists(
-                        connectedLorasA.map(l => ({ ...l, source: "current" })),
-                        node.savedLorasA || []
-                    );
-                    const mergedB = mergeLoraLists(
-                        connectedLorasB.map(l => ({ ...l, source: "current" })),
-                        node.savedLorasB || []
-                    );
-                    const mergedC = mergeLoraLists(
-                        connectedLorasC.map(l => ({ ...l, source: "current" })),
-                        node.savedLorasC || []
-                    );
-                    const mergedD = mergeLoraLists(
-                        connectedLorasD.map(l => ({ ...l, source: "current" })),
-                        node.savedLorasD || []
-                    );
-                    allLorasA = [...mergedA];
-                    allLorasB = [...mergedB];
-                    allLorasC = [...mergedC];
-                    allLorasD = [...mergedD];
-                }
+                allLorasA = Array.isArray(draftSavedLorasA) ? [...draftSavedLorasA] : [...draftLorasA];
+                allLorasB = Array.isArray(draftSavedLorasB) ? [...draftSavedLorasB] : [...draftLorasB];
+                allLorasC = Array.isArray(draftSavedLorasC) ? [...draftSavedLorasC] : [...draftLorasC];
+                allLorasD = Array.isArray(draftSavedLorasD) ? [...draftSavedLorasD] : [...draftLorasD];
 
-                const allTriggerWords = mergeTriggerWordLists(
-                    node.currentTriggerWords || [],
-                    node.savedTriggerWords || []
-                );
+                const allTriggerWords = Array.isArray(draftSavedTriggerWords)
+                    ? [...draftSavedTriggerWords]
+                    : [...draftTriggerWords];
 
                 const thumbnail = editedThumbnail !== undefined ? editedThumbnail : (node.connectedThumbnail || null);
 
@@ -7510,6 +7542,7 @@ function normalizeLorasForRenderer(loraList) {
             const clipStrength = Number(lora.clip_strength ?? lora.strength ?? modelStrength);
             return {
                 name: String(lora.name || lora.path || "").trim(),
+                path: String(lora.path || lora.name || "").trim(),
                 model_strength: Number.isFinite(modelStrength) ? modelStrength : 1.0,
                 clip_strength: Number.isFinite(clipStrength) ? clipStrength : (Number.isFinite(modelStrength) ? modelStrength : 1.0),
                 active: true,
@@ -7550,8 +7583,16 @@ function getThumbnailPromptLorasA(promptData) {
     );
 }
 
-function applyPromptThumbnailImageLora(workflowData, promptData, slot = "model_a") {
-    const extraLoras = getComposerThumbnailImageLoras(promptData);
+function getThumbnailPromptLorasAll(promptData) {
+    let merged = [];
+    for (const key of ["loras_a", "loras_b", "loras_c", "loras_d"]) {
+        merged = mergeRendererLoras(merged, normalizeLorasForRenderer(promptData?.[key]));
+    }
+    return mergeRendererLoras(merged, getComposerThumbnailImageLoras(promptData));
+}
+
+function applyPromptThumbnailLoras(workflowData, promptData, slot = "model_a") {
+    const extraLoras = getThumbnailPromptLorasAll(promptData);
     if (!extraLoras.length || !workflowData || typeof workflowData !== "object") {
         return workflowData;
     }
@@ -8309,7 +8350,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     const seedUsed = applyThumbnailSeeds(wfForThumb, modelSlot, { staticSeed: options?.staticSeed });
     applyThumbnailSelectedLoras(wfForThumb, renderSelection, modelSlot);
     if (options?.promptData && typeof options.promptData === "object") {
-        applyPromptThumbnailImageLora(wfForThumb, options.promptData, modelSlot);
+        applyPromptThumbnailLoras(wfForThumb, options.promptData, modelSlot);
     }
 
     const thumbPositive = getThumbnailPositivePrompt(wfForThumb, modelSlot);
@@ -8695,7 +8736,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
                 } else {
                     parsedWorkflowData.positive_prompt = effectivePrompt;
                 }
-                applyPromptThumbnailImageLora(parsedWorkflowData, promptData, thumbnailSlot);
+                applyPromptThumbnailLoras(parsedWorkflowData, promptData, thumbnailSlot);
                 thumbnail = await generateThumbnailWorkflowFromWorkflowData(parsedWorkflowData, activeRenderSelection, {
                     staticSeed: staticSeedForRun,
                     promptData,

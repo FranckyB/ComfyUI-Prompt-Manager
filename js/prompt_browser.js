@@ -4563,6 +4563,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     return false;
                 },
                 getThumbnailModelLabel: () => getThumbnailRenderLabelParts(),
+                saveMode: mode === "save",
                 compact: compactBrowser,
                 width: getEditPanelWidth(),
             });
@@ -6547,6 +6548,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
 
             const saveResult = await onSave({
+                ...(draftPayload && typeof draftPayload === "object" ? draftPayload : {}),
                 category: categoryLabel,
                 name,
                 overwrite,

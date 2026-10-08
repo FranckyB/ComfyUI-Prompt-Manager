@@ -921,6 +921,26 @@ function createNumberInput(value, options = {}, styles = {}) {
     return input;
 }
 
+function countPromptManagerNamedItems(items, nameKey = "name") {
+    if (!Array.isArray(items)) return { active: 0, total: 0 };
+    let active = 0;
+    let total = 0;
+    for (const item of items) {
+        const label = String(item?.[nameKey] || "").trim();
+        if (!label) continue;
+        total += 1;
+        if (item?.active !== false) active += 1;
+    }
+    return { active, total };
+}
+
+function hasPromptManagerWorkflowPayload(workflowData) {
+    if (!workflowData) return false;
+    if (typeof workflowData === "string") return workflowData.trim().length > 0;
+    if (typeof workflowData === "object") return Object.keys(workflowData).length > 0;
+    return false;
+}
+
 function createPickerTrigger(placeholder = "(None)", styles = {}) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1280,6 +1300,7 @@ export function createPromptBrowserEditPanel(options) {
     const isSystemPromptsSource = String(endpointPrefix) === "/prompt-generator";
     const isPromptManagerSource = String(endpointPrefix) === "/prompt-manager" || String(endpointPrefix) === "/prompt-manager-advanced";
     const isComposerSource = !isSystemPromptsSource && !isPromptManagerSource;
+    const isPromptManagerSaveMode = isPromptManagerSource && options?.saveMode === true;
 
     const _showInfo = typeof showInfo === "function" ? showInfo : async () => {};
     const _showConfirm = typeof showConfirm === "function" ? showConfirm : async () => false;
@@ -1299,6 +1320,7 @@ export function createPromptBrowserEditPanel(options) {
     let currentPromptName = "";
     let pendingThumbnail = null;
     let loadedThumbnail = null;
+    let currentDraftMetadata = {};
     let loadedPromptText = "";
     let loadedImageLora = "";
     let loadedImageLoraStrength = 1.0;
@@ -1824,6 +1846,7 @@ export function createPromptBrowserEditPanel(options) {
         if (!isEditingExistingPrompt() || nextName === String(currentPromptName || "").trim()) {
             _syncPromptSelection(currentCategory, nextName);
         }
+        updatePromptManagerSaveSummary();
         updateEditorActionButtons();
         _onChange();
     });
@@ -1846,6 +1869,122 @@ export function createPromptBrowserEditPanel(options) {
     promptTextArea.style.minHeight = isCompact ? "60px" : "120px";
     promptTextArea.style.flex = "1";
     promptBody.appendChild(promptTextArea);
+    const promptManagerSaveSummary = el("div", {
+        display: isPromptManagerSaveMode ? "flex" : "none",
+        flexDirection: "column",
+        gap: "6px",
+        padding: "8px 10px",
+        background: STYLE.cardBg,
+        border: `1px solid ${STYLE.inputBorder}`,
+        borderRadius: "6px",
+    });
+    const promptManagerSaveSummaryTitle = el("div", {
+        color: STYLE.textPrimary,
+        fontSize: "12px",
+        fontWeight: "bold",
+    }, "Save Includes");
+    const promptManagerSaveSummaryMeta = el("div", {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "6px",
+    });
+
+    const createPromptManagerChip = () => el("div", {
+        padding: "4px 8px",
+        background: STYLE.inputBg,
+        border: `1px solid ${STYLE.sectionBorder}`,
+        borderRadius: "999px",
+        color: STYLE.textPrimary,
+        fontSize: "11px",
+        lineHeight: "1.2",
+        whiteSpace: "nowrap",
+    }, "");
+
+    const promptManagerSummaryWorkflow = createPromptManagerChip();
+    const promptManagerSummaryTriggerWords = createPromptManagerChip();
+    promptManagerSaveSummaryMeta.append(
+        promptManagerSummaryWorkflow,
+        promptManagerSummaryTriggerWords,
+    );
+
+    const promptManagerSummaryLoras = el("div", {
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+    });
+    const promptManagerSummaryLorasLabel = el("div", {
+        color: STYLE.textMuted,
+        fontSize: "11px",
+        textTransform: "uppercase",
+        letterSpacing: "0.04em",
+    }, "LoRAs To Save");
+    const promptManagerSummaryLorasValue = el("div", {
+        color: STYLE.textPrimary,
+        fontSize: "12px",
+        lineHeight: "1.35",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+    }, "");
+    promptManagerSummaryLoras.append(promptManagerSummaryLorasLabel, promptManagerSummaryLorasValue);
+
+    promptManagerSaveSummary.append(promptManagerSaveSummaryTitle, promptManagerSaveSummaryMeta, promptManagerSummaryLoras);
+    promptBody.appendChild(promptManagerSaveSummary);
+
+    function updatePromptManagerSaveSummary() {
+        if (!isPromptManagerSaveMode) return;
+
+        const metadata = currentDraftMetadata && typeof currentDraftMetadata === "object" ? currentDraftMetadata : {};
+        const workflowIncluded = hasPromptManagerWorkflowPayload(metadata.workflow_data);
+        const triggerCounts = countPromptManagerNamedItems(metadata.trigger_words, "text");
+        const loraCounts = {
+            a: countPromptManagerNamedItems(metadata.loras_a),
+            b: countPromptManagerNamedItems(metadata.loras_b),
+            c: countPromptManagerNamedItems(metadata.loras_c),
+            d: countPromptManagerNamedItems(metadata.loras_d),
+        };
+
+        promptManagerSummaryWorkflow.textContent = workflowIncluded ? "Workflow data included" : "No workflow data";
+        promptManagerSummaryTriggerWords.textContent = triggerCounts.total > 0
+            ? `Trigger words ${triggerCounts.active}/${triggerCounts.total}`
+            : "No trigger words";
+
+        const formatLoraList = (label, items) => {
+            const named = Array.isArray(items)
+                ? items.filter((item) => String(item?.name || "").trim())
+                : [];
+            if (!named.length) return null;
+            const activeNames = named
+                .filter((item) => item?.active !== false)
+                .map((item) => {
+                    const modelStrength = Number(item?.strength ?? item?.model_strength ?? 1.0);
+                    const clipStrength = Number(item?.clip_strength ?? item?.strength ?? modelStrength);
+                    const safeModel = Number.isFinite(modelStrength) ? modelStrength : 1.0;
+                    const safeClip = Number.isFinite(clipStrength) ? clipStrength : safeModel;
+                    const suffix = safeClip !== safeModel
+                        ? ` (${safeModel.toFixed(2).replace(/\.00$/, "")}/${safeClip.toFixed(2).replace(/\.00$/, "")})`
+                        : ` (${safeModel.toFixed(2).replace(/\.00$/, "")})`;
+                    return `${String(item.name).trim()}${suffix}`;
+                });
+            if (!activeNames.length) return `${label}: disabled`;
+            return `${label}: ${activeNames.join(", ")}`;
+        };
+
+        const loraLines = [
+            formatLoraList("A", metadata.loras_a),
+            formatLoraList("B", metadata.loras_b),
+            formatLoraList("C", metadata.loras_c),
+            formatLoraList("D", metadata.loras_d),
+        ].filter(Boolean);
+
+        promptManagerSummaryLorasValue.textContent = loraLines.length > 0
+            ? loraLines.join("\n")
+            : "No active LoRAs";
+    }
+
+    promptTextArea.addEventListener("input", () => {
+        updatePromptManagerSaveSummary();
+        _onChange();
+    });
 
     const imageLoraRow = el("div", {
         display: isComposerSource ? "flex" : "none",
@@ -2034,6 +2173,7 @@ export function createPromptBrowserEditPanel(options) {
         currentPromptName = name;
         pendingThumbnail = null;
         const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], name, endpointPrefix);
+        currentDraftMetadata = entry && typeof entry === "object" ? { ...entry } : {};
         loadedPromptText = entry?.prompt || "";
         loadedThumbnail = entry?.thumbnail || null;
         loadedImageLora = String(entry?.lora_image || entry?.lora || "").trim();
@@ -2047,6 +2187,7 @@ export function createPromptBrowserEditPanel(options) {
         refModWeightInput.value = String(loadedRefModWeight);
         await refreshComposerAssetChoices({ loraImage: loadedImageLora, loraVideo: loadedVideoLora, refmod: loadedRefMod });
         updateThumbnailDisplay(entry?.thumbnail || null);
+        updatePromptManagerSaveSummary();
         updateEditorActionButtons();
         _onChange();
         return result;
@@ -2231,6 +2372,7 @@ export function createPromptBrowserEditPanel(options) {
             const thumbnail = await _generateThumbnail(category, name, draftPromptData);
             pendingThumbnail = thumbnail || null;
             updateThumbnailDisplay(pendingThumbnail);
+            updatePromptManagerSaveSummary();
             _onChange();
         } catch (err) {
             console.error("[PromptBrowserEdit] Thumbnail generation failed:", err);
@@ -2416,6 +2558,7 @@ export function createPromptBrowserEditPanel(options) {
 
         const entry = getCategoryPromptEntryForEndpoint(node?.prompts?.[category], promptName, endpointPrefix);
         if (entry && typeof entry === "object") {
+            currentDraftMetadata = { ...entry };
             promptTextArea.value = entry.prompt || "";
             loadedPromptText = entry.prompt || "";
             loadedThumbnail = entry.thumbnail || null;
@@ -2430,8 +2573,10 @@ export function createPromptBrowserEditPanel(options) {
             refModWeightInput.value = String(loadedRefModWeight);
             await refreshComposerAssetChoices({ loraImage: loadedImageLora, loraVideo: loadedVideoLora, refmod: loadedRefMod });
             updateThumbnailDisplay(loadedThumbnail);
+            updatePromptManagerSaveSummary();
             updateEditorActionButtons();
         } else {
+            currentDraftMetadata = {};
             promptTextArea.value = "";
             loadedPromptText = "";
             loadedThumbnail = null;
@@ -2446,6 +2591,7 @@ export function createPromptBrowserEditPanel(options) {
             refModWeightInput.value = "1";
             await refreshComposerAssetChoices({ loraImage: "", loraVideo: "", refmod: "" });
             updateThumbnailDisplay(null);
+            updatePromptManagerSaveSummary();
             updateEditorActionButtons();
         }
 
@@ -2459,6 +2605,11 @@ export function createPromptBrowserEditPanel(options) {
 
         currentCategory = String(options?.category || draft?.category || currentCategory || "").trim();
         currentPromptName = "";
+        currentDraftMetadata = { ...(draft && typeof draft === "object" ? draft : {}) };
+        delete currentDraftMetadata.category;
+        delete currentDraftMetadata.name;
+        delete currentDraftMetadata.text;
+        delete currentDraftMetadata.thumbnail;
         promptNameInput.value = String(options?.name || draft?.name || "").trim();
         promptTextArea.value = String(draft?.text || "");
         loadedPromptText = "";
@@ -2485,6 +2636,7 @@ export function createPromptBrowserEditPanel(options) {
         }
 
         updateThumbnailDisplay(pendingThumbnail);
+        updatePromptManagerSaveSummary();
         updateEditorActionButtons();
         loadCategorySettings(currentCategory);
         return true;
@@ -2548,6 +2700,7 @@ export function createPromptBrowserEditPanel(options) {
             loadedCategoryBasePrompt = "";
             loadedCategoryPromptPrefix = "";
         }
+        updatePromptManagerSaveSummary();
     }
 
     function showTypeSettings() {
@@ -2588,6 +2741,7 @@ export function createPromptBrowserEditPanel(options) {
         if (!canProceed) return false;
         promptNameInput.value = "";
         promptTextArea.value = "";
+        currentDraftMetadata = {};
         loadedPromptText = "";
         pendingThumbnail = null;
         loadedThumbnail = null;
@@ -2605,6 +2759,7 @@ export function createPromptBrowserEditPanel(options) {
         }
         updateThumbnailDisplay(null);
         currentPromptName = "";
+        updatePromptManagerSaveSummary();
         updateEditorActionButtons();
         return true;
     }
@@ -2886,6 +3041,7 @@ export function createPromptBrowserEditPanel(options) {
 
     // Initialize the thumbnail area with the placeholder so it never starts empty.
     updateThumbnailDisplay(null);
+    updatePromptManagerSaveSummary();
     updateEditorActionButtons();
     if (isComposerSource) {
         void refreshComposerAssetChoices();
@@ -2906,9 +3062,11 @@ export function createPromptBrowserEditPanel(options) {
         confirmDiscardChanges,
         setPromptName: (value) => {
             promptNameInput.value = String(value || "").trim();
+            updatePromptManagerSaveSummary();
             updateEditorActionButtons();
         },
         getCurrentPromptDraft: () => ({
+            ...currentDraftMetadata,
             category: String(currentCategory || "").trim(),
             name: String(promptNameInput.value || "").trim(),
             text: String(promptTextArea.value || ""),
