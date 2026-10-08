@@ -3761,6 +3761,8 @@ async function openSaveBrowserForNode(node) {
     const initialName = useWorkflowDateDefault
         ? buildWorkflowDefaultName()
         : (currentName || "New Prompt");
+    const existingPromptEntry = node.prompts?.[currentCategory]?.[currentName] || null;
+    const initialThumbnail = node.connectedThumbnail || existingPromptEntry?.thumbnail || null;
 
     await openPromptBrowserForSave({
         node,
@@ -3775,10 +3777,17 @@ async function openSaveBrowserForNode(node) {
         filterEmptyCategories: node?._isWorkflowManager === true,
         showAllCategoriesToggle: node?._isWorkflowManager === true,
         hideContentFilterControl: node?._isWorkflowManager === true,
-        onSave: async ({ category, name, overwrite }) => {
+        saveWithEditPanel: true,
+        saveDraft: {
+            category: currentCategory,
+            name: initialName,
+            text: textWidget.value || "",
+            thumbnail: initialThumbnail,
+        },
+        onSave: async ({ category, name, overwrite, text: editedText, thumbnail: editedThumbnail }) => {
             const promptName = String(name || "").trim();
             const targetCategory = String(category || "").trim();
-            const promptText = textWidget.value;
+            const promptText = typeof editedText === "string" ? editedText : String(textWidget.value || "");
             if (!promptName || !targetCategory) {
                 return { success: false, error: "Category and prompt name are required." };
             }
@@ -3831,7 +3840,7 @@ async function openSaveBrowserForNode(node) {
                     node.savedTriggerWords || []
                 );
 
-                const thumbnail = node.connectedThumbnail || null;
+                const thumbnail = editedThumbnail !== undefined ? editedThumbnail : (node.connectedThumbnail || null);
 
                 let preservedNsfw = false;
                 const categoryPrompts = node.prompts?.[targetCategory];
@@ -3952,177 +3961,7 @@ function addButtonBar(node) {
 
     // Save Prompt/Workflow button
     const savePromptBtn = createButton(saveButtonLabel, async () => {
-        const currentCategory = categoryWidget.value;
-        const currentName = (promptWidget.value || "").trim();
-        const useWorkflowDateDefault = node._isWorkflowManager && (
-            hasConnectedWorkflowInput(node) ||
-            !currentName ||
-            currentName.toLowerCase() === "new prompt" ||
-            node.isNewUnsavedPrompt === true
-        );
-        const initialName = useWorkflowDateDefault
-            ? buildWorkflowDefaultName()
-            : (currentName || "New Prompt");
-
-        await openPromptBrowserForSave({
-            node,
-            currentCategory,
-            currentPrompt: promptWidget.value || "",
-            title: node._isComposerManager ? "Save Composer" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt"),
-            saveButtonText: "Save",
-            namePlaceholder: "Prompt name",
-            initialName,
-            workflowOnly: node?._isWorkflowManager === true,
-            contentFilter: node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : undefined),
-            filterEmptyCategories: node?._isWorkflowManager === true,
-            showAllCategoriesToggle: node?._isWorkflowManager === true,
-            hideContentFilterControl: node?._isWorkflowManager === true,
-            onSave: async ({ category, name, overwrite }) => {
-                const promptName = String(name || "").trim();
-                const targetCategory = String(category || "").trim();
-                const promptText = textWidget.value;
-                if (!promptName || !targetCategory) {
-                    return { success: false, error: "Category and prompt name are required." };
-                }
-
-                try {
-                    // Use the last-executed state from Python as the authoritative source for connected loras.
-                    // node.currentLorasA/B is populated from the backend after each execution (input_loras_a/b),
-                    // so it already reflects only what actually ran.
-                    const connectedLorasA = node.currentLorasA || [];
-                    const connectedLorasB = node.currentLorasB || [];
-                    const connectedLorasC = node.currentLorasC || [];
-                    const connectedLorasD = node.currentLorasD || [];
-
-                    const useLoraInput = shouldCombineLoras(node);
-                    const useInputOnlyLoras = shouldUseInputOnlyLoras(node);
-
-                    let allLorasA, allLorasB, allLorasC, allLorasD;
-                    if (useInputOnlyLoras) {
-                        allLorasA = [...connectedLorasA.map(l => ({ ...l, source: "current", fromInput: true }))];
-                        allLorasB = [...connectedLorasB.map(l => ({ ...l, source: "current", fromInput: true }))];
-                        allLorasC = [...connectedLorasC.map(l => ({ ...l, source: "current", fromInput: true }))];
-                        allLorasD = [...connectedLorasD.map(l => ({ ...l, source: "current", fromInput: true }))];
-                    } else if (!useLoraInput) {
-                        allLorasA = [...(node.savedLorasA || [])];
-                        allLorasB = [...(node.savedLorasB || [])];
-                        allLorasC = [...(node.savedLorasC || [])];
-                        allLorasD = [...(node.savedLorasD || [])];
-                    } else {
-                        const mergedA = mergeLoraLists(
-                            connectedLorasA.map(l => ({ ...l, source: "current" })),
-                            node.savedLorasA || []
-                        );
-                        const mergedB = mergeLoraLists(
-                            connectedLorasB.map(l => ({ ...l, source: "current" })),
-                            node.savedLorasB || []
-                        );
-                        const mergedC = mergeLoraLists(
-                            connectedLorasC.map(l => ({ ...l, source: "current" })),
-                            node.savedLorasC || []
-                        );
-                        const mergedD = mergeLoraLists(
-                            connectedLorasD.map(l => ({ ...l, source: "current" })),
-                            node.savedLorasD || []
-                        );
-                        allLorasA = [...mergedA];
-                        allLorasB = [...mergedB];
-                        allLorasC = [...mergedC];
-                        allLorasD = [...mergedD];
-                    }
-
-                    const allTriggerWords = mergeTriggerWordLists(
-                        node.currentTriggerWords || [],
-                        node.savedTriggerWords || []
-                    );
-
-                    const thumbnail = node.connectedThumbnail || null;
-
-                    // Preserve existing NSFW status when overwriting from the browser-save flow.
-                    let preservedNsfw = false;
-                    const categoryPrompts = node.prompts?.[targetCategory];
-                    if (categoryPrompts && typeof categoryPrompts === "object") {
-                        const existingName = Object.keys(categoryPrompts)
-                            .filter((k) => !isHiddenCategoryEntryKey(k))
-                            .find((k) => k.toLowerCase() === promptName.toLowerCase());
-                        if (existingName && categoryPrompts[existingName]?.nsfw === true) {
-                            preservedNsfw = true;
-                        }
-                    }
-
-                    await savePrompt(node, targetCategory, promptName, promptText, allLorasA, allLorasB, allLorasC, allLorasD, allTriggerWords, thumbnail, preservedNsfw);
-
-                    const useWorkflowWidget = node.widgets?.find(w => w.name === "use_workflow_data");
-                    if (useWorkflowWidget?.value === true) {
-                        const clone = (v, fb) => {
-                            try {
-                                return JSON.parse(JSON.stringify(v ?? fb));
-                            } catch {
-                                return fb;
-                            }
-                        };
-
-                        node._preWorkflowModeState = {
-                            text: promptText || "",
-                            savedLorasA: clone(allLorasA, []),
-                            savedLorasB: clone(allLorasB, []),
-                            savedLorasC: clone(allLorasC, []),
-                            savedLorasD: clone(allLorasD, []),
-                            currentLorasA: [],
-                            currentLorasB: [],
-                            currentLorasC: [],
-                            currentLorasD: [],
-                            savedTriggerWords: clone(allTriggerWords, []),
-                            currentTriggerWords: [],
-                            lastWorkflowData: clone(node.lastWorkflowData, null),
-                        };
-
-                        useWorkflowWidget.value = false;
-                        if (typeof useWorkflowWidget.callback === "function") {
-                            await useWorkflowWidget.callback(false);
-                        }
-                    }
-
-                    node._skipCallbackReload = true;
-                    categoryWidget.value = targetCategory;
-                    filterPromptDropdown(node);
-                    promptWidget.value = promptName;
-                    textWidget.value = promptText;
-                    node._skipCallbackReload = false;
-
-                    node._previousCategory = targetCategory;
-                    node._previousPrompt = promptName;
-
-                    node.savedLorasA = allLorasA;
-                    node.savedLorasB = allLorasB;
-                    node.savedLorasC = allLorasC;
-                    node.savedLorasD = allLorasD;
-                    node.savedTriggerWords = allTriggerWords;
-                    updateLoraDisplays(node);
-                    updateTriggerWordsDisplay(node);
-
-                    if (node.updatePromptSelectorDisplay) {
-                        node.updatePromptSelectorDisplay();
-                    }
-
-                    updateLastSavedState(node);
-
-                    return {
-                        success: true,
-                        category: targetCategory,
-                        name: promptName,
-                        overwritten: overwrite === true,
-                    };
-                } catch (err) {
-                    console.error("[PromptManagerAdvanced] Error during save:", err);
-                    return { success: false, error: err?.message || "Error during save" };
-                } finally {
-                    node.isNewUnsavedPrompt = false;
-                    node.newPromptCategory = null;
-                    node.newPromptName = null;
-                }
-            },
-        });
+        await openSaveBrowserForNode(node);
     });
 
     // New/Clear button - clears current editable state

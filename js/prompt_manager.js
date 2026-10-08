@@ -3,6 +3,53 @@ import { ComfyWidgets } from "../../scripts/widgets.js";
 import { api } from "../../scripts/api.js";
 
 let promptInputMaskPatched = false;
+const AUTO_SELECT_MODEL_OPTION = "Default (auto-select)";
+const preferredModelSettingOptions = [AUTO_SELECT_MODEL_OPTION];
+const preferredModelBaseTooltip = "Select the preferred model for all modes (text and vision). Leave blank to auto-select.";
+
+function normalizePreferredModelSettingValue(value) {
+    return value === AUTO_SELECT_MODEL_OPTION || value == null ? "" : String(value);
+}
+
+function updatePreferredModelSettingDefinition(definition, models, tooltip) {
+    preferredModelSettingOptions.splice(0, preferredModelSettingOptions.length, AUTO_SELECT_MODEL_OPTION, ...models);
+    definition.options = preferredModelSettingOptions;
+    definition.tooltip = tooltip || preferredModelBaseTooltip;
+
+    const registeredDefinition = app?.ui?.settings?.settingsLookup?.[definition.id];
+    if (registeredDefinition) {
+        registeredDefinition.options = preferredModelSettingOptions;
+        registeredDefinition.tooltip = definition.tooltip;
+    }
+
+    const currentValue = app?.ui?.settings?.getSettingValue?.(definition.id);
+    if (currentValue === "") {
+        app.ui.settings.setSettingValue(definition.id, AUTO_SELECT_MODEL_OPTION);
+    }
+}
+
+async function refreshPreferredModelOptions(definition) {
+    try {
+        const response = await api.fetchApi("/prompt-manager/available-models");
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const models = Array.isArray(data?.models)
+            ? data.models.filter(model => typeof model === "string" && model.trim())
+            : [];
+        const tooltipParts = [preferredModelBaseTooltip];
+        const status = typeof data?.status === "string" ? data.status.trim() : "";
+        if (status && !status.toLowerCase().startsWith("error:")) {
+            tooltipParts.push(status);
+        }
+        updatePreferredModelSettingDefinition(definition, models, tooltipParts.join("\n"));
+    } catch (error) {
+        console.error("[PromptManager] Error loading preferred model options:", error);
+        updatePreferredModelSettingDefinition(definition, [], preferredModelBaseTooltip);
+    }
+}
 
 function isTruthyInputFlag(value) {
     return value === true || value === 1 || value === "1" || value === "true";
@@ -45,26 +92,30 @@ function attachPromptInputMaskShim() {
         return result;
     };
 }
+
+const preferredModelSetting = {
+    id: "PromptManager.PreferredModel",
+    category: ["Prompt Manager", "1. Model Preferences", "Preferred Model"],
+    name: "Preferred Model",
+    tooltip: preferredModelBaseTooltip,
+    type: "combo",
+    options: preferredModelSettingOptions,
+    defaultValue: AUTO_SELECT_MODEL_OPTION,
+    onChange(value) {
+        fetch("/prompt-manager/save-preference", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key: "preferred_model", value: normalizePreferredModelSettingValue(value) })
+        }).catch(error => {
+            console.error("[PromptManager] Error saving preferred model preference:", error);
+        });
+    }
+};
+
 app.registerExtension({
     name: "PromptManager",
     settings: [
-        {
-            id: "PromptManager.PreferredModel",
-            category: ["Prompt Manager", "1. Model Preferences", "Preferred Model"],
-            name: "Preferred Model",
-            tooltip: "Filename of the preferred model for all modes (text and vision). Leave empty to auto-select. e.g. Qwen3.5-9B-UD-Q4_K_XL.gguf",
-            type: "text",
-            defaultValue: "",
-            onChange(value) {
-                fetch("/prompt-manager/save-preference", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ key: "preferred_model", value: value })
-                }).catch(error => {
-                    console.error("[PromptManager] Error saving preferred model preference:", error);
-                });
-            }
-        },
+        preferredModelSetting,
         {
             id: "PromptManager.HideDownloadableModels",
             category: ["Prompt Manager", "1. Model Preferences", "Hide Downloadable Models"],
@@ -77,7 +128,7 @@ app.registerExtension({
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ key: "hide_downloadable_models", value: value })
-                }).catch(error => {
+                }).then(() => refreshPreferredModelOptions(preferredModelSetting)).catch(error => {
                     console.error("[PromptManager] Error saving hide-downloadable-models preference:", error);
                 });
             }
@@ -111,7 +162,7 @@ app.registerExtension({
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ key: "custom_llama_model_path", value: value })
-                }).catch(error => {
+                }).then(() => refreshPreferredModelOptions(preferredModelSetting)).catch(error => {
                     console.error("[PromptManager] Error saving Model path preference:", error);
                 });
             }
@@ -221,7 +272,7 @@ app.registerExtension({
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ key: "llm_backend", value: value })
-                }).catch(error => {
+                }).then(() => refreshPreferredModelOptions(preferredModelSetting)).catch(error => {
                     console.error("[PromptManager] Error saving LLM backend preference:", error);
                 });
             }
@@ -265,7 +316,7 @@ app.registerExtension({
         // Load settings from ComfyUI and sync to Python cache
         try {
             // Sync current values to Python cache first
-            const preferredModel = app.ui.settings.getSettingValue("PromptManager.PreferredModel");
+            const preferredModel = normalizePreferredModelSettingValue(app.ui.settings.getSettingValue("PromptManager.PreferredModel"));
             const hideDownloadableModels = app.ui.settings.getSettingValue("PromptManager.HideDownloadableModels");
             const llamaPath = app.ui.settings.getSettingValue("PromptManager.LlamaPath");
             const modelPath = app.ui.settings.getSettingValue("PromptManager.ModelPath");
@@ -321,8 +372,10 @@ app.registerExtension({
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "ollama_keep_alive", value: ollamaKeepAlive })
             });
+            await refreshPreferredModelOptions(preferredModelSetting);
         } catch (error) {
             console.error("[PromptManager] Error syncing preferences:", error);
+            await refreshPreferredModelOptions(preferredModelSetting);
         }
     },
     async beforeRegisterNodeDef(nodeType, nodeData, app) {

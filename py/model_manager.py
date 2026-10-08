@@ -8,6 +8,7 @@ import server
 from huggingface_hub import HfApi
 from tqdm.auto import tqdm
 import requests
+from .ollama_wrapper import discover_ollama_models
 
 # Add preference cache and API endpoints for preferences
 _preferences_cache = {
@@ -84,11 +85,49 @@ async def save_preference(request):
 async def list_ollama_models(request):
     """API endpoint to discover available Ollama models."""
     try:
-        from .ollama_wrapper import discover_ollama_models
         models, status = discover_ollama_models(_preferences_cache)
         return server.web.json_response({"models": models, "status": status})
     except Exception as e:
         return server.web.json_response({"models": [], "status": f"Error: {e}"}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/prompt-manager/available-models")
+async def list_available_models(request):
+    """API endpoint to discover preferred-model dropdown options for the active backend."""
+    try:
+        backend = str(_preferences_cache.get("llm_backend", "llama.cpp") or "llama.cpp").strip() or "llama.cpp"
+        preferred_model = str(_preferences_cache.get("preferred_model", "") or "").strip()
+        hide_downloadable_models = _preferences_cache.get("hide_downloadable_models", False) is True
+
+        if backend == "ollama":
+            models, status = discover_ollama_models(_preferences_cache)
+            tooltip = "Select the Ollama model to use. Leave blank to auto-select."
+        else:
+            models = get_all_models()
+            if hide_downloadable_models:
+                status = "Only locally available models are shown."
+                tooltip = "Select a locally available model. Leave blank to auto-select."
+            else:
+                status = "Local models are listed first, then built-in HuggingFace download entries."
+                tooltip = "Select a model to use. Leave blank to auto-select."
+
+        return server.web.json_response({
+            "models": list(models or []),
+            "backend": backend,
+            "preferred_model": preferred_model,
+            "hide_downloadable_models": hide_downloadable_models,
+            "status": status,
+            "tooltip": tooltip,
+        })
+    except Exception as e:
+        return server.web.json_response({
+            "models": [],
+            "backend": str(_preferences_cache.get("llm_backend", "llama.cpp") or "llama.cpp"),
+            "preferred_model": str(_preferences_cache.get("preferred_model", "") or ""),
+            "hide_downloadable_models": _preferences_cache.get("hide_downloadable_models", False) is True,
+            "status": f"Error: {e}",
+            "tooltip": "Select a model to use. Leave blank to auto-select.",
+        }, status=500)
 
 
 def get_models_directory():

@@ -1923,6 +1923,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         options?.preferenceScope || (promptOnly ? "composer" : "manager")
     );
     const allowEditMode = options?.allowEditMode !== false;
+    const saveUsesEditPanel = mode === "save" && allowEditMode && options?.saveWithEditPanel === true;
     const initialContentFilter = (() => {
         const raw = String(options?.contentFilter || "").trim().toLowerCase();
         return raw === "prompt" || raw === "recipe" || raw === "compose" || raw === "all" ? raw : "";
@@ -1934,7 +1935,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const rememberedEditMode = sessionBrowserEditMode.has(browserPrefScope)
         ? sessionBrowserEditMode.get(browserPrefScope) === true
         : null;
-    let editMode = allowEditMode && (rememberedEditMode ?? (options?.editMode === true));
+    let editMode = saveUsesEditPanel
+        ? true
+        : (allowEditMode && (rememberedEditMode ?? (options?.editMode === true)));
     let multiSelectMode = startInMultiSelect;
     let updateSelectButton = () => {};
     let updateFooterText = () => {};
@@ -2011,7 +2014,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 updateSelectButton();
             }
 
-            if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
+            if (!saveUsesEditPanel && editMode && editPanel && typeof editPanel.clearPrompt === "function") {
                 await editPanel.clearPrompt({ skipConfirm: true });
             }
         };
@@ -2083,13 +2086,18 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
             if (editMode && editPanel) {
                 editPanel.loadCategorySettings(selectedCategory);
-                if (typeof editPanel.showCategorySettings === "function") {
+                if (saveUsesEditPanel && typeof editPanel.showPromptSettings === "function") {
+                    editPanel.showPromptSettings();
+                } else if (typeof editPanel.showCategorySettings === "function") {
                     editPanel.showCategorySettings();
                 }
             }
         };
 
         const canChangeEditorContext = async () => {
+            if (saveUsesEditPanel) {
+                return true;
+            }
             if (!editMode || !editPanel || typeof editPanel.confirmDiscardChanges !== "function") {
                 return true;
             }
@@ -2600,6 +2608,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let updateEditModeBtn = () => {};
         const syncEditPanelSelection = async () => {
             if (!editPanel) return;
+            if (saveUsesEditPanel) {
+                editPanel.loadCategorySettings(selectedCategory);
+                return;
+            }
             if (currentPrompt || blankPromptExplicitSelection) {
                 await editPanel.loadPrompt(selectedCategory, currentPrompt);
                 return;
@@ -2753,7 +2765,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                             return;
                         }
                         setBlankPromptSelection();
-                        if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
+                        if (!saveUsesEditPanel && editMode && editPanel && typeof editPanel.clearPrompt === "function") {
                             await editPanel.clearPrompt({ skipConfirm: true });
                         }
                         setSelectedCategory(resolveComposerCategoryKey(node, categoryName, data.type_file || ""));
@@ -3493,7 +3505,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         rebuildCategoryList();
                         rebuildTypeRailButtons();
                         if (editMode && editPanel) {
-                            if (typeof editPanel.clearPrompt === "function") {
+                            if (!saveUsesEditPanel && typeof editPanel.clearPrompt === "function") {
                                 await editPanel.clearPrompt({ skipConfirm: true });
                             }
                             if (typeof editPanel.loadCategorySettings === "function") {
@@ -4248,7 +4260,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const canProceed = await canChangeEditorContext();
                     if (!canProceed) return;
                     setBlankPromptSelection();
-                    if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
+                    if (!saveUsesEditPanel && editMode && editPanel && typeof editPanel.clearPrompt === "function") {
                         await editPanel.clearPrompt({ skipConfirm: true });
                     }
                     setSelectedCategory(cat);
@@ -4391,7 +4403,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         contentRow.appendChild(gridContainer);
 
         // Edit panel
-        if (allowEditMode && mode !== "save") {
+        if (allowEditMode && (mode !== "save" || saveUsesEditPanel)) {
             editPanel = createPromptBrowserEditPanel({
                 node,
                 endpointPrefix,
@@ -4522,13 +4534,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         ? resolveComposerCategoryKey(node, category, nextType && nextType !== "__all__" ? getComposerTypeFile(node, nextType) : "")
                         : category;
                     setBlankPromptSelection();
-                    if (typeof editPanel.clearPrompt === "function") {
+                    if (!saveUsesEditPanel && typeof editPanel.clearPrompt === "function") {
                         await editPanel.clearPrompt({ skipConfirm: true });
                     }
                     rebuildCategoryList();
                     if (editPanel) {
                         editPanel.loadCategorySettings(selectedCategory);
-                        if (typeof editPanel.showCategorySettings === "function") {
+                        if (saveUsesEditPanel && typeof editPanel.showPromptSettings === "function") {
+                            editPanel.showPromptSettings();
+                        } else if (typeof editPanel.showCategorySettings === "function") {
                             editPanel.showCategorySettings();
                         }
                     }
@@ -4823,7 +4837,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
-            const showEditBlank = editMode && !!editPanel && mode !== "save";
+            const showEditBlank = editMode && !!editPanel;
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
@@ -5042,7 +5056,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
                         enableMultiSelect({ preserveCurrentSelection: true });
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (editMode && editPanel) {
+                        if (editMode && editPanel && !saveUsesEditPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         renderContent(searchInput.value);
@@ -5052,13 +5066,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
-                            if (editMode && editPanel) {
+                            if (editMode && editPanel && !saveUsesEditPanel) {
                                 editPanel.loadPrompt(selectedCategory, promptName);
                             }
                             renderContent(searchInput.value);
                             return;
                         }
-                        if (editMode && editPanel) {
+                        if (editMode && editPanel && !saveUsesEditPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         updateCardSelection(card, promptName);
@@ -5067,7 +5081,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
 
                     // In edit mode, ask before discarding unsaved changes.
-                    if (editMode && editPanel) {
+                    if (editMode && editPanel && !saveUsesEditPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
                             resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
@@ -5091,6 +5105,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                     if (mode === "save") {
                         selectedSaveName = promptName;
+                        if (saveUsesEditPanel && editPanel?.setPromptName) {
+                            editPanel.setPromptName(promptName);
+                        }
                         if (saveNameInput) {
                             saveNameInput.value = promptName;
                             saveNameInput.focus();
@@ -5123,6 +5140,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (mode === "save") {
                     card.ondblclick = async () => {
                         selectedSaveName = promptName;
+                        if (saveUsesEditPanel && editPanel?.setPromptName) {
+                            editPanel.setPromptName(promptName);
+                        }
                         if (saveNameInput) {
                             saveNameInput.value = promptName;
                         }
@@ -5213,7 +5233,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
-            const showEditBlank = editMode && !!editPanel && mode !== "save";
+            const showEditBlank = editMode && !!editPanel;
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
@@ -5429,7 +5449,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
                         enableMultiSelect({ preserveCurrentSelection: true });
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (editMode && editPanel) {
+                        if (editMode && editPanel && !saveUsesEditPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         renderContent(searchInput.value);
@@ -5439,13 +5459,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
-                            if (editMode && editPanel) {
+                            if (editMode && editPanel && !saveUsesEditPanel) {
                                 editPanel.loadPrompt(selectedCategory, promptName);
                             }
                             renderContent(searchInput.value);
                             return;
                         }
-                        if (editMode && editPanel) {
+                        if (editMode && editPanel && !saveUsesEditPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         updateCardSelection(card, promptName);
@@ -5453,7 +5473,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    if (editMode && editPanel) {
+                    if (editMode && editPanel && !saveUsesEditPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
                             resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
@@ -5477,6 +5497,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                     if (mode === "save") {
                         selectedSaveName = promptName;
+                        if (saveUsesEditPanel && editPanel?.setPromptName) {
+                            editPanel.setPromptName(promptName);
+                        }
                         if (saveNameInput) {
                             saveNameInput.value = promptName;
                             saveNameInput.focus();
@@ -5509,6 +5532,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (mode === "save") {
                     card.ondblclick = async () => {
                         selectedSaveName = promptName;
+                        if (saveUsesEditPanel && editPanel?.setPromptName) {
+                            editPanel.setPromptName(promptName);
+                        }
                         if (saveNameInput) {
                             saveNameInput.value = promptName;
                         }
@@ -5599,7 +5625,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
             const filteredPrompts = getFilteredPrompts(filter);
-            const showEditBlank = editMode && !!editPanel && mode !== "save";
+            const showEditBlank = editMode && !!editPanel;
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
                 const emptyMsg = document.createElement("div");
@@ -6038,7 +6064,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
                         enableMultiSelect({ preserveCurrentSelection: true });
                         applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (editMode && editPanel) {
+                        if (editMode && editPanel && !saveUsesEditPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         renderContent(searchInput.value);
@@ -6048,13 +6074,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (isMultiSelectActive()) {
                         const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
                         if (action === "rerender") {
-                            if (editMode && editPanel) {
+                            if (editMode && editPanel && !saveUsesEditPanel) {
                                 editPanel.loadPrompt(selectedCategory, promptName);
                             }
                             renderContent(searchInput.value);
                             return;
                         }
-                        if (editMode && editPanel) {
+                        if (editMode && editPanel && !saveUsesEditPanel) {
                             editPanel.loadPrompt(selectedCategory, promptName);
                         }
                         updateRowSelection(row, promptName);
@@ -6062,7 +6088,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         return;
                     }
 
-                    if (editMode && editPanel) {
+                    if (editMode && editPanel && !saveUsesEditPanel) {
                         const now = Date.now();
                         if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 1000) {
                             resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
@@ -6086,6 +6112,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                     if (mode === "save") {
                         selectedSaveName = promptName;
+                        if (saveUsesEditPanel && editPanel?.setPromptName) {
+                            editPanel.setPromptName(promptName);
+                        }
                         if (saveNameInput) {
                             saveNameInput.value = promptName;
                             saveNameInput.focus();
@@ -6118,6 +6147,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (mode === "save") {
                     row.ondblclick = async () => {
                         selectedSaveName = promptName;
+                        if (saveUsesEditPanel && editPanel?.setPromptName) {
+                            editPanel.setPromptName(promptName);
+                        }
                         if (saveNameInput) {
                             saveNameInput.value = promptName;
                         }
@@ -6478,7 +6510,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let cancelSaveButton = null;
 
         const handleSaveAction = async () => {
-            if (mode !== "save" || !onSave || !saveNameInput) {
+            if (mode !== "save" || !onSave) {
                 return;
             }
 
@@ -6488,10 +6520,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 return;
             }
 
-            const name = (saveNameInput.value || "").trim();
+            const draftPayload = saveUsesEditPanel && editPanel?.getCurrentPromptDraft
+                ? editPanel.getCurrentPromptDraft()
+                : null;
+            const name = String(draftPayload?.name ?? saveNameInput?.value ?? "").trim();
             if (!name) {
                 await showInfo("Missing Name", "Please enter a name before saving.");
-                saveNameInput.focus();
+                if (saveNameInput) saveNameInput.focus();
                 return;
             }
 
@@ -6511,7 +6546,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }
 
-            const saveResult = await onSave({ category: categoryLabel, name, overwrite });
+            const saveResult = await onSave({
+                category: categoryLabel,
+                name,
+                overwrite,
+                text: typeof draftPayload?.text === "string" ? draftPayload.text : undefined,
+                thumbnail: draftPayload?.thumbnail,
+            });
             if (saveResult?.success) {
                 resolve(saveResult);
                 cleanup();
@@ -6556,7 +6597,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const saveBar = document.createElement("div");
         if (mode === "save") {
             saveBar.style.cssText = `
-                display: flex;
+                display: ${saveUsesEditPanel ? "none" : "flex"};
                 gap: 8px;
                 align-items: center;
                 margin-top: 8px;
@@ -6564,31 +6605,33 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 border-top: 1px solid ${UI.sectionBorder};
             `;
 
-            saveNameInput = document.createElement("input");
-            saveNameInput.type = "text";
-            saveNameInput.value = selectedSaveName;
-            saveNameInput.placeholder = saveNamePlaceholder;
-            saveNameInput.style.cssText = `
-                flex: 1;
-                min-width: 0;
-                padding: 7px 10px;
-                background: ${UI.inputBg};
-                border: 1px solid ${UI.inputBorder};
-                border-radius: 4px;
-                color: #fff;
-                font-size: 13px;
-                box-sizing: border-box;
-                outline: none;
-            `;
-            saveNameInput.onfocus = () => saveNameInput.style.borderColor = UI.accent;
-            saveNameInput.onblur = () => saveNameInput.style.borderColor = UI.inputBorder;
-            saveNameInput.onkeydown = async (e) => {
-                if (e.key === "Enter") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    await handleSaveAction();
-                }
-            };
+            if (!saveUsesEditPanel) {
+                saveNameInput = document.createElement("input");
+                saveNameInput.type = "text";
+                saveNameInput.value = selectedSaveName;
+                saveNameInput.placeholder = saveNamePlaceholder;
+                saveNameInput.style.cssText = `
+                    flex: 1;
+                    min-width: 0;
+                    padding: 7px 10px;
+                    background: ${UI.inputBg};
+                    border: 1px solid ${UI.inputBorder};
+                    border-radius: 4px;
+                    color: #fff;
+                    font-size: 13px;
+                    box-sizing: border-box;
+                    outline: none;
+                `;
+                saveNameInput.onfocus = () => saveNameInput.style.borderColor = UI.accent;
+                saveNameInput.onblur = () => saveNameInput.style.borderColor = UI.inputBorder;
+                saveNameInput.onkeydown = async (e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        await handleSaveAction();
+                    }
+                };
+            }
 
             saveActionButton = document.createElement("button");
             saveActionButton.textContent = saveButtonText;
@@ -6623,7 +6666,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 cleanup();
             };
 
-            saveBar.appendChild(saveNameInput);
+            if (saveNameInput) {
+                saveBar.appendChild(saveNameInput);
+            }
             saveBar.appendChild(cancelSaveButton);
             saveBar.appendChild(saveActionButton);
         } else if (supportsMultiSelect) {
@@ -6923,6 +6968,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         document.body.appendChild(overlay);
         document.body.appendChild(dialog);
         updateEditModeLayout();
+        if (saveUsesEditPanel && editPanel?.loadDraft) {
+            void editPanel.loadDraft(options?.saveDraft || {}, {
+                category: selectedCategory,
+                name: selectedSaveName,
+            });
+        }
         searchInput.focus();
     });
 }
@@ -6944,6 +6995,8 @@ function standaloneOpenPromptBrowserForSave(options = {}) {
         filterEmptyCategories: options.filterEmptyCategories === true,
         showAllCategoriesToggle: options.showAllCategoriesToggle === true,
         hideContentFilterControl: options.hideContentFilterControl === true,
+        saveWithEditPanel: options.saveWithEditPanel === true,
+        saveDraft: options.saveDraft,
         endpointPrefix: options.endpointPrefix,
         loadPromptsFn: options.loadPromptsFn,
     });

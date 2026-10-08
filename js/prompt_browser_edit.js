@@ -2453,6 +2453,43 @@ export function createPromptBrowserEditPanel(options) {
         return true;
     }
 
+    async function loadDraft(draft = {}, options = {}) {
+        const canProceed = await confirmDiscardChanges();
+        if (!canProceed) return false;
+
+        currentCategory = String(options?.category || draft?.category || currentCategory || "").trim();
+        currentPromptName = "";
+        promptNameInput.value = String(options?.name || draft?.name || "").trim();
+        promptTextArea.value = String(draft?.text || "");
+        loadedPromptText = "";
+        pendingThumbnail = draft?.thumbnail || null;
+        loadedThumbnail = draft?.thumbnail || null;
+        loadedImageLora = "";
+        loadedImageLoraStrength = 1.0;
+        loadedVideoLora = "";
+        loadedVideoLoraStrength = 1.0;
+        loadedRefMod = "";
+        loadedRefModWeight = 1.0;
+        imageLoraStrengthInput.value = "1";
+        videoLoraStrengthInput.value = "1";
+        refModWeightInput.value = "1";
+
+        groupOpen = false;
+        settingsOpen = false;
+        promptOpen = true;
+        toolsOpen = false;
+        syncSectionVisibility();
+
+        if (isComposerSource) {
+            await refreshComposerAssetChoices({ loraImage: "", loraVideo: "", refmod: "" });
+        }
+
+        updateThumbnailDisplay(pendingThumbnail);
+        updateEditorActionButtons();
+        loadCategorySettings(currentCategory);
+        return true;
+    }
+
     function loadTypeSettings(promptType) {
         const selectedPromptType = String(promptType || "").trim();
         if (!selectedPromptType || selectedPromptType === "__all__") {
@@ -2857,6 +2894,7 @@ export function createPromptBrowserEditPanel(options) {
 
     return {
         element: root,
+        loadDraft,
         loadPrompt,
         loadTypeSettings,
         loadCategorySettings,
@@ -2866,6 +2904,16 @@ export function createPromptBrowserEditPanel(options) {
         refreshThumbnailModelButton,
         clearPrompt,
         confirmDiscardChanges,
+        setPromptName: (value) => {
+            promptNameInput.value = String(value || "").trim();
+            updateEditorActionButtons();
+        },
+        getCurrentPromptDraft: () => ({
+            category: String(currentCategory || "").trim(),
+            name: String(promptNameInput.value || "").trim(),
+            text: String(promptTextArea.value || ""),
+            thumbnail: pendingThumbnail || loadedThumbnail || null,
+        }),
         getCurrentPromptName: () => String(promptNameInput.value || "").trim(),
     };
 }
