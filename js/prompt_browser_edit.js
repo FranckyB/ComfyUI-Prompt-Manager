@@ -2144,6 +2144,13 @@ export function createPromptBrowserEditPanel(options) {
             text: String(promptTextArea.value || "").trim(),
             thumbnail: pendingThumbnail || loadedThumbnail,
         };
+        if (isPromptManagerSource) {
+            for (const key of ["loras_a", "loras_b", "loras_c", "loras_d", "trigger_words", "workflow_data", "nsfw"]) {
+                if (Object.prototype.hasOwnProperty.call(currentDraftMetadata, key)) {
+                    payload[key] = currentDraftMetadata[key];
+                }
+            }
+        }
         if (includeOriginalIdentity && isEditingExistingPrompt()) {
             payload.old_name = String(currentPromptName || "").trim();
             payload.old_category = String(currentCategory || "").trim();
@@ -2207,12 +2214,12 @@ export function createPromptBrowserEditPanel(options) {
     function updateEditorActionButtons() {
         const editingExisting = isEditingExistingPrompt();
         const nameChanged = hasPromptNameChanged();
-        saveBtn.textContent = editingExisting ? (nameChanged ? "Rename" : "Update") : "Save";
-        saveNewBtn.style.display = editingExisting && nameChanged ? "inline-flex" : "none";
+        saveBtn.textContent = editingExisting ? (nameChanged ? "Save New" : "Update") : "Save";
+        saveNewBtn.style.display = "none";
     }
 
     async function doPrimaryPromptAction(autoFromGeneration) {
-        if (isEditingExistingPrompt()) {
+        if (isEditingExistingPrompt() && !hasPromptNameChanged()) {
             return await doUpdatePrompt(autoFromGeneration);
         }
         return await doSavePrompt(autoFromGeneration);
@@ -2405,6 +2412,7 @@ export function createPromptBrowserEditPanel(options) {
 
     async function doSavePrompt(autoFromGeneration) {
         const category = currentCategory;
+        const categoryLabel = getCategoryDisplayName(node?.prompts, category);
         const name = String(promptNameInput.value || "").trim();
         const text = String(promptTextArea.value || "").trim();
 
