@@ -2831,7 +2831,7 @@ export function createPromptBrowserEditPanel(options) {
             fontSize: "12px",
             lineHeight: "1.45",
             whiteSpace: "pre-line",
-        }, "Each line must be: Title - Prompt text");
+        }, "One prompt per line: Title - Prompt text, or prompt text without a title.");
 
         const buttonRow = el("div", {
             display: "flex",
@@ -2857,16 +2857,34 @@ export function createPromptBrowserEditPanel(options) {
             let failed = 0;
             let invalid = 0;
             const seen = new Set();
+            const categoryName = getCategoryDisplayName(node?.prompts, category);
+            const reservedNames = new Set(
+                Object.keys(getCategoryPromptEntriesForEndpoint(node?.prompts?.[category], endpointPrefix))
+                    .map((name) => name.toLowerCase())
+            );
+            for (const line of lines) {
+                const separator = /\s+-\s+/.exec(line);
+                if (separator) {
+                    reservedNames.add(line.substring(0, separator.index).trim().toLowerCase());
+                }
+            }
+            let nextNumber = 1;
             let firstCreatedName = "";
 
             for (const line of lines) {
-                const separatorIndex = line.indexOf("-");
-                if (separatorIndex <= 0) {
-                    invalid++;
-                    continue;
+                const separator = /\s+-\s+/.exec(line);
+                let name;
+                let text;
+                if (separator) {
+                    name = line.substring(0, separator.index).trim();
+                    text = line.substring(separator.index + separator[0].length).trim();
+                } else {
+                    do {
+                        name = `${categoryName} ${String(nextNumber++).padStart(2, "0")}`;
+                    } while (reservedNames.has(name.toLowerCase()));
+                    reservedNames.add(name.toLowerCase());
+                    text = line;
                 }
-                const name = line.substring(0, separatorIndex).trim();
-                const text = line.substring(separatorIndex + 1).trim();
                 if (!name || !text) {
                     invalid++;
                     continue;

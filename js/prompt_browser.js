@@ -1826,7 +1826,7 @@ export function getPromptNamesForCategory(node, category, options = {}) {
     const promptEntries = getCategoryPromptEntries(categoryPrompts, endpointPrefix);
 
     let promptNames = Object.keys(promptEntries)
-        .sort((a, b) => a.localeCompare(b));
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
     if (hideNSFW) {
         promptNames = promptNames.filter((name) => promptEntries?.[name]?.nsfw !== true);
