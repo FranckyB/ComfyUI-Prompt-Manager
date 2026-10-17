@@ -2214,12 +2214,12 @@ export function createPromptBrowserEditPanel(options) {
     function updateEditorActionButtons() {
         const editingExisting = isEditingExistingPrompt();
         const nameChanged = hasPromptNameChanged();
-        saveBtn.textContent = editingExisting ? (nameChanged ? "Save New" : "Update") : "Save";
-        saveNewBtn.style.display = "none";
+        saveBtn.textContent = editingExisting ? (nameChanged ? "Rename" : "Update") : "Save";
+        saveNewBtn.style.display = editingExisting && nameChanged ? "inline-flex" : "none";
     }
 
     async function doPrimaryPromptAction(autoFromGeneration) {
-        if (isEditingExistingPrompt() && !hasPromptNameChanged()) {
+        if (isEditingExistingPrompt()) {
             return await doUpdatePrompt(autoFromGeneration);
         }
         return await doSavePrompt(autoFromGeneration);
