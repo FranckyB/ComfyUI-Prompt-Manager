@@ -3762,6 +3762,8 @@ async function openSaveBrowserForNode(node) {
         ? buildWorkflowDefaultName()
         : (currentName || "New Prompt");
     const existingPromptEntry = node.prompts?.[currentCategory]?.[currentName] || null;
+    const showNSFWOnSave = existingPromptEntry?.nsfw === true
+        || node.prompts?.[currentCategory]?.["__meta__"]?.nsfw === true;
     const initialThumbnail = node.connectedThumbnail || existingPromptEntry?.thumbnail || null;
     const hasWorkflowInput = hasConnectedWorkflowInput(node);
     const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
@@ -3829,6 +3831,7 @@ async function openSaveBrowserForNode(node) {
         showAllCategoriesToggle: node?._isWorkflowManager === true,
         hideContentFilterControl: node?._isWorkflowManager === true,
         saveWithEditPanel: true,
+        showNSFWOnOpen: showNSFWOnSave,
         saveMode: true,
         saveDraft: {
             category: currentCategory,

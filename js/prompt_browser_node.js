@@ -14,7 +14,7 @@ import {
     replaceComposerLibraryFromFile,
     showComposerExportSelectionDialog,
 } from "./prompt_composer.js";
-import { saveComposerCategorySettings } from "./prompt_composer_common.js";
+import { loadComposerPrompts, saveComposerCategorySettings } from "./prompt_composer_common.js";
 import {
     buildSavePromptRequestBodyForSource,
     COMPOSER_ENDPOINT_PREFIX,
@@ -669,9 +669,15 @@ async function loadActivePrompts(node) {
     try {
         const source = getSourceValue(node);
         const endpointPrefix = getEndpointPrefixForSource(source);
-        const prompts = await loadPromptsFromEndpoint(endpointPrefix);
+        const composerState = {};
+        const prompts = source === SOURCE_COMPOSE
+            ? await loadComposerPrompts(composerState)
+            : await loadPromptsFromEndpoint(endpointPrefix);
         if (requestId !== node._promptBrowserLoadRequestId) {
             return prompts;
+        }
+        if (source === SOURCE_COMPOSE) {
+            node.composerPromptLibrary = composerState.composerPromptLibrary;
         }
         node.composerPrompts = prompts;
         node.prompts = prompts;

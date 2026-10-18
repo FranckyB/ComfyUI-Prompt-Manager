@@ -2241,6 +2241,7 @@ async def save_thumbnail(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.post("/prompt-manager/toggle-nsfw")
 @server.PromptServer.instance.routes.post("/prompt-manager-advanced/toggle-nsfw")
 async def toggle_nsfw_advanced(request):
     """API endpoint to toggle NSFW flag on a category or prompt"""

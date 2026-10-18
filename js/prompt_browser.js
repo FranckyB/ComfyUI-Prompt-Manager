@@ -2406,7 +2406,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         }
 
         // NSFW toggle button
-        let hideNSFWState = getHideNSFW(app);
+        let hideNSFWState = options?.showNSFWOnOpen === true ? false : getHideNSFW(app);
         const nsfwBtn = document.createElement("button");
         const btnStyle = `
             background: ${UI.buttonBg};
@@ -6998,6 +6998,7 @@ function standaloneOpenPromptBrowserForSave(options = {}) {
         showAllCategoriesToggle: options.showAllCategoriesToggle === true,
         hideContentFilterControl: options.hideContentFilterControl === true,
         saveWithEditPanel: options.saveWithEditPanel === true,
+        showNSFWOnOpen: options.showNSFWOnOpen === true,
         saveDraft: options.saveDraft,
         endpointPrefix: options.endpointPrefix,
         loadPromptsFn: options.loadPromptsFn,
