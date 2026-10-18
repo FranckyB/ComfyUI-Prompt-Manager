@@ -51,6 +51,7 @@ Generates prompts using a local LLM. Supports either Llama.cpp or Ollama, but ca
 Allows downloading of 3 different sizes of Unsloth's Qwen 3.5, but users are free to add more models in models/gguf. If found, the add-on will list them. (Refresh when adding new ones)
 
 - Comes with a bundle of pre-made System Prompts. 
+- Use the arrows beside the system prompt name to cycle through saved prompts across categories, or click the name to open Prompt Browser on System Prompts. When loading workflows, legacy names such as `Enhance Prompt (Image)` are matched to current entries. Missing prompts fall back to `Image / Enhance Prompt` (or the first available entry if that default was removed), without changing other widget values.
 - Create your own system prompts, using the **Prompt Browser** node
 - I highly recommend using the **rgthree add-on** and enable *"Auto Nest Subdirectories in Menus"*. This will display categories as submenus.
 - Options to output in JSON format and enable Thinking mode.
@@ -62,8 +63,10 @@ Allows downloading of 3 different sizes of Unsloth's Qwen 3.5, but users are fre
   - Clears Vram again once the prompt is generated.
   - It is recommended to leave on, unless you are using small models
 - Both Stop_server and clear_vram are ignored when using Text encoders, as we instead let Comfy manage the VRAM.
+- Expected llama.cpp startup failures log one actionable summary without a console traceback. Enable **Show everything in Console** in Prompt Generator Options and retry to see the traceback, full launch command, and server stderr. The workflow still fails normally, and unexpected errors retain their tracebacks.
 - Lastly, the **Model Selection**:
   - (Use Default): Uses the default model set in preferences, or the first found, if not set.
+  - Missing saved model selections fall back to the default selection with a console warning. If no suitable model is available, generation still reports an error.
   - 3 Different Quant size of Qwen 3.5 can be automatically downloaded.
   - Any models you add in models/gguf, or any custom folder if set in preferences.
   - If you no longer want to see the built-in download entries, enable the `Hide downloadable built-in models` preference under Prompt Manager settings.

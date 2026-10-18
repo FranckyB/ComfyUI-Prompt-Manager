@@ -5,6 +5,7 @@ import os
 import sys
 import shutil
 import gc
+import logging
 import atexit
 import signal
 import psutil
@@ -48,6 +49,37 @@ _current_gpu_device = None
 _job_handle = None
 _close_llama_on_exit = True
 _model_default_params = None
+
+class PromptGeneratorStartupError(RuntimeError):
+    def __init__(self, message, show_everything_in_console=False):
+        super().__init__(message)
+        self.show_everything_in_console = show_everything_in_console
+
+
+class _PromptGeneratorStartupLogFilter(logging.Filter):
+    _prompt_generator_startup_filter = True
+
+    def filter(self, record):
+        error = sys.exc_info()[1]
+        if not isinstance(error, PromptGeneratorStartupError):
+            return True
+        if error.show_everything_in_console:
+            return True
+        if record.funcName != "execute" or os.path.basename(record.pathname) != "execution.py":
+            return True
+        if not record.getMessage().startswith("Traceback (most recent call last):"):
+            return True
+        return logging.getLogger().isEnabledFor(logging.DEBUG)
+
+
+def _install_prompt_generator_startup_log_filter():
+    logger = logging.getLogger()
+    if not any(getattr(log_filter, "_prompt_generator_startup_filter", False) for log_filter in logger.filters):
+        logger.addFilter(_PromptGeneratorStartupLogFilter())
+
+
+_install_prompt_generator_startup_log_filter()
+
 
 def print_pg_header():
     """Print the Prompt Generator header"""
@@ -1291,6 +1323,10 @@ class PromptGenerator:
     def IS_CHANGED(cls, seed, **kwargs):
         return seed
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, model="(use default)"):
+        return True if isinstance(model, str) else "Model must be a string."
+
     @staticmethod
     def is_server_alive():
         """Check if llama.cpp server is responding"""
@@ -1301,7 +1337,7 @@ class PromptGenerator:
             return False
 
     @staticmethod
-    def start_server(model_name, context_size=2048, use_vision_model=False, gpu_device=None, clear_vram_on_run=True):
+    def start_server(model_name, context_size=2048, use_vision_model=False, gpu_device=None, clear_vram_on_run=True, show_everything_in_console=False):
         """Start llama.cpp server with specified model
 
         Args:
@@ -1310,6 +1346,7 @@ class PromptGenerator:
             use_vision_model: Whether to use the vision model's mmproj
             gpu_device: GPU device index (e.g. "0", "1"), or None for system default
             clear_vram_on_run: Whether VRAM cleanup is enabled (used for hints on GPU OOM)
+            show_everything_in_console: Whether to print the full command and startup stderr
 
         Returns:
             tuple: (success: bool, error_message: str or None)
@@ -1484,7 +1521,12 @@ class PromptGenerator:
             def _launch_and_wait(args):
                 global _server_process, _current_model, _current_context_size, _current_gpu_device
 
-                print_pg("Launching:", " ".join(str(a) for a in args))
+                command = " ".join(str(arg) for arg in args)
+                if show_everything_in_console:
+                    print_pg("Launching:", command)
+                else:
+                    print_pg("Launching:", f"llama-server ({os.path.basename(model_path)})")
+                    logging.debug("[PromptGenerator] Launch command: %s", command)
                 _server_process = subprocess.Popen(args, **popen_kwargs)
 
                 # On Windows attach process to Job Object so children die if parent exits
@@ -1517,8 +1559,10 @@ class PromptGenerator:
                             pass
                         error = f"Error: llama-server exited with code {_server_process.returncode}"
                         if stderr_output:
-                            last_lines = "\n".join(stderr_output.splitlines()[-5:])
-                            error += f"\n{last_lines}"
+                            if show_everything_in_console:
+                                print_pg("llama-server stderr:", stderr_output, RED)
+                            else:
+                                logging.debug("[PromptGenerator] llama-server stderr:\n%s", stderr_output)
                         _server_process = None
                         _current_model = None
                         _current_context_size = None
@@ -1552,6 +1596,9 @@ class PromptGenerator:
                     return False
                 markers = [
                     "failed to load model",
+                    "failed to create context",
+                    "failed to create_context",
+                    "model loading error",
                     "cuda error",
                     "hip error",
                     "vulkan",
@@ -1568,25 +1615,22 @@ class PromptGenerator:
             # Retry with conservative args if this looks like a flag-compatibility issue.
             if _is_unsupported_flag_error(stderr_output):
                 print_pg("Warning: llama-server rejected one or more advanced launch flags. Retrying with compatibility mode.", YELLOW)
-                success, fallback_error, _ = _launch_and_wait(cmd_args_fallback)
+                success, error_msg, stderr_output = _launch_and_wait(cmd_args_fallback)
                 if success:
                     return (True, None)
-                print_pg(fallback_error, RED)
-                return (False, fallback_error)
 
             # Model load failure while GPU offload was requested: do NOT silently
             # fall back to CPU. CPU inference is too slow for this node, so we
             # surface the failure and let the user decide (smaller model, lower
             # quantization, less layers, or CPU-only node).
             if _is_model_load_failure(stderr_output):
-                hint = ""
-                if not clear_vram_on_run:
-                    hint = " 'Clear VRAM on run' is disabled; enabling it may free enough GPU memory to load this model."
-                print_pg("ERROR:", f"llama-server failed to load the model with GPU offload enabled. Try a smaller model, lower quantization, or reduce --n-gpu-layers.{hint}", RED)
-                print_pg(error_msg, RED)
-                return (False, error_msg)
+                error_msg = "Prompt Generator: llama-server could not load the model. "
+                if use_gpu_offload and not clear_vram_on_run:
+                    error_msg += "Try enabling 'Clear VRAM on run' first; it is currently disabled. "
+                error_msg += "Try a smaller model or a lower context size."
+            if not show_everything_in_console:
+                error_msg = error_msg.rstrip(".") + ". Enable 'Show everything in Console' for full server details."
 
-            print_pg(error_msg, RED)
             return (False, error_msg)
 
         except FileNotFoundError:
@@ -1804,7 +1848,7 @@ class PromptGenerator:
         )
 
         # Extract console option from connected options node
-        show_everything_in_console = False  # Default to False when options not connected
+        show_everything_in_console = bool(options and options.get("show_everything_in_console", False))
         use_model_default_sampling = True   # Default to using model defaults
 
         # Resolve the selected system prompt and derive behavior from its category.
@@ -1880,15 +1924,17 @@ class PromptGenerator:
         if use_ollama:
             # ── Ollama model selection ──
             # Priority: Options node > preferences > auto-discover from Ollama
-            if options and "model" in options:
-                model_to_use = options["model"]
-            elif _preferred:
-                model_to_use = _preferred
+            from ..py.ollama_wrapper import discover_ollama_models
+            discovered, status = discover_ollama_models(_preferences_cache)
+            selected_model = options.get("model") if options else None
+            if selected_model and (selected_model in discovered or f"{selected_model}:latest" in discovered):
+                model_to_use = selected_model
             else:
-                # Auto-discover available models from Ollama
-                from ..py.ollama_wrapper import discover_ollama_models
-                discovered, status = discover_ollama_models(_preferences_cache)
-                if discovered:
+                if selected_model:
+                    print_pg("Warning       :", f"Selected Ollama model '{selected_model}' was not found; falling back to the default model selection.")
+                if _preferred and (_preferred in discovered or f"{_preferred}:latest" in discovered):
+                    model_to_use = _preferred
+                elif discovered:
                     model_to_use = discovered[0]
                 else:
                     error_msg = (f"Error: No Ollama model available. {status}\n"
@@ -1903,6 +1949,8 @@ class PromptGenerator:
             print_pg("Backend       :", "llama.cpp")
             available_models = get_local_models()
             preferred_local_model = self.resolve_preferred_model(_preferred, available_models)
+            if options and options.get("model") and not is_model_local(options["model"]):
+                print_pg("Warning       :", f"Selected model '{options['model']}' was not found locally; falling back to the default model selection.")
 
             if use_vision_model:
                 # Priority: Options node > preferences > auto-discover
@@ -1989,9 +2037,9 @@ class PromptGenerator:
             if _current_model != model_to_use or _current_context_size != context_size or _current_gpu_device != gpu_device or not self.is_server_alive():
                 self.stop_server()
                 # Get context_size and gpu_device from options or use defaults
-                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device, clear_vram_on_run=clear_vram_on_run)
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device, clear_vram_on_run=clear_vram_on_run, show_everything_in_console=show_everything_in_console)
                 if not success:
-                    raise RuntimeError(error_msg)
+                    raise PromptGeneratorStartupError(error_msg, show_everything_in_console=show_everything_in_console)
 
         # Build the endpoint URL
         full_url = f"http://localhost:{self.get_server_port()}/v1/chat/completions"
@@ -2111,7 +2159,7 @@ class PromptGenerator:
             if response.status_code == 500:
                 print_pg("Error:", "Server error 500, restarting server and retrying...", RED)
                 self.stop_server()
-                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device, clear_vram_on_run=clear_vram_on_run)
+                success, error_msg = self.start_server(model_to_use, context_size, use_vision_model, gpu_device, clear_vram_on_run=clear_vram_on_run, show_everything_in_console=show_everything_in_console)
                 if success:
                     response = requests.post(
                         full_url,
