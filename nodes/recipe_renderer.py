@@ -71,7 +71,9 @@ def _apply_family_sampler_defaults(primary_sampler, wf_sampler, family_key, log_
 
     The renderer is the final consumer of RECIPE_DATA; family defaults are the
     intended sampler configuration and always win over upstream template values
-    or Builder override_data.
+    or Builder override_data — except for keys the caller marked as explicitly
+    user-set via `explicit_overrides` (e.g. the Prompt Manager thumbnail picker's
+    remembered step override).
     """
     family_defaults = _FAMILY_SAMPLER_DEFAULTS.get(family_key, {})
     if not family_defaults:
@@ -80,6 +82,17 @@ def _apply_family_sampler_defaults(primary_sampler, wf_sampler, family_key, log_
     merged = dict(wf_sampler) if isinstance(wf_sampler, dict) else {}
     if isinstance(primary_sampler, dict):
         merged.update(primary_sampler)
+
+    # Keys the caller flagged as explicitly chosen (not template defaults).
+    explicit = set()
+    for src in (wf_sampler, primary_sampler):
+        if not isinstance(src, dict):
+            continue
+        raw = src.get("explicit_overrides")
+        if isinstance(raw, str):
+            raw = [raw]
+        if isinstance(raw, (list, tuple, set)):
+            explicit |= {str(k).strip() for k in raw}
 
     field_map = {
         "steps_a": ("steps", "steps_a"),
@@ -93,6 +106,8 @@ def _apply_family_sampler_defaults(primary_sampler, wf_sampler, family_key, log_
     for family_key_default, source_keys in field_map.items():
         family_val = family_defaults.get(family_key_default)
         if family_val is None:
+            continue
+        if family_key_default in explicit:
             continue
         for src_key in source_keys:
             if src_key not in merged:

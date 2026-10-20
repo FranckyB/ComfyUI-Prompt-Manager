@@ -243,6 +243,14 @@ app.registerExtension({
             defaultValue: ""
         },
         {
+            id: "PromptManager.ThumbnailRenderSteps",
+            category: ["Prompt Manager", "4. Advanced Preferences", "Thumbnail Generation Steps"],
+            name: "Thumbnail generation steps (per family overrides)",
+            tooltip: "JSON map of model family -> step count used for thumbnail generation, e.g. {\"sdxl\": 12}. Set from the gear icon in the prompt browser (Steps row). Leave empty to use the hardcoded per-family defaults, or use the Reset button in the picker to revert a family.",
+            type: "text",
+            defaultValue: ""
+        },
+        {
             id: "PromptManager.ThumbnailComposerSeed",
             category: ["Prompt Manager", "4. Advanced Preferences", "Composer Thumbnail Seed"],
             name: "Static seed for Prompt Composer thumbnail generation",

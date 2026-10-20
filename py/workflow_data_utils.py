@@ -170,6 +170,9 @@ def _legacy_to_v2_recipe_data(recipe_data, source):
                 "seed": _safe_int(seed, 0),
                 "sampler_name": str(sampler.get("sampler_name", "euler") or "euler"),
                 "scheduler": str(sampler.get("scheduler", "simple") or "simple"),
+                # Keep caller-flagged explicit overrides (e.g. thumbnail step
+                # overrides) so family defaults don't clobber them downstream.
+                "explicit_overrides": list(sampler.get("explicit_overrides", [])),
             },
             "resolution": {
                 "width": _safe_int(resolution.get("width", 768), 768),

@@ -7216,10 +7216,126 @@ const THUMB_RENDER_BATCH = 1;
 const THUMB_RENDER_LENGTH = 1;
 const THUMB_DEFAULT_NEGATIVE = "blurry, bad quality, worst quality, low resolution, watermark, text, logo, deformed, ugly, disfigured";
 
+// Hardcoded per-family sampler defaults used for thumbnail generation.
+// Kept in sync with _FAMILY_SAMPLER_DEFAULTS in nodes/recipe_renderer.py so the
+// picker shows each family's real default instead of falling back to SDXL values.
+const THUMBNAIL_FAMILY_SAMPLER_DEFAULTS = {
+    sdxl: { steps_a: 20, steps_b: null, cfg: 5, sampler_name: "dpmpp_2m_sde", scheduler: "karras" },
+    ernie: { steps_a: 4, steps_b: null, cfg: 1, sampler_name: "euler_ancestral", scheduler: "beta" },
+    flux1: { steps_a: 20, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+    flux2: { steps_a: 4, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+    zimage: { steps_a: 9, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+    krea2: { steps_a: 9, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+    ltxv: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+    wan_image: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+    wan_video_t2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+    wan_video_i2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
+    anima: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "er_sde", scheduler: "simple" },
+    qwen_image: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
+};
+
+// Remembered step overrides, keyed by model family (stored as a JSON map in settings).
+const THUMBNAIL_STEPS_SETTINGS_KEY = "PromptManager.ThumbnailRenderSteps";
+const THUMBNAIL_STEPS_MIN = 1;
+const THUMBNAIL_STEPS_MAX = 200;
+const THUMBNAIL_STEPS_WILDCARD_KEY = "*";
+
+function _thumbnailFamilyKey(familyKey) {
+    return String(familyKey || "").trim().toLowerCase();
+}
+
+function _normalizeThumbnailSteps(value, fallback = null) {
+    if (value === null || value === undefined || value === "") return fallback;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return Math.min(THUMBNAIL_STEPS_MAX, Math.max(THUMBNAIL_STEPS_MIN, Math.round(numeric)));
+}
+
+function _parseThumbnailStepsOverrides(raw) {
+    const map = new Map();
+    if (!raw) return map;
+
+    let data = raw;
+    if (typeof data === "string") {
+        try {
+            data = JSON.parse(data);
+        } catch (e) {
+            data = null;
+        }
+    }
+
+    if (data && typeof data === "object") {
+        for (const [family, steps] of Object.entries(data)) {
+            const value = _normalizeThumbnailSteps(steps);
+            if (value) map.set(_thumbnailFamilyKey(family), value);
+        }
+    } else {
+        // Legacy/plain number value: keep it as a fallback for families without an entry.
+        const value = _normalizeThumbnailSteps(raw);
+        if (value) map.set(THUMBNAIL_STEPS_WILDCARD_KEY, value);
+    }
+
+    return map;
+}
+
+function getThumbnailFamilyDefaultSteps(familyKey) {
+    const entry = THUMBNAIL_FAMILY_SAMPLER_DEFAULTS[_thumbnailFamilyKey(familyKey)]
+        || THUMBNAIL_FAMILY_SAMPLER_DEFAULTS.sdxl;
+    return entry.steps_a;
+}
+
+function _currentThumbnailStepsOverrides() {
+    // Read the live setting so edits from the settings panel apply immediately;
+    // fall back to the startup snapshot when settings are not ready yet.
+    try {
+        const raw = app?.ui?.settings?.getSettingValue(THUMBNAIL_STEPS_SETTINGS_KEY);
+        if (raw) return _parseThumbnailStepsOverrides(raw);
+    } catch (e) { /* use startup snapshot */ }
+    return _thumbnailStepsOverrides;
+}
+
+function getThumbnailStepsOverride(familyKey) {
+    const overrides = _currentThumbnailStepsOverrides();
+    const key = _thumbnailFamilyKey(familyKey);
+    if (overrides.has(key)) return overrides.get(key);
+    return overrides.get(THUMBNAIL_STEPS_WILDCARD_KEY) ?? null;
+}
+
+function getEffectiveThumbnailSteps(familyKey) {
+    return getThumbnailStepsOverride(familyKey) ?? getThumbnailFamilyDefaultSteps(familyKey);
+}
+
+// Passing null (or the family default) clears the remembered override for that family.
+function saveThumbnailStepsOverride(familyKey, steps) {
+    const key = _thumbnailFamilyKey(familyKey);
+    if (!key) return null;
+
+    const overrides = _currentThumbnailStepsOverrides();
+    const value = _normalizeThumbnailSteps(steps);
+    if (!value || value === getThumbnailFamilyDefaultSteps(key)) {
+        overrides.delete(key);
+    } else {
+        overrides.set(key, value);
+    }
+    _thumbnailStepsOverrides = overrides;
+
+    try {
+        app.ui.settings.setSettingValue(
+            THUMBNAIL_STEPS_SETTINGS_KEY,
+            JSON.stringify(Object.fromEntries(overrides)),
+        );
+    } catch (e) {
+        console.warn("[ThumbnailGen] Could not persist thumbnail steps override:", e);
+    }
+
+    return value;
+}
+
 let _thumbnailRenderFamily = null;
 let _thumbnailRenderModel = null;
 let _thumbnailRenderLora1 = null;
 let _thumbnailRenderLora2 = null;
+let _thumbnailStepsOverrides = new Map();
 let _thumbnailLegacyModel = null;
 let _thumbnailShowAllModels = false;
 let _thumbnailFamiliesCache = null;
@@ -7229,11 +7345,15 @@ const _thumbnailModelsPromises = new Map();
 let _activeThumbnailRenderPicker = null;
 
 function getThumbnailRenderState() {
+    const familyKey = _thumbnailRenderFamily ? _thumbnailFamilyKey(_thumbnailRenderFamily) : "";
     return {
         family: _thumbnailRenderFamily,
         model: _thumbnailRenderModel,
         lora1: _thumbnailRenderLora1,
         lora2: _thumbnailRenderLora2,
+        steps: familyKey ? getEffectiveThumbnailSteps(familyKey) : null,
+        stepsDefault: familyKey ? getThumbnailFamilyDefaultSteps(familyKey) : null,
+        stepsOverride: familyKey ? getThumbnailStepsOverride(familyKey) : null,
     };
 }
 
@@ -7254,6 +7374,9 @@ try {
     if (typeof savedLora2 === "string" && savedLora2.trim()) {
         _thumbnailRenderLora2 = savedLora2;
     }
+    _thumbnailStepsOverrides = _parseThumbnailStepsOverrides(
+        app.ui.settings.getSettingValue(THUMBNAIL_STEPS_SETTINGS_KEY),
+    );
     _thumbnailShowAllModels = app.ui.settings.getSettingValue("PromptManager.ThumbnailShowAllModels") === true;
 
     // Backward compatibility with old checkpoint-only preference:
@@ -7616,23 +7739,13 @@ function applyPromptThumbnailLoras(workflowData, promptData, slot = "model_a") {
 }
 
 function getThumbnailFamilySamplerDefaults(familyKey) {
-    const key = String(familyKey || "").trim().toLowerCase();
-    const byFamily = {
-        sdxl: { steps_a: 20, steps_b: null, cfg: 5, sampler_name: "dpmpp_2m_sde", scheduler: "karras" },
-        flux1: { steps_a: 20, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
-        flux2: { steps_a: 4, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
-        zimage: { steps_a: 9, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
-        ltxv: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
-        wan_image: { steps_a: 8, steps_b: null, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
-        wan_video_t2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
-        wan_video_i2v: { steps_a: 2, steps_b: 2, cfg: 1, sampler_name: "lcm", scheduler: "simple" },
-        anima: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "er_sde", scheduler: "simple" },
-        qwen_image: { steps_a: 10, steps_b: null, cfg: 1, sampler_name: "euler", scheduler: "simple" },
-    };
-    const d = byFamily[key] || byFamily.sdxl;
+    const key = _thumbnailFamilyKey(familyKey);
+    const d = THUMBNAIL_FAMILY_SAMPLER_DEFAULTS[key] || THUMBNAIL_FAMILY_SAMPLER_DEFAULTS.sdxl;
+    const steps = getEffectiveThumbnailSteps(key);
     return {
-        steps_a: d.steps_a,
-        steps_b: d.steps_b,
+        steps_a: steps,
+        // Two-stage families keep both stages on the same (possibly overridden) step count.
+        steps_b: d.steps_b === null ? null : steps,
         cfg: d.cfg,
         seed_a: 0,
         sampler_name: d.sampler_name,
@@ -7647,6 +7760,9 @@ function applyThumbnailFamilySamplerDefaults(workflowData, familyKey, selectedSl
     }
 
     const defaults = getThumbnailFamilySamplerDefaults(familyKey);
+    // When the user has a remembered step override, flag it as explicit so the
+    // renderer keeps the chosen value instead of re-applying family defaults.
+    const explicitKeys = getThumbnailStepsOverride(familyKey) !== null ? ["steps_a", "steps_b"] : null;
     const wf = workflowData;
     const sampler = (wf.sampler && typeof wf.sampler === "object") ? wf.sampler : (wf.sampler = {});
     sampler.steps_a = defaults.steps_a;
@@ -7655,6 +7771,9 @@ function applyThumbnailFamilySamplerDefaults(workflowData, familyKey, selectedSl
     sampler.cfg = defaults.cfg;
     sampler.sampler_name = defaults.sampler_name;
     sampler.scheduler = defaults.scheduler;
+    if (explicitKeys) {
+        sampler.explicit_overrides = explicitKeys;
+    }
 
     if (Number(wf.version || 0) >= 2 && wf.models && typeof wf.models === "object") {
         const slotKey = String(selectedSlot || "model_a").trim().toLowerCase();
@@ -7669,6 +7788,9 @@ function applyThumbnailFamilySamplerDefaults(workflowData, familyKey, selectedSl
             blockSampler.cfg = defaults.cfg;
             blockSampler.sampler_name = defaults.sampler_name;
             blockSampler.scheduler = defaults.scheduler;
+            if (explicitKeys) {
+                blockSampler.explicit_overrides = explicitKeys;
+            }
         }
     }
 
@@ -7884,6 +8006,7 @@ function saveThumbnailRenderSelection(selection) {
     const selectedLoras = _getThumbnailSelectedLoras(selection);
     _thumbnailRenderLora1 = selectedLoras[0] || null;
     _thumbnailRenderLora2 = selectedLoras[1] || null;
+    saveThumbnailStepsOverride(selection.family, selection.steps);
     _thumbnailLegacyModel = null;
     try {
         app.ui.settings.setSettingValue("PromptManager.ThumbnailRenderFamily", selection.family);
@@ -7895,7 +8018,13 @@ function saveThumbnailRenderSelection(selection) {
     }
 }
 
-async function showThumbnailRenderPicker(preselectedFamily = null, preselectedModel = null, preselectedLora1 = null, preselectedLora2 = null) {
+async function showThumbnailRenderPicker(
+    preselectedFamily = null,
+    preselectedModel = null,
+    preselectedLora1 = null,
+    preselectedLora2 = null,
+    preselectedSteps = null,
+) {
     if (_activeThumbnailRenderPicker?.close) {
         _activeThumbnailRenderPicker.close(null);
     }
@@ -7953,6 +8082,12 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
                 <label style="color: #c4ccd6; font-size: 13px;">LoRA 2</label>
                 <select class="lora2-select" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
             </div>
+            <div style="display: grid; grid-template-columns: 64px 1fr 34px; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <label style="color: #c4ccd6; font-size: 13px;">Steps</label>
+                <input class="steps-input" type="number" min="1" max="200" step="1" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;" />
+                <button class="steps-reset" title="Reset steps to the family default" style="height: 32px; background: ${UI.buttonBg}; color: #ddd; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-size: 14px;">↺</button>
+            </div>
+            <div class="steps-hint" style="min-height: 16px; margin-bottom: 8px; color: #9aa5b4; font-size: 12px;"></div>
             <div class="lora-hint" style="min-height: 16px; margin-bottom: 8px; color: #9aa5b4; font-size: 12px;"></div>
             <div class="model-hint" style="min-height: 16px; margin-bottom: 12px; color: #9aa5b4; font-size: 12px;"></div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
@@ -7971,6 +8106,9 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         const modelHint = dialog.querySelector(".model-hint");
         const okBtn = dialog.querySelector('.ok-btn');
         const cancelBtn = dialog.querySelector('.cancel-btn');
+        const stepsInput = dialog.querySelector(".steps-input");
+        const stepsResetBtn = dialog.querySelector(".steps-reset");
+        const stepsHint = dialog.querySelector(".steps-hint");
 
         let familyModels = [];
         let availableLoras = [];
@@ -7992,6 +8130,38 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
                 : "Model filtering ON (by family). Click to show all models.";
         };
         updateFilterToggleUi();
+
+        const familyDisplayLabel = () => familySel.selectedOptions?.[0]?.textContent
+            || familySel.value
+            || "selected family";
+
+        const updateStepsUi = () => {
+            const familyKey = familySel.value || validFamily;
+            const defaultSteps = getThumbnailFamilyDefaultSteps(familyKey);
+            const savedOverride = getThumbnailStepsOverride(familyKey);
+            const pendingSteps = _normalizeThumbnailSteps(stepsInput.value, defaultSteps);
+            const pendingChanged = pendingSteps !== savedOverride;
+            const label = familyDisplayLabel();
+
+            stepsHint.textContent = savedOverride !== null
+                ? `Steps: ${pendingSteps} (remembered for ${label}, default ${defaultSteps})`
+                : `Steps: ${pendingSteps} (family default ${defaultSteps})`;
+
+            const overridden = savedOverride !== null || pendingChanged;
+            stepsHint.style.color = overridden ? "#f5d28c" : "#9aa5b4";
+            stepsInput.style.borderColor = overridden ? UI.accentBorder : UI.inputBorder;
+            stepsResetBtn.disabled = !overridden;
+            stepsResetBtn.style.opacity = stepsResetBtn.disabled ? "0.45" : "1";
+            stepsResetBtn.title = `Reset steps to the ${defaultSteps} default for ${label} (clears the remembered override)`;
+        };
+
+        const setStepsInputValue = (value) => {
+            stepsInput.value = String(_normalizeThumbnailSteps(
+                value,
+                getThumbnailFamilyDefaultSteps(familySel.value || validFamily),
+            ));
+            updateStepsUi();
+        };
 
         const setHint = (text, color = "#888") => {
             modelHint.textContent = text;
@@ -8214,6 +8384,7 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
             .map((f) => `<option value="${f.key}">${f.label}</option>`)
             .join("");
         familySel.value = validFamily;
+        setStepsInputValue(preselectedSteps ?? getEffectiveThumbnailSteps(validFamily));
 
         const cleanup = () => {
             if (isClosed) return;
@@ -8236,7 +8407,19 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
         };
 
         familySel.onchange = async () => {
+            setStepsInputValue(getEffectiveThumbnailSteps(familySel.value));
             await loadFamilyModels(familySel.value, "");
+        };
+
+        stepsInput.oninput = () => updateStepsUi();
+        stepsInput.onchange = () => updateStepsUi();
+
+        stepsResetBtn.onclick = () => {
+            const familyKey = familySel.value;
+            const defaultSteps = getThumbnailFamilyDefaultSteps(familyKey);
+            saveThumbnailStepsOverride(familyKey, null);
+            stepsInput.value = String(defaultSteps);
+            updateStepsUi();
         };
         filterToggle.onclick = async () => {
             showAllModels = !showAllModels;
@@ -8260,7 +8443,8 @@ async function showThumbnailRenderPicker(preselectedFamily = null, preselectedMo
                 setHint("Please select a model before continuing.", "#c66");
                 return;
             }
-            closePicker({ family, model, loras });
+            const steps = _normalizeThumbnailSteps(stepsInput.value, getThumbnailFamilyDefaultSteps(family));
+            closePicker({ family, model, loras, steps });
         };
         cancelBtn.onclick = () => { closePicker(null); };
 
@@ -8289,6 +8473,7 @@ async function ensureThumbnailRenderSelection({ force = false } = {}) {
             family: _thumbnailRenderFamily,
             model: _thumbnailRenderModel,
             loras: [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean),
+            steps: getEffectiveThumbnailSteps(_thumbnailRenderFamily),
         };
     }
     const picked = await showThumbnailRenderPicker(
@@ -8296,6 +8481,7 @@ async function ensureThumbnailRenderSelection({ force = false } = {}) {
         _thumbnailRenderModel || _thumbnailLegacyModel || null,
         _thumbnailRenderLora1 || null,
         _thumbnailRenderLora2 || null,
+        _thumbnailRenderFamily ? getEffectiveThumbnailSteps(_thumbnailRenderFamily) : null,
     );
     if (!picked) return null;
     saveThumbnailRenderSelection(picked);
@@ -8357,7 +8543,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     }
 
     const thumbPositive = getThumbnailPositivePrompt(wfForThumb, modelSlot);
-    console.log(`[ThumbnailGen] Workflow queued | slot=${modelSlot} | seed=${seedUsed} | prompt=${thumbPositive || "(not resolved)"}`);
+    console.log(`[ThumbnailGen] Workflow queued | slot=${modelSlot} | steps=${wfForThumb?.sampler?.steps_a} | seed=${seedUsed} | prompt=${thumbPositive || "(not resolved)"}`);
 
     const workflow = {};
     let nodeId = 1;

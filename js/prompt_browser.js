@@ -73,6 +73,7 @@ let _thumbnailRenderFamily = null;
 let _thumbnailRenderModel = null;
 let _thumbnailRenderLora1 = null;
 let _thumbnailRenderLora2 = null;
+let _thumbnailRenderSteps = null;
 
 function _normalizeThumbnailPromptStrength(value) {
     const numeric = Number(value);
@@ -114,6 +115,7 @@ function _syncThumbnailRenderState() {
     _thumbnailRenderModel = state.model || null;
     _thumbnailRenderLora1 = state.lora1 || null;
     _thumbnailRenderLora2 = state.lora2 || null;
+    _thumbnailRenderSteps = state.steps ?? null;
 }
 
 function getThumbnailRenderLabelParts() {
@@ -121,10 +123,11 @@ function getThumbnailRenderLabelParts() {
     const selectedLoras = [_thumbnailRenderLora1, _thumbnailRenderLora2].filter(Boolean);
     if (_thumbnailRenderFamily && _thumbnailRenderModel) {
         const leafName = _thumbnailLeafName(_thumbnailRenderModel);
+        const stepsPart = _thumbnailRenderSteps ? ` · ${_thumbnailRenderSteps} steps` : "";
         return {
             shortLabel: typeSafeTruncate(`🔧 ${leafName}`, 18),
             iconLabel: "🔧",
-            fullLabel: `Thumbnail: ${_thumbnailRenderFamily} : ${leafName}${selectedLoras.length ? ` + ${selectedLoras.length} LoRA${selectedLoras.length > 1 ? "s" : ""}` : ""}`,
+            fullLabel: `Thumbnail: ${_thumbnailRenderFamily} : ${leafName}${selectedLoras.length ? ` + ${selectedLoras.length} LoRA${selectedLoras.length > 1 ? "s" : ""}` : ""}${stepsPart}`,
         };
     }
     return {
@@ -2477,6 +2480,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 _thumbnailRenderModel,
                 _thumbnailRenderLora1,
                 _thumbnailRenderLora2,
+                _thumbnailRenderSteps,
             );
             if (picked) {
                 saveThumbnailRenderSelection(picked);
@@ -4554,6 +4558,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         _thumbnailRenderModel,
                         _thumbnailRenderLora1,
                         _thumbnailRenderLora2,
+                        _thumbnailRenderSteps,
                     );
                     if (picked) {
                         saveThumbnailRenderSelection(picked);
