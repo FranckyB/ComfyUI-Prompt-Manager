@@ -6,6 +6,8 @@ import vm from "node:vm";
 const source = await readFile(new URL("../js/prompt_generator.js", import.meta.url), "utf8");
 const adaptersSource = await readFile(new URL("../js/prompt_store_adapters.js", import.meta.url), "utf8");
 const adapters = await import(`data:text/javascript,${encodeURIComponent(adaptersSource)}`);
+const textLockSource = await readFile(new URL("../js/prompt_text_lock.js", import.meta.url), "utf8");
+const textLock = await import(`data:text/javascript,${encodeURIComponent(textLockSource)}`);
 
 class Element extends EventTarget {
     constructor(tagName) {
@@ -68,7 +70,7 @@ async function createFixture() {
     const setup = vm.runInNewContext(
         `${source.replace(/^import .*;\r?\n/gm, "")}\nsetupSystemPromptSelector;`,
         {
-            app, api, showThumbnailBrowser, ...adapters,
+            app, api, showThumbnailBrowser, ...adapters, ...textLock,
             document: { createElement: tagName => new Element(tagName) },
             console: { log() {}, error() {} },
         },
@@ -246,8 +248,8 @@ test("long labels use a constrained DOM button and expose the full name as a too
     assert.match(button.style.cssText, /text-overflow: ellipsis/);
     assert.equal(button.tagName, "button");
     assert.equal(button.attributes["aria-label"], "Browse System Prompts");
-    assert.equal(widget.options.getMinHeight(), 28);
-    assert.equal(widget.options.getMaxHeight(), 28);
+    assert.equal(widget.options.getMinHeight(), 26);
+    assert.equal(widget.options.getMaxHeight(), 26);
 });
 
 test("migrates the exact legacy value stored by Krea2_Workflow-09 on configure", async () => {

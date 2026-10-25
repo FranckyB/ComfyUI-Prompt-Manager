@@ -107,7 +107,7 @@ class PromptManager:
             "required": {
                 "category": (categories, {"default": first_category}),
                 "name": (all_prompts_list, {"default": first_prompt}),
-                "use_external": ("BOOLEAN", {"default": False, "label_on": "on", "label_off": "off", "tooltip": "Toggle to use LLM input instead of internal text"}),
+                "use_external": ("BOOLEAN", {"default": False, "tooltip": "Toggle to use LLM input instead of internal text"}),
                 "text": ("STRING", {"multiline": True, "default": first_prompt_text, "placeholder": "Enter prompt text", "dynamicPrompts": False, "tooltip": "Enter prompt text directly"}),
             },
             "optional": {

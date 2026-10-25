@@ -1003,7 +1003,6 @@ function setupPromptBrowserNode(nodeType, nodeData) {
         const textWidget = node.widgets.find((w) => w.name === "text");
         const selectedPromptsWidget = node.widgets.find((w) => w.name === "selected_prompts");
         if (sourceWidget) {
-            sourceWidget.type = "converted-widget";
             sourceWidget.computeSize = () => [0, 0];
             sourceWidget.hidden = true;
             // Do not persist during initial create; onConfigure may still restore
@@ -1011,22 +1010,18 @@ function setupPromptBrowserNode(nodeType, nodeData) {
             restorePromptBrowserSource(node, sourceWidget, null, { persist: false });
         }
         if (categoryWidget) {
-            categoryWidget.type = "converted-widget";
             categoryWidget.computeSize = () => [0, 0];
             categoryWidget.hidden = true;
         }
         if (nameWidget) {
-            nameWidget.type = "converted-widget";
             nameWidget.computeSize = () => [0, 0];
             nameWidget.hidden = true;
         }
         if (textWidget) {
-            textWidget.type = "converted-widget";
             textWidget.computeSize = () => [0, 0];
             textWidget.hidden = true;
         }
         if (selectedPromptsWidget) {
-            selectedPromptsWidget.type = "converted-widget";
             selectedPromptsWidget.computeSize = () => [0, 0];
             selectedPromptsWidget.hidden = true;
         }
@@ -1130,28 +1125,23 @@ function setupPromptBrowserNode(nodeType, nodeData) {
         const textWidget = node.widgets.find((w) => w.name === "text");
         const selectedPromptsWidget = node.widgets.find((w) => w.name === "selected_prompts");
         if (sourceWidget) {
-            sourceWidget.type = "converted-widget";
             sourceWidget.computeSize = () => [0, 0];
             sourceWidget.hidden = true;
             restorePromptBrowserSource(node, sourceWidget, info);
         }
         if (categoryWidget) {
-            categoryWidget.type = "converted-widget";
             categoryWidget.computeSize = () => [0, 0];
             categoryWidget.hidden = true;
         }
         if (nameWidget) {
-            nameWidget.type = "converted-widget";
             nameWidget.computeSize = () => [0, 0];
             nameWidget.hidden = true;
         }
         if (textWidget) {
-            textWidget.type = "converted-widget";
             textWidget.computeSize = () => [0, 0];
             textWidget.hidden = true;
         }
         if (selectedPromptsWidget) {
-            selectedPromptsWidget.type = "converted-widget";
             selectedPromptsWidget.computeSize = () => [0, 0];
             selectedPromptsWidget.hidden = true;
         }

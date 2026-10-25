@@ -4148,17 +4148,10 @@ app.registerExtension({
             };
 
             // -- Only hide data widgets, keep toggle switches visible --
-            // IMPORTANT: override_data and lora_state must keep their original
-            // STRING type so ComfyUI's graphToPrompt includes them in execution.
-            // "converted-widget" type causes ComfyUI to skip the widget value.
             const KEEP_VISIBLE = new Set([]);
-            const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
                 w.computeSize = () => [0, -4];
-                if (!KEEP_TYPE.has(w.name)) {
-                    w.type = "converted-widget";
-                }
                 w.hidden = true;
                 w.draw = function () {};
                 if (w.element) w.element.style.display = "none";
@@ -4725,13 +4718,9 @@ app.registerExtension({
             // Re-hide data widgets (same logic as onNodeCreated)
             const domW = node.widgets?.find(w => w.name === "we_ui");
             const KEEP_VISIBLE = new Set([]);
-            const KEEP_TYPE = new Set(["override_data", "lora_state"]);
             for (const w of (node.widgets || [])) {
                 if (w === domW || KEEP_VISIBLE.has(w.name)) continue;
                 w.computeSize = () => [0, -4];
-                if (!KEEP_TYPE.has(w.name)) {
-                    w.type = "converted-widget";
-                }
                 w.hidden = true;
                 w.draw = function () {};
                 if (w.element) w.element.style.display = "none";

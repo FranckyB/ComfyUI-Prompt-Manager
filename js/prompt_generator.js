@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
 import { SYSTEM_PROMPTS_ENDPOINT_PREFIX, getCategoryPromptEntries } from "./prompt_store_adapters.js";
+import { setPromptTextLocked } from "./prompt_text_lock.js";
 
 function setupSystemPromptSelector(node) {
     const widget = node.widgets?.find(w => w.name === "system_prompt");
@@ -75,13 +76,16 @@ function setupSystemPromptSelector(node) {
     };
 
     const container = document.createElement("div");
+    // Mirrors Prompt Manager's selector; the dark backing is what keeps the translucent name button dark.
     container.style.cssText = `
         display: flex;
         align-items: center;
-        gap: 2px;
+        gap: 0;
+        background: #1a1a1a;
+        border-radius: 6px;
         width: 100%;
         min-width: 0;
-        height: 28px;
+        height: 26px;
         box-sizing: border-box;
     `;
     for (const eventName of ["pointerdown", "mousedown", "dblclick"]) {
@@ -95,15 +99,23 @@ function setupSystemPromptSelector(node) {
         button.title = title;
         button.setAttribute("aria-label", title);
         button.style.cssText = `
-            flex: 0 0 28px;
-            height: 28px;
-            padding: 0;
-            border: none;
             background: #2a2a2a;
+            border: none;
             color: #888;
-            font-size: 10px;
+            padding: 0 10px;
+            height: 100%;
             cursor: pointer;
+            font-size: 10px;
+            transition: all 0.15s ease;
         `;
+        button.addEventListener("mouseover", () => {
+            button.style.background = direction ? "#3a3a3a" : "rgba(56, 130, 246, 0.32)";
+            if (direction) button.style.color = "#fff";
+        });
+        button.addEventListener("mouseout", () => {
+            button.style.background = direction ? "#2a2a2a" : "rgba(56, 130, 246, 0.22)";
+            if (direction) button.style.color = "#888";
+        });
         button.addEventListener("click", event => {
             event.stopPropagation();
             void activate(direction);
@@ -115,22 +127,23 @@ function setupSystemPromptSelector(node) {
     makeButton("\u25c0", "Previous system prompt", -1);
     const nameButton = makeButton("", "Browse System Prompts", 0);
     nameButton.style.cssText = `
-        flex: 1 1 0;
+        flex: 1;
         min-width: 0;
-        height: 28px;
+        text-align: center;
+        color: #dbeafe;
+        font-family: inherit;
+        font-size: 13px;
         padding: 0 10px;
+        cursor: pointer;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         background: rgba(56, 130, 246, 0.22);
         border: 1px solid rgba(56, 130, 246, 0.85);
         border-radius: 4px;
-        color: #dbeafe;
-        font-family: inherit;
-        font-size: 13px;
-        text-align: center;
+        height: 100%;
+        transition: background 0.15s ease;
         box-sizing: border-box;
-        cursor: pointer;
     `;
     makeButton("\u25b6", "Next system prompt", 1);
     const updateDisplay = () => {
@@ -139,8 +152,8 @@ function setupSystemPromptSelector(node) {
     };
     const index = node.widgets.indexOf(widget);
     const selector = node.addDOMWidget("system_prompt", "system_prompt_selector", container, {
-        getMinHeight: () => 28,
-        getMaxHeight: () => 28,
+        getMinHeight: () => 26,
+        getMaxHeight: () => 26,
         getValue: () => widget.value,
         setValue: value => {
             widget.value = value;
@@ -148,6 +161,8 @@ function setupSystemPromptSelector(node) {
         },
     });
     selector.computeSize = width => [width, 28];
+    // Nodes 2.0 stretches DOM widgets that expose computeLayoutSize; keep this row fixed-height.
+    selector.computeLayoutSize = undefined;
     selector.serializeValue = () => widget.value;
     node.widgets.splice(node.widgets.indexOf(selector), 1);
     node.widgets.splice(index, 1, selector);
@@ -307,10 +322,7 @@ app.registerExtension({
                 };
 
                 const applyPromptInputState = () => {
-                    if (!promptWidget || !promptWidget.inputEl) return;
-                    const connected = isPromptInputConnected();
-                    promptWidget.inputEl.readOnly = connected;
-                    promptWidget.inputEl.style.opacity = connected ? "0.5" : "";
+                    setPromptTextLocked(promptWidget, isPromptInputConnected());
                 };
                 // Python echoes back the value it actually received on prompt_input
                 // (only when that input was connected) in the "executed" event.
@@ -352,13 +364,11 @@ app.registerExtension({
                                 promptWidget.value = incoming;
                                 if (promptWidget.inputEl) {
                                     promptWidget.inputEl.value = incoming;
-                                    promptWidget.inputEl.readOnly = true;
-                                    promptWidget.inputEl.style.opacity = "0.5";
                                 }
+                                setPromptTextLocked(promptWidget, true);
                             }
-                        } else if (promptWidget && promptWidget.inputEl) {
-                            promptWidget.inputEl.readOnly = false;
-                            promptWidget.inputEl.style.opacity = "";
+                        } else {
+                            setPromptTextLocked(promptWidget, false);
                         }
                         node.serialize_widgets = true;
                         app.graph.setDirtyCanvas(true, true);

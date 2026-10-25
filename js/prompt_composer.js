@@ -66,7 +66,6 @@ function getWidgetByName(node, name) {
 
 function hideWidget(widget) {
     if (!widget) return;
-    widget.type = "converted-widget";
     widget.computeSize = () => [0, -4];
     widget.hidden = true;
     widget.draw = function () {};

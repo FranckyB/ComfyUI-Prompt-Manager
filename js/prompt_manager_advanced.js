@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { PM_UI_PALETTE as UI } from "./ui_palette.js";
+import { setPromptTextLocked } from "./prompt_text_lock.js";
 import {
     configurePromptBrowserDeps,
     showThumbnailBrowser,
@@ -268,7 +269,7 @@ app.registerExtension({
                 if (promptTextWidget) {
                     promptTextWidget.label = "prompt";
                     if (node._isWorkflowManager) {
-                        promptTextWidget.type = "converted-widget";
+                        promptTextWidget.hidden = true;
                         promptTextWidget.computeSize = () => [0, -4];
                     }
                 }
@@ -615,25 +616,13 @@ app.registerExtension({
                             if (useExternal && llmInput) {
                                 // Using external prompt — display the input text (read-only, ghosted)
                                 promptTextWidget.value = llmInput;
-                                if (promptTextWidget.inputEl) {
-                                    promptTextWidget.inputEl.readOnly = true;
-                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
-                                    promptTextWidget.inputEl.style.opacity = "0.5";
-                                }
+                                setPromptTextLocked(promptTextWidget, true);
                             } else if (useWorkflow && wfData && getWorkflowPromptText(wfData)) {
                                 // Using workflow_data prompt — display it (read-only, ghosted)
                                 promptTextWidget.value = getWorkflowPromptText(wfData);
-                                if (promptTextWidget.inputEl) {
-                                    promptTextWidget.inputEl.readOnly = true;
-                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
-                                    promptTextWidget.inputEl.style.opacity = "0.5";
-                                }
+                                setPromptTextLocked(promptTextWidget, true);
                             } else {
-                                // Using internal text — enable the widget
-                                if (promptTextWidget.inputEl) {
-                                    promptTextWidget.inputEl.readOnly = false;
-                                    promptTextWidget.inputEl.style.opacity = "";
-                                }
+                                setPromptTextLocked(promptTextWidget, false);
                             }
 
                             this.serialize_widgets = true;
@@ -1126,7 +1115,6 @@ function enforceWorkflowManagerCompactMode(node) {
     const hiddenNames = new Set(["category", "name", "text", "use_prompt_input", "use_lora_input", "use_workflow_data"]);
     for (const widget of (node.widgets || [])) {
         if (!hiddenNames.has(String(widget?.name || ""))) continue;
-        widget.type = "converted-widget";
         widget.hidden = true;
         widget.computeSize = () => [0, -4];
         if (widget.inputEl) {
@@ -2268,10 +2256,21 @@ function shouldShowExtraLoraStacks(node) {
     return node.hasMultiLoraInput === true || hasSaved || hasCurrent;
 }
 
+let _pmaVueStylesInstalled = false;
+function installPmaVueStyles() {
+    if (_pmaVueStylesInstalled) return;
+    _pmaVueStylesInstalled = true;
+    const style = document.createElement("style");
+    // Nodes 2.0 insets widgets 12px per side (classic: 10px); trim card padding so two 200px tags still fit.
+    style.textContent = ".lg-node-widgets .lora-display-container { padding-left: 6px !important; padding-right: 6px !important; }";
+    document.head.appendChild(style);
+}
+
 function addLoraDisplays(node) {
     if (node.loraDisplaysAttached) {
         return;
     }
+    installPmaVueStyles();
 
     const stacks = [
         { id: "a", title: "LoRAs Stack A", domName: "loras_a_display" },
@@ -2301,6 +2300,11 @@ function addLoraDisplays(node) {
             const height = 58 + rows * 28;
             return [width, height];
         };
+        // Nodes 2.0 stretches DOM widgets that expose computeLayoutSize; keep this row content-sized.
+        widget.computeLayoutSize = undefined;
+        if (stack.id === "c" || stack.id === "d") {
+            widget.hidden = !shouldShowExtraLoraStacks(node);
+        }
 
         // IMPORTANT: When Stack C/D are hidden, computeSize alone is not enough —
         // the DOM widget's positioned wrapper element (managed outside our container)
@@ -2369,50 +2373,42 @@ function addLoraDisplays(node) {
 
     // Add hidden widgets to store toggle states for serialization
     const lorasAToggleWidget = node.addWidget('text', 'loras_a_toggle', '[]');
-    lorasAToggleWidget.type = "converted-widget";
     lorasAToggleWidget.hidden = true;
     lorasAToggleWidget.computeSize = () => [0, -4];
     node.lorasAToggleWidget = lorasAToggleWidget;
 
     const lorasBToggleWidget = node.addWidget('text', 'loras_b_toggle', '[]');
-    lorasBToggleWidget.type = "converted-widget";
     lorasBToggleWidget.hidden = true;
     lorasBToggleWidget.computeSize = () => [0, -4];
     node.lorasBToggleWidget = lorasBToggleWidget;
 
     const lorasCToggleWidget = node.addWidget('text', 'loras_c_toggle', '[]');
-    lorasCToggleWidget.type = "converted-widget";
     lorasCToggleWidget.hidden = true;
     lorasCToggleWidget.computeSize = () => [0, -4];
     node.lorasCToggleWidget = lorasCToggleWidget;
 
     const lorasDToggleWidget = node.addWidget('text', 'loras_d_toggle', '[]');
-    lorasDToggleWidget.type = "converted-widget";
     lorasDToggleWidget.hidden = true;
     lorasDToggleWidget.computeSize = () => [0, -4];
     node.lorasDToggleWidget = lorasDToggleWidget;
 
     // Add hidden widgets to store current (connected) loras for tab-switch persistence
     const currentLorasAWidget = node.addWidget('text', 'current_loras_a', '[]');
-    currentLorasAWidget.type = "converted-widget";
     currentLorasAWidget.hidden = true;
     currentLorasAWidget.computeSize = () => [0, -4];
     node.currentLorasAWidget = currentLorasAWidget;
 
     const currentLorasBWidget = node.addWidget('text', 'current_loras_b', '[]');
-    currentLorasBWidget.type = "converted-widget";
     currentLorasBWidget.hidden = true;
     currentLorasBWidget.computeSize = () => [0, -4];
     node.currentLorasBWidget = currentLorasBWidget;
 
     const currentLorasCWidget = node.addWidget('text', 'current_loras_c', '[]');
-    currentLorasCWidget.type = "converted-widget";
     currentLorasCWidget.hidden = true;
     currentLorasCWidget.computeSize = () => [0, -4];
     node.currentLorasCWidget = currentLorasCWidget;
 
     const currentLorasDWidget = node.addWidget('text', 'current_loras_d', '[]');
-    currentLorasDWidget.type = "converted-widget";
     currentLorasDWidget.hidden = true;
     currentLorasDWidget.computeSize = () => [0, -4];
     node.currentLorasDWidget = currentLorasDWidget;
@@ -2538,6 +2534,8 @@ function updateLoraDisplays(node) {
     if (node.loraDContainer) {
         node.loraDContainer.style.display = showExtra ? "flex" : "none";
     }
+    if (node.loraCWidget) node.loraCWidget.hidden = !showExtra;
+    if (node.loraDWidget) node.loraDWidget.hidden = !showExtra;
 
     const tagsContainerC = node.loraCContainer?.querySelector(".lora-tags-container");
     if (tagsContainerC) renderLoraTags(tagsContainerC, displayBySlot.c, "c", node);
@@ -2713,7 +2711,8 @@ function createLoraTag(lora, index, stackId, node) {
         backgroundColor: bgColor,
         color: textColor,
         border: `1px solid ${borderColor}`,
-        width: "200px",
+        // Two columns always fit; equals 200px at the classic minimum node width.
+        width: "min(200px, calc(50% - 2px))",
         height: "24px",
         boxSizing: "border-box",
         userSelect: "none",
@@ -3232,12 +3231,13 @@ function addTriggerWordsDisplay(node) {
         const height = 58 + rows * 28;
         return [width, height];
     };
+    // Nodes 2.0 stretches DOM widgets that expose computeLayoutSize; keep this row content-sized.
+    triggerWordsWidget.computeLayoutSize = undefined;
     node.triggerWordsWidget = triggerWordsWidget;
     node.triggerWordsContainer = triggerWordsContainer;
 
     // Add hidden widget to store toggle states for serialization
     const triggerWordsToggleWidget = node.addWidget('text', 'trigger_words_toggle', '[]');
-    triggerWordsToggleWidget.type = "converted-widget";
     triggerWordsToggleWidget.hidden = true;
     triggerWordsToggleWidget.computeSize = () => [0, -4];
     node.triggerWordsToggleWidget = triggerWordsToggleWidget;
@@ -4122,6 +4122,8 @@ function addButtonBar(node) {
     htmlWidget.computeSize = function(width) {
         return [width, 40];
     };
+    // Nodes 2.0 stretches DOM widgets that expose computeLayoutSize; keep this row content-sized.
+    htmlWidget.computeLayoutSize = undefined;
 
     node.buttonBarAttached = true;
 }
@@ -4415,7 +4417,6 @@ function ensureWorkflowManagerPersistenceWidgets(node) {
 
     if (!node.savedWorkflowDataWidget) {
         const savedWorkflowDataWidget = node.addWidget('text', 'saved_workflow_data', '');
-        savedWorkflowDataWidget.type = "converted-widget";
         savedWorkflowDataWidget.hidden = true;
         savedWorkflowDataWidget.computeSize = () => [0, -4];
         node.savedWorkflowDataWidget = savedWorkflowDataWidget;
@@ -4423,7 +4424,6 @@ function ensureWorkflowManagerPersistenceWidgets(node) {
 
     if (!node.connectedThumbnailStateWidget) {
         const connectedThumbnailStateWidget = node.addWidget('text', 'connected_thumbnail_state', '');
-        connectedThumbnailStateWidget.type = "converted-widget";
         connectedThumbnailStateWidget.hidden = true;
         connectedThumbnailStateWidget.computeSize = () => [0, -4];
         node.connectedThumbnailStateWidget = connectedThumbnailStateWidget;
@@ -4937,24 +4937,7 @@ function refreshPmaPromptGhosting(node) {
     const isWorkflowConnected = workflowConnection && workflowConnection.link != null;
     const useWorkflow = useWorkflowWidget?.value === true && isWorkflowConnected;
 
-    if (useExternalWidget.value && isLlmConnected) {
-        if (textWidget.inputEl) {
-            textWidget.inputEl.readOnly = true;
-            textWidget.inputEl.style.pointerEvents = "auto";
-            textWidget.inputEl.style.opacity = "0.5";
-        }
-    } else if (useWorkflow) {
-        if (textWidget.inputEl) {
-            textWidget.inputEl.readOnly = true;
-            textWidget.inputEl.style.pointerEvents = "auto";
-            textWidget.inputEl.style.opacity = "0.5";
-        }
-    } else {
-        if (textWidget.inputEl) {
-            textWidget.inputEl.readOnly = false;
-            textWidget.inputEl.style.opacity = "";
-        }
-    }
+    setPromptTextLocked(textWidget, (useExternalWidget.value && isLlmConnected) || useWorkflow);
 }
 
 function getWorkflowDataLiveSig(workflowData) {
@@ -5141,11 +5124,7 @@ function setupUseExternalToggleHandler(node) {
 
         if (value && isLlmConnected) {
             // Using LLM and it's connected - make text widget read-only (ghosted)
-            if (textWidget.inputEl) {
-                textWidget.inputEl.readOnly = true;
-                textWidget.inputEl.style.pointerEvents = "auto";
-                textWidget.inputEl.style.opacity = "0.5";
-            }
+            setPromptTextLocked(textWidget, true);
 
             // Try to show prompt input value if available
             const graph = app.graph;
@@ -5168,17 +5147,10 @@ function setupUseExternalToggleHandler(node) {
             }
         } else if (useWorkflow) {
             // Using workflow_data — make text widget read-only (ghosted)
-            if (textWidget.inputEl) {
-                textWidget.inputEl.readOnly = true;
-                textWidget.inputEl.style.pointerEvents = "auto";
-                textWidget.inputEl.style.opacity = "0.5";
-            }
+            setPromptTextLocked(textWidget, true);
         } else {
             // Using internal text - enable widget but keep current text (which may be LLM output)
-            if (textWidget.inputEl) {
-                textWidget.inputEl.readOnly = false;
-                textWidget.inputEl.style.opacity = "";
-            }
+            setPromptTextLocked(textWidget, false);
         }
     };
 
@@ -9015,9 +8987,9 @@ function createPromptSelectorWidget(node) {
     if (!categoryWidget || !promptWidget) return;
 
     // Hide the original category and prompt widgets visually but keep them functional
-    categoryWidget.type = "converted-widget";
+    categoryWidget.hidden = true;
     categoryWidget.computeSize = () => [0, -4];
-    promptWidget.type = "converted-widget";
+    promptWidget.hidden = true;
     promptWidget.computeSize = () => [0, -4];
 
     for (let i = node.inputs.length - 1; i >= 0; i--) {
@@ -9507,6 +9479,8 @@ function createPromptSelectorWidget(node) {
         widget.computeSize = function(width) {
             return [width, 28];
         };
+        // Nodes 2.0 stretches DOM widgets that expose computeLayoutSize; keep this row fixed-height.
+        widget.computeLayoutSize = undefined;
     }
 
     // Store reference for updates

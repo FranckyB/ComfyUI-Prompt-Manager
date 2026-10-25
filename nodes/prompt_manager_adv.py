@@ -405,8 +405,6 @@ class PromptManagerAdvanced:
                 "name": (all_prompts_list, {"default": first_prompt}),
                 "use_prompt_input": ("BOOLEAN", {
                     "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
                     "tooltip": "Toggle to use connected prompt input instead of internal text"}),
                 "use_lora_input": (_LORA_INPUT_MODES, {
                     "default": _LORA_INPUT_MODE_PROMPT_ONLY,

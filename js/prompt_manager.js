@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { ComfyWidgets } from "../../scripts/widgets.js";
 import { api } from "../../scripts/api.js";
+import { setPromptTextLocked } from "./prompt_text_lock.js";
 
 let promptInputMaskPatched = false;
 const AUTO_SELECT_MODEL_OPTION = "Default (auto-select)";
@@ -431,17 +432,9 @@ app.registerExtension({
                             if (useExternal && llmInput) {
                                 // When using external, display the LLM input text (read-only, ghosted)
                                 promptTextWidget.value = llmInput;
-                                if (promptTextWidget.inputEl) {
-                                    promptTextWidget.inputEl.readOnly = true;
-                                    promptTextWidget.inputEl.style.pointerEvents = "auto";
-                                    promptTextWidget.inputEl.style.opacity = "0.5";
-                                }
+                                setPromptTextLocked(promptTextWidget, true);
                             } else {
-                                // When using internal, enable the widget
-                                if (promptTextWidget.inputEl) {
-                                    promptTextWidget.inputEl.readOnly = false;
-                                    promptTextWidget.inputEl.style.opacity = "";
-                                }
+                                setPromptTextLocked(promptTextWidget, false);
                             }
                             
                             this.serialize_widgets = true;
@@ -857,6 +850,8 @@ function addButtonBar(node) {
     htmlWidget.computeSize = function(width) {
         return [width, 36];
     };
+    // Nodes 2.0 stretches DOM widgets that expose computeLayoutSize; keep this row fixed-height.
+    htmlWidget.computeLayoutSize = undefined;
 
     node.buttonBarAttached = true;
 }
@@ -1013,11 +1008,7 @@ function setupUseExternalToggleHandler(node) {
 
         if (value && isLlmConnected) {
             // Using LLM and it's connected - make text widget read-only (ghosted)
-            if (textWidget.inputEl) {
-                textWidget.inputEl.readOnly = true;
-                textWidget.inputEl.style.pointerEvents = "auto";
-                textWidget.inputEl.style.opacity = "0.5";
-            }
+            setPromptTextLocked(textWidget, true);
             
             // Try to show LLM value if available
             const graph = app.graph;
@@ -1040,10 +1031,7 @@ function setupUseExternalToggleHandler(node) {
             }
         } else {
             // Using internal text - enable widget but keep current text (which may be LLM output)
-            if (textWidget.inputEl) {
-                textWidget.inputEl.readOnly = false;
-                textWidget.inputEl.style.opacity = "";
-            }
+            setPromptTextLocked(textWidget, false);
         }
     };
 

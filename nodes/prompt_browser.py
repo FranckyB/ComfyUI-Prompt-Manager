@@ -130,8 +130,6 @@ class PromptBrowser:
                 }),
                 "use_prompt_input": ("BOOLEAN", {
                     "default": False,
-                    "label_on": "on",
-                    "label_off": "off",
                     "tooltip": "Toggle to use connected prompt input instead of internal text",
                 }),
                 "text": ("STRING", {
