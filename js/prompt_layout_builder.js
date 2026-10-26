@@ -7,7 +7,7 @@ import { COMPOSER_ENDPOINT_PREFIX, getComposerEntry, loadComposerPrompts } from 
 
 // Boxes are canvas fractions {x, y, w, h, type, text, desc, palette, prompt_ref?}; mirrors nodes/prompt_layout_builder.py.
 const NODE_NAME = "PromptLayoutBuilder";
-const REF_IMAGE_RATIO = "Use Ref Image Ratio";
+const REF_RATIO = "Use Reference Ratio";
 const SIZE_MULTIPLE = 16;
 const BOX_PALETTE_MAX = 8;
 const SUMMARY_PALETTE_MAX = 16;
@@ -91,7 +91,7 @@ function parseColor(text) {
 
 function canvasSize(node) {
     const ratioName = String(getWidget(node, "aspect_ratio")?.value || "");
-    const ratio = ratioName === REF_IMAGE_RATIO
+    const ratio = ratioName === REF_RATIO
         ? (node.properties?.[REF_SIZE_PROP] || [1, 1])
         : (ratioName.match(/^(\d+):(\d+)/)?.slice(1).map(Number) || [1, 1]);
     const megapixels = Number(getWidget(node, "megapixels")?.value) || 1;

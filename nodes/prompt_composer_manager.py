@@ -47,7 +47,7 @@ class PromptComposerManager(PromptManagerAdvanced):
                 }),
             },
             "optional": {
-                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {"forceInput": True, "tooltip": "Connected compose data to edit/forward"}),
+                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {"forceInput": True, "tooltip": "Connected compose data (Prompt Composer or Prompt Layout Builder) to edit/forward"}),
                 "image": ("IMAGE", {"tooltip": "Optional image input used as the saved thumbnail when present."}),
             },
             "hidden": {
@@ -59,7 +59,7 @@ class PromptComposerManager(PromptManagerAdvanced):
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Compose-data focused manager for Prompt Composer saves, with optional thumbnail image input."
+    DESCRIPTION = "Composition Manager: save and reload Prompt Composer and Prompt Layout Builder compose_data, with optional thumbnail image input."
     RETURN_TYPES = ("COMPOSE_DATA",)
     RETURN_NAMES = ("compose_data",)
     FUNCTION = "get_workflow"

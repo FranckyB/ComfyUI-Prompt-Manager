@@ -25,8 +25,12 @@ from comfy_extras.nodes_bounding_boxes import (
 )
 from comfy_extras.nodes_resolution import ASPECT_RATIOS
 
+from ..py.workflow_data_utils import build_v2_recipe_data_from_prompt
 
-REF_IMAGE_RATIO = "Use Ref Image Ratio"
+
+REF_RATIO = "Use Reference Ratio"
+# compose_data key holding the editor state, next to Prompt Composer's "prompt_composer".
+LAYOUT_RECIPE_KEY = "prompt_layout"
 SIZE_MULTIPLE = 16
 CANVASES = ("single", "multi_panel", "collage")
 BOX_TYPES = ("object", "character", "text")
@@ -36,13 +40,11 @@ HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 RELATIVE_SPACES = {"percent": 100.0, "relative_1000": 1000.0}
 
 
-def _resolution(aspect_ratio, megapixels, image):
-    if aspect_ratio != REF_IMAGE_RATIO:
+def _resolution(aspect_ratio, megapixels, ref_size):
+    if aspect_ratio != REF_RATIO:
         w_ratio, h_ratio = ASPECT_RATIOS[aspect_ratio]
-    elif image is not None:
-        h_ratio, w_ratio = image.shape[1:3]
     else:
-        w_ratio = h_ratio = 1
+        w_ratio, h_ratio = ref_size or (1, 1)
     scale = math.sqrt(megapixels * 1024 * 1024 / (w_ratio * h_ratio))
     return tuple(max(SIZE_MULTIPLE, round(r * scale / SIZE_MULTIPLE) * SIZE_MULTIPLE) for r in (w_ratio, h_ratio))
 
@@ -63,13 +65,17 @@ def _clean_box(raw):
     y1, y2 = sorted((y, y + h))
     x1, y1, x2, y2 = (min(1.0, max(0.0, v)) for v in (x1, y1, x2, y2))
     box_type = raw.get("type") if raw.get("type") in BOX_TYPES else "object"
-    return {
+    box = {
         "x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1,
         "type": box_type,
         "text": str(raw.get("text") or "") if box_type == "text" else "",
         "desc": str(raw.get("desc") or ""),
         "palette": _palette(raw.get("palette"), BOX_PALETTE_MAX),
     }
+    ref = raw.get("prompt_ref")
+    if isinstance(ref, dict) and ref.get("name"):
+        box["prompt_ref"] = {"category": str(ref.get("category") or ""), "name": str(ref["name"])}
+    return box
 
 
 def _find_layout(text):
@@ -151,6 +157,20 @@ def _layout_prompt(prompt, meta, canvas, palette, boxes, width, height):
 def _fit_background(image, width, height):
     samples = image[:1, :, :, :3].movedim(-1, 1)
     return comfy.utils.common_upscale(samples, width, height, "lanczos", "center").movedim(1, -1)
+
+
+def _compose_data(layout_prompt, state, width, height):
+    data = build_v2_recipe_data_from_prompt(prompt_text=layout_prompt, source="PromptLayoutBuilder")
+    data["models"]["model_a"]["resolution"].update(width=width, height=height)
+    data[LAYOUT_RECIPE_KEY] = {
+        **state,
+        "width": width,
+        "height": height,
+        "composer_prompts": [
+            {"box": index, **box["prompt_ref"]} for index, box in enumerate(state["boxes"], 1) if box.get("prompt_ref")
+        ],
+    }
+    return data
 
 
 def _pixel_frame(boxes, width, height):
@@ -254,9 +274,10 @@ class PromptLayoutBuilder:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "aspect_ratio": ([REF_IMAGE_RATIO, *(ratio.value for ratio in ASPECT_RATIOS)], {
+                "aspect_ratio": ([REF_RATIO, *(ratio.value for ratio in ASPECT_RATIOS)], {
                     "default": "1:1 (Square)",
-                    "tooltip": "Canvas aspect ratio. 'Use Ref Image Ratio' follows the connected image.",
+                    "tooltip": "Canvas aspect ratio. 'Use Reference Ratio' follows a layout restored from compose_data, "
+                               "otherwise the connected image.",
                 }),
                 "megapixels": ("FLOAT", {
                     "default": 1.0, "min": 0.1, "max": 16.0, "step": 0.1,
@@ -284,17 +305,18 @@ class PromptLayoutBuilder:
                 "layout_data": ("STRING", {"default": "{}", "tooltip": "Editor boxes (managed by the node UI)."}),
             },
             "optional": {
-                "image": ("IMAGE", {"tooltip": "Background for the editor; also sets the ratio with 'Use Ref Image Ratio'."}),
-                "import_json": ("STRING", {
+                "image": ("IMAGE", {"tooltip": "Background for the editor; also sets the ratio with 'Use Reference Ratio'."}),
+                "import_json": ("STRING,COMPOSE_DATA", {
                     "forceInput": True,
                     "lazy": True,
-                    "tooltip": "Layout JSON, e.g. from Prompt Generator: percent, 0-1000 or MOSS-native boxes. Only evaluated when use_import_json is on.",
+                    "tooltip": "Layout JSON (e.g. from Prompt Generator: percent, 0-1000 or MOSS-native boxes) or a saved "
+                               "layout's compose_data from Composition Manager. Only evaluated when use_import_json is on.",
                 }),
             },
         }
 
-    RETURN_TYPES = ("STRING", "IMAGE", "INT", "INT")
-    RETURN_NAMES = ("prompt", "preview", "width", "height")
+    RETURN_TYPES = ("STRING", "IMAGE", "INT", "INT", "COMPOSE_DATA")
+    RETURN_NAMES = ("prompt", "preview", "width", "height", "compose_data")
     FUNCTION = "build"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = True
@@ -305,14 +327,31 @@ class PromptLayoutBuilder:
 
     def build(self, aspect_ratio, megapixels, prompt, meta, canvas, use_import_json, layout_data,
               image=None, import_json=None):
-        width, height = _resolution(aspect_ratio, megapixels, image)
-        state = json.loads(layout_data or "{}")
+        saved = None
+        if use_import_json and isinstance(import_json, dict):
+            saved = import_json.get(LAYOUT_RECIPE_KEY)
+            if not isinstance(saved, dict):
+                raise ValueError("Prompt Layout Builder: this compose_data has no layout (it is Prompt Composer data).")
+        text_import = use_import_json and isinstance(import_json, str) and import_json.strip()
+        if saved and saved.get("width") and saved.get("height"):
+            ref_size = (int(saved["width"]), int(saved["height"]))
+        elif image is not None:
+            ref_size = (int(image.shape[2]), int(image.shape[1]))
+        else:
+            ref_size = None
+        width, height = _resolution(aspect_ratio, megapixels, ref_size)
+
+        state = saved if saved else json.loads(layout_data or "{}")
         boxes = [_clean_box(box) for box in state.get("boxes", []) if isinstance(box, dict)]
         palette = _palette(state.get("palette"), SUMMARY_PALETTE_MAX)
         meta_tags = _strs(meta)
         ui = {}
 
-        if use_import_json and import_json and import_json.strip():
+        if saved:
+            prompt = str(saved.get("prompt") or "")
+            meta_tags = _strs(saved.get("meta"))
+            canvas = saved.get("canvas") if saved.get("canvas") in CANVASES else "none"
+        elif text_import:
             layout = _find_layout(import_json)
             boxes = _import_boxes(layout, width, height)
             summary = layout.get("summary")
@@ -321,26 +360,32 @@ class PromptLayoutBuilder:
                 meta_tags = _strs(summary.get("meta"))
                 canvas = summary.get("canvas") if summary.get("canvas") in CANVASES else "none"
                 palette = _palette(summary.get("palette"), SUMMARY_PALETTE_MAX)
+        if saved or text_import:
             ui["pm_layout_import"] = [{
                 "boxes": boxes, "palette": palette, "prompt": prompt, "meta": ", ".join(meta_tags), "canvas": canvas,
             }]
 
+        ui["pm_layout_ref_size"] = list(ref_size) if ref_size else []
         if image is None:
             preview_bg = None
             ui["pm_layout_background"] = []
-            ui["pm_layout_ref_size"] = []
         else:
             background = _fit_background(image, width, height)
             preview_bg = Image.fromarray((background[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
             ui["pm_layout_background"] = nodes.PreviewImage().save_images(background, "pm.layout.background")["ui"]["images"]
-            ui["pm_layout_ref_size"] = [int(image.shape[2]), int(image.shape[1])]
 
+        layout_prompt = _layout_prompt(prompt, meta_tags, canvas, palette, boxes, width, height)
+        editor_state = {
+            "boxes": boxes, "palette": palette, "prompt": prompt, "meta": meta_tags, "canvas": canvas,
+            "aspect_ratio": aspect_ratio, "megapixels": megapixels,
+        }
         return {
             "ui": ui,
             "result": (
-                _layout_prompt(prompt, meta_tags, canvas, palette, boxes, width, height),
+                layout_prompt,
                 render_preview(boxes, width, height, preview_bg),
                 width,
                 height,
+                _compose_data(layout_prompt, editor_state, width, height),
             ),
         }

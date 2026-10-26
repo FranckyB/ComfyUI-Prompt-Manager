@@ -7,6 +7,7 @@ import {
     showThumbnailBrowser,
     openPromptBrowserForSave,
     hasComposeLikePayload,
+    hasLayoutPayload,
     hasRecipeLikePayload,
     getPromptNamesForCategory,
     getVisibleCategories,
@@ -69,6 +70,43 @@ function shouldCombineLoras(node) {
 
 function shouldUseInputOnlyLoras(node) {
     return normalizeUseLoraInputWidget(node) === LORA_MODE_INPUT_ONLY;
+}
+
+// Composition Manager lists the entries its connected node can load: layouts for Prompt Layout Builder,
+// composer data for Prompt Composer, both when it is not connected to either. A type picked in the browser wins.
+const COMPOSITION_FILTER_PROP = "pm_composition_filter";
+const COMPOSITION_FILTERS = ["composition", "compose", "layout"];
+
+function getManagerContentFilter(node) {
+    if (!node?._isComposerManager) return node?._isWorkflowManager ? "recipe" : undefined;
+    const picked = node.properties?.[COMPOSITION_FILTER_PROP];
+    if (COMPOSITION_FILTERS.includes(picked)) return picked;
+    const graph = node.graph || app.graph;
+    const linkIds = [
+        ...(node.outputs || []).flatMap((output) => output.links || []),
+        ...(node.inputs || []).map((input) => input.link).filter((id) => id != null),
+    ];
+    const types = new Set(linkIds.map((id) => {
+        const link = graph?.links?.[id];
+        const otherId = link?.origin_id === node.id ? link?.target_id : link?.origin_id;
+        return graph?.getNodeById?.(otherId)?.type;
+    }));
+    if (types.has("PromptLayoutBuilder") && !types.has("PromptComposer")) return "layout";
+    if (types.has("PromptComposer") && !types.has("PromptLayoutBuilder")) return "compose";
+    return "composition";
+}
+
+function getManagerFilterControl(node) {
+    if (!node?._isComposerManager) return { hideContentFilterControl: node?._isWorkflowManager === true };
+    return {
+        hideContentFilterControl: false,
+        contentFilterCycle: COMPOSITION_FILTERS,
+        onContentFilterChange: (value) => {
+            node.properties ??= {};
+            node.properties[COMPOSITION_FILTER_PROP] = value;
+            node.updatePromptSelectorDisplay?.();
+        },
+    };
 }
 
 /**
@@ -1507,7 +1545,7 @@ function updateWorkflowManagerPreview(node) {
         } else if (workflowInputConnected) {
             ui.emptyLabel.textContent = "Waiting for workflow_data input...";
         } else {
-            ui.emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composer" : "No thumbnail for selected workflow";
+            ui.emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composition" : "No thumbnail for selected workflow";
         }
     }
 }
@@ -1618,7 +1656,7 @@ function addWorkflowManagerPreview(node) {
     `;
 
     const emptyLabel = document.createElement("div");
-    emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composer" : "No thumbnail for selected workflow";
+    emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composition" : "No thumbnail for selected workflow";
     emptyLabel.style.cssText = `
         position: absolute;
         inset: 0;
@@ -3821,22 +3859,22 @@ async function openSaveBrowserForNode(node) {
         node,
         currentCategory,
         currentPrompt: promptWidget.value || "",
-        title: node._isComposerManager ? "Save Composer" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt"),
+        title: node._isComposerManager ? "Save Composition" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt"),
         saveButtonText: "Save",
         namePlaceholder: "Prompt name",
         initialName,
         workflowOnly: node?._isWorkflowManager === true,
-        contentFilter: node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : undefined),
+        contentFilter: getManagerContentFilter(node),
         filterEmptyCategories: node?._isWorkflowManager === true,
         showAllCategoriesToggle: node?._isWorkflowManager === true,
-        hideContentFilterControl: node?._isWorkflowManager === true,
+        ...getManagerFilterControl(node),
         saveWithEditPanel: true,
         showNSFWOnOpen: showNSFWOnSave,
         saveMode: true,
         saveDraft: {
             category: currentCategory,
             name: initialName,
-            text: textWidget.value || "",
+            text: textWidget.value || (node._isWorkflowManager ? getWorkflowPromptText(draftWorkflowData) : ""),
             thumbnail: initialThumbnail,
             workflow_data: draftWorkflowData,
             loras_a: draftLorasA,
@@ -3991,8 +4029,8 @@ function addButtonBar(node) {
     // Forward wheel events to canvas for zooming
     forwardWheelToCanvas(buttonContainer);
 
-                const saveButtonLabel = node._isComposerManager ? "Save Composer" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt");
-                const clearButtonLabel = node._isComposerManager ? "Clear Composer" : (node._isWorkflowManager ? "Clear Workflow" : "New Prompt");
+                const saveButtonLabel = node._isComposerManager ? "Save Composition" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt");
+                const clearButtonLabel = node._isComposerManager ? "Clear Composition" : (node._isWorkflowManager ? "Clear Workflow" : "New Prompt");
 
     // Save Prompt/Workflow button
     const savePromptBtn = createButton(saveButtonLabel, async () => {
@@ -9190,7 +9228,7 @@ function createPromptSelectorWidget(node) {
 
         if (wmInputMode) {
             nameDisplay.textContent = hasLiveWorkflow
-                ? (node?._isComposerManager ? "Input connected: save incoming composer" : "Input connected: save incoming workflow")
+                ? (node?._isComposerManager ? "Input connected: save incoming composition" : "Input connected: save incoming workflow")
                 : "Waiting for workflow_data input...";
             nameDisplay.title = nameDisplay.textContent;
             nameDisplay.style.cursor = "default";
@@ -9245,6 +9283,7 @@ function createPromptSelectorWidget(node) {
             const catIsNSFW = node.prompts[category]?.["__meta__"]?.nsfw === true;
             const promptIsNSFW = promptData?.nsfw === true;
             const hasComposeData = hasComposeLikePayload(promptData);
+            const hasLayoutData = hasComposeData && hasLayoutPayload(promptData);
             const hasRecipeData = !hasComposeData && hasRecipeLikePayload(promptData);
 
             if (catIsNSFW || promptIsNSFW) {
@@ -9262,11 +9301,11 @@ function createPromptSelectorWidget(node) {
             }
 
             if ((hasComposeData || hasRecipeData) && !node?._isWorkflowManager) {
-                createBadge("workflow-selector-label", hasComposeData ? "C" : "R", `
+                createBadge("workflow-selector-label", hasLayoutData ? "L" : hasComposeData ? "C" : "R", `
                     width: 14px;
                     height: 14px;
                     border-radius: 50%;
-                    background: ${hasComposeData ? "rgba(55, 165, 95, 0.95)" : "rgba(235, 140, 35, 0.95)"};
+                    background: ${hasLayoutData ? "rgba(124, 92, 220, 0.95)" : hasComposeData ? "rgba(55, 165, 95, 0.95)" : "rgba(235, 140, 35, 0.95)"};
                     color: #fff;
                     font-size: 9px;
                     font-weight: bold;
@@ -9300,7 +9339,7 @@ function createPromptSelectorWidget(node) {
 
         const hideNSFW = app.ui.settings.getSettingValue("PromptManager.DefaultHideNSFW");
         const workflowOnly = node?._isWorkflowManager === true;
-        const contentFilter = node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : "all");
+        const contentFilter = getManagerContentFilter(node) || "all";
         const categories = getVisibleCategories(node, {
             hideNSFW: hideNSFW === true,
             workflowOnly,
@@ -9439,10 +9478,10 @@ function createPromptSelectorWidget(node) {
 
             const selection = await showThumbnailBrowser(node, category, currentPrompt, {
                 workflowOnly: node?._isWorkflowManager === true,
-                contentFilter: node?._isComposerManager ? "compose" : (node?._isWorkflowManager ? "recipe" : undefined),
+                contentFilter: getManagerContentFilter(node),
                 filterEmptyCategories: true,
                 showAllCategoriesToggle: true,
-                hideContentFilterControl: node?._isWorkflowManager === true,
+                ...getManagerFilterControl(node),
                 allowMultiSelect: false,
             });
 

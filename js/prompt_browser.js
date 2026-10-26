@@ -1757,7 +1757,7 @@ export function setThumbnailPreviewEnabled(value) {
 export function getBrowserContentFilter(runtimeApp = app) {
     if (_sessionBrowserContentFilter !== null) return _sessionBrowserContentFilter;
     const saved = String(runtimeApp?.ui?.settings?.getSettingValue("PromptManager.BrowserContentFilter") || "all").toLowerCase();
-    return (saved === "prompt" || saved === "recipe" || saved === "compose" || saved === "all") ? saved : "all";
+    return ["prompt", "recipe", "compose", "layout", "all"].includes(saved) ? saved : "all";
 }
 
 export function setBrowserContentFilter(value) {
@@ -1794,8 +1794,18 @@ export function hasComposeLikePayload(promptData) {
     if (!workflowData || typeof workflowData !== "object") return false;
     const workflowSource = String(workflowData._source || "").trim();
     if (workflowSource === "PromptComposerManager" || workflowSource === "ComposerManager") return true;
-    return workflowData.prompt_composer && typeof workflowData.prompt_composer === "object";
+    // Layout saves keep their own _source (PromptLayoutBuilder), so detect them by their payload.
+    return [workflowData.prompt_composer, workflowData.prompt_layout].some((block) => block && typeof block === "object");
 }
+
+// Prompt Layout Builder state saved through Composition Manager; a compose-like payload Prompt Composer cannot use.
+export function hasLayoutPayload(promptData) {
+    const workflowData = parseWorkflowDataCandidate(promptData?.workflow_data);
+    return !!(workflowData && typeof workflowData.prompt_layout === "object" && workflowData.prompt_layout);
+}
+
+const LAYOUT_BADGE_COLOR = "rgba(124, 92, 220, 0.95)";
+const COMPOSE_BADGE_COLOR = "rgba(47, 146, 72, 0.95)";
 
 export function hasRecipeLikePayload(promptData) {
     if (!promptData || typeof promptData !== "object") return false;
@@ -1839,12 +1849,15 @@ export function getPromptNamesForCategory(node, category, options = {}) {
         promptNames = promptNames.filter((name) => {
             const entry = promptEntries?.[name];
             const hasComposeData = hasComposeLikePayload(entry);
+            const hasLayoutData = hasComposeData && hasLayoutPayload(entry);
             const hasRecipeData = !hasComposeData && hasRecipeLikePayload(entry);
             const hasPromptData = !hasComposeData && hasPromptPresetPayload(entry);
 
             if (workflowOnly && !(hasComposeData || hasRecipeData || hasPromptData)) return false;
             if (contentFilter === "prompt") return hasPromptData;
-            if (contentFilter === "compose") return hasComposeData;
+            if (contentFilter === "compose") return hasComposeData && !hasLayoutData;
+            if (contentFilter === "layout") return hasLayoutData;
+            if (contentFilter === "composition") return hasComposeData;
             if (contentFilter === "recipe") return hasRecipeData;
             return true;
         });
@@ -1929,11 +1942,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const saveUsesEditPanel = mode === "save" && allowEditMode && options?.saveWithEditPanel === true;
     const initialContentFilter = (() => {
         const raw = String(options?.contentFilter || "").trim().toLowerCase();
-        return raw === "prompt" || raw === "recipe" || raw === "compose" || raw === "all" ? raw : "";
+        return ["prompt", "recipe", "compose", "layout", "composition", "all"].includes(raw) ? raw : "";
     })();
     const filterEmptyCategories = options?.filterEmptyCategories === true;
     const showAllCategoriesToggle = options?.showAllCategoriesToggle === true;
     const hideContentFilterControl = options?.hideContentFilterControl === true;
+    // Optional caller-owned Type filter cycle (e.g. Composition Manager); not saved to the global setting.
+    const contentFilterCycle = Array.isArray(options?.contentFilterCycle) ? options.contentFilterCycle : null;
+    const onContentFilterChange = typeof options?.onContentFilterChange === "function" ? options.onContentFilterChange : null;
     const useComposerMultiSelectActions = multiSelectActionMode === "composer-add";
     const rememberedEditMode = sessionBrowserEditMode.has(browserPrefScope)
         ? sessionBrowserEditMode.get(browserPrefScope) === true
@@ -1945,7 +1961,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     let updateSelectButton = () => {};
     let updateFooterText = () => {};
     let updateSelectionToolbar = () => {};
-    let showAllCategoriesState = false;
+    // Saving may target a category with no matching entries yet, so list empty categories by default.
+    let showAllCategoriesState = mode === "save";
 
     const filterAllowedCategories = (categories) => {
         if (!allowedCategorySet || !Array.isArray(categories)) return categories;
@@ -2440,6 +2457,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 contentFilterBtn.textContent = "Type: Compose";
                 contentFilterBtn.style.cssText = btnStyle + `background: rgba(47, 111, 146, 0.18); border-color: rgba(47, 111, 146, 0.82); color: #d7edf8;`;
                 contentFilterBtn.title = "Showing compose entries only";
+            } else if (contentFilterState === "layout") {
+                contentFilterBtn.textContent = "Type: Layout";
+                contentFilterBtn.style.cssText = btnStyle + `background: rgba(124, 92, 220, 0.18); border-color: rgba(124, 92, 220, 0.82); color: #e6defc;`;
+                contentFilterBtn.title = "Showing layout entries only";
+            } else if (contentFilterState === "composition") {
+                contentFilterBtn.textContent = "Type: Compose + Layout";
+                contentFilterBtn.style.cssText = btnStyle;
+                contentFilterBtn.title = "Showing compose and layout entries";
             } else if (contentFilterState === "recipe") {
                 contentFilterBtn.textContent = "Type: Recipe";
                 contentFilterBtn.style.cssText = btnStyle + `background: rgba(235, 140, 35, 0.18); border-color: rgba(235, 140, 35, 0.8); color: #ffe7c2;`;
@@ -2447,7 +2472,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             } else {
                 contentFilterBtn.textContent = "Type: All";
                 contentFilterBtn.style.cssText = btnStyle;
-                contentFilterBtn.title = "Showing prompts, recipes, and compose entries";
+                contentFilterBtn.title = "Showing prompts, recipes, compose and layout entries";
             }
         };
         const allCategoriesBtn = document.createElement("button");
@@ -2964,10 +2989,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
 
             if (hideNSFWState && isCategoryNSFW(newCategory)) {
-                const firstVisible = categories.find(c => !isCategoryNSFW(c));
-                if (firstVisible) {
-                    newCategory = firstVisible;
-                }
+                newCategory = categories.find(c => !isCategoryNSFW(c)) || "";
             }
 
             setSelectedCategory(newCategory);
@@ -4948,14 +4970,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
 
                     if (showComposeBadge) {
+                        const isLayoutEntry = hasLayoutPayload(promptData);
                         const composeBadge = document.createElement("div");
-                        composeBadge.textContent = "C";
-                        composeBadge.title = "Has Compose Data";
+                        composeBadge.textContent = isLayoutEntry ? "L" : "C";
+                        composeBadge.title = isLayoutEntry ? "Has Layout Data" : "Has Compose Data";
                         composeBadge.style.cssText = `
                             width: 14px;
                             height: 14px;
                             border-radius: 50%;
-                            background: rgba(47, 146, 72, 0.95);
+                            background: ${isLayoutEntry ? LAYOUT_BADGE_COLOR : COMPOSE_BADGE_COLOR};
                             color: #fff;
                             font-size: 9px;
                             font-weight: bold;
@@ -5344,14 +5367,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
 
                     if (showComposeBadge) {
+                        const isLayoutEntry = hasLayoutPayload(promptData);
                         const composeBadge = document.createElement("div");
-                        composeBadge.textContent = "C";
-                        composeBadge.title = "Has Compose Data";
+                        composeBadge.textContent = isLayoutEntry ? "L" : "C";
+                        composeBadge.title = isLayoutEntry ? "Has Layout Data" : "Has Compose Data";
                         composeBadge.style.cssText = `
                             width: 14px;
                             height: 14px;
                             border-radius: 50%;
-                            background: rgba(47, 146, 72, 0.95);
+                            background: ${isLayoutEntry ? LAYOUT_BADGE_COLOR : COMPOSE_BADGE_COLOR};
                             color: #fff;
                             font-size: 9px;
                             font-weight: bold;
@@ -5908,9 +5932,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const showWorkflowBadge = !showComposeBadge && !workflowOnly && hasWorkflowData;
                 const showPromptBadge = !showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload;
                 if (showComposeBadge) {
+                    const isLayoutEntry = hasLayoutPayload(promptData);
                     const composeBadge = document.createElement("div");
-                    composeBadge.textContent = "C";
-                    composeBadge.title = "Has Compose Data";
+                    composeBadge.textContent = isLayoutEntry ? "L" : "C";
+                    composeBadge.title = isLayoutEntry ? "Has Layout Data" : "Has Compose Data";
                     composeBadge.style.cssText = `
                         position: absolute;
                         right: -2px;
@@ -5918,7 +5943,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         width: 12px;
                         height: 12px;
                         border-radius: 50%;
-                        background: rgba(47, 146, 72, 0.95);
+                        background: ${isLayoutEntry ? LAYOUT_BADGE_COLOR : COMPOSE_BADGE_COLOR};
                         color: #fff;
                         font-size: 8px;
                         font-weight: bold;
@@ -6458,12 +6483,23 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // Event handlers for controls
         contentFilterBtn.onclick = () => {
+            if (contentFilterCycle) {
+                const index = contentFilterCycle.indexOf(contentFilterState);
+                contentFilterState = contentFilterCycle[(index + 1) % contentFilterCycle.length];
+                onContentFilterChange?.(contentFilterState);
+                updateContentFilterBtn();
+                rebuildCategoryList();
+                renderContent(searchInput.value);
+                return;
+            }
             if (contentFilterState === "all") {
                 contentFilterState = "prompt";
             } else if (contentFilterState === "prompt") {
                 contentFilterState = "recipe";
             } else if (contentFilterState === "recipe") {
                 contentFilterState = "compose";
+            } else if (contentFilterState === "compose") {
+                contentFilterState = "layout";
             } else {
                 contentFilterState = "all";
             }
@@ -7002,6 +7038,8 @@ function standaloneOpenPromptBrowserForSave(options = {}) {
         filterEmptyCategories: options.filterEmptyCategories === true,
         showAllCategoriesToggle: options.showAllCategoriesToggle === true,
         hideContentFilterControl: options.hideContentFilterControl === true,
+        contentFilterCycle: options.contentFilterCycle,
+        onContentFilterChange: options.onContentFilterChange,
         saveWithEditPanel: options.saveWithEditPanel === true,
         showNSFWOnOpen: options.showNSFWOnOpen === true,
         saveDraft: options.saveDraft,

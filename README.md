@@ -126,7 +126,7 @@ Node-side Prompt Composer controls include:
 
 ### Saving And Reloading Composer Workflows
 
-The **Compose Manager** node lets you save and reload full Prompt Composer workflows using **Compose Data**.
+The **Composition Manager** node (formerly Compose Manager) lets you save and reload full Prompt Composer workflows using **Compose Data**. It also saves **Prompt Layout Builder** layouts; the Prompt Browser marks composer entries **C** and layout entries **L**.
 
 To restore a saved Composer setup in **Prompt Composer**, use the **second row of toggles** on the node:
 
