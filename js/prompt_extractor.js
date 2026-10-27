@@ -379,7 +379,7 @@ function _createExtractorSummaryLoraTag(lora) {
         background:${isAvailable ? "rgba(61,134,210,0.9)" : "rgba(220,53,69,0.9)"};
         color:#fff;
         flex-shrink:0;
-        font-size:12px;
+        font-size:14px;
     `;
 
     const nameSpan = document.createElement("span");
@@ -389,7 +389,7 @@ function _createExtractorSummaryLoraTag(lora) {
 
     const strengthBadge = document.createElement("span");
     strengthBadge.textContent = Number.isFinite(strength) ? strength.toFixed(2) : "1.00";
-    strengthBadge.style.cssText = "font-size:10px; font-weight:600; padding:1px 6px; border-radius:999px; background:rgba(255,255,255,0.15);";
+    strengthBadge.style.cssText = "font-size:12px; font-weight:600; padding:1px 6px; border-radius:999px; background:rgba(255,255,255,0.15);";
     tag.appendChild(strengthBadge);
 
     return tag;
@@ -409,7 +409,7 @@ function _showExtractorWorkflowSummaryDialog(summary) {
         dialog.appendChild(title);
 
         const meta = document.createElement("div");
-        meta.style.cssText = "margin-bottom:12px; color:#9eb2c6; font-size:12px; padding-bottom:10px; border-bottom:1px solid rgba(115,144,170,0.35);";
+        meta.style.cssText = "margin-bottom:12px; color:#9eb2c6; font-size:14px; padding-bottom:10px; border-bottom:1px solid rgba(115,144,170,0.35);";
         meta.innerHTML = `<b style=\"color:#c5d8ea;\">Models found:</b> ${summary.modelCount}`;
         dialog.appendChild(meta);
 
@@ -421,14 +421,14 @@ function _showExtractorWorkflowSummaryDialog(summary) {
         if (!summary.modelDetails.length) {
             const none = document.createElement("div");
             none.textContent = "No models found.";
-            none.style.cssText = "color:#9aa8b7; font-size:12px;";
+            none.style.cssText = "color:#9aa8b7; font-size:14px;";
             modelsList.appendChild(none);
         } else {
             for (const item of summary.modelDetails) {
                 const row = document.createElement("div");
                 const familyText = item.family ? ` (${item.family})` : "";
                 row.textContent = `${item.slotLabel}: ${item.modelDisplay || "(none)"}${familyText}`;
-                row.style.cssText = "color:#d9e6f3; font-size:13px; background:rgba(37,48,60,0.55); border:1px solid rgba(96,124,150,0.35); border-radius:6px; padding:6px 8px;";
+                row.style.cssText = "color:#d9e6f3; font-size:15px; background:rgba(37,48,60,0.55); border:1px solid rgba(96,124,150,0.35); border-radius:6px; padding:6px 8px;";
                 modelsList.appendChild(row);
             }
         }
@@ -444,7 +444,7 @@ function _showExtractorWorkflowSummaryDialog(summary) {
         if (!summary.modelDetails.some((m) => Array.isArray(m.loras) && m.loras.length > 0)) {
             const none = document.createElement("div");
             none.textContent = "No LoRAs found.";
-            none.style.cssText = "color:#9aa8b7; font-size:12px; margin-bottom:8px;";
+            none.style.cssText = "color:#9aa8b7; font-size:14px; margin-bottom:8px;";
             loraSection.appendChild(none);
         } else {
             for (const item of summary.modelDetails) {
@@ -454,7 +454,7 @@ function _showExtractorWorkflowSummaryDialog(summary) {
 
                 const stackTitle = document.createElement("div");
                 stackTitle.textContent = `Stack ${item.slotLabel}:`;
-                stackTitle.style.cssText = "color:#c5d8ea; font-size:12px; margin:0 0 6px 0;";
+                stackTitle.style.cssText = "color:#c5d8ea; font-size:14px; margin:0 0 6px 0;";
                 stackCard.appendChild(stackTitle);
 
                 const stackTags = document.createElement("div");
@@ -921,7 +921,7 @@ function showImagePreviewModal(filename, viewType) {
     title.textContent = filename;
     title.style.cssText = `
         color: #fff;
-        font-size: 14px;
+        font-size: 16px;
         font-family: sans-serif;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -978,7 +978,7 @@ function showImagePreviewModal(filename, viewType) {
             <div style="color: #ff6666; font-family: sans-serif; text-align: center;">
                 <div style="font-size: 48px; margin-bottom: 10px;">??</div>
                 <div>Failed to load image</div>
-                <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">${filename}</div>
+                <div style="font-size: 14px; margin-top: 5px; opacity: 0.7;">${filename}</div>
             </div>
         `;
     };
@@ -992,7 +992,7 @@ function showImagePreviewModal(filename, viewType) {
         position: absolute;
         bottom: 20px;
         color: rgba(255, 255, 255, 0.5);
-        font-size: 12px;
+        font-size: 14px;
         font-family: sans-serif;
     `;
 
@@ -1060,7 +1060,7 @@ function showVideoPreviewModal(filename, viewType) {
     title.textContent = filename;
     title.style.cssText = `
         color: #fff;
-        font-size: 14px;
+        font-size: 16px;
         font-family: sans-serif;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -1132,7 +1132,7 @@ function showVideoPreviewModal(filename, viewType) {
             msgOverlay.style.cssText = `
                 position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
                 background: rgba(0, 0, 0, 0.75); color: #ccc; padding: 8px 16px;
-                border-radius: 6px; font-family: sans-serif; font-size: 13px;
+                border-radius: 6px; font-family: sans-serif; font-size: 15px;
                 pointer-events: none; white-space: nowrap;
             `;
             msgOverlay.textContent = 'H265/yuv444 \u2014 browser playback not supported';
@@ -1143,7 +1143,7 @@ function showVideoPreviewModal(filename, viewType) {
                 <div style="color: #aaa; font-family: sans-serif; text-align: center;">
                     <div style="font-size: 48px; margin-bottom: 10px;">\uD83C\uDFAC</div>
                     <div>This video format cannot be played in the browser</div>
-                    <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">H265 or yuv444 encoded</div>
+                    <div style="font-size: 14px; margin-top: 5px; opacity: 0.7;">H265 or yuv444 encoded</div>
                 </div>
             `;
         };
@@ -1159,7 +1159,7 @@ function showVideoPreviewModal(filename, viewType) {
         position: absolute;
         bottom: 20px;
         color: rgba(255, 255, 255, 0.5);
-        font-size: 12px;
+        font-size: 14px;
         font-family: sans-serif;
     `;
 
@@ -1699,8 +1699,8 @@ app.registerExtension({
                     }
                     const VALID_OUTPUTS = isWorkflowExtractor
                         ? [
-                            { name: "recipe_data",     type: "RECIPE_DATA" },
                             { name: "image",           type: "IMAGE" },
+                            { name: "manager_data",    type: "MANAGER_DATA" },
                         ]
                         : [
                             { name: "positive_prompt", type: "STRING" },
@@ -1713,13 +1713,25 @@ app.registerExtension({
                         const namesMatch = this.outputs.length === VALID_OUTPUTS.length &&
                             VALID_OUTPUTS.every((v, i) => this.outputs[i]?.name === v.name && this.outputs[i]?.type === v.type);
                         if (!namesMatch) {
-                            // Preserve existing links before resetting
-                            const savedLinks = this.outputs.map(o => o.links ? [...o.links] : null);
+                            // Preserve existing links by output name (recipe_data was renamed manager_data)
+                            const legacyNames = { recipe_data: "manager_data" };
+                            const savedByIndex = this.outputs.map(o => o.links ? [...o.links] : null);
+                            const savedLinks = new Map(this.outputs.map((o, i) => [legacyNames[o.name] || o.name, savedByIndex[i]]));
                             this.outputs.length = 0;
                             for (let i = 0; i < VALID_OUTPUTS.length; i++) {
                                 this.addOutput(VALID_OUTPUTS[i].name, VALID_OUTPUTS[i].type);
-                                // Restore links for slots that existed at the same index
-                                if (savedLinks[i]) this.outputs[i].links = savedLinks[i];
+                                const links = savedLinks.has(VALID_OUTPUTS[i].name) || isWorkflowExtractor
+                                    ? savedLinks.get(VALID_OUTPUTS[i].name)
+                                    : savedByIndex[i];
+                                if (!links) continue;
+                                this.outputs[i].links = links;
+                                for (const linkId of links) {
+                                    const link = this.graph?.links?.[linkId];
+                                    if (link) {
+                                        link.origin_slot = i;
+                                        link.type = VALID_OUTPUTS[i].type;
+                                    }
+                                }
                             }
                         }
                     }

@@ -4709,8 +4709,8 @@ class WorkflowExtractor:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Extract workflow data from images, videos, and workflow files. Simplified version for RecipeBuilder."
-    RETURN_TYPES = ("RECIPE_DATA", "IMAGE")
-    RETURN_NAMES = ("recipe_data", "image")
+    RETURN_TYPES = ("IMAGE", "MANAGER_DATA")
+    RETURN_NAMES = ("image", "manager_data")
     FUNCTION = "extract_workflow"
     OUTPUT_NODE = False
 
@@ -4735,7 +4735,7 @@ class WorkflowExtractor:
             # Keep RecipeExtractor silent in UI previews for the same reason
             # as PromptExtractor: avoid replacing final generation thumbnails.
             "ui": {},
-            "result": (workflow_data, image_tensor),
+            "result": (image_tensor, workflow_data),
         }
 
     @classmethod

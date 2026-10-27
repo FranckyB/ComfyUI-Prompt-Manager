@@ -201,6 +201,8 @@ _LORA_INPUT_MODE_PROMPT_ONLY = "Prompt LoRAs Only"
 _LORA_INPUT_MODE_COMBINE = "Combine LoRAs"
 _LORA_INPUT_MODE_INPUT_ONLY = "Input LoRAs Only"
 _PROMPT_COMPOSER_RECIPE_KEY = "prompt_composer"
+# Marks manager_data produced by Prompt Manager, next to "prompt_composer" and "prompt_layout".
+_PROMPT_MANAGER_RECIPE_KEY = "prompt_manager"
 _LORA_INPUT_MODES = (
     _LORA_INPUT_MODE_PROMPT_ONLY,
     _LORA_INPUT_MODE_COMBINE,
@@ -424,7 +426,7 @@ class PromptManagerAdvanced:
             },
             "optional": {
                 "prompt": ("STRING", {"multiline": True, "forceInput": True, "lazy": True, "tooltip": "Connect prompt text input here"}),
-                "manager_data": ("RECIPE_DATA,COMPOSE_DATA", {"forceInput": True, "tooltip": "Optional saved recipe or composer payload."}),
+                "manager_data": ("MANAGER_DATA", {"forceInput": True, "tooltip": "Optional saved recipe or composer payload."}),
                 "lora_stack_a": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "First LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
                 "lora_stack_b": ("LORA_STACK,MULTI_LORA_STACK", {"forceInput": True, "tooltip": "Second LoRA stack input. Accepts LORA_STACK or MULTI_LORA_STACK."}),
                 "trigger_words": ("STRING", {"forceInput": True, "tooltip": "Comma-separated trigger words to append to prompt"}),
@@ -443,9 +445,9 @@ class PromptManagerAdvanced:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Full-featured prompt manager with multi-slot LoRA stack support, trigger words, and thumbnail browser."
-    RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK", "RECIPE_DATA", "MULTI_LORA_STACK")
-    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "manager_data", "multi_lora_stack")
-    OUTPUT_TOOLTIPS = ("", "", "", "Saved recipe or composer payload.", "")
+    RETURN_TYPES = ("STRING", "LORA_STACK", "LORA_STACK", "MULTI_LORA_STACK", "MANAGER_DATA")
+    RETURN_NAMES = ("prompt", "lora_stack_a", "lora_stack_b", "multi_lora_stack", "manager_data")
+    OUTPUT_TOOLTIPS = ("", "", "", "", "Prompt, LoRAs and saved recipe data; connect to Library Manager to save it.")
     FUNCTION = "get_prompt"
     OUTPUT_NODE = True
 
@@ -1147,6 +1149,7 @@ class PromptManagerAdvanced:
             prompt_enabled=bool(use_prompt_input and current_prompt_input_text),
             input_lora_stack=active_used_input_loras,
         )
+        out_workflow_data[_PROMPT_MANAGER_RECIPE_KEY] = {"category": category, "name": name}
 
         out_multi_stack = {
             "a": out_stack_a,
@@ -1155,7 +1158,7 @@ class PromptManagerAdvanced:
             "d": out_stack_d,
         }
 
-        return (final_output, out_stack_a, out_stack_b, out_workflow_data, out_multi_stack)
+        return (final_output, out_stack_a, out_stack_b, out_multi_stack, out_workflow_data)
 
     def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
                           text="", prompt=None, lora_stack_a=None, lora_stack_b=None,

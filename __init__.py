@@ -11,7 +11,7 @@ from .py.prompt_composer_store import PromptComposerStore
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.prompt_composer import PromptComposer
-from .nodes.prompt_composer_manager import PromptComposerManager
+from .nodes.library_manager import LibraryManager
 from .nodes.prompt_browser import PromptBrowser
 from .nodes.prompt_generator import PromptGenerator, PromptGeneratorDataStore
 from .nodes.prompt_generator_options import PromptGenOptions
@@ -24,7 +24,6 @@ from .nodes.recipe_renderer import WorkflowRenderer as RecipeRenderer
 from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
-from .nodes.recipe_manager import WorkflowManager as RecipeManager
 from .nodes.multi_prompt import RecipeBuilderMultiPrompts
 from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter, LoraStackCombine
 
@@ -33,7 +32,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptManager":             PromptManager,
     "PromptBrowser":             PromptBrowser,
     "PromptComposer":            PromptComposer,
-    "PromptComposerManager":     PromptComposerManager,
+    "LibraryManager":            LibraryManager,
     "PromptGenerator":           PromptGenerator,
     "PromptGenOptions":          PromptGenOptions,
     "PromptGeneratorKillSwitch": PromptGeneratorKillSwitch,
@@ -47,7 +46,6 @@ NODE_CLASS_MAPPINGS = {
     "RecipeRelay":               RecipeRelay,
     "RecipeModelLoader":         RecipeModelLoader,
     "RecipeModelPicker":         RecipeModelPicker,
-    "RecipeManager":             RecipeManager,
     "RecipeBuilderMultiPrompts": RecipeBuilderMultiPrompts,
     "MultiLoraStackerLM":        MultiLoraStackerLM,
     "MultiLoraCombine":          MultiLoraCombine,
@@ -59,7 +57,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManagerAdvanced":      "Prompt Manager",
     "PromptManager":              "Prompt Manager (Basic)",
     "PromptComposer":             "Prompt Composer",
-    "PromptComposerManager":      "Composition Manager",
+    "LibraryManager":             "Library Manager",
     "PromptBrowser":              "Prompt Browser",
     "PromptGenerator":            "Prompt Generator",
     "PromptGenOptions":           "Prompt Generator Options",
@@ -74,7 +72,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeRelay":                "Recipe Relay",
     "RecipeModelLoader":          "Recipe Model Loader",
     "RecipeModelPicker":          "Recipe Model Picker",
-    "RecipeManager":              "Recipe Manager",
     "RecipeBuilderMultiPrompts":  "Multi Prompts",
     "MultiLoraStackerLM":         "Multi LoRA Stack",
     "MultiLoraCombine":           "Multi LoRA Combine",
@@ -93,4 +90,4 @@ try:
 except Exception as e:
     print(f"[PromptManager] Backup initialization skipped: {e}")
 
-print("[PromptManager] Nodes registered: Prompt Manager, Prompt Composer, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Recipe Manager, Composer Manager")
+print("[PromptManager] Nodes registered: Prompt Manager, Prompt Composer, Prompt Generator, Prompt Generator Kill Switch, Prompt Extractor, Recipe Extractor, Recipe Builder, Recipe Renderer, Recipe Relay, Library Manager")

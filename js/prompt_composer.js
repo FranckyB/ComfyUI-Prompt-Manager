@@ -156,7 +156,7 @@ function writeInputLoraMode(node, value) {
 }
 
 function hasConnectedRecipeInput(node) {
-    return node?.inputs?.some((input) => (input?.name === "compose_data" || input?.name === "recipe_data") && input.link != null) === true;
+    return node?.inputs?.some((input) => input?.name === "manager_data" && input.link != null) === true;
 }
 
 function isRecipeSyncEnabled(node) {
@@ -185,7 +185,7 @@ function ensureComposerPromptTextTooltip() {
         border: 1px solid ${UI.accentBorder};
         border-radius: 8px;
         color: ${UI.textPrimary || "#ddd"};
-        font-size: 13px;
+        font-size: 15px;
         line-height: 1.45;
         padding: 12px 14px;
         box-shadow: 0 10px 28px rgba(0,0,0,0.55);
@@ -570,7 +570,7 @@ async function showComposerJsonBrowser({
         const topRow = document.createElement("div");
         topRow.style.cssText = "display:flex; justify-content:space-between; align-items:center; gap:12px;";
         topRow.innerHTML = `
-            <h3 style="margin:0; color:#e5e7eb; font-size:14px; font-weight:600; letter-spacing:0.01em;">${title}</h3>
+            <h3 style="margin:0; color:#e5e7eb; font-size:16px; font-weight:600; letter-spacing:0.01em;">${title}</h3>
             <button class="close-btn" style="background:none; border:none; color:#8b9098; font-size:22px; cursor:pointer; padding:0; width:28px; height:28px;">×</button>
         `;
         header.appendChild(topRow);
@@ -581,7 +581,7 @@ async function showComposerJsonBrowser({
             const button = document.createElement("button");
             button.type = "button";
             button.textContent = label;
-            button.style.cssText = "background:#23262b; border:1px solid rgba(255,255,255,0.08); border-radius:3px; color:#cfd5de; min-width:28px; height:28px; padding:0 8px; cursor:pointer; font-size:11px;";
+            button.style.cssText = "background:#23262b; border:1px solid rgba(255,255,255,0.08); border-radius:3px; color:#cfd5de; min-width:28px; height:28px; padding:0 8px; cursor:pointer; font-size:13px;";
             button.onmouseover = () => { button.style.background = "#2a2e34"; };
             button.onmouseout = () => { button.style.background = "#23262b"; };
             return button;
@@ -594,7 +594,7 @@ async function showComposerJsonBrowser({
         const pathInput = document.createElement("input");
         pathInput.type = "text";
         pathInput.placeholder = "Paste folder path and press Enter";
-        pathInput.style.cssText = "flex:1; min-width:240px; height:30px; font-size:12px; color:#e5e7eb; background:#111317; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:0 10px; box-sizing:border-box;";
+        pathInput.style.cssText = "flex:1; min-width:240px; height:30px; font-size:14px; color:#e5e7eb; background:#111317; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:0 10px; box-sizing:border-box;";
         navRow.appendChild(upBtn);
         navRow.appendChild(refreshBtn);
         navRow.appendChild(inputBtn);
@@ -607,7 +607,7 @@ async function showComposerJsonBrowser({
         body.style.cssText = "flex:1; min-height:0; overflow:hidden; padding:10px 14px 0 14px; display:flex; flex-direction:column; gap:0;";
         const listHeader = document.createElement("div");
         listHeader.textContent = "Name";
-        listHeader.style.cssText = "height:30px; display:flex; align-items:center; padding:0 12px; background:#212121; color:#d7dbe1; font-size:12px; border:1px solid rgba(255,255,255,0.08); border-bottom:none; box-sizing:border-box;";
+        listHeader.style.cssText = "height:30px; display:flex; align-items:center; padding:0 12px; background:#212121; color:#d7dbe1; font-size:14px; border:1px solid rgba(255,255,255,0.08); border-bottom:none; box-sizing:border-box;";
         const listing = document.createElement("div");
         listing.style.cssText = "flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:0; background:#17191d; border:1px solid rgba(255,255,255,0.08);";
         body.appendChild(listHeader);
@@ -625,7 +625,7 @@ async function showComposerJsonBrowser({
         filenameRow.style.cssText = "display:flex; align-items:center; gap:10px;";
         const filenameLabel = document.createElement("span");
         filenameLabel.textContent = "Name:";
-        filenameLabel.style.cssText = "font-size:12px; color:#d7dbe1; min-width:48px;";
+        filenameLabel.style.cssText = "font-size:14px; color:#d7dbe1; min-width:48px;";
         const filenameInput = document.createElement("input");
         filenameInput.type = "text";
         filenameInput.value = isSaveMode ? normalizeComposerFilename(defaultFilename, "prompt_composer_data.json") : "";
@@ -698,7 +698,7 @@ async function showComposerJsonBrowser({
             if (!currentDirs.length && !currentFiles.length) {
                 const empty = document.createElement("div");
                 empty.textContent = "This folder is empty";
-                empty.style.cssText = "padding:12px; color:#6b7280; font-size:12px; border-bottom:1px solid rgba(255,255,255,0.04);";
+                empty.style.cssText = "padding:12px; color:#6b7280; font-size:14px; border-bottom:1px solid rgba(255,255,255,0.04);";
                 listing.appendChild(empty);
                 return;
             }
@@ -948,7 +948,7 @@ function analyzeComposerImportConflicts(promptsData, importedData) {
     return conflicts;
 }
 
-function showComposerImportModeDialog({ duplicatePromptCount = 0, duplicateCategorySettingsCount = 0 }) {
+export function showComposerImportModeDialog({ duplicatePromptCount = 0, duplicateCategorySettingsCount = 0 }) {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -1050,7 +1050,7 @@ function getOrderedComposerTypeEntriesForExport(node) {
     });
 }
 
-function triggerBrowserDownload(blob, filename) {
+export function triggerBrowserDownload(blob, filename) {
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = objectUrl;
@@ -1177,7 +1177,7 @@ export async function showComposerExportSelectionDialog(node) {
         const footer = document.createElement("div");
         footer.style.cssText = "padding:12px 18px 18px 18px; border-top:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; gap:10px; flex-wrap:wrap;";
         const selectionInfo = document.createElement("div");
-        selectionInfo.style.cssText = `margin-right:auto; font-size:12px; color:${UI.textMuted || "hsl(0 0% 67%)"};`;
+        selectionInfo.style.cssText = `margin-right:auto; font-size:14px; color:${UI.textMuted || "hsl(0 0% 67%)"};`;
 
         const makeButton = (label, primary = false) => {
             const button = document.createElement("button");
@@ -1212,8 +1212,8 @@ export async function showComposerExportSelectionDialog(node) {
             card.type = "button";
             card.style.cssText = `text-align:left; min-height:96px; border:1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; border-radius:10px; background:${UI.cardBg || "hsl(219 16% 18%)"}; color:${UI.textPrimary || "hsl(0 0% 87%)"}; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:8px;`;
             card.innerHTML = `
-                <div style="font-size:13px; font-weight:700; line-height:1.3; word-break:break-word;">${entry.name}</div>
-                <div style="font-size:11px; color:${UI.textMuted || "hsl(0 0% 67%)"}; word-break:break-word;">${entry.typeFile}</div>
+                <div style="font-size:15px; font-weight:700; line-height:1.3; word-break:break-word;">${entry.name}</div>
+                <div style="font-size:13px; color:${UI.textMuted || "hsl(0 0% 67%)"}; word-break:break-word;">${entry.typeFile}</div>
             `;
             card.onclick = () => {
                 if (selected.has(entry.typeFile)) selected.delete(entry.typeFile);
@@ -1251,7 +1251,7 @@ export async function showComposerExportSelectionDialog(node) {
     });
 }
 
-async function exportComposerJsonLibrary(node) {
+export async function exportComposerJsonLibrary(node) {
     try {
         const selectedTypeFiles = await showComposerExportSelectionDialog(node);
         if (!Array.isArray(selectedTypeFiles) || selectedTypeFiles.length === 0) return;
@@ -1280,7 +1280,7 @@ async function exportComposerJsonLibrary(node) {
     }
 }
 
-async function openComposerJsonLibrary(node) {
+export async function openComposerJsonLibrary(node) {
     const file = await pickComposerImportFile();
     if (!file) return;
 
@@ -1308,7 +1308,7 @@ async function openComposerJsonLibrary(node) {
     }
 }
 
-async function mergeComposerJsonLibrary(node) {
+export async function mergeComposerJsonLibrary(node) {
     const file = await pickComposerImportFile();
     if (!file) return;
 
@@ -2087,11 +2087,11 @@ function ensureComposerUi(node) {
         border-radius: 8px;
         background: rgba(25, 53, 68, 0.78);
         color: #d7edf8;
-        font-size: 11px;
+        font-size: 13px;
         line-height: 1.3;
         flex: 0 0 auto;
     `;
-    lockNotice.textContent = "Sync follows connected compose_data for card state only. Prompt selects incoming prompt or saved compose-data prompt, and LoRA adds the saved extra compose-data LoRAs.";
+    lockNotice.textContent = "Sync follows connected manager_data for card state only. Prompt selects incoming prompt or saved manager_data prompt, and LoRA adds the saved extra manager_data LoRAs.";
 
     const createInlineSwitch = ({ title, leftLabel, rightLabel, getValue, onToggle, isRightActive, isDisabled = null }) => {
         const group = document.createElement("div");
@@ -2107,7 +2107,7 @@ function ensureComposerUi(node) {
 
         const left = document.createElement("span");
         left.textContent = leftLabel;
-        left.style.cssText = "font-size: 12px; color: #b9c2ce; white-space: nowrap; user-select: none;";
+        left.style.cssText = "font-size: 14px; color: #b9c2ce; white-space: nowrap; user-select: none;";
 
         const button = document.createElement("button");
         button.type = "button";
@@ -2139,7 +2139,7 @@ function ensureComposerUi(node) {
 
         const right = document.createElement("span");
         right.textContent = rightLabel;
-        right.style.cssText = "font-size: 12px; color: #b9c2ce; white-space: nowrap; user-select: none;";
+        right.style.cssText = "font-size: 14px; color: #b9c2ce; white-space: nowrap; user-select: none;";
 
         const sync = () => {
             const current = getValue();
@@ -2188,7 +2188,7 @@ function ensureComposerUi(node) {
 
         const text = document.createElement("span");
         text.textContent = label;
-        text.style.cssText = `font-size: 12px; color: ${defaultLabelColor}; white-space: nowrap; user-select: none;`;
+        text.style.cssText = `font-size: 14px; color: ${defaultLabelColor}; white-space: nowrap; user-select: none;`;
 
         const button = document.createElement("button");
         button.type = "button";
@@ -2263,7 +2263,7 @@ function ensureComposerUi(node) {
 
         const text = document.createElement("span");
         text.textContent = label;
-        text.style.cssText = `font-size: 12px; color: ${active ? "#f3f4f6" : "#8fb0c6"}; white-space: nowrap; user-select: none;`;
+        text.style.cssText = `font-size: 14px; color: ${active ? "#f3f4f6" : "#8fb0c6"}; white-space: nowrap; user-select: none;`;
 
         const button = document.createElement("button");
         button.type = "button";
@@ -2321,7 +2321,7 @@ function ensureComposerUi(node) {
         isActive: (current) => current === "video",
     });
     const recipeSyncSwitch = createLabeledToggle({
-        title: "When enabled, execute clears local card edits and reloads the Prompt Composer state from connected compose_data",
+        title: "When enabled, execute clears local card edits and reloads the Prompt Composer state from connected manager_data",
         label: "Sync",
         getValue: () => readRecipeSyncMode(node),
         onToggle: () => {
@@ -2335,7 +2335,7 @@ function ensureComposerUi(node) {
         activeBackground: "#8a2f3b",
     });
     const inputPromptSwitch = createLabeledToggle({
-        title: "When enabled, use the prompt from compose_data instead of the live incoming prompt",
+        title: "When enabled, use the prompt from manager_data instead of the live incoming prompt",
         label: "Prompt",
         getValue: () => readInputPromptMode(node),
         onToggle: () => {
@@ -2348,7 +2348,7 @@ function ensureComposerUi(node) {
         inactiveLabelColor: "#dbeafe",
     });
     const inputLoraSwitch = createLabeledToggle({
-        title: "When enabled, use the saved LoRA input from compose_data instead of the live connected LoRA input",
+        title: "When enabled, use the saved LoRA input from manager_data instead of the live connected LoRA input",
         label: "LoRA",
         getValue: () => readInputLoraMode(node),
         onToggle: () => {
@@ -2394,7 +2394,7 @@ function ensureComposerUi(node) {
             border: 1px solid #444;
             background: #222;
             color: #fff;
-            font-size: 11px;
+            font-size: 13px;
             font-weight: 600;
             letter-spacing: 0.02em;
             cursor: pointer;
@@ -2579,7 +2579,7 @@ function ensureComposerUi(node) {
             item.textContent = label;
             item.style.cssText = `
                 padding: 7px 12px;
-                font-size: 12px;
+                font-size: 14px;
                 color: ${disabled ? "#666" : "#ddd"};
                 cursor: ${disabled ? "default" : "pointer"};
                 user-select: none;
@@ -2776,7 +2776,7 @@ function ensureComposerUi(node) {
             item.textContent = label;
             item.style.cssText = `
                 padding: 7px 12px;
-                font-size: 12px;
+                font-size: 14px;
                 color: ${disabled ? "#666" : "#ddd"};
                 cursor: ${disabled ? "default" : "pointer"};
                 user-select: none;
@@ -2909,7 +2909,7 @@ function ensureComposerUi(node) {
         const initialCategory = promptRefs[0]?.category || part.category || getDefaultComposerPickerCategory(node);
         const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__all__";
         const selection = await showThumbnailBrowser(node, initialCategory, currentPrompt, {
-            title: "Select Prompt Composer Part",
+            title: "Select Prompt Snippet",
             multiSelect: true,
             startInMultiSelect: hasMultiSelection,
             multiCategorySelect: true,
@@ -2945,7 +2945,7 @@ function ensureComposerUi(node) {
         const initialCategory = basePart?.category || getDefaultComposerPickerCategory(node);
         const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__all__";
         const selection = await showThumbnailBrowser(node, initialCategory, "", {
-            title: "Add Prompt Composer Part",
+            title: "Add Prompt Snippet",
             multiSelect: true,
             multiCategorySelect: true,
             endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
@@ -3175,7 +3175,7 @@ function ensureComposerUi(node) {
                 background: ${part.subject_locked ? subjectAccent.strong : "rgba(15,23,42,0.82)"};
                 border: 1px solid ${subjectAccent.border};
                 color: ${subjectAccent.text};
-                font-size: 10px;
+                font-size: 12px;
                 line-height: 16px;
                 text-align: center;
                 font-weight: 700;
@@ -3274,7 +3274,7 @@ function ensureComposerUi(node) {
                     background: rgba(15,23,42,0.85);
                     border: 1px solid ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"};
                     color: #dbeafe;
-                    font-size: 10px;
+                    font-size: 12px;
                     line-height: 16px;
                     text-align: center;
                     font-weight: bold;
@@ -3299,7 +3299,7 @@ function ensureComposerUi(node) {
                 border: 1px solid ${UI.accentBorder || "hsl(208 73% 57% / 0.65)"};
                 background: rgba(15,23,42,0.9);
                 color: #dbeafe;
-                font-size: 13px;
+                font-size: 15px;
                 line-height: 1;
                 font-weight: 700;
                 padding: 0;
@@ -3332,7 +3332,7 @@ function ensureComposerUi(node) {
                 : `${displayCategory}: ${primaryName}`;
             label.title = "";
             label.style.cssText = `
-                font-size: 10px;
+                font-size: 12px;
                 color: ${isMuted ? (UI.textMuted || "#9ca3af") : (UI.textPrimary || "#d1d5db")};
                 line-height: 1.2;
                 text-align: center;
@@ -3362,7 +3362,7 @@ function ensureComposerUi(node) {
                     background: ${UI.buttonBg || "#232a36"};
                     color: ${UI.textPrimary || "#d1d5db"};
                     cursor: pointer;
-                    font-size: 12px;
+                    font-size: 14px;
                     line-height: 1;
                     padding: 0;
                 `;
@@ -3387,7 +3387,7 @@ function ensureComposerUi(node) {
                 border-radius: 4px;
                 background: ${UI.inputBg || "#181d25"};
                 color: ${UI.textPrimary || "#d1d5db"};
-                font-size: 11px;
+                font-size: 13px;
                 text-align: center;
                 box-sizing: border-box;
                 padding: 0 4px;
@@ -3533,7 +3533,7 @@ function ensureComposerUi(node) {
             const initialCategory = getDefaultComposerPickerCategory(node);
             const initialCategoryTypeFilter = getCategoryPromptType(node, initialCategory) || "__all__";
             const selection = await showThumbnailBrowser(node, initialCategory, "", {
-                title: "Add Prompt Composer Part",
+                title: "Add Prompt Snippet",
                 multiSelect: true,
                 multiCategorySelect: true,
                 endpointPrefix: COMPOSER_ENDPOINT_PREFIX,

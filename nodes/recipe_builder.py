@@ -1,7 +1,7 @@
 """
 ComfyUI Workflow Builder
 Extracts ALL generation parameters from an image/video, provides a full UI
-for editing them, and outputs RECIPE_DATA (JSON) for the Workflow Renderer
+for editing them, and outputs MANAGER_DATA (JSON) for the Workflow Renderer
 render node.
 
 Part of ComfyUI-Prompt-Manager — shares extraction logic with PromptExtractor.
@@ -732,7 +732,7 @@ class WorkflowBuilder:
     inputs to pre-fill parameters.
 
     Widget order:  Resolution → Model / VAE / CLIP → Prompts → Sampler → LoRAs
-    Outputs RECIPE_DATA (JSON string) for the Workflow Renderer render node.
+    Outputs MANAGER_DATA (JSON string) for the Workflow Renderer render node.
     """
 
     # Class-level cache so models persist across executions.
@@ -756,8 +756,8 @@ class WorkflowBuilder:
             "required": {},
             "optional": {
                 # ── Connectable inputs ────────────────────────────────
-                "recipe_data": ("RECIPE_DATA", {
-                    "tooltip": "Optional recipe_data input for prefill/update.",
+                "manager_data": ("MANAGER_DATA", {
+                    "tooltip": "Optional manager_data input for prefill/update.",
                 }),
                 "pos_prompts": ("STRING", {
                     "default": "",
@@ -794,8 +794,8 @@ class WorkflowBuilder:
             return f"Unsupported type for multi_lora_stack: {t}"
         return True
 
-    RETURN_TYPES  = ("RECIPE_DATA",)
-    RETURN_NAMES  = ("recipe_data",)
+    RETURN_TYPES  = ("MANAGER_DATA",)
+    RETURN_NAMES  = ("manager_data",)
     FUNCTION      = "execute"
     CATEGORY      = "Prompt Manager"
     OUTPUT_NODE   = True
@@ -805,7 +805,7 @@ class WorkflowBuilder:
     )
 
     def execute(self,
-                recipe_data=None,
+                manager_data=None,
                 pos_prompt=None, neg_prompt=None,
                 seed=None, seed_a=None, seed_b=None, denoise=None,
                 lora_stack=None, lora_stack_a=None, lora_stack_b=None,
@@ -820,7 +820,7 @@ class WorkflowBuilder:
           2. Apply JS overrides
           3. Merge connected lora inputs (always)
           4. Build recipe_data JSON
-          5. Return RECIPE_DATA
+          5. Return MANAGER_DATA
         """
         # Backward-compat input mapping: route legacy scalar inputs to slot A.
         if seed is not None and seed_a is None:
@@ -1055,12 +1055,12 @@ class WorkflowBuilder:
 
         # ── Parse recipe_data input (if connected) ─────────────────────
         wf_data = None
-        if recipe_data is not None:
-            if isinstance(recipe_data, dict):
-                wf_data = recipe_data
-            elif isinstance(recipe_data, str):
+        if manager_data is not None:
+            if isinstance(manager_data, dict):
+                wf_data = manager_data
+            elif isinstance(manager_data, str):
                 try:
-                    wf_data = json.loads(recipe_data)
+                    wf_data = json.loads(manager_data)
                 except (json.JSONDecodeError, TypeError):
                     print("[RecipeBuilder] Warning: could not parse recipe_data")
 
@@ -2659,16 +2659,16 @@ class WorkflowBuilder:
 
 
 class RecipeBuilder(WorkflowBuilder):
-    RETURN_TYPES = ("RECIPE_DATA",)
-    RETURN_NAMES = ("recipe_data",)
+    RETURN_TYPES = ("MANAGER_DATA",)
+    RETURN_NAMES = ("manager_data",)
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {},
             "optional": {
-                "recipe_data": ("RECIPE_DATA", {
-                    "tooltip": "Optional recipe_data input for prefill/update.",
+                "manager_data": ("MANAGER_DATA", {
+                    "tooltip": "Optional manager_data input for prefill/update.",
                 }),
                 "pos_prompts": ("STRING", {
                     "default": "",
@@ -2710,14 +2710,14 @@ class RecipeBuilder(WorkflowBuilder):
     )
 
     def execute(self,
-                recipe_data=None,
+                manager_data=None,
                 pos_prompts=None,
                 neg_prompts=None,
                 multi_lora_stack=None,
                 override_data="{}", lora_state="{}",
                 unique_id=None, extra_pnginfo=None, prompt=None):
         result = super().execute(
-            recipe_data=recipe_data,
+            manager_data=manager_data,
             pos_prompts=pos_prompts,
             neg_prompts=neg_prompts,
             multi_lora_stack=multi_lora_stack,

@@ -68,7 +68,7 @@ function forwardWheelToCanvas(element) {
     const style = document.createElement("style");
     style.id = "we-select-style";
     style.textContent = `
-        .we-select option, .we-select optgroup { font-size: 14px; }
+        .we-select option, .we-select optgroup { font-size: 16px; }
         .we-select optgroup { font-weight: bold; color: #e06060; }
     `;
     document.head.appendChild(style);
@@ -121,7 +121,7 @@ function makeBtn(label, onclick, extraStyle) {
     const b = makeEl("button", {
         padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: "6px",
         background: C.bgInput, color: "#ccc", cursor: "pointer",
-        fontSize: "12px", fontWeight: "600", width: "100%",
+        fontSize: "14px", fontWeight: "600", width: "100%",
         ...extraStyle,
     }, label);
     const baseBg = extraStyle?.background || C.bgInput;
@@ -207,7 +207,7 @@ function makeSection(title, node = null, key = null, opts = {}) {
     const header = makeEl("div", {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "4px 8px",
-        fontSize: "11px", fontWeight: "600", color: "#aaa",
+        fontSize: "13px", fontWeight: "600", color: "#aaa",
         userSelect: "none",
         borderBottom: "1px solid rgba(255,255,255,0.1)",
         cursor: "pointer",
@@ -295,16 +295,16 @@ function makeSection(title, node = null, key = null, opts = {}) {
 const LABEL_W = "35%";
 const INPUT_W = "55%";
 const ROW_STYLE = {
-    display: "flex", alignItems: "center", padding: "2px 0", fontSize: "12px", gap: "2px",
+    display: "flex", alignItems: "center", padding: "2px 0", fontSize: "14px", gap: "2px",
 };
 const INPUT_STYLE = {
     background: C.bgInput, color: C.text, border: `1px solid ${C.border}`,
-    borderRadius: "6px", padding: "3px 6px", fontSize: "12px",
+    borderRadius: "6px", padding: "3px 6px", fontSize: "14px",
     width: INPUT_W, boxSizing: "border-box", textAlign: "right",
 };
 const RESET_STYLE = {
     background: "none", border: "none", color: C.textMuted, cursor: "pointer",
-    fontSize: "12px", padding: "0 2px", lineHeight: "1", flexShrink: "0",
+    fontSize: "14px", padding: "0 2px", lineHeight: "1", flexShrink: "0",
     visibility: "hidden", width: "14px", textAlign: "center",
 };
 
@@ -374,7 +374,7 @@ function _canonicalInputName(name) {
     const n = String(name || "").trim().toLowerCase();
     if (n === "positive_prompt") return "pos_prompt";
     if (n === "negative_prompt") return "neg_prompt";
-    if (n === "workflow_data") return "recipe_data";
+    if (n === "workflow_data" || n === "recipe_data") return "manager_data";
     return n;
 }
 
@@ -957,7 +957,7 @@ function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown, on
 
     const tag = makeEl("div", {
         display: "inline-flex", alignItems: "center", gap: "6px",
-        padding: "4px 10px", borderRadius: "6px", fontSize: "12px",
+        padding: "4px 10px", borderRadius: "6px", fontSize: "14px",
         cursor: "pointer", userSelect: "none", flexShrink: "0",
         transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease",
         backgroundColor: bgColor, color: textColor,
@@ -966,7 +966,7 @@ function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown, on
     });
 
     if (!avail) {
-        const warn = makeEl("span", { fontSize: "11px", marginRight: "-2px" }, "\u26A0\uFE0F");
+        const warn = makeEl("span", { fontSize: "13px", marginRight: "-2px" }, "\u26A0\uFE0F");
         tag.appendChild(warn);
     }
 
@@ -983,7 +983,7 @@ function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown, on
     sinp.className = "strength-input";
     sinp.value = str.toFixed(2);
     Object.assign(sinp.style, {
-        fontSize: "10px", fontWeight: "600", padding: "1px 4px",
+        fontSize: "12px", fontWeight: "600", padding: "1px 4px",
         borderRadius: "999px", backgroundColor: "rgba(255,255,255,0.15)",
         color: "rgba(255,255,255,0.9)", width: "38px", textAlign: "center",
         border: "1px solid transparent", outline: "none", cursor: "text",
@@ -1049,14 +1049,14 @@ function makeLoraTag(lora, avail, onToggle, onStrength, onMoveUp, onMoveDown, on
         });
         menu.className = "wb-lora-context-menu";
         const title = makeEl("div", {
-            padding: "8px 12px", fontSize: "12px", color: "#aaa", fontWeight: "bold",
+            padding: "8px 12px", fontSize: "14px", color: "#aaa", fontWeight: "bold",
             borderBottom: "1px solid #444", marginBottom: "4px", whiteSpace: "nowrap",
         }, name);
         menu.appendChild(title);
 
         const addMenuItem = (label, color, onClick) => {
             const item = makeEl("div", {
-                padding: "8px 12px", cursor: "pointer", fontSize: "12px",
+                padding: "8px 12px", cursor: "pointer", fontSize: "14px",
                 color, whiteSpace: "nowrap",
             }, label);
             item.addEventListener("mouseenter", () => { item.style.backgroundColor = "#3a3a3a"; });
@@ -1120,7 +1120,7 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
     });
     const titleLabel = document.createElement("span");
     titleLabel.textContent = title;
-    Object.assign(titleLabel.style, { fontSize: "12px", fontWeight: "bold", color: "#aaa" });
+    Object.assign(titleLabel.style, { fontSize: "14px", fontWeight: "bold", color: "#aaa" });
     titleBar.appendChild(titleLabel);
     const btnContainer = document.createElement("div");
     Object.assign(btnContainer.style, { display: "flex", gap: "4px" });
@@ -1128,7 +1128,7 @@ function createLoraStackContainer(title, onResetStrength, onToggleAll) {
         const b = document.createElement("button");
         b.textContent = text;
         Object.assign(b.style, {
-            fontSize: "10px", padding: "2px 8px",
+            fontSize: "12px", padding: "2px 8px",
             backgroundColor: P.buttonBg || C.bgCard,
             color: C.text,
             border: `1px solid ${C.border}`,
@@ -1905,7 +1905,7 @@ function updateLoras(node) {
 
     const noLorasMsg = () => makeEl("div", {
         color: "rgba(200, 200, 200, 0.5)", fontStyle: "italic",
-        fontSize: "11px", padding: "8px", width: "100%", textAlign: "center",
+        fontSize: "13px", padding: "8px", width: "100%", textAlign: "center",
     }, "No LoRAs");
 
     if (!lorasA.length) containerA.appendChild(noLorasMsg());
@@ -1997,14 +1997,14 @@ function _showError(node, errorMsg) {
         border: "1px solid rgba(220, 53, 69, 0.6)",
         borderRadius: "6px",
         color: "#f88",
-        fontSize: "12px",
+        fontSize: "14px",
         lineHeight: "1.4",
         marginBottom: "4px",
         wordBreak: "break-word",
     });
     banner.className = "we-error-banner";
 
-    const icon = makeEl("span", { marginRight: "6px", fontSize: "13px" }, "\u26A0\uFE0F");
+    const icon = makeEl("span", { marginRight: "6px", fontSize: "15px" }, "\u26A0\uFE0F");
     const text = makeEl("span", {}, errorMsg);
     banner.append(icon, text);
 
@@ -2027,7 +2027,7 @@ function _showInfo(node, infoMsg) {
         border: "1px solid rgba(66, 153, 225, 0.65)",
         borderRadius: "6px",
         color: "#b9dcff",
-        fontSize: "12px",
+        fontSize: "14px",
         lineHeight: "1.4",
         marginBottom: "4px",
         whiteSpace: "pre-wrap",
@@ -2832,7 +2832,7 @@ app.registerExtension({
 
             const _normalizeRecipePortsNow = () => {
                 const VALID_INPUTS = new Set([
-                    "recipe_data",
+                    "manager_data",
                     "pos_prompts",
                     "neg_prompts",
                     "multi_lora_stack",
@@ -2842,6 +2842,7 @@ app.registerExtension({
                         if (!inp || !inp.name) continue;
                         inp.name = _normalizeInputNameForVariant(inp.name);
                         if (inp.name === "pos_prompts" || inp.name === "neg_prompts") inp.type = "STRING";
+                        if (inp.name === "manager_data") inp.type = "MANAGER_DATA";
                     }
                     const keepIndexByName = new Map();
                     for (let i = 0; i < node.inputs.length; i++) {
@@ -2869,14 +2870,14 @@ app.registerExtension({
                     }
 
                     const hasInput = (name) => node.inputs.some((inp) => _normalizeInputNameForVariant(inp?.name || "") === name);
-                    if (!hasInput("recipe_data")) node.addInput("recipe_data", "RECIPE_DATA");
+                    if (!hasInput("manager_data")) node.addInput("manager_data", "MANAGER_DATA");
                     if (!hasInput("pos_prompts")) node.addInput("pos_prompts", "STRING");
                     if (!hasInput("neg_prompts")) node.addInput("neg_prompts", "STRING");
                     if (!hasInput("multi_lora_stack")) node.addInput("multi_lora_stack", "MULTI_LORA_STACK");
                 }
 
                 const VALID_OUTPUTS = [
-                    { name: "recipe_data", type: "RECIPE_DATA" },
+                    { name: "manager_data", type: "MANAGER_DATA" },
                 ];
                 if (node.outputs) {
                     const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&
@@ -3176,7 +3177,7 @@ app.registerExtension({
                 let fallback = null;
                 for (const inp of ins) {
                     if (!inp) continue;
-                    if (_canonicalInputName(inp.name) !== "recipe_data") continue;
+                    if (_canonicalInputName(inp.name) !== "manager_data") continue;
                     if (fallback == null) fallback = inp;
                     if (inp.link != null) return inp;
                 }
@@ -3977,7 +3978,7 @@ app.registerExtension({
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
                 border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "none",
+                fontSize: "14px", padding: "6px", resize: "none",
                 fontFamily: "inherit", lineHeight: "1.4",
                 minHeight: "128px", height: "128px", maxHeight: "none", overflow: "auto",
             });
@@ -4002,7 +4003,7 @@ app.registerExtension({
                 width: "100%", boxSizing: "border-box",
                 background: C.bgInput, color: C.text,
                 border: `1px solid ${C.border}`, borderRadius: "4px",
-                fontSize: "12px", padding: "6px", resize: "none",
+                fontSize: "14px", padding: "6px", resize: "none",
                 fontFamily: "inherit", lineHeight: "1.4",
                 minHeight: "128px", height: "128px", maxHeight: "none", overflow: "auto",
             });
@@ -4630,7 +4631,7 @@ app.registerExtension({
             }
 
             const VALID_INPUTS = new Set([
-                "recipe_data",
+                "manager_data",
                 "pos_prompts",
                 "neg_prompts",
                 "multi_lora_stack",
@@ -4644,6 +4645,7 @@ app.registerExtension({
                     if (!inp || !inp.name) continue;
                     inp.name = _normalizeInputNameForVariant(inp.name);
                     if (inp.name === "pos_prompts" || inp.name === "neg_prompts") inp.type = "STRING";
+                    if (inp.name === "manager_data") inp.type = "MANAGER_DATA";
                 }
 
                 // Deduplicate legacy duplicate inputs by name. Prefer keeping
@@ -4686,8 +4688,8 @@ app.registerExtension({
                 // Ensure newly introduced inputs exist on restored nodes.
                 // Older saved workflows can miss optional inputs added later.
                 const hasInput = (name) => node.inputs.some((inp) => _normalizeInputNameForVariant(inp?.name || "") === name);
-                if (!hasInput("recipe_data")) {
-                    node.addInput("recipe_data", "RECIPE_DATA");
+                if (!hasInput("manager_data")) {
+                    node.addInput("manager_data", "MANAGER_DATA");
                 }
                 if (!hasInput("pos_prompts")) {
                     node.addInput("pos_prompts", "STRING");
@@ -4700,7 +4702,7 @@ app.registerExtension({
                 }
             }
             const VALID_OUTPUTS = [
-                { name: "recipe_data", type: "RECIPE_DATA" },
+                { name: "manager_data", type: "MANAGER_DATA" },
             ];
             if (node.outputs) {
                 const namesMatch = node.outputs.length === VALID_OUTPUTS.length &&

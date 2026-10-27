@@ -1,9 +1,9 @@
 """
-Prompt Composer Manager - compose_data editor/save helper for Prompt Composer payloads.
+Library Manager - save and reload manager_data from Prompt Manager, Recipe nodes, Prompt Composer and Prompt Layout Builder.
 
-Differences from Recipe Manager:
-- accepts an IMAGE input to provide/save a thumbnail alongside compose data
-- tags saved/forwarded workflow metadata as PromptComposerManager
+Compared to the base Prompt Manager node:
+- accepts an IMAGE input to provide/save a thumbnail alongside the data
+- tags saved/forwarded workflow metadata as LibraryManager
 """
 
 import json
@@ -15,10 +15,10 @@ from ..py.workflow_data_utils import ensure_v2_recipe_data, get_v2_model_block, 
 from .prompt_manager_adv import PromptManagerAdvanced
 
 
-class PromptComposerManager(PromptManagerAdvanced):
-    """Workflow-focused manager for Prompt Composer data with explicit thumbnail input."""
+class LibraryManager(PromptManagerAdvanced):
+    """Workflow-focused manager for manager_data payloads with explicit thumbnail input."""
 
-    SOURCE_NAME = "PromptComposerManager"
+    SOURCE_NAME = "LibraryManager"
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -47,7 +47,7 @@ class PromptComposerManager(PromptManagerAdvanced):
                 }),
             },
             "optional": {
-                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {"forceInput": True, "tooltip": "Connected compose data (Prompt Composer or Prompt Layout Builder) to edit/forward"}),
+                "manager_data": ("MANAGER_DATA", {"forceInput": True, "tooltip": "manager_data from Prompt Manager, Recipe nodes, Prompt Composer or Prompt Layout Builder to save/forward"}),
                 "image": ("IMAGE", {"tooltip": "Optional image input used as the saved thumbnail when present."}),
             },
             "hidden": {
@@ -59,15 +59,15 @@ class PromptComposerManager(PromptManagerAdvanced):
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Composition Manager: save and reload Prompt Composer and Prompt Layout Builder compose_data, with optional thumbnail image input."
-    RETURN_TYPES = ("COMPOSE_DATA",)
-    RETURN_NAMES = ("compose_data",)
+    DESCRIPTION = "Library Manager: save and reload manager_data from Prompt Manager, Recipe nodes, Prompt Composer and Prompt Layout Builder, with optional thumbnail image input."
+    RETURN_TYPES = ("MANAGER_DATA",)
+    RETURN_NAMES = ("manager_data",)
     FUNCTION = "get_workflow"
     OUTPUT_NODE = True
 
     @classmethod
     def IS_CHANGED(cls, category, name, text="", **kwargs):
-        data = kwargs.get("compose_data", None)
+        data = kwargs.get("manager_data", None)
         if data is None:
             data = kwargs.get("data", None)
         image = kwargs.get("image", None)
@@ -96,7 +96,7 @@ class PromptComposerManager(PromptManagerAdvanced):
         category,
         name,
         text="",
-        compose_data=None,
+        manager_data=None,
         image=None,
         unique_id=None,
         loras_a_toggle=None,
@@ -106,7 +106,7 @@ class PromptComposerManager(PromptManagerAdvanced):
     ):
         prompts_data = self.load_prompts()
         source_name = self.SOURCE_NAME
-        recipe_data = compose_data
+        recipe_data = manager_data
         if recipe_data is None:
             recipe_data = kwargs.get("data")
         if recipe_data is None:

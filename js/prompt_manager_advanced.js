@@ -72,38 +72,46 @@ function shouldUseInputOnlyLoras(node) {
     return normalizeUseLoraInputWidget(node) === LORA_MODE_INPUT_ONLY;
 }
 
-// Composition Manager lists the entries its connected node can load: layouts for Prompt Layout Builder,
-// composer data for Prompt Composer, both when it is not connected to either. A type picked in the browser wins.
-const COMPOSITION_FILTER_PROP = "pm_composition_filter";
-const COMPOSITION_FILTERS = ["composition", "compose", "layout"];
+// Library Manager lists the entries its connected node can load (Prompt Manager, recipe, Prompt Composer or
+// Prompt Layout Builder data), everything when the connection is ambiguous. A type picked in the browser wins.
+const LIBRARY_FILTER_PROP = "pm_library_filter";
+const LIBRARY_FILTERS = ["all", "prompt", "recipe", "compose", "layout"];
+const LIBRARY_SOURCE_FILTERS = {
+    PromptManagerAdvanced: "prompt",
+    PromptComposer: "compose",
+    PromptLayoutBuilder: "layout",
+    RecipeBuilder: "recipe",
+    RecipeExtractor: "recipe",
+    RecipeRenderer: "recipe",
+    RecipeRelay: "recipe",
+    RecipeModelLoader: "recipe",
+};
 
 function getManagerContentFilter(node) {
-    if (!node?._isComposerManager) return node?._isWorkflowManager ? "recipe" : undefined;
-    const picked = node.properties?.[COMPOSITION_FILTER_PROP];
-    if (COMPOSITION_FILTERS.includes(picked)) return picked;
+    if (!node?._isComposerManager) return undefined;
+    const picked = node.properties?.[LIBRARY_FILTER_PROP];
+    if (LIBRARY_FILTERS.includes(picked)) return picked;
     const graph = node.graph || app.graph;
     const linkIds = [
         ...(node.outputs || []).flatMap((output) => output.links || []),
         ...(node.inputs || []).map((input) => input.link).filter((id) => id != null),
     ];
-    const types = new Set(linkIds.map((id) => {
+    const filters = new Set(linkIds.map((id) => {
         const link = graph?.links?.[id];
         const otherId = link?.origin_id === node.id ? link?.target_id : link?.origin_id;
-        return graph?.getNodeById?.(otherId)?.type;
-    }));
-    if (types.has("PromptLayoutBuilder") && !types.has("PromptComposer")) return "layout";
-    if (types.has("PromptComposer") && !types.has("PromptLayoutBuilder")) return "compose";
-    return "composition";
+        return LIBRARY_SOURCE_FILTERS[graph?.getNodeById?.(otherId)?.type];
+    }).filter(Boolean));
+    return filters.size === 1 ? [...filters][0] : "all";
 }
 
 function getManagerFilterControl(node) {
-    if (!node?._isComposerManager) return { hideContentFilterControl: node?._isWorkflowManager === true };
+    if (!node?._isComposerManager) return {};
     return {
         hideContentFilterControl: false,
-        contentFilterCycle: COMPOSITION_FILTERS,
+        contentFilterCycle: LIBRARY_FILTERS,
         onContentFilterChange: (value) => {
             node.properties ??= {};
-            node.properties[COMPOSITION_FILTER_PROP] = value;
+            node.properties[LIBRARY_FILTER_PROP] = value;
             node.updatePromptSelectorDisplay?.();
         },
     };
@@ -187,7 +195,7 @@ function attachPromptInputMaskShim() {
             if (!nodePayload || typeof nodePayload !== "object") continue;
 
             const classType = String(nodePayload.class_type || nodePayload.type || "");
-            if (classType !== "PromptManagerAdvanced" && classType !== "RecipeManager" && classType !== "PromptComposerManager" && classType !== "ComposerManager") continue;
+            if (classType !== "PromptManagerAdvanced" && classType !== "LibraryManager") continue;
 
             const inputs = nodePayload.inputs;
             if (!inputs || typeof inputs !== "object") continue;
@@ -249,10 +257,10 @@ app.registerExtension({
     name: "PromptManagerAdvanced",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "RecipeManager" || nodeData.name === "PromptComposerManager" || nodeData.name === "ComposerManager") {
+        if (nodeData.name === "PromptManagerAdvanced" || nodeData.name === "LibraryManager") {
             attachPromptInputMaskShim();
-            const isComposerManagerNode = nodeData.name === "PromptComposerManager" || nodeData.name === "ComposerManager";
-            const isWorkflowManagerNode = nodeData.name === "RecipeManager" || isComposerManagerNode;
+            const isComposerManagerNode = nodeData.name === "LibraryManager";
+            const isWorkflowManagerNode = isComposerManagerNode;
             const onNodeCreated = nodeType.prototype.onNodeCreated;
 
             nodeType.prototype.onNodeCreated = function () {
@@ -1518,7 +1526,7 @@ function updateWorkflowManagerPreview(node) {
     };
 
     // Keep preview scoped to workflow/prompt data only for RecipeManager.
-    // ComposerManager explicitly uses thumbnail_image as a dedicated thumbnail
+    // Library Manager explicitly uses thumbnail_image as a dedicated thumbnail
     // carrier, so prefer the execution-provided connected thumbnail there.
     const liveThumbnail = node?._isComposerManager
         ? (String(node.connectedThumbnail || "").trim() || pickThumbnail(liveWorkflow))
@@ -1545,7 +1553,7 @@ function updateWorkflowManagerPreview(node) {
         } else if (workflowInputConnected) {
             ui.emptyLabel.textContent = "Waiting for workflow_data input...";
         } else {
-            ui.emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composition" : "No thumbnail for selected workflow";
+            ui.emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected entry" : "No thumbnail for selected workflow";
         }
     }
 }
@@ -1656,7 +1664,7 @@ function addWorkflowManagerPreview(node) {
     `;
 
     const emptyLabel = document.createElement("div");
-    emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected composition" : "No thumbnail for selected workflow";
+    emptyLabel.textContent = node?._isComposerManager ? "No thumbnail for selected entry" : "No thumbnail for selected workflow";
     emptyLabel.style.cssText = `
         position: absolute;
         inset: 0;
@@ -1664,7 +1672,7 @@ function addWorkflowManagerPreview(node) {
         align-items: center;
         justify-content: center;
         text-align: center;
-        font-size: 11px;
+        font-size: 13px;
         color: ${PMA_THEME.textMuted};
         background: ${PMA_THEME.inputBg};
         border: 1px dashed ${PMA_THEME.inputBorder};
@@ -1897,7 +1905,7 @@ function _createSummaryLoraTag(lora) {
         gap: "6px",
         padding: "4px 10px",
         borderRadius: "6px",
-        fontSize: "12px",
+        fontSize: "14px",
         transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease",
         backgroundColor: bgColor,
         color: textColor,
@@ -1913,7 +1921,7 @@ function _createSummaryLoraTag(lora) {
     if (!isAvailable) {
         const warningIcon = document.createElement("span");
         warningIcon.textContent = "⚠️";
-        warningIcon.style.fontSize = "11px";
+        warningIcon.style.fontSize = "13px";
         warningIcon.style.marginRight = "-2px";
         tag.appendChild(warningIcon);
     }
@@ -1933,7 +1941,7 @@ function _createSummaryLoraTag(lora) {
     const strengthBadge = document.createElement("span");
     strengthBadge.textContent = Number.isFinite(strength) ? strength.toFixed(2) : "1.00";
     Object.assign(strengthBadge.style, {
-        fontSize: "10px",
+        fontSize: "12px",
         fontWeight: "600",
         padding: "1px 6px",
         borderRadius: "999px",
@@ -2015,7 +2023,7 @@ function _showWorkflowSummaryDialog(summary) {
         dialog.appendChild(title);
 
         const meta = document.createElement("div");
-        meta.style.cssText = "margin-bottom: 12px; color: #9eb2c6; font-size: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(115, 144, 170, 0.35);";
+        meta.style.cssText = "margin-bottom: 12px; color: #9eb2c6; font-size: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(115, 144, 170, 0.35);";
         meta.innerHTML = `<b style=\"color:#c5d8ea;\">Models found:</b> ${summary.modelCount}`;
         dialog.appendChild(meta);
 
@@ -2027,14 +2035,14 @@ function _showWorkflowSummaryDialog(summary) {
         if (!summary.modelDetails.length) {
             const none = document.createElement("div");
             none.textContent = "No models found.";
-            none.style.cssText = "color:#9aa8b7; font-size:12px;";
+            none.style.cssText = "color:#9aa8b7; font-size:14px;";
             modelsList.appendChild(none);
         } else {
             for (const item of summary.modelDetails) {
                 const row = document.createElement("div");
                 const familyText = item.family ? ` (${item.family})` : "";
                 row.textContent = `${item.slotLabel}: ${item.modelDisplay || "(none)"}${familyText}`;
-                row.style.cssText = "color:#d9e6f3; font-size:13px; background: rgba(37, 48, 60, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 6px; padding: 6px 8px;";
+                row.style.cssText = "color:#d9e6f3; font-size:15px; background: rgba(37, 48, 60, 0.55); border: 1px solid rgba(96, 124, 150, 0.35); border-radius: 6px; padding: 6px 8px;";
                 modelsList.appendChild(row);
             }
         }
@@ -2050,7 +2058,7 @@ function _showWorkflowSummaryDialog(summary) {
         if (!summary.modelDetails.some((m) => Array.isArray(m.loras) && m.loras.length > 0)) {
             const none = document.createElement("div");
             none.textContent = "No LoRAs found.";
-            none.style.cssText = "color:#9aa8b7; font-size:12px; margin-bottom:8px;";
+            none.style.cssText = "color:#9aa8b7; font-size:14px; margin-bottom:8px;";
             loraSection.appendChild(none);
         } else {
             for (const item of summary.modelDetails) {
@@ -2060,7 +2068,7 @@ function _showWorkflowSummaryDialog(summary) {
 
                 const stackTitle = document.createElement("div");
                 stackTitle.textContent = `Stack ${item.slotLabel}:`;
-                stackTitle.style.cssText = "color:#c5d8ea; font-size:12px; margin:0 0 6px 0;";
+                stackTitle.style.cssText = "color:#c5d8ea; font-size:14px; margin:0 0 6px 0;";
                 stackCard.appendChild(stackTitle);
 
                 const stackTags = document.createElement("div");
@@ -2489,7 +2497,7 @@ function createLoraDisplayContainer(title, stackId, node) {
     const titleLabel = document.createElement("span");
     titleLabel.textContent = title;
     Object.assign(titleLabel.style, {
-        fontSize: "12px",
+        fontSize: "14px",
         fontWeight: "bold",
         color: PMA_THEME.textMuted
     });
@@ -2507,7 +2515,7 @@ function createLoraDisplayContainer(title, stackId, node) {
     resetBtn.textContent = "Reset Strength";
     resetBtn.title = "Reset all strength values to their original values";
     Object.assign(resetBtn.style, {
-        fontSize: "10px",
+        fontSize: "12px",
         padding: "2px 8px",
         backgroundColor: PMA_THEME.buttonBg,
         color: PMA_THEME.textPrimary,
@@ -2522,7 +2530,7 @@ function createLoraDisplayContainer(title, stackId, node) {
     const toggleAllBtn = document.createElement("button");
     toggleAllBtn.textContent = "Toggle All";
     Object.assign(toggleAllBtn.style, {
-        fontSize: "10px",
+        fontSize: "12px",
         padding: "2px 8px",
         backgroundColor: PMA_THEME.buttonBg,
         color: PMA_THEME.textPrimary,
@@ -2678,7 +2686,7 @@ function renderLoraTags(container, loras, stackId, node) {
         Object.assign(emptyMessage.style, {
             color: "rgba(200, 200, 200, 0.5)",
             fontStyle: "italic",
-            fontSize: "11px",
+            fontSize: "13px",
             padding: "8px",
             width: "100%",
             textAlign: "center"
@@ -2743,7 +2751,7 @@ function createLoraTag(lora, index, stackId, node) {
         gap: "6px",
         padding: "4px 10px",
         borderRadius: "6px",
-        fontSize: "12px",
+        fontSize: "14px",
         cursor: "pointer",
         transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease",
         backgroundColor: bgColor,
@@ -2761,7 +2769,7 @@ function createLoraTag(lora, index, stackId, node) {
     if (!isAvailable) {
         const warningIcon = document.createElement("span");
         warningIcon.textContent = "⚠️";
-        warningIcon.style.fontSize = "11px";
+        warningIcon.style.fontSize = "13px";
         warningIcon.style.marginRight = "-2px";
         tag.appendChild(warningIcon);
     }
@@ -2785,7 +2793,7 @@ function createLoraTag(lora, index, stackId, node) {
     strengthInput.className = "strength-input";
     strengthInput.value = strength.toFixed(2);
     Object.assign(strengthInput.style, {
-        fontSize: "10px",
+        fontSize: "12px",
         fontWeight: "600",
         padding: "1px 4px",
         borderRadius: "999px",
@@ -2954,7 +2962,7 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
     titleItem.textContent = loraName;
     titleItem.style.cssText = `
         padding: 8px 12px;
-        font-size: 12px;
+        font-size: 14px;
         color: #aaa;
         font-weight: bold;
         border-bottom: 1px solid #444;
@@ -2969,7 +2977,7 @@ function showLoraContextMenu(e, node, stackId, index, loraName, isAvailable = tr
         item.style.cssText = `
             padding: 8px 12px;
             cursor: pointer;
-            font-size: 12px;
+            font-size: 14px;
             color: ${color};
             white-space: nowrap;
         `;
@@ -3318,7 +3326,7 @@ function createTriggerWordsDisplayContainer(title, node) {
     const titleLabel = document.createElement("span");
     titleLabel.textContent = title;
     Object.assign(titleLabel.style, {
-        fontSize: "12px",
+        fontSize: "14px",
         fontWeight: "bold",
         color: PMA_THEME.textMuted
     });
@@ -3335,7 +3343,7 @@ function createTriggerWordsDisplayContainer(title, node) {
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Add";
     Object.assign(addBtn.style, {
-        fontSize: "10px",
+        fontSize: "12px",
         padding: "2px 8px",
         backgroundColor: PMA_THEME.accentSoft,
         color: PMA_THEME.textPrimary,
@@ -3350,7 +3358,7 @@ function createTriggerWordsDisplayContainer(title, node) {
     const toggleAllBtn = document.createElement("button");
     toggleAllBtn.textContent = "Toggle All";
     Object.assign(toggleAllBtn.style, {
-        fontSize: "10px",
+        fontSize: "12px",
         padding: "2px 8px",
         backgroundColor: PMA_THEME.buttonBg,
         color: PMA_THEME.textPrimary,
@@ -3456,7 +3464,7 @@ function renderTriggerWordTags(container, triggerWords, node) {
         Object.assign(emptyMessage.style, {
             color: "rgba(200, 200, 200, 0.5)",
             fontStyle: "italic",
-            fontSize: "11px",
+            fontSize: "13px",
             padding: "8px",
             width: "100%",
             textAlign: "center"
@@ -3498,7 +3506,7 @@ function createTriggerWordTag(word, index, node) {
         justifyContent: "center",
         padding: "4px 10px",
         borderRadius: "6px",
-        fontSize: "12px",
+        fontSize: "14px",
         cursor: "pointer",
         transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease",
         backgroundColor: bgColor,
@@ -3701,7 +3709,7 @@ function showTriggerWordContextMenu(e, node, index, wordText) {
     deleteItem.style.cssText = `
         padding: 8px 12px;
         cursor: pointer;
-        font-size: 12px;
+        font-size: 14px;
         color: #ff6b6b;
         white-space: nowrap;
     `;
@@ -3800,8 +3808,11 @@ async function openSaveBrowserForNode(node) {
         ? buildWorkflowDefaultName()
         : (currentName || "New Prompt");
     const existingPromptEntry = node.prompts?.[currentCategory]?.[currentName] || null;
-    const showNSFWOnSave = existingPromptEntry?.nsfw === true
-        || node.prompts?.[currentCategory]?.["__meta__"]?.nsfw === true;
+    // Only reveal NSFW for an entry that was actually loaded; a fresh node's default category must not override the setting.
+    const showNSFWOnSave = !!existingPromptEntry && (
+        existingPromptEntry.nsfw === true
+        || node.prompts?.[currentCategory]?.["__meta__"]?.nsfw === true
+    );
     const initialThumbnail = node.connectedThumbnail || existingPromptEntry?.thumbnail || null;
     const hasWorkflowInput = hasConnectedWorkflowInput(node);
     const liveWorkflowData = hasWorkflowInput ? await resolveWorkflowDataForLive(node) : null;
@@ -3859,7 +3870,7 @@ async function openSaveBrowserForNode(node) {
         node,
         currentCategory,
         currentPrompt: promptWidget.value || "",
-        title: node._isComposerManager ? "Save Composition" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt"),
+        title: node._isComposerManager ? "Save to Library" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt"),
         saveButtonText: "Save",
         namePlaceholder: "Prompt name",
         initialName,
@@ -4029,8 +4040,8 @@ function addButtonBar(node) {
     // Forward wheel events to canvas for zooming
     forwardWheelToCanvas(buttonContainer);
 
-                const saveButtonLabel = node._isComposerManager ? "Save Composition" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt");
-                const clearButtonLabel = node._isComposerManager ? "Clear Composition" : (node._isWorkflowManager ? "Clear Workflow" : "New Prompt");
+                const saveButtonLabel = node._isComposerManager ? "Save to Library" : (node._isWorkflowManager ? "Save Workflow" : "Save Prompt");
+                const clearButtonLabel = node._isComposerManager ? "Clear Entry" : (node._isWorkflowManager ? "Clear Workflow" : "New Prompt");
 
     // Save Prompt/Workflow button
     const savePromptBtn = createButton(saveButtonLabel, async () => {
@@ -6056,7 +6067,7 @@ async function savePrompt(node, category, name, text, lorasA, lorasB, lorasC, lo
                 ? builtWorkflowData
                 : mergePromptComposerInputMetadataIntoWorkflowData(node, builtWorkflowData);
             if (node?._isWorkflowManager) {
-                liveWorkflowData._source = node?._isComposerManager ? "PromptComposerManager" : "RecipeManager";
+                liveWorkflowData._source = "LibraryManager";
             }
             node.lastWorkflowData = liveWorkflowData;
             syncSavedWorkflowDataWidget(node);
@@ -6317,7 +6328,7 @@ function createButton(text, callback) {
     button.style.color = "#fff";
     button.style.border = "1px solid #444";
     button.style.borderRadius = "6px";
-    button.style.fontSize = "11px";
+    button.style.fontSize = "13px";
     button.style.fontWeight = "normal";
     button.style.whiteSpace = "nowrap";
     button.style.overflow = "hidden";
@@ -6348,7 +6359,7 @@ function createDropdownButton(text, items) {
     button.style.color = "#fff";
     button.style.border = "1px solid #444";
     button.style.borderRadius = "6px";
-    button.style.fontSize = "11px";
+    button.style.fontSize = "13px";
     button.style.fontWeight = "normal";
     button.style.whiteSpace = "nowrap";
     button.style.height = "28px";
@@ -6381,7 +6392,7 @@ function createDropdownButton(text, items) {
             menuItem.style.cssText = `
                 padding: 8px 12px;
                 cursor: pointer;
-                font-size: 11px;
+                font-size: 13px;
                 color: ${PMA_THEME.textPrimary};
                 white-space: nowrap;
             `;
@@ -6474,16 +6485,16 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory, o
         const defaultGroupValue = String(options.defaultGroupValue || fallbackGroupValue || "");
         const categorySelectHtml = showCategorySelect
             ? `
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category to rename:</div>
-            <select class="category-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 14px;">Category to rename:</div>
+            <select class="category-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px;">
                 ${_buildDialogOptionHtml(normalizedCategories, defaultCategory)}
             </select>
             `
             : "";
         const groupSelectHtml = groupOptions && groupOptions.length > 0
             ? `
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt Group</div>
-            <select class="group-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 14px;">Prompt Group</div>
+            <select class="group-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px;">
                 ${_buildDialogOptionHtml(groupOptions, defaultGroupValue)}
             </select>
             `
@@ -6492,8 +6503,8 @@ function showRenameCategoryDialog(title, message, categories, defaultCategory, o
         dialog.innerHTML = `
             <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
             ${categorySelectHtml}
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
-            <input type="text" value="${String(defaultCategory || "")}" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 14px;">${message}</div>
+            <input type="text" value="${String(defaultCategory || "")}" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px; box-sizing: border-box;" />
             ${groupSelectHtml}
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
@@ -6773,7 +6784,7 @@ function showTextPrompt(title, message, defaultValue = "", useOverlay = true) {
         dialog.innerHTML = `
             <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
             <div style="margin-bottom: 10px; color: #ccc;">${message}</div>
-            <input type="text" value="${defaultValue}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;" />
+            <input type="text" value="${defaultValue}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px;" />
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
@@ -6904,7 +6915,7 @@ async function showPromptExportSelectionDialog(promptData) {
         const footer = document.createElement("div");
         footer.style.cssText = "padding:12px 18px 18px 18px; border-top:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; gap:10px; flex-wrap:wrap;";
         const selectionInfo = document.createElement("div");
-        selectionInfo.style.cssText = `margin-right:auto; font-size:12px; color:${UI.textMuted || "hsl(0 0% 67%)"};`;
+        selectionInfo.style.cssText = `margin-right:auto; font-size:14px; color:${UI.textMuted || "hsl(0 0% 67%)"};`;
 
         const makeButton = (label, primary = false) => {
             const button = document.createElement("button");
@@ -6939,8 +6950,8 @@ async function showPromptExportSelectionDialog(promptData) {
             card.type = "button";
             card.style.cssText = `text-align:left; min-height:96px; border:1px solid ${UI.inputBorder || "hsl(218 10% 41%)"}; border-radius:10px; background:${UI.cardBg || "hsl(219 16% 18%)"}; color:${UI.textPrimary || "hsl(0 0% 87%)"}; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:8px;`;
             card.innerHTML = `
-                <div style="font-size:13px; font-weight:700; line-height:1.3; word-break:break-word;">${entry.categoryName}</div>
-                <div style="font-size:11px; color:${UI.textMuted || "hsl(0 0% 67%)"}; word-break:break-word;">${entry.promptCount} prompt${entry.promptCount === 1 ? "" : "s"}${entry.nsfw ? " • NSFW" : ""}</div>
+                <div style="font-size:15px; font-weight:700; line-height:1.3; word-break:break-word;">${entry.categoryName}</div>
+                <div style="font-size:13px; color:${UI.textMuted || "hsl(0 0% 67%)"}; word-break:break-word;">${entry.promptCount} prompt${entry.promptCount === 1 ? "" : "s"}${entry.nsfw ? " • NSFW" : ""}</div>
             `;
             card.onclick = () => {
                 if (selected.has(entry.categoryName)) selected.delete(entry.categoryName);
@@ -7009,8 +7020,8 @@ function showNewCategoryDialog(useOverlay = true) {
         dialog.innerHTML = `
             <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">New Category</div>
             <div style="margin-bottom: 10px; color: #ccc;">Enter new category name:</div>
-            <input type="text" value="" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
-            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 15px; color: #aaa; font-size: 13px; cursor: pointer; user-select: none;">
+            <input type="text" value="" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px; box-sizing: border-box;" />
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 15px; color: #aaa; font-size: 15px; cursor: pointer; user-select: none;">
                 <input type="checkbox" class="nsfw-cb" style="cursor: pointer; accent-color: #c44;" />
                 Mark as NSFW
             </label>
@@ -8064,7 +8075,7 @@ async function showThumbnailRenderPicker(
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: ${UI.panel}; border: 1px solid ${UI.panelBorder}; border-radius: 10px;
             padding: 18px; z-index: 10000; width: 634px; min-width: 634px; max-width: 634px;
-            font-family: inherit; font-size: 13px;
+            font-family: inherit; font-size: 15px;
             box-sizing: border-box; overflow: hidden;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         `;
@@ -8072,37 +8083,37 @@ async function showThumbnailRenderPicker(
         dialog.innerHTML = `
             <div style="margin-bottom: 12px; font-size: 18px; font-weight: 600; color: #ddd;">Select Model for Thumbnail Generation</div>
             <div style="display: grid; grid-template-columns: 64px 1fr 34px; gap: 8px; align-items: center; margin-bottom: 8px;">
-                <label style="color: #c4ccd6; font-size: 13px; font-weight: 600;">Type</label>
-                <select class="family-select" style="padding: 7px; min-width: 0; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; font-family: inherit; font-size: 13px;"></select>
-                <button class="filter-toggle" title="Model filtering ON (by family). Click to show all models." style="height: 32px; background: ${UI.buttonBg}; color: #ddd; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-size: 14px;">👁</button>
+                <label style="color: #c4ccd6; font-size: 15px; font-weight: 600;">Type</label>
+                <select class="family-select" style="padding: 7px; min-width: 0; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; font-family: inherit; font-size: 15px;"></select>
+                <button class="filter-toggle" title="Model filtering ON (by family). Click to show all models." style="height: 32px; background: ${UI.buttonBg}; color: #ddd; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-size: 16px;">👁</button>
             </div>
             <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
-                <label style="color: #c4ccd6; font-size: 13px;">Model</label>
-                <select class="model-select" size="13" style="width: 100%; min-width: 0; padding: 4px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
+                <label style="color: #c4ccd6; font-size: 15px;">Model</label>
+                <select class="model-select" size="13" style="width: 100%; min-width: 0; padding: 4px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 15px;"></select>
             </div>
             <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
-                <label style="color: #c4ccd6; font-size: 13px;">Filter</label>
-                <input class="lora-filter-input" type="text" placeholder="Filter LoRAs by name or path..." style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;" />
+                <label style="color: #c4ccd6; font-size: 15px;">Filter</label>
+                <input class="lora-filter-input" type="text" placeholder="Filter LoRAs by name or path..." style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 15px;" />
             </div>
             <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
-                <label style="color: #c4ccd6; font-size: 13px;">LoRA 1</label>
-                <select class="lora1-select" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
+                <label style="color: #c4ccd6; font-size: 15px;">LoRA 1</label>
+                <select class="lora1-select" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 15px;"></select>
             </div>
             <div style="display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin-bottom: 8px;">
-                <label style="color: #c4ccd6; font-size: 13px;">LoRA 2</label>
-                <select class="lora2-select" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;"></select>
+                <label style="color: #c4ccd6; font-size: 15px;">LoRA 2</label>
+                <select class="lora2-select" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 15px;"></select>
             </div>
             <div style="display: grid; grid-template-columns: 64px 1fr 34px; gap: 8px; align-items: center; margin-bottom: 8px;">
-                <label style="color: #c4ccd6; font-size: 13px;">Steps</label>
-                <input class="steps-input" type="number" min="1" max="200" step="1" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 13px;" />
-                <button class="steps-reset" title="Reset steps to the family default" style="height: 32px; background: ${UI.buttonBg}; color: #ddd; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-size: 14px;">↺</button>
+                <label style="color: #c4ccd6; font-size: 15px;">Steps</label>
+                <input class="steps-input" type="number" min="1" max="200" step="1" style="width: 100%; min-width: 0; padding: 7px; background: ${UI.inputBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; box-sizing: border-box; font-family: inherit; font-size: 15px;" />
+                <button class="steps-reset" title="Reset steps to the family default" style="height: 32px; background: ${UI.buttonBg}; color: #ddd; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-size: 16px;">↺</button>
             </div>
-            <div class="steps-hint" style="min-height: 16px; margin-bottom: 8px; color: #9aa5b4; font-size: 12px;"></div>
-            <div class="lora-hint" style="min-height: 16px; margin-bottom: 8px; color: #9aa5b4; font-size: 12px;"></div>
-            <div class="model-hint" style="min-height: 16px; margin-bottom: 12px; color: #9aa5b4; font-size: 12px;"></div>
+            <div class="steps-hint" style="min-height: 16px; margin-bottom: 8px; color: #9aa5b4; font-size: 14px;"></div>
+            <div class="lora-hint" style="min-height: 16px; margin-bottom: 8px; color: #9aa5b4; font-size: 14px;"></div>
+            <div class="model-hint" style="min-height: 16px; margin-bottom: 12px; color: #9aa5b4; font-size: 14px;"></div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="cancel-btn" style="padding: 8px 16px; background: ${UI.buttonBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 16px; background: ${UI.accentSoft}; color: #fff; border: 1px solid ${UI.accentBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;">Select</button>
+                <button class="cancel-btn" style="padding: 8px 16px; background: ${UI.buttonBg}; color: #e5e7eb; border: 1px solid ${UI.inputBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 15px;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: ${UI.accentSoft}; color: #fff; border: 1px solid ${UI.accentBorder}; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 15px;">Select</button>
             </div>
         `;
 
@@ -8562,7 +8573,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
     workflow[rendererId] = {
         class_type: "RecipeRenderer",
         inputs: {
-            recipe_data: wfForThumb,
+            manager_data: wfForThumb,
             model_slot: modelSlot,
             clear_cache_after_render: false,
         }
@@ -8573,7 +8584,7 @@ async function generateThumbnailWorkflowFromWorkflowData(workflowData, renderSel
         class_type: "SaveImage",
         inputs: {
             filename_prefix: "_thumb_wf_",
-            images: [rendererId, 1]
+            images: [rendererId, 0]
         }
     };
 
@@ -8784,7 +8795,7 @@ function _ensureThumbQueueProgress() {
     progress.style.cssText = `
         position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
         background: #222; border: 2px solid #4CAF50; border-radius: 8px;
-        padding: 14px 16px; z-index: 10000; color: #fff; font-size: 14px;
+        padding: 14px 16px; z-index: 10000; color: #fff; font-size: 16px;
         box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 320px;
     `;
 
@@ -8803,7 +8814,7 @@ function _ensureThumbQueueProgress() {
         width: 24px; height: 24px; line-height: 22px;
         border-radius: 6px; border: 1px solid #666;
         background: #2f2f2f; color: #eee;
-        cursor: pointer; font-size: 14px; padding: 0;
+        cursor: pointer; font-size: 16px; padding: 0;
         display: flex; align-items: center; justify-content: center;
         flex-shrink: 0;
     `;
@@ -8891,7 +8902,7 @@ async function generateThumbnailForPrompt(node, category, promptName, onUpdate, 
         indicator.style.cssText = `
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: #222; border: 2px solid #4CAF50; border-radius: 8px;
-            padding: 20px 30px; z-index: 10000; color: #fff; font-size: 14px;
+            padding: 20px 30px; z-index: 10000; color: #fff; font-size: 16px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         `;
         indicator.innerHTML = `
@@ -9069,7 +9080,7 @@ function createPromptSelectorWidget(node) {
         padding: 0 10px;
         height: 100%;
         cursor: pointer;
-        font-size: 10px;
+        font-size: 12px;
         transition: all 0.15s ease;
     `;
     leftArrow.onmouseover = () => {
@@ -9087,7 +9098,7 @@ function createPromptSelectorWidget(node) {
         flex: 1;
         text-align: center;
         color: #dbeafe;
-        font-size: 13px;
+        font-size: 15px;
         padding: 0 10px;
         cursor: pointer;
         overflow: hidden;
@@ -9202,7 +9213,7 @@ function createPromptSelectorWidget(node) {
         padding: 0 10px;
         height: 100%;
         cursor: pointer;
-        font-size: 10px;
+        font-size: 12px;
         transition: all 0.15s ease;
     `;
     rightArrow.onmouseover = () => {
@@ -9228,7 +9239,7 @@ function createPromptSelectorWidget(node) {
 
         if (wmInputMode) {
             nameDisplay.textContent = hasLiveWorkflow
-                ? (node?._isComposerManager ? "Input connected: save incoming composition" : "Input connected: save incoming workflow")
+                ? (node?._isComposerManager ? "Input connected: save incoming manager_data" : "Input connected: save incoming workflow")
                 : "Waiting for workflow_data input...";
             nameDisplay.title = nameDisplay.textContent;
             nameDisplay.style.cursor = "default";

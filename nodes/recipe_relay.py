@@ -205,7 +205,7 @@ class WorkflowRelay:
         cls._VAE_ENUM = vaes
         cls._CLIP_ENUM = clips
         cls.RETURN_TYPES = (
-            "RECIPE_DATA",
+            "MANAGER_DATA",
             "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", "*", "*",
             "INT", "INT", "FLOAT",
             cls._SAMPLER_ENUM, cls._SCHEDULER_ENUM, "FLOAT",
@@ -222,7 +222,7 @@ class WorkflowRelay:
         return {
             "required": {},
             "optional": {
-                "recipe_data":     ("RECIPE_DATA",       {"forceInput": True, "tooltip": "Optional recipe_data input. If omitted, bridge starts from an empty payload dict."}),
+                "manager_data":    ("MANAGER_DATA",      {"forceInput": True, "tooltip": "Optional manager_data input. If omitted, bridge starts from an empty payload dict."}),
                 "model_slot":      (_MODEL_KEYS,         {"default": "model_a", "tooltip": "Select which model slot to read/update in recipe_data."}),
                 "model":           ("MODEL",             {"tooltip": "Pass-through Model"}),
                 "clip":            ("CLIP",              {"tooltip": "Pass-through CLIP"}),
@@ -254,7 +254,7 @@ class WorkflowRelay:
         }
 
     RETURN_TYPES = (
-        "RECIPE_DATA",
+        "MANAGER_DATA",
         "MODEL", "CLIP", "CONDITIONING", "CONDITIONING", "VAE", "LATENT", "IMAGE", "MASK", "*", "*",
         "INT", "INT", "FLOAT",
         _LIVE_SAMPLERS, _LIVE_SCHEDULERS, "FLOAT",
@@ -265,7 +265,7 @@ class WorkflowRelay:
         _LIVE_CKPTS, _LIVE_UNETS, _LIVE_VAES, _LIVE_CLIPS,
     )
     RETURN_NAMES = (
-        "recipe_data",
+        "manager_data",
         "model", "clip", "positive", "negative", "vae", "latent", "image", "mask", "extra_1", "extra_2",
         "seed", "steps", "cfg",
         "sampler_name", "scheduler", "denoise",
@@ -284,7 +284,7 @@ class WorkflowRelay:
 
     # ------------------------------------------------------------------
 
-    def unpack(self, recipe_data=None, model_slot="model_a", **kwargs):
+    def unpack(self, manager_data=None, model_slot="model_a", **kwargs):
         def _normalize_lora_stack_input(raw_stack):
             rows = []
             if raw_stack is None:
@@ -386,13 +386,13 @@ class WorkflowRelay:
             return os.path.splitext(base)[0]
 
         # Accept both dict and JSON string
-        if isinstance(recipe_data, str):
+        if isinstance(manager_data, str):
             try:
-                incoming_wf = json.loads(recipe_data)
+                incoming_wf = json.loads(manager_data)
             except (json.JSONDecodeError, TypeError):
                 incoming_wf = {}
-        elif isinstance(recipe_data, dict):
-            incoming_wf = dict(recipe_data)
+        elif isinstance(manager_data, dict):
+            incoming_wf = dict(manager_data)
         else:
             incoming_wf = {}
 

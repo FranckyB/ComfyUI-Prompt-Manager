@@ -106,7 +106,7 @@ function ensureStyles() {
     padding: 5px 8px;
 }
 .pm-multi-lm-stack-label {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: 0.02em;
     color: ${textHeading};
@@ -124,7 +124,7 @@ function ensureStyles() {
     border-radius: 5px;
     background: ${inputBg};
     color: ${textPrimary};
-    font-size: 12px;
+    font-size: 14px;
     line-height: 1;
     padding: 0;
     cursor: pointer;
@@ -139,7 +139,7 @@ function ensureStyles() {
 .pm-multi-lm-step-value {
     min-width: 16px;
     text-align: center;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
     line-height: 1.1;
     color: hsl(0 0% 100%);
@@ -167,7 +167,7 @@ function ensureStyles() {
 }
 .pm-multi-lm-title {
     font-weight: 700;
-    font-size: 12px;
+    font-size: 14px;
     letter-spacing: 0.02em;
     color: ${textHeading};
     margin-bottom: 6px;
@@ -184,7 +184,7 @@ function ensureStyles() {
     background: ${inputBg};
     color: ${textPrimary};
     margin-bottom: 6px;
-    font-size: 12px;
+    font-size: 14px;
     flex-shrink: 0;
 }
 .pm-multi-lm-search::placeholder {

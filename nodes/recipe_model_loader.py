@@ -320,8 +320,8 @@ class WorkflowModelLoader:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "recipe_data": ("RECIPE_DATA", {
-                    "tooltip": "Recipe data containing model name strings to load.",
+                "manager_data": ("MANAGER_DATA", {
+                    "tooltip": "manager_data containing model name strings to load.",
                     "forceInput": True,
                 }),
                 "model": (["model_a", "model_b", "model_c", "model_d"], {
@@ -335,8 +335,8 @@ class WorkflowModelLoader:
             }
         }
 
-    def get_model(self, recipe_data, model="model_a", weight_dtype="default"):
-        workflow_data = recipe_data
+    def get_model(self, manager_data, model="model_a", weight_dtype="default"):
+        workflow_data = manager_data
         selected_model_slot = model
         if selected_model_slot not in ("model_a", "model_b", "model_c", "model_d"):
             selected_model_slot = "model_a"

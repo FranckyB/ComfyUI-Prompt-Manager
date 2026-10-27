@@ -1107,15 +1107,15 @@ class PromptComposer:
                 }),
                 "recipe_sync_mode": (RECIPE_SYNC_MODE_CHOICES, {
                     "default": "edit",
-                    "tooltip": "Choose whether Prompt Composer keeps local edits or follows connected compose_data on execute.",
+                    "tooltip": "Choose whether Prompt Composer keeps local edits or follows connected manager_data on execute.",
                 }),
                 "input_prompt_mode": (INPUT_PROMPT_MODE_CHOICES, {
                     "default": "no_prompt",
-                    "tooltip": "When enabled during compose_data sync, use the saved prompt input from compose_data instead of the live prompt input.",
+                    "tooltip": "When enabled during manager_data sync, use the saved prompt input from manager_data instead of the live prompt input.",
                 }),
                 "input_lora_mode": (INPUT_LORA_MODE_CHOICES, {
                     "default": "no_lora",
-                    "tooltip": "When enabled during compose_data sync, include the saved extra LoRA input data from compose_data in addition to the composed LoRAs.",
+                    "tooltip": "When enabled during manager_data sync, include the saved extra LoRA input data from manager_data in addition to the composed LoRAs.",
                 }),
             },
             "optional": {
@@ -1124,13 +1124,13 @@ class PromptComposer:
                     "forceInput": True,
                     "tooltip": "Optional incoming prompt. Composed parts can be placed before or after it.",
                 }),
-                "compose_data": ("RECIPE_DATA,COMPOSE_DATA", {
+                "manager_data": ("MANAGER_DATA", {
                     "forceInput": True,
-                    "tooltip": "Optional saved Prompt Composer payload. Connect recipe or compose data to restore Prompt Composer parts and reuse them.",
+                    "tooltip": "Optional saved Prompt Composer manager_data (e.g. from Library Manager) to restore Prompt Composer parts and reuse them.",
                 }),
                 "lora_stack": ("LORA_STACK", {
                     "forceInput": True,
-                    "tooltip": "Optional incoming LoRA stack. Prompt Composer either uses this live input or the saved compose_data LoRA input, then appends per-prompt LoRAs.",
+                    "tooltip": "Optional incoming LoRA stack. Prompt Composer either uses this live input or the saved manager_data LoRA input, then appends per-prompt LoRAs.",
                 }),
                 "mods": ("H3_REF_MODS", {
                     "forceInput": True,
@@ -1150,8 +1150,8 @@ class PromptComposer:
 
     CATEGORY = "Prompt Manager"
     DESCRIPTION = "Compose multiple prompt fragments with per-part strength in one node."
-    RETURN_TYPES = ("STRING", "COMPOSE_DATA", "LORA_STACK", "H3_REF_MODS")
-    RETURN_NAMES = ("Prompt", "compose_data", "lora_stack", "mods")
+    RETURN_TYPES = ("STRING", "LORA_STACK", "H3_REF_MODS", "MANAGER_DATA")
+    RETURN_NAMES = ("Prompt", "lora_stack", "mods", "manager_data")
     FUNCTION = "compose"
     OUTPUT_NODE = True
 
@@ -1160,8 +1160,8 @@ class PromptComposer:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", input_prompt_mode="no_prompt", input_lora_mode="no_lora", compose_data=None, lora_stack=None, mods=None, **kwargs):
-        recipe_data = compose_data if compose_data is not None else kwargs.get("recipe_data")
+    def IS_CHANGED(cls, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", input_prompt_mode="no_prompt", input_lora_mode="no_lora", manager_data=None, lora_stack=None, mods=None, **kwargs):
+        recipe_data = manager_data
         parts = _resolve_effective_parts_for_change(parts_data, recipe_sync_mode=recipe_sync_mode, recipe_data=recipe_data)
         prompts_data = PromptComposerStore.load_prompts()
         prompt_library_signature = _build_prompt_library_signature(parts, prompts_data)
@@ -1170,8 +1170,8 @@ class PromptComposer:
             return (parts_data, dynamic_seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, _normalize_input_prompt_mode(input_prompt_mode), _normalize_input_lora_mode(input_lora_mode), str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
         return (parts_data, seed, prompt, output_format, compose_position, generation_mode, recipe_sync_mode, _normalize_input_prompt_mode(input_prompt_mode), _normalize_input_lora_mode(input_lora_mode), str(recipe_data) if recipe_data else None, prompt_library_signature, lora_stack, mods)
 
-    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", input_prompt_mode="no_prompt", input_lora_mode="no_lora", compose_data=None, lora_stack=None, mods=None, unique_id=None, **kwargs):
-        recipe_data = compose_data if compose_data is not None else kwargs.get("recipe_data")
+    def compose(self, parts_data="[]", seed=0, prompt="", output_format="text", compose_position="before", generation_mode="image", recipe_sync_mode="edit", input_prompt_mode="no_prompt", input_lora_mode="no_lora", manager_data=None, lora_stack=None, mods=None, unique_id=None, **kwargs):
+        recipe_data = manager_data
         prompts_data = PromptComposerStore.load_prompts()
         base_recipe_data = _coerce_recipe_data_payload(recipe_data, source="PromptComposer")
         composer_recipe_state = _extract_prompt_composer_recipe_state(base_recipe_data)
@@ -1412,4 +1412,4 @@ class PromptComposer:
                 "prompt_composer": out_recipe_data.get(PROMPT_COMPOSER_RECIPE_KEY),
             })
 
-        return (final_output, out_recipe_data, merged_lora_stack, merged_mods)
+        return (final_output, merged_lora_stack, merged_mods, out_recipe_data)

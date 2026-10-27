@@ -72,16 +72,17 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
   - System Prompts used by Prompt Generator.
   - Compose Data used by Prompt Composer, including v2 prompt-group libraries with export, open, and merge workflows.
   - Prompt Data used by our Prompt Manager.
+- Prompt Library Hub (sidebar **Prompts** button, can be hidden in Settings): browse, edit, import and export System Prompts, Prompt Snippets, and Saved Compose / Prompts / Layouts / Recipes from one panel, with per-category export.
 
 ### Recipe Toolset (Experimental)
 These tools were an experiment, with some of the tech now used in other parts of the add-on.
-- Recipe Extractor: normalizes extracted metadata into reusable recipe_data.
-- Recipe Builder: edit and validate recipe_data in a cleaner authoring surface.
-- Recipe Renderer: execute recipe_data through built-in generation templates.
-- Recipe Hub: merge/append model blocks into one `recipe_data` and expose each model block as its own output.
+- Recipe Extractor: normalizes extracted metadata into reusable `manager_data`.
+- Recipe Builder: edit and validate recipe data in a cleaner authoring surface.
+- Recipe Renderer: execute recipe data through built-in generation templates.
+- Recipe Hub: merge/append model blocks into one `manager_data` and expose each model block as its own output.
 - Recipe Relay: edit one model block (`model_data`) with seed and LoRA stack overrides.
-- Recipe Model Loader: resolve and load models from recipe_data.
-- Recipe Manager: save and reuse recipe entries.
+- Recipe Model Loader: resolve and load models from recipe data.
+- Save and reuse recipes with the **Library Manager** (it replaces the former Recipe Manager).
 
 ## Workflow Examples
 
@@ -93,7 +94,7 @@ Workflow examples are provided to help understand the basics.
 - This is where you set model/backend defaults, NSFW visibility defaults, view preferences, and more.
 - If you want the Prompt Generator dropdowns to show only your local models, enable `Hide downloadable built-in models` in these settings.
 - Prompt Generator backend choices (llama.cpp, Ollama) and related options are configured there.
-- The Prompt Generator's system prompts are fully user-customizable. They're stored in `user/default/prompt_generator_data.json` and can be created and edited with the **Prompt Browser** — your custom prompts then show up directly in the Prompt Generator node. (Press r for refresh if not visible)
+- The Prompt Generator's system prompts are fully user-customizable. They're stored in `user/default/prompt_generator_data.json` and can be created and edited with the **Prompt Library Hub** (sidebar) or the **Prompt Browser** — your custom prompts then show up directly in the Prompt Generator node. (Press r for refresh if not visible)
 
 ## Documentation
 
@@ -126,7 +127,7 @@ Node-side Prompt Composer controls include:
 
 ### Saving And Reloading Composer Workflows
 
-The **Composition Manager** node (formerly Compose Manager) lets you save and reload full Prompt Composer workflows using **Compose Data**. It also saves **Prompt Layout Builder** layouts; the Prompt Browser marks composer entries **C** and layout entries **L**.
+The **Library Manager** node (formerly Compose Manager, and replacing Recipe Manager) saves and reloads the `manager_data` of **Prompt Manager**, the **Recipe** nodes, **Prompt Composer** and **Prompt Layout Builder**; they all share the `MANAGER_DATA` type. The Prompt Browser marks their entries **P**, **C** and **L** (recipes show under Type: Recipe). Connect Library Manager's `manager_data` to Prompt Composer's `manager_data` input to restore a saved Composer setup.
 
 To restore a saved Composer setup in **Prompt Composer**, use the **second row of toggles** on the node:
 

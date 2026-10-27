@@ -1075,7 +1075,7 @@ function createButton(text, callback) {
     button.style.color = "#fff";
     button.style.border = "1px solid #444";
     button.style.borderRadius = "6px";
-    button.style.fontSize = "11px";
+    button.style.fontSize = "13px";
     button.style.fontWeight = "normal";
     button.style.whiteSpace = "nowrap";
     button.style.overflow = "hidden";
@@ -1106,7 +1106,7 @@ function createDropdownButton(text, items) {
     button.style.color = "#fff";
     button.style.border = "1px solid #444";
     button.style.borderRadius = "6px";
-    button.style.fontSize = "11px";
+    button.style.fontSize = "13px";
     button.style.fontWeight = "normal";
     button.style.whiteSpace = "nowrap";
     button.style.height = "28px";
@@ -1139,7 +1139,7 @@ function createDropdownButton(text, items) {
             menuItem.style.cssText = `
                 padding: 8px 12px;
                 cursor: pointer;
-                font-size: 11px;
+                font-size: 13px;
                 color: #fff;
                 white-space: nowrap;
             `;
@@ -1219,12 +1219,12 @@ function showPromptWithCategory(title, message, defaultName, categories, default
 
         dialog.innerHTML = `
             <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category:</div>
-            <select style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;">
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 14px;">Category:</div>
+            <select style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px;">
                 ${categoryOptions}
             </select>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
-            <input type="text" value="${defaultName}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
+            <div style="margin-bottom: 6px; color: #aaa; font-size: 14px;">${message}</div>
+            <input type="text" value="${defaultName}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px; box-sizing: border-box;" />
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
@@ -1516,7 +1516,7 @@ function showTextPrompt(title, message, defaultValue = "") {
         dialog.innerHTML = `
             <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
             <div style="margin-bottom: 10px; color: #ccc;">${message}</div>
-            <input type="text" value="${defaultValue}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px;" />
+            <input type="text" value="${defaultValue}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 16px;" />
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>

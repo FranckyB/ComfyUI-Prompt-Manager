@@ -2,8 +2,10 @@
 Prompt Layout Builder - draw a MOSS-Image layout (scene prompt + boxed regions) or load one from an LLM.
 
 The editor stores boxes as canvas fractions {x, y, w, h, type, text, desc, palette} in the layout_data widget.
-The prompt output is the native MOSS-Image layout JSON (bbox in pixels from the canvas centre, yxyx), the same
-format as MOSS-Image Layout Prompt. import_json accepts that format, percent or 0-1000 yxyx layouts written by
+The prompt output follows output_format: the native MOSS-Image layout JSON (bbox in pixels from the canvas centre,
+yxyx, the same format as MOSS-Image Layout Prompt), an Ideogram 4 JSON caption (0-1000 yxyx elements, as Build JSON
+Prompt (Ideogram)). import_json accepts the MOSS
+format, percent or 0-1000 yxyx layouts written by
 an LLM, and the elements list from Create Bounding Boxes. The two converter nodes translate layouts to and from the
 core BOUNDING_BOX / elements types so the builder can be chained with other box nodes.
 """
@@ -29,7 +31,7 @@ from ..py.workflow_data_utils import build_v2_recipe_data_from_prompt
 
 
 REF_RATIO = "Use Reference Ratio"
-# compose_data key holding the editor state, next to Prompt Composer's "prompt_composer".
+# manager_data key holding the editor state, next to Prompt Composer's "prompt_composer".
 LAYOUT_RECIPE_KEY = "prompt_layout"
 SIZE_MULTIPLE = 16
 CANVASES = ("single", "multi_panel", "collage")
@@ -38,6 +40,7 @@ BOX_PALETTE_MAX = 8
 SUMMARY_PALETTE_MAX = 16
 HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 RELATIVE_SPACES = {"percent": 100.0, "relative_1000": 1000.0}
+OUTPUT_FORMATS = ("MOSS", "Ideogram")
 
 
 def _resolution(aspect_ratio, megapixels, ref_size):
@@ -154,12 +157,41 @@ def _layout_prompt(prompt, meta, canvas, palette, boxes, width, height):
     return json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
 
 
+def _ideogram_prompt(prompt, palette, boxes, fields):
+    # Same caption as Ideogram 4 Prompt Builder KJ: compact JSON, and every style key in order once a style is set.
+    fields = fields if isinstance(fields, dict) else {}
+    text = lambda key: str(fields.get(key) or "")
+    caption = {}
+    if prompt.strip():
+        caption["high_level_description"] = prompt.strip()
+    style = fields.get("style")
+    if style in ("photo", "art_style"):
+        style_description = {"aesthetics": text("aesthetics"), "lighting": text("lighting")}
+        if style == "photo":
+            style_description.update(photo=text("style_detail"), medium=text("medium"))
+        else:
+            style_description.update(medium=text("medium"), art_style=text("style_detail"))
+        if palette:
+            style_description["color_palette"] = palette
+        caption["style_description"] = style_description
+    caption["compositional_deconstruction"] = {"background": text("background"), "elements": build_elements(boxes)}
+    return json.dumps(caption, ensure_ascii=False, separators=(",", ":"))
+
+
+def _format_prompt(output_format, prompt, meta, canvas, palette, boxes, width, height, ideogram=None):
+    if output_format == "Ideogram":
+        return _ideogram_prompt(prompt, palette, boxes, ideogram)
+    if not boxes:
+        return prompt
+    return _layout_prompt(prompt, meta, canvas, palette, boxes, width, height)
+
+
 def _fit_background(image, width, height):
     samples = image[:1, :, :, :3].movedim(-1, 1)
     return comfy.utils.common_upscale(samples, width, height, "lanczos", "center").movedim(1, -1)
 
 
-def _compose_data(layout_prompt, state, width, height):
+def _manager_data(layout_prompt, state, width, height):
     data = build_v2_recipe_data_from_prompt(prompt_text=layout_prompt, source="PromptLayoutBuilder")
     data["models"]["model_a"]["resolution"].update(width=width, height=height)
     data[LAYOUT_RECIPE_KEY] = {
@@ -276,7 +308,7 @@ class PromptLayoutBuilder:
             "required": {
                 "aspect_ratio": ([REF_RATIO, *(ratio.value for ratio in ASPECT_RATIOS)], {
                     "default": "1:1 (Square)",
-                    "tooltip": "Canvas aspect ratio. 'Use Reference Ratio' follows a layout restored from compose_data, "
+                    "tooltip": "Canvas aspect ratio. 'Use Reference Ratio' follows a layout restored from manager_data, "
                                "otherwise the connected image.",
                 }),
                 "megapixels": ("FLOAT", {
@@ -303,35 +335,39 @@ class PromptLayoutBuilder:
                     "tooltip": "Read the layout from import_json and lock the editor. Turn off to edit the imported boxes.",
                 }),
                 "layout_data": ("STRING", {"default": "{}", "tooltip": "Editor boxes (managed by the node UI)."}),
+                "output_format": (list(OUTPUT_FORMATS), {
+                    "default": "MOSS",
+                    "tooltip": "Prompt format: MOSS-Image layout JSON or Ideogram 4 JSON caption.",
+                }),
             },
             "optional": {
                 "image": ("IMAGE", {"tooltip": "Background for the editor; also sets the ratio with 'Use Reference Ratio'."}),
-                "import_json": ("STRING,COMPOSE_DATA", {
+                "import_json": ("STRING,MANAGER_DATA", {
                     "forceInput": True,
                     "lazy": True,
                     "tooltip": "Layout JSON (e.g. from Prompt Generator: percent, 0-1000 or MOSS-native boxes) or a saved "
-                               "layout's compose_data from Composition Manager. Only evaluated when use_import_json is on.",
+                               "layout's manager_data from Library Manager. Only evaluated when use_import_json is on.",
                 }),
             },
         }
 
-    RETURN_TYPES = ("STRING", "IMAGE", "INT", "INT", "COMPOSE_DATA")
-    RETURN_NAMES = ("prompt", "preview", "width", "height", "compose_data")
+    RETURN_TYPES = ("STRING", "IMAGE", "INT", "INT", "MANAGER_DATA")
+    RETURN_NAMES = ("prompt", "preview", "width", "height", "manager_data")
     FUNCTION = "build"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = True
-    DESCRIPTION = "Draw MOSS-Image layout boxes over a scene prompt, or load them from an LLM layout JSON."
+    DESCRIPTION = "Draw layout boxes over a scene prompt, or load them from an LLM layout JSON. Outputs a MOSS-Image or Ideogram 4 prompt."
 
     def check_lazy_status(self, use_import_json, **kwargs):
         return ["import_json"] if use_import_json else []
 
     def build(self, aspect_ratio, megapixels, prompt, meta, canvas, use_import_json, layout_data,
-              image=None, import_json=None):
+              image=None, import_json=None, output_format="MOSS"):
         saved = None
         if use_import_json and isinstance(import_json, dict):
             saved = import_json.get(LAYOUT_RECIPE_KEY)
             if not isinstance(saved, dict):
-                raise ValueError("Prompt Layout Builder: this compose_data has no layout (it is Prompt Composer data).")
+                raise ValueError("Prompt Layout Builder: this manager_data has no layout (it comes from Prompt Manager or Prompt Composer).")
         text_import = use_import_json and isinstance(import_json, str) and import_json.strip()
         if saved and saved.get("width") and saved.get("height"):
             ref_size = (int(saved["width"]), int(saved["height"]))
@@ -344,6 +380,7 @@ class PromptLayoutBuilder:
         state = saved if saved else json.loads(layout_data or "{}")
         boxes = [_clean_box(box) for box in state.get("boxes", []) if isinstance(box, dict)]
         palette = _palette(state.get("palette"), SUMMARY_PALETTE_MAX)
+        ideogram = state.get("ideogram") if isinstance(state.get("ideogram"), dict) else {}
         meta_tags = _strs(meta)
         ui = {}
 
@@ -363,6 +400,7 @@ class PromptLayoutBuilder:
         if saved or text_import:
             ui["pm_layout_import"] = [{
                 "boxes": boxes, "palette": palette, "prompt": prompt, "meta": ", ".join(meta_tags), "canvas": canvas,
+                **({"ideogram": ideogram} if saved and ideogram else {}),
             }]
 
         ui["pm_layout_ref_size"] = list(ref_size) if ref_size else []
@@ -374,10 +412,10 @@ class PromptLayoutBuilder:
             preview_bg = Image.fromarray((background[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
             ui["pm_layout_background"] = nodes.PreviewImage().save_images(background, "pm.layout.background")["ui"]["images"]
 
-        layout_prompt = _layout_prompt(prompt, meta_tags, canvas, palette, boxes, width, height)
+        layout_prompt = _format_prompt(output_format, prompt, meta_tags, canvas, palette, boxes, width, height, ideogram)
         editor_state = {
             "boxes": boxes, "palette": palette, "prompt": prompt, "meta": meta_tags, "canvas": canvas,
-            "aspect_ratio": aspect_ratio, "megapixels": megapixels,
+            "aspect_ratio": aspect_ratio, "megapixels": megapixels, "ideogram": ideogram,
         }
         return {
             "ui": ui,
@@ -386,6 +424,6 @@ class PromptLayoutBuilder:
                 render_preview(boxes, width, height, preview_bg),
                 width,
                 height,
-                _compose_data(layout_prompt, editor_state, width, height),
+                _manager_data(layout_prompt, editor_state, width, height),
             ),
         }

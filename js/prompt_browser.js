@@ -1786,22 +1786,25 @@ export function hasWorkflowDataPayload(rawWorkflowData) {
     );
 }
 
-export function hasComposeLikePayload(promptData) {
-    if (!promptData || typeof promptData !== "object") return false;
-    const savedFrom = String(promptData.saved_from || "").trim();
-    if (savedFrom === "PromptComposerManager" || savedFrom === "ComposerManager") return true;
-    const workflowData = parseWorkflowDataCandidate(promptData.workflow_data);
-    if (!workflowData || typeof workflowData !== "object") return false;
-    const workflowSource = String(workflowData._source || "").trim();
-    if (workflowSource === "PromptComposerManager" || workflowSource === "ComposerManager") return true;
-    // Layout saves keep their own _source (PromptLayoutBuilder), so detect them by their payload.
-    return [workflowData.prompt_composer, workflowData.prompt_layout].some((block) => block && typeof block === "object");
+// Library entries are classified by the manager_data block their source node wrote, not by who saved them.
+function getWorkflowBlock(promptData, key) {
+    const workflowData = parseWorkflowDataCandidate(promptData?.workflow_data);
+    const block = workflowData && typeof workflowData === "object" ? workflowData[key] : null;
+    return block && typeof block === "object" ? block : null;
 }
 
-// Prompt Layout Builder state saved through Composition Manager; a compose-like payload Prompt Composer cannot use.
+// Prompt Composer or Prompt Layout Builder data.
+export function hasComposeLikePayload(promptData) {
+    return !!(getWorkflowBlock(promptData, "prompt_composer") || getWorkflowBlock(promptData, "prompt_layout"));
+}
+
+// Prompt Layout Builder state; compose-like, but Prompt Composer cannot use it.
 export function hasLayoutPayload(promptData) {
-    const workflowData = parseWorkflowDataCandidate(promptData?.workflow_data);
-    return !!(workflowData && typeof workflowData.prompt_layout === "object" && workflowData.prompt_layout);
+    return !!getWorkflowBlock(promptData, "prompt_layout");
+}
+
+export function hasPromptManagerPayload(promptData) {
+    return !!getWorkflowBlock(promptData, "prompt_manager");
 }
 
 const LAYOUT_BADGE_COLOR = "rgba(124, 92, 220, 0.95)";
@@ -1850,14 +1853,13 @@ export function getPromptNamesForCategory(node, category, options = {}) {
             const entry = promptEntries?.[name];
             const hasComposeData = hasComposeLikePayload(entry);
             const hasLayoutData = hasComposeData && hasLayoutPayload(entry);
-            const hasRecipeData = !hasComposeData && hasRecipeLikePayload(entry);
+            const hasRecipeData = !hasComposeData && !hasPromptManagerPayload(entry) && hasRecipeLikePayload(entry);
             const hasPromptData = !hasComposeData && hasPromptPresetPayload(entry);
 
             if (workflowOnly && !(hasComposeData || hasRecipeData || hasPromptData)) return false;
             if (contentFilter === "prompt") return hasPromptData;
             if (contentFilter === "compose") return hasComposeData && !hasLayoutData;
             if (contentFilter === "layout") return hasLayoutData;
-            if (contentFilter === "composition") return hasComposeData;
             if (contentFilter === "recipe") return hasRecipeData;
             return true;
         });
@@ -1942,7 +1944,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
     const saveUsesEditPanel = mode === "save" && allowEditMode && options?.saveWithEditPanel === true;
     const initialContentFilter = (() => {
         const raw = String(options?.contentFilter || "").trim().toLowerCase();
-        return ["prompt", "recipe", "compose", "layout", "composition", "all"].includes(raw) ? raw : "";
+        return ["prompt", "recipe", "compose", "layout", "all"].includes(raw) ? raw : "";
     })();
     const filterEmptyCategories = options?.filterEmptyCategories === true;
     const showAllCategoriesToggle = options?.showAllCategoriesToggle === true;
@@ -2461,10 +2463,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 contentFilterBtn.textContent = "Type: Layout";
                 contentFilterBtn.style.cssText = btnStyle + `background: rgba(124, 92, 220, 0.18); border-color: rgba(124, 92, 220, 0.82); color: #e6defc;`;
                 contentFilterBtn.title = "Showing layout entries only";
-            } else if (contentFilterState === "composition") {
-                contentFilterBtn.textContent = "Type: Compose + Layout";
-                contentFilterBtn.style.cssText = btnStyle;
-                contentFilterBtn.title = "Showing compose and layout entries";
             } else if (contentFilterState === "recipe") {
                 contentFilterBtn.textContent = "Type: Recipe";
                 contentFilterBtn.style.cssText = btnStyle + `background: rgba(235, 140, 35, 0.18); border-color: rgba(235, 140, 35, 0.8); color: #ffe7c2;`;
@@ -4939,8 +4937,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
                 const showComposeBadge = hasComposeData;
-                const showWorkflowBadge = !showComposeBadge && !workflowOnly && hasWorkflowData;
-                const showPromptBadge = !showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload;
+                const showManagerBadge = !showComposeBadge && hasPromptManagerPayload(promptData);
+                const showWorkflowBadge = !showComposeBadge && !showManagerBadge && !workflowOnly && hasWorkflowData;
+                const showPromptBadge = showManagerBadge || (!showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload);
                 if (isNSFW || showComposeBadge || showWorkflowBadge || showPromptBadge) {
                     const badgeStack = document.createElement("div");
                     badgeStack.style.cssText = `
@@ -5013,7 +5012,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (showPromptBadge) {
                         const promptBadge = document.createElement("div");
                         promptBadge.textContent = "P";
-                        promptBadge.title = "Prompt Data (Converted to Recipe)";
+                        promptBadge.title = showManagerBadge ? "Has Prompt Manager Data" : "Prompt Data (Converted to Recipe)";
                         promptBadge.style.cssText = `
                             width: 14px;
                             height: 14px;
@@ -5336,8 +5335,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 // Top-right badge stack: NSFW first, workflow badge under it.
                 const showComposeBadge = hasComposeData;
-                const showWorkflowBadge = !showComposeBadge && !workflowOnly && hasWorkflowData;
-                const showPromptBadge = !showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload;
+                const showManagerBadge = !showComposeBadge && hasPromptManagerPayload(promptData);
+                const showWorkflowBadge = !showComposeBadge && !showManagerBadge && !workflowOnly && hasWorkflowData;
+                const showPromptBadge = showManagerBadge || (!showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload);
                 if (isNSFW || showComposeBadge || showWorkflowBadge || showPromptBadge) {
                     const badgeStack = document.createElement("div");
                     badgeStack.style.cssText = `
@@ -5410,7 +5410,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     if (showPromptBadge) {
                         const promptBadge = document.createElement("div");
                         promptBadge.textContent = "P";
-                        promptBadge.title = "Prompt Data (Converted to Recipe)";
+                        promptBadge.title = showManagerBadge ? "Has Prompt Manager Data" : "Prompt Data (Converted to Recipe)";
                         promptBadge.style.cssText = `
                             width: 14px;
                             height: 14px;
@@ -5929,8 +5929,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
                 const hasComposeData = !promptOnly && hasComposeLikePayload(promptData);
                 const showComposeBadge = hasComposeData;
-                const showWorkflowBadge = !showComposeBadge && !workflowOnly && hasWorkflowData;
-                const showPromptBadge = !showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload;
+                const showManagerBadge = !showComposeBadge && hasPromptManagerPayload(promptData);
+                const showWorkflowBadge = !showComposeBadge && !showManagerBadge && !workflowOnly && hasWorkflowData;
+                const showPromptBadge = showManagerBadge || (!showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload);
                 if (showComposeBadge) {
                     const isLayoutEntry = hasLayoutPayload(promptData);
                     const composeBadge = document.createElement("div");
@@ -5984,7 +5985,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (showPromptBadge) {
                     const promptBadge = document.createElement("div");
                     promptBadge.textContent = "P";
-                    promptBadge.title = "Prompt Data (Converted to Recipe)";
+                    promptBadge.title = showManagerBadge ? "Has Prompt Manager Data" : "Prompt Data (Converted to Recipe)";
                     promptBadge.style.cssText = `
                         position: absolute;
                         right: -2px;

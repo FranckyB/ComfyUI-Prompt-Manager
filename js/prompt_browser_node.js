@@ -339,7 +339,7 @@ async function showPromptLibraryBrowser({
         const topRow = document.createElement("div");
         topRow.style.cssText = "display:flex; justify-content:space-between; align-items:center; gap:12px;";
         topRow.innerHTML = `
-            <h3 style="margin:0; color:#e5e7eb; font-size:14px; font-weight:600; letter-spacing:0.01em;">${title}</h3>
+            <h3 style="margin:0; color:#e5e7eb; font-size:16px; font-weight:600; letter-spacing:0.01em;">${title}</h3>
             <button class="close-btn" style="background:none; border:none; color:#8b9098; font-size:22px; cursor:pointer; padding:0; width:28px; height:28px;">×</button>
         `;
         header.appendChild(topRow);
@@ -350,7 +350,7 @@ async function showPromptLibraryBrowser({
             const button = document.createElement("button");
             button.type = "button";
             button.textContent = label;
-            button.style.cssText = "background:#23262b; border:1px solid rgba(255,255,255,0.08); border-radius:3px; color:#cfd5de; min-width:28px; height:28px; padding:0 8px; cursor:pointer; font-size:11px;";
+            button.style.cssText = "background:#23262b; border:1px solid rgba(255,255,255,0.08); border-radius:3px; color:#cfd5de; min-width:28px; height:28px; padding:0 8px; cursor:pointer; font-size:13px;";
             button.onmouseover = () => { button.style.background = "#2a2e34"; };
             button.onmouseout = () => { button.style.background = "#23262b"; };
             return button;
@@ -363,7 +363,7 @@ async function showPromptLibraryBrowser({
         const pathInput = document.createElement("input");
         pathInput.type = "text";
         pathInput.placeholder = "Paste folder path and press Enter";
-        pathInput.style.cssText = "flex:1; min-width:240px; height:30px; font-size:12px; color:#e5e7eb; background:#111317; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:0 10px; box-sizing:border-box;";
+        pathInput.style.cssText = "flex:1; min-width:240px; height:30px; font-size:14px; color:#e5e7eb; background:#111317; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:0 10px; box-sizing:border-box;";
         navRow.appendChild(upBtn);
         navRow.appendChild(refreshBtn);
         navRow.appendChild(inputBtn);
@@ -376,7 +376,7 @@ async function showPromptLibraryBrowser({
         body.style.cssText = "flex:1; min-height:0; overflow:hidden; padding:10px 14px 0 14px; display:flex; flex-direction:column; gap:0;";
         const listHeader = document.createElement("div");
         listHeader.textContent = "Name";
-        listHeader.style.cssText = "height:30px; display:flex; align-items:center; padding:0 12px; background:#212121; color:#d7dbe1; font-size:12px; border:1px solid rgba(255,255,255,0.08); border-bottom:none; box-sizing:border-box;";
+        listHeader.style.cssText = "height:30px; display:flex; align-items:center; padding:0 12px; background:#212121; color:#d7dbe1; font-size:14px; border:1px solid rgba(255,255,255,0.08); border-bottom:none; box-sizing:border-box;";
         const listing = document.createElement("div");
         listing.style.cssText = "flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:0; background:#17191d; border:1px solid rgba(255,255,255,0.08);";
         body.appendChild(listHeader);
@@ -394,7 +394,7 @@ async function showPromptLibraryBrowser({
         filenameRow.style.cssText = "display:flex; align-items:center; gap:10px;";
         const filenameLabel = document.createElement("span");
         filenameLabel.textContent = "Name:";
-        filenameLabel.style.cssText = "font-size:12px; color:#d7dbe1; min-width:48px;";
+        filenameLabel.style.cssText = "font-size:14px; color:#d7dbe1; min-width:48px;";
         const filenameInput = document.createElement("input");
         filenameInput.type = "text";
         filenameInput.value = isSaveMode ? normalizePromptLibraryFilename(defaultFilename, "prompt_library_data.json") : "";
@@ -467,7 +467,7 @@ async function showPromptLibraryBrowser({
             if (!currentDirs.length && !currentFiles.length) {
                 const empty = document.createElement("div");
                 empty.textContent = "This folder is empty";
-                empty.style.cssText = "padding:12px; color:#6b7280; font-size:12px; border-bottom:1px solid rgba(255,255,255,0.04);";
+                empty.style.cssText = "padding:12px; color:#6b7280; font-size:14px; border-bottom:1px solid rgba(255,255,255,0.04);";
                 listing.appendChild(empty);
                 return;
             }
@@ -817,7 +817,7 @@ function createComposerButton(text, callback) {
     button.style.color = "#fff";
     button.style.border = "1px solid #444";
     button.style.borderRadius = "6px";
-    button.style.fontSize = "11px";
+    button.style.fontSize = "13px";
     button.style.whiteSpace = "nowrap";
     button.style.overflow = "hidden";
     button.style.textOverflow = "ellipsis";
@@ -844,7 +844,7 @@ function createComposerDropdownButton(text, items) {
     button.style.color = "#fff";
     button.style.border = "1px solid #444";
     button.style.borderRadius = "6px";
-    button.style.fontSize = "11px";
+    button.style.fontSize = "13px";
     button.style.whiteSpace = "nowrap";
     button.style.height = "28px";
     button.style.display = "flex";
@@ -878,7 +878,7 @@ function createComposerDropdownButton(text, items) {
                 menuItem.style.cssText = `
                     padding: 8px 12px;
                     cursor: pointer;
-                    font-size: 11px;
+                    font-size: 13px;
                     color: ${PMA_THEME.textPrimary};
                     white-space: nowrap;
                 `;
@@ -1389,7 +1389,7 @@ function buildComposerSourceBar(node) {
         padding: 0 10px;
         height: 100%;
         cursor: pointer;
-        font-size: 10px;
+        font-size: 12px;
         transition: all 0.15s ease;
     `;
 
@@ -1413,7 +1413,7 @@ function buildComposerSourceBar(node) {
         flex: 1;
         text-align: center;
         color: #ddd;
-        font-size: 12px;
+        font-size: 14px;
         font-weight: 600;
         letter-spacing: 0.04em;
         text-transform: uppercase;
@@ -1551,7 +1551,7 @@ function buildComposerPreview(node) {
         align-items: center;
         justify-content: center;
         text-align: center;
-        font-size: 12px;
+        font-size: 14px;
         color: ${PMA_THEME.textMuted};
         padding: 8px;
         box-sizing: border-box;
@@ -1739,7 +1739,7 @@ function buildComposerPromptEditor(node) {
         background: ${PMA_THEME.inputBg};
         color: ${PMA_THEME.textPrimary};
         padding: 10px;
-        font-size: 13px;
+        font-size: 15px;
         box-sizing: border-box;
         font-family: inherit;
     `;
@@ -1820,7 +1820,7 @@ function buildComposerSelectorBar(node) {
         padding: 0 10px;
         height: 100%;
         cursor: pointer;
-        font-size: 10px;
+        font-size: 12px;
         transition: all 0.15s ease;
     `;
     leftArrow.onmouseover = () => { leftArrow.style.background = "#3a3a3a"; leftArrow.style.color = "#fff"; };
@@ -1831,7 +1831,7 @@ function buildComposerSelectorBar(node) {
         flex: 1;
         text-align: center;
         color: #dbeafe;
-        font-size: 13px;
+        font-size: 15px;
         padding: 0 10px;
         cursor: pointer;
         overflow: hidden;
@@ -1859,7 +1859,7 @@ function buildComposerSelectorBar(node) {
         padding: 0 10px;
         height: 100%;
         cursor: pointer;
-        font-size: 10px;
+        font-size: 12px;
         transition: all 0.15s ease;
     `;
     rightArrow.onmouseover = () => { rightArrow.style.background = "#3a3a3a"; rightArrow.style.color = "#fff"; };

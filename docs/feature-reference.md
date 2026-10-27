@@ -52,7 +52,7 @@ Allows downloading of 3 different sizes of Unsloth's Qwen 3.5, but users are fre
 
 - Comes with a bundle of pre-made System Prompts. 
 - Use the arrows beside the system prompt name to cycle through saved prompts across categories, or click the name to open Prompt Browser on System Prompts. When loading workflows, legacy names such as `Enhance Prompt (Image)` are matched to current entries. Missing prompts fall back to `Image / Enhance Prompt` (or the first available entry if that default was removed), without changing other widget values.
-- Create your own system prompts, using the **Prompt Browser** node
+- Create your own system prompts with the **Prompt Library Hub** (sidebar) or by clicking the system prompt name
 - I highly recommend using the **rgthree add-on** and enable *"Auto Nest Subdirectories in Menus"*. This will display categories as submenus.
 - Options to output in JSON format and enable Thinking mode.
 - The stop_server_after toggle:
@@ -80,15 +80,24 @@ This node provides extra control to **Prompt Generator** and is NOT mandatory.
 - Change the System settings for the model
 - Change the GPU used by the LLM
 
+### Prompt Library Hub
+The **Prompts** button in ComfyUI's left sidebar opens the Prompt Library Hub (hide it with Settings > Prompt Manager > 4. Advanced Preferences > Show Prompts Sidebar Button): one place to browse, edit, import and export every Prompt Manager library. It has three sections:
+- **Saved Prompts**: pick the type with the Prompt Manager / Prompt Composer / Prompt Layout / Prompt Recipe buttons (saved through Prompt Manager or Library Manager).
+- **Saved Snippets**: the snippets used by Prompt Composer.
+- **Saved System Prompts**: the system prompts used by Prompt Generator.
+
+Every section has the same three buttons:
+- **Browse & Edit**: opens the Prompt Browser on that library with the Edit tab on.
+- **Import**: merge a file; when entries already exist you choose to keep or overwrite them. Snippets and System Prompts can also be replaced from a file, and System Prompts can restore the built-in defaults (adds back missing built-in prompts without touching yours). Saved Prompt types share one file, so they only merge.
+- **Export**: pick the categories to export as one JSON file (Snippets export selected prompt groups as a ZIP).
+
 ### Prompt Browser
 Prompt Browser lets you create and edit all 3 prompt libraries from a single interface:
 - System prompts: The System Prompts used by Prompt Generator.
 - Compose prompts: Snippets used by Prompt Composer
 - Prompt Manager prompts: Our saved workflow prompts
 
-Prompt Generator now uses a *prompt_generator_data.json*, so you can author your own prompts instead of being limited to the previous simple presets. The add-on also comes with new default prompt, these can be imported back into your saved user system prompts by using the **More** button in the Prompt Browser Node.  
-
-New Prompts may be added from time to time, so this is an easy way to import them back in.
+Prompt Generator now uses a *prompt_generator_data.json*, so you can author your own prompts instead of being limited to the previous simple presets. The add-on also comes with new default prompts; these can be imported back into your saved user system prompts with **Restore Defaults** in the Prompt Library Hub.
 
 
 ### Prompt Extractor
@@ -139,8 +148,8 @@ Loads models/checkpoints based on recipe data.
 - Makes recipe playback more reliable across sessions by tying loader behavior to the saved recipe, not memory.
 - Useful for multi-model pipelines where model choice is part of the recipe itself.
 
-### Recipe Manager
-Save, browse, and reuse recipe entries.
+### Saving Recipes (Library Manager)
+Recipe nodes pass their data as `manager_data`, the same type used by Prompt Manager, Prompt Composer and Prompt Layout Builder. Save, browse, and reuse recipes with the **Library Manager** (it replaces the former Recipe Manager).
 - Persistent recipe storage so successful setups can be cataloged and recalled quickly.
 - Works with Builder for quick review and updates.
 - Encourages a library-style workflow: capture working recipes, name/tag them, and reapply them across projects.

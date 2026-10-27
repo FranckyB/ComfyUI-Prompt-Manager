@@ -27,7 +27,11 @@ const BODY_FONT = `Inter, "Segoe UI", "Noto Sans", Roboto, "Helvetica Neue", sys
 const STYLE_ID = "pm-layout-style";
 const DEFAULT_COLOR = "#FFFFFF";
 // Backend inputs whose values are edited from the editor UI instead of native widgets.
-const HIDDEN_WIDGETS = ["aspect_ratio", "megapixels", "prompt", "meta", "canvas", "use_import_json", "layout_data"];
+const HIDDEN_WIDGETS = ["aspect_ratio", "megapixels", "prompt", "meta", "canvas", "use_import_json", "layout_data", "output_format"];
+const OUTPUT_FORMATS = [
+    { value: "MOSS", title: "MOSS-Image layout JSON (pixels from the canvas centre, yxyx)" },
+    { value: "Ideogram", title: "Ideogram 4 JSON caption (0-1000 yxyx elements)" },
+];
 const BOX_TYPES = [
     { value: "object", label: "Object", tag: "OBJ" },
     { value: "character", label: "Character", tag: "CHR" },
@@ -105,9 +109,10 @@ function readState(node) {
         return {
             boxes: Array.isArray(state.boxes) ? state.boxes : [],
             palette: Array.isArray(state.palette) ? state.palette : [],
+            ideogram: state.ideogram && typeof state.ideogram === "object" ? state.ideogram : {},
         };
     } catch {
-        return { boxes: [], palette: [] };
+        return { boxes: [], palette: [], ideogram: {} };
     }
 }
 
@@ -125,7 +130,7 @@ function ensureStyle() {
         .pm-layout-host { width: 100%; height: 100%; }
         .pm-layout { display: flex; flex-direction: column; gap: 8px; width: 100%; height: 100%; box-sizing: border-box; padding: 8px;
             background: ${UI.panel}; border: 1px solid ${UI.panelBorder}; border-radius: 8px; color: ${UI.textPrimary};
-            font: 12px/1.35 sans-serif; overflow: auto; }
+            font: 14px/1.35 sans-serif; overflow: auto; }
         .pm-layout * { box-sizing: border-box; }
         .pm-layout-main { display: flex; flex-direction: column; gap: 8px; flex: 1 0 auto; }
         .pm-layout-side { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
@@ -140,7 +145,13 @@ function ensureStyle() {
         .pm-layout .pm-layout-toggle input:checked::before { transform: translateX(14px); }
         .pm-layout .pm-layout-toggle input:focus-visible { outline: 2px solid ${UI.accentBorder}; outline-offset: 2px; }
         .pm-layout-target { grid-column: 2; color: ${UI.textHint}; text-align: right; white-space: nowrap; }
+        .pm-layout-format { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; }
+        .pm-layout-format > button { flex: 1; }
         .pm-layout-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 8px; }
+        .pm-layout-ideogram { display: flex; flex-direction: column; gap: 6px; }
+        .pm-layout-style-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; }
+        .pm-layout-trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+        .pm-layout-hint { color: hsl(35 85% 65%); font-size: 13px; }
         .pm-layout .pm-layout-tool-select { width: auto; height: 28px; padding: 0 6px; }
         .pm-layout-spacer { flex: 1; }
         .pm-layout button { height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid ${UI.inputBorder};
@@ -153,18 +164,22 @@ function ensureStyle() {
         .pm-layout textarea { resize: vertical; min-height: 52px; }
         .pm-layout input:focus, .pm-layout textarea:focus, .pm-layout select:focus { outline: none; border-color: ${UI.accentBorder}; }
         .pm-layout input:disabled, .pm-layout textarea:disabled, .pm-layout select:disabled { opacity: 0.55; }
-        .pm-layout-label { display: block; margin-bottom: 3px; color: ${UI.textMuted}; font-size: 11px; }
+        .pm-layout-label { display: block; margin-bottom: 3px; color: ${UI.textMuted}; font-size: 13px; }
         .pm-layout-stage { position: relative; flex: 1 1 auto; min-height: ${STAGE_MIN_HEIGHT}px; border: 1px solid ${UI.cardBorder};
             border-radius: 6px; background: hsl(220 15% 8%); overflow: hidden; outline: none; touch-action: none; }
         .pm-layout-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-        .pm-layout-status { display: flex; justify-content: space-between; gap: 8px; color: ${UI.textHint}; font-size: 11px; }
+        .pm-layout-status { display: flex; justify-content: space-between; gap: 8px; color: ${UI.textHint}; font-size: 13px; }
         .pm-layout-banner { padding: 6px 8px; border-radius: 6px; border: 1px solid hsl(40 92% 60% / 0.6);
             background: hsl(40 92% 60% / 0.12); color: hsl(48 100% 90%); }
         .pm-layout-card { display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 8px;
             border: 1px solid ${UI.sectionBorder}; background: ${UI.cardBg}; }
         .pm-layout fieldset { display: contents; }
         .pm-layout-title { font-weight: 600; color: ${UI.textHeading}; }
-        .pm-layout-coords { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+        .pm-layout-coords { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+        .pm-layout-coord { display: flex; align-items: center; gap: 3px; min-width: 0; color: ${UI.textHint}; font-size: 13px; }
+        .pm-layout .pm-layout-coord input { height: 28px; padding: 0 4px; text-align: center; -moz-appearance: textfield; }
+        .pm-layout .pm-layout-coord input::-webkit-inner-spin-button,
+        .pm-layout .pm-layout-coord input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         .pm-layout-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
         .pm-layout-desc { display: flex; gap: 6px; align-items: stretch; }
         .pm-layout .pm-layout-thumb { flex: 0 0 52px; width: 52px; height: 52px; padding: 0; overflow: hidden; font-size: 18px;
@@ -172,12 +187,11 @@ function ensureStyle() {
         .pm-layout-thumb img, .pm-layout-thumb video { width: 100%; height: 100%; object-fit: cover; }
         .pm-layout-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
         .pm-layout .pm-layout-swatch { width: 26px; height: 26px; padding: 0; border-radius: 6px; border-color: rgba(255, 255, 255, 0.28); }
-        .pm-layout-empty { justify-content: center; color: ${UI.textHint}; text-align: center; padding: 10px; }
         .pm-layout-ghost { opacity: 0.45; }
         .pm-layout .pm-layout-ghost textarea:disabled { opacity: 1; }
         .pm-layout-picker { position: fixed; z-index: 10002; width: 236px; display: flex; flex-direction: column; gap: 10px; padding: 10px;
             border-radius: 8px; border: 1px solid ${UI.panelBorder}; background: ${UI.panel}; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
-            color: ${UI.textPrimary}; font: 12px/1.35 sans-serif; }
+            color: ${UI.textPrimary}; font: 14px/1.35 sans-serif; }
         .pm-layout-picker * { box-sizing: border-box; }
         .pm-layout-picker-area { position: relative; height: 150px; border-radius: 6px; cursor: crosshair; touch-action: none; }
         .pm-layout-picker-hue { position: relative; height: 12px; border-radius: 6px; cursor: pointer; touch-action: none;
@@ -193,7 +207,7 @@ function ensureStyle() {
         .pm-layout-picker button { background: ${UI.buttonBg}; cursor: pointer; }
         .pm-layout-picker input:focus, .pm-layout-picker select:focus { outline: none; border-color: ${UI.accentBorder}; }
         .pm-layout-placeholder { display: none; height: 100%; align-items: center; justify-content: center; border-radius: 8px;
-            border: 1px dashed ${UI.panelBorder}; color: ${UI.textHint}; font: 12px sans-serif; }
+            border: 1px dashed ${UI.panelBorder}; color: ${UI.textHint}; font: 14px sans-serif; }
         .pm-layout-overlay { position: fixed; inset: 0; z-index: 9000; display: flex; padding: 24px; background: ${UI.overlay}; }
         .pm-layout.pm-layout-full { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; padding: 12px; overflow: hidden; }
         .pm-layout-full .pm-layout-main { min-height: 0; }
@@ -326,7 +340,8 @@ function openColorPicker(anchor, color, { onInput, onRemove, onClose }) {
 
 // Edits stay local while the picker is open and are committed once when it closes.
 function createPaletteField(parent, labelText, limit, onCommit) {
-    const swatches = el("div", "pm-layout-swatches", labeled(parent, labelText).wrap);
+    const field = labeled(parent, labelText);
+    const swatches = el("div", "pm-layout-swatches", field.wrap);
     let colors = [];
 
     const edit = (index, button) => openColorPicker(button, colors[index], {
@@ -363,6 +378,7 @@ function createPaletteField(parent, labelText, limit, onCommit) {
     };
 
     return {
+        ...field,
         set(next) {
             if (activePicker && swatches.contains(activePicker.anchor)) return;
             colors = [...next];
@@ -427,6 +443,10 @@ function createLayoutEditor(node) {
 
     const main = el("div", "pm-layout-main", root);
     const settings = el("div", "pm-layout-settings", main);
+    const formatRow = el("div", "pm-layout-format", settings);
+    el("span", "pm-layout-label", formatRow, "Output");
+    const formatButtons = OUTPUT_FORMATS.map(({ value, title }) =>
+        makeButton(formatRow, value, title, () => { setWidgetValue("output_format", value); render(); }));
     const aspectSelect = el("select", "", labeled(settings, "Aspect ratio").wrap);
     aspectSelect.addEventListener("change", () => { setWidgetValue("aspect_ratio", aspectSelect.value); render(); });
     const megapixelsInput = el("input", "", labeled(settings, "Megapixels").wrap);
@@ -450,17 +470,38 @@ function createLayoutEditor(node) {
     const sceneCard = el("div", "pm-layout-card pm-layout-scene", main);
     const sceneFields = el("fieldset", "", sceneCard);
     el("span", "pm-layout-title", sceneFields, "Scene");
-    const scenePrompt = el("textarea", "", labeled(sceneFields, "Prompt").wrap);
+    const promptField = labeled(sceneFields, "Prompt");
+    const scenePrompt = el("textarea", "", promptField.wrap);
     scenePrompt.placeholder = "Scene description (summary caption)";
     const sceneRow = el("div", "pm-layout-split", sceneFields);
     const sceneMeta = el("input", "", labeled(sceneRow, "Meta (comma-separated style tags)").wrap);
     sceneMeta.placeholder = "poster, graphic design";
     const sceneCanvas = el("select", "", labeled(sceneRow, "Canvas").wrap);
     for (const [input, name] of [[scenePrompt, "prompt"], [sceneMeta, "meta"], [sceneCanvas, "canvas"]]) {
-        input.addEventListener(input === sceneCanvas ? "change" : "input", () => setWidgetValue(name, input.value));
+        input.addEventListener(input === sceneCanvas ? "change" : "input", () => { setWidgetValue(name, input.value); renderSceneHint(); });
     }
+    const ideogramBlock = el("div", "pm-layout-ideogram", sceneFields);
+    const ideoBackground = el("input", "", labeled(ideogramBlock, "Background").wrap);
+    ideoBackground.placeholder = "The environment behind and around the subjects";
+    const ideoStyleRow = el("div", "pm-layout-style-row", ideogramBlock);
+    const ideoStyle = el("select", "", labeled(ideoStyleRow, "Style").wrap);
+    for (const [value, label] of [["none", "None"], ["photo", "Photo"], ["art_style", "Art style"]]) ideoStyle.append(new Option(label, value));
+    const ideoDetailField = labeled(ideoStyleRow, "Photo");
+    const ideoDetail = el("input", "", ideoDetailField.wrap);
+    const ideoTrio = el("div", "pm-layout-trio", ideogramBlock);
+    const ideoAesthetics = el("input", "", labeled(ideoTrio, "Aesthetics").wrap);
+    ideoAesthetics.placeholder = "moody, cinematic";
+    const ideoLighting = el("input", "", labeled(ideoTrio, "Lighting").wrap);
+    ideoLighting.placeholder = "golden hour, rim light";
+    const ideoMedium = el("input", "", labeled(ideoTrio, "Medium").wrap);
+    ideoMedium.placeholder = "photograph";
+    const ideogramInputs = [[ideoBackground, "background"], [ideoDetail, "style_detail"], [ideoAesthetics, "aesthetics"],
+        [ideoLighting, "lighting"], [ideoMedium, "medium"]];
+    for (const [input, key] of ideogramInputs) input.addEventListener("input", () => setIdeogram(key, input.value));
+    ideoStyle.addEventListener("change", () => { setIdeogram("style", ideoStyle.value); render(); });
     const scenePalette = createPaletteField(sceneFields, "Scene palette", SUMMARY_PALETTE_MAX,
         (colors) => edit(() => { state.palette = colors; }));
+    const sceneHint = el("div", "pm-layout-hint", sceneFields);
 
     const toolbar = el("div", "pm-layout-row", main);
     const addButton = makeButton(toolbar, "+ Box", "Add a box", () => addBox());
@@ -496,23 +537,22 @@ function createLayoutEditor(node) {
     const prevButton = makeButton(navRow, "←", "Previous box", () => { selected -= 1; render(); });
     const nextButton = makeButton(navRow, "→", "Next box", () => { selected += 1; render(); });
 
-    const emptyHint = el("div", "pm-layout-card pm-layout-empty", side, "No box selected. Drag on the canvas or press + Box.");
     const boxCard = el("div", "pm-layout-card", side);
     const boxFields = el("fieldset", "", boxCard);
     const boxHeader = el("div", "pm-layout-row", boxFields);
-    const boxTitle = el("span", "pm-layout-title", boxHeader);
-    el("div", "pm-layout-spacer", boxHeader);
-    makeButton(boxHeader, "Duplicate", "Duplicate this box (Ctrl/Cmd+D)", () => duplicateSelected());
-    makeButton(boxHeader, "Delete", "Delete this box (Del)", () => deleteSelected());
-
-    const coords = el("div", "pm-layout-coords", boxFields);
-    const coordInputs = ["x", "y", "width", "height"].map((name, index) => {
-        const input = el("input", "", labeled(coords, name).wrap);
+    const coords = el("div", "pm-layout-coords", boxHeader);
+    const coordInputs = [["x", "x"], ["y", "y"], ["w", "width"], ["h", "height"]].map(([short, name], index) => {
+        const field = el("label", "pm-layout-coord", coords);
+        field.title = `${name} (px)`;
+        el("span", "", field, short);
+        const input = el("input", "", field);
         input.type = "number";
         input.step = "1";
         input.addEventListener("change", () => setCoord(index, Number(input.value)));
         return input;
     });
+    makeButton(boxHeader, "Duplicate", "Duplicate this box (Ctrl/Cmd+D)", () => duplicateSelected());
+    makeButton(boxHeader, "Delete", "Delete this box (Del)", () => deleteSelected());
 
     const types = el("div", "pm-layout-types", boxFields);
     const typeButtons = BOX_TYPES.map((type) => makeButton(types, type.label, `Label this box as ${type.value}`, () => {
@@ -559,6 +599,20 @@ function createLayoutEditor(node) {
         setWidgetValue("layout_data", JSON.stringify(state));
     }
 
+    // Ideogram-only scene fields live in layout_data; typing does not add undo steps (like the scene prompt).
+    function setIdeogram(key, value) {
+        if (isLocked()) return;
+        state.ideogram = { ...(state.ideogram || {}), [key]: value };
+        persist();
+        renderSceneHint();
+    }
+
+    const outputFormat = () => {
+        const widget = getWidget(node, "output_format");
+        if (widget && !OUTPUT_FORMATS.some((format) => format.value === widget.value)) widget.value = "MOSS";
+        return String(widget?.value || "MOSS");
+    };
+
     function pushUndo(before) {
         undo.push(before);
         if (undo.length > HISTORY_LIMIT) undo.shift();
@@ -597,6 +651,7 @@ function createLayoutEditor(node) {
             persist();
             renderNav();
             renderToolbar();
+            renderSceneHint();
             schedulePaint();
         });
     }
@@ -660,7 +715,7 @@ function createLayoutEditor(node) {
         let selection;
         try {
             selection = await showThumbnailBrowser(node, category, ref?.name || "", {
-                title: "Select Prompt for Box",
+                title: "Select Prompt Snippet for Box",
                 endpointPrefix: COMPOSER_ENDPOINT_PREFIX,
                 promptOnly: true,
                 loadPromptsFn: loadComposerPrompts,
@@ -716,28 +771,22 @@ function createLayoutEditor(node) {
             option.value = String(index);
             return option;
         });
-        if (selected < 0) {
-            const placeholderOption = el("option", "", null, count ? "No box selected" : "No boxes");
-            placeholderOption.value = "-1";
-            options.unshift(placeholderOption);
-        }
+        const placeholderOption = el("option", "", null, "00 No Selection");
+        placeholderOption.value = "-1";
+        options.unshift(placeholderOption);
         navSelect.replaceChildren(...options);
         navSelect.value = String(selected);
         navSelect.disabled = !count;
         navSelect.style.borderLeft = selected >= 0 ? `3px solid ${rgba(boxRgb(state.boxes[selected], selected))}` : "";
-        prevButton.disabled = selected <= 0;
-        nextButton.disabled = selected < 0 || selected >= count - 1;
+        prevButton.disabled = selected < 0;
+        nextButton.disabled = selected >= count - 1;
     }
 
     function renderBox() {
-        // Keep the panel height when the card hides so the canvas does not jump.
-        if (selected < 0 && boxCard.offsetHeight) emptyHint.style.minHeight = `${boxCard.offsetHeight}px`;
         boxCard.style.display = selected >= 0 ? "" : "none";
-        emptyHint.style.display = selected >= 0 || isLocked() ? "none" : "";
         if (selected < 0) return;
         const box = state.boxes[selected];
         const [W, H] = canvasSize(node);
-        boxTitle.textContent = `Box ${pad2(selected + 1)}`;
         boxCard.style.borderColor = rgba(boxRgb(box, selected), 0.7);
         [box.x * W, box.y * H, box.w * W, box.h * H].forEach((value, index) => setValue(coordInputs[index], String(Math.round(value))));
         typeButtons.forEach((button, index) => button.classList.toggle("active", BOX_TYPES[index].value === box.type));
@@ -759,10 +808,40 @@ function createLayoutEditor(node) {
         aspectSelect.value = String(aspectWidget?.value ?? "");
         setValue(megapixelsInput, String(getWidget(node, "megapixels")?.value ?? 1));
         importToggle.checked = !!getWidget(node, "use_import_json")?.value;
+        const format = outputFormat();
+        formatButtons.forEach((button, index) => button.classList.toggle("active", OUTPUT_FORMATS[index].value === format));
         targetLabel.textContent = `Target: ${W} × ${H}`;
     }
 
+    function renderSceneHint() {
+        const format = outputFormat();
+        const missing = [];
+        if (format !== "MOSS" && !String(getWidget(node, "prompt")?.value || "").trim()) {
+            missing.push("a high-level description");
+        }
+        // An undescribed box still claims its region, leaving the model to guess what goes there.
+        const blank = state.boxes.map((box, index) => (String(box.desc || "").trim() || (box.type === "text" && String(box.text || "").trim()) ? null : pad2(index + 1))).filter(Boolean);
+        if (blank.length) missing.push(`a description for box ${blank.join(", ")}`);
+        sceneHint.textContent = missing.length ? `Missing: ${missing.join(", ")}.` : "";
+        sceneHint.style.display = missing.length ? "" : "none";
+    }
+
     function renderScene() {
+        const format = outputFormat();
+        const ideogram = state.ideogram || {};
+        promptField.label.textContent = format === "Ideogram" ? "High-level description" : "Prompt";
+        scenePrompt.placeholder = format === "Ideogram" ? "One or two sentences summarizing the whole image"
+            : "Scene description (summary caption)";
+        sceneRow.style.display = format === "MOSS" ? "" : "none";
+        ideogramBlock.style.display = format === "Ideogram" ? "" : "none";
+        scenePalette.label.textContent = format === "Ideogram" ? "Style palette" : "Scene palette";
+        const style = ["photo", "art_style"].includes(ideogram.style) ? ideogram.style : "none";
+        ideoStyle.value = style;
+        ideoDetailField.label.textContent = style === "art_style" ? "Art style" : "Photo";
+        ideoDetail.placeholder = style === "art_style" ? "flat vector illustration, bold outlines" : "35mm, f/1.4, shallow depth of field";
+        for (const input of [ideoDetail, ideoAesthetics, ideoLighting, ideoMedium]) input.disabled = style === "none";
+        for (const [input, key] of ideogramInputs) setValue(input, String(ideogram[key] ?? ""));
+        renderSceneHint();
         setValue(scenePrompt, String(getWidget(node, "prompt")?.value ?? ""));
         setValue(sceneMeta, String(getWidget(node, "meta")?.value ?? ""));
         const canvasWidget = getWidget(node, "canvas");
@@ -1130,7 +1209,11 @@ function createLayoutEditor(node) {
             }
             const imported = message?.pm_layout_import?.[0];
             if (imported) {
-                const next = { boxes: imported.boxes || [], palette: imported.palette || [] };
+                const next = {
+                    boxes: imported.boxes || [],
+                    palette: imported.palette || [],
+                    ideogram: imported.ideogram || state.ideogram || {},
+                };
                 if (JSON.stringify(next) !== snapshot()) {
                     pushUndo(snapshot());
                     state = next;

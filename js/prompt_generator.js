@@ -105,7 +105,7 @@ function setupSystemPromptSelector(node) {
             padding: 0 10px;
             height: 100%;
             cursor: pointer;
-            font-size: 10px;
+            font-size: 12px;
             transition: all 0.15s ease;
         `;
         button.addEventListener("mouseover", () => {
@@ -132,7 +132,7 @@ function setupSystemPromptSelector(node) {
         text-align: center;
         color: #dbeafe;
         font-family: inherit;
-        font-size: 13px;
+        font-size: 15px;
         padding: 0 10px;
         cursor: pointer;
         overflow: hidden;

@@ -1,7 +1,7 @@
 """
 Workflow Renderer — render-only node.
 
-Accepts RECIPE_DATA (JSON string from Recipe Builder or PromptExtractor),
+Accepts MANAGER_DATA (JSON string from Recipe Builder or PromptExtractor),
 loads models, samples, decodes, and outputs IMAGE + LATENT.
 
 No UI, no extraction — purely a render engine.
@@ -69,7 +69,7 @@ _FAMILY_SAMPLER_DEFAULTS = {
 def _apply_family_sampler_defaults(primary_sampler, wf_sampler, family_key, log_prefix="[RecipeRenderer]"):
     """Apply family-specific sampler defaults unconditionally.
 
-    The renderer is the final consumer of RECIPE_DATA; family defaults are the
+    The renderer is the final consumer of MANAGER_DATA; family defaults are the
     intended sampler configuration and always win over upstream template values
     or Builder override_data — except for keys the caller marked as explicitly
     user-set via `explicit_overrides` (e.g. the Prompt Manager thumbnail picker's
@@ -212,7 +212,7 @@ class WorkflowRenderer:
     """
     Render-only generation node.
 
-    Takes RECIPE_DATA (from Workflow Builder or PromptExtractor),
+    Takes MANAGER_DATA (from Workflow Builder or PromptExtractor),
     loads models, applies LoRAs, samples, decodes.
     Outputs IMAGE + LATENT.
     """
@@ -223,9 +223,9 @@ class WorkflowRenderer:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "recipe_data": ("RECIPE_DATA", {
+                "manager_data": ("MANAGER_DATA", {
                     "forceInput": True,
-                    "tooltip": "Connect recipe_data from Recipe Builder or PromptExtractor",
+                    "tooltip": "Connect manager_data from Recipe Builder, Recipe Extractor or Library Manager",
                 }),
                 "clear_cache_after_render": ("BOOLEAN", {
                     "default": False,
@@ -248,19 +248,19 @@ class WorkflowRenderer:
             },
         }
 
-    RETURN_TYPES = ("RECIPE_DATA", "IMAGE", "LATENT")
-    RETURN_NAMES = ("recipe_data", "output_image", "output_latent")
+    RETURN_TYPES = ("IMAGE", "LATENT", "MANAGER_DATA")
+    RETURN_NAMES = ("output_image", "output_latent", "manager_data")
     FUNCTION = "execute"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = False
     DESCRIPTION = (
-        "Render-only node. Accepts recipe_data, loads models, samples, "
-        "and decodes. Outputs IMAGE + LATENT + RECIPE_DATA "
+        "Render-only node. Accepts manager_data, loads models, samples, "
+        "and decodes. Outputs IMAGE + LATENT + MANAGER_DATA "
         "(with MODEL/CLIP/VAE passthrough)."
     )
 
     @classmethod
-    def IS_CHANGED(cls, recipe_data, source_image=None, **kwargs):
+    def IS_CHANGED(cls, manager_data, source_image=None, **kwargs):
         """Return a slot-aware fingerprint so unrelated slot edits do not force rerender."""
         import hashlib
         import json as _json
@@ -286,16 +286,16 @@ class WorkflowRenderer:
         h.update(str(clear_cache_after_render).encode())
 
         wf = None
-        if isinstance(recipe_data, dict):
-            wf = recipe_data
-        elif isinstance(recipe_data, str):
+        if isinstance(manager_data, dict):
+            wf = manager_data
+        elif isinstance(manager_data, str):
             try:
-                wf = json.loads(recipe_data)
+                wf = json.loads(manager_data)
             except Exception:
                 wf = None
-                h.update(recipe_data.encode())
+                h.update(manager_data.encode())
         else:
-            h.update(str(type(recipe_data)).encode())
+            h.update(str(type(manager_data)).encode())
 
         if isinstance(wf, dict):
             wf = _legacy_recipe_to_v2(wf)
@@ -433,8 +433,8 @@ class WorkflowRenderer:
         except Exception as e:
             print(f"[RecipeRenderer] CUDA cache clear failed: {e}")
 
-    def execute(self, recipe_data, model_slot="model_a", clear_cache_after_render=False, source_image=None, unique_id=None):
-        workflow_data = recipe_data
+    def execute(self, manager_data, model_slot="model_a", clear_cache_after_render=False, source_image=None, unique_id=None):
+        workflow_data = manager_data
 
         # ── Parse workflow_data ───────────────────────────────────────────
         if isinstance(workflow_data, dict):
@@ -561,7 +561,7 @@ class WorkflowRenderer:
 
         # ── Family-specific sampler defaults ──────────────────────────────
         # Always apply the family's intended sampler configuration. The renderer
-        # is the final consumer of RECIPE_DATA, so upstream template or Builder
+        # is the final consumer of MANAGER_DATA, so upstream template or Builder
         # override_data values are replaced with the family defaults.
         primary_sampler, wf_sampler, _ = _apply_family_sampler_defaults(
             primary_sampler, wf_sampler, family_key
@@ -981,7 +981,7 @@ class WorkflowRenderer:
         if clear_cache_after_render:
             self._clear_cached_models()
 
-        return (wf_out, decoded, out_latent)
+        return (decoded, out_latent, wf_out)
 
 
 def _extract_expression_block(positive_prompt):
