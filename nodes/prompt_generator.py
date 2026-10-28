@@ -12,6 +12,7 @@ import psutil
 import json
 import base64
 import ctypes
+import re
 import numpy as np
 import torch
 import server
@@ -981,92 +982,156 @@ def resolve_llama_server_command(custom_llama_path=""):
     return server_name
 
 
-def detect_llama_gpu_support(server_cmd):
-    """Check whether the resolved llama-server binary supports GPU offload.
+# GPU backend libraries shipped next to llama-server by the official llama.cpp
+# release archives (Windows: ggml-cuda.dll / ggml-vulkan.dll, Linux: *.so).
+# ggml loads every backend library it finds next to the executable at startup,
+# so a GPU backend library sitting beside a resolved binary means that binary
+# *can* offload, even when it never prints the backend name on stdout.
+_BACKEND_LIBRARY_SUFFIXES = (".dll", ".so", ".dylib")
 
-    Recent llama.cpp builds no longer always print the backend in
-    `--version`, so this checks three sources: the version string, the
-    linked shared libraries, and the available CLI options.
 
-    Returns a tuple (has_gpu: bool, backends: list of str, error: str or None).
-    Backends detected include: CUDA/cuBLAS, HIP/hipBLAS, Vulkan, SYCL, CLBlast.
+def _backends_in_text(text):
+    """Map free-form llama.cpp output (or library file names) to GPU backends.
+
+    Short names such as "hip" are matched on word boundaries only, otherwise
+    unrelated words ("chip", "shipping") produce false positives.
     """
-    backends = set()
-    errors = []
+    found = set()
+    lowered = (text or "").lower()
+    if not lowered:
+        return found
+    if any(k in lowered for k in ("cuda", "cublas", "cudart")):
+        found.add("CUDA")
+    # Short names such as "hip" need boundaries, otherwise unrelated words
+    # ("chip", "shipping") match. llama.cpp writes device names as "HIP0",
+    # so trailing digits are allowed but further letters are not.
+    if "hipblas" in lowered or re.search(r"(?<![a-z0-9])(hip|rocm)\d*(?![a-z0-9])", lowered):
+        found.add("HIP")
+    if "vulkan" in lowered:
+        found.add("Vulkan")
+    if "sycl" in lowered:
+        found.add("SYCL")
+    if "clblast" in lowered or "opencl" in lowered:
+        found.add("OpenCL")
+    if "metal" in lowered:
+        found.add("Metal")
+    return found
 
-    # 1) Try parsing --version output.
+
+def _run_llama_probe(server_cmd, flag, timeout=15):
+    """Run `<server_cmd> <flag>` and return (combined_output, error_or_None)."""
+    popen_kwargs = {}
+    if os.name == "nt":
+        # Probe runs must not flash console windows on Windows.
+        popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
     try:
         result = subprocess.run(
-            [server_cmd, "--version"],
+            [server_cmd, flag],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=10,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            **popen_kwargs,
         )
-        text = (result.stdout or "") + "\n" + (result.stderr or "")
-        text_lower = text.lower()
-        if any(k in text_lower for k in ("cuda", "cublas")):
-            backends.add("CUDA")
-        if any(k in text_lower for k in ("hip", "hipblas", "rocm")):
-            backends.add("HIP")
-        if "vulkan" in text_lower:
-            backends.add("Vulkan")
-        if "sycl" in text_lower:
-            backends.add("SYCL")
-        if "clblast" in text_lower:
-            backends.add("CLBlast")
     except FileNotFoundError:
-        return (False, [], f"llama-server not found: {server_cmd}")
+        return "", f"llama-server not found: {server_cmd}"
+    except subprocess.TimeoutExpired:
+        return "", f"llama-server {flag} timed out after {timeout}s"
     except Exception as e:
-        errors.append(str(e))
+        return "", f"llama-server {flag} failed: {e}"
 
-    # 2) Inspect linked libraries (handles builds where version hides backend).
+    return (result.stdout or "") + "\n" + (result.stderr or ""), None
+
+
+def _scan_backend_libraries(server_cmd):
+    """Detect GPU backend libraries installed next to the resolved binary.
+
+    This is the probe that works on Windows, where there is no `ldd` and where
+    llama.cpp loads its backends dynamically from *.dll files next to the exe.
+    """
+    exe = shutil.which(server_cmd) or (server_cmd if os.path.isfile(server_cmd) else None)
+    if not exe or not os.path.isfile(exe):
+        return set()
+
     try:
-        ldd_result = subprocess.run(
-            ["ldd", server_cmd],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=10,
-        )
-        ldd_text = (ldd_result.stdout or "").lower()
-        if "libggml-cuda" in ldd_text or "libcublas" in ldd_text:
-            backends.add("CUDA")
-        if "libggml-hip" in ldd_text or "libhipblas" in ldd_text:
-            backends.add("HIP")
-        if "libggml-vulkan" in ldd_text:
-            backends.add("Vulkan")
-        if "libggml-sycl" in ldd_text:
-            backends.add("SYCL")
-        if "libclblast" in ldd_text:
-            backends.add("CLBlast")
-    except Exception as e:
-        errors.append(str(e))
+        entries = os.listdir(os.path.dirname(os.path.abspath(exe)))
+    except OSError:
+        return set()
 
-    # 3) Check that --help exposes GPU offload flags.
-    try:
-        help_result = subprocess.run(
-            [server_cmd, "-h"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=10,
-        )
-        help_text = (help_result.stdout or "") + (help_result.stderr or "")
-        help_lower = help_text.lower()
-        if not (
-            "--n-gpu-layers" in help_lower
-            or "-ngl" in help_lower
-            or "--gpu-layers" in help_lower
-        ):
-            # No GPU offload CLI option means the binary is effectively CPU-only
-            # from the caller's point of view, even if it links some backend stub.
-            backends.clear()
-    except Exception as e:
-        errors.append(str(e))
+    found = set()
+    for entry in entries:
+        if entry.lower().endswith(_BACKEND_LIBRARY_SUFFIXES):
+            found |= _backends_in_text(entry)
+    return found
 
-    backend_list = sorted(backends)
-    return (len(backend_list) > 0, backend_list, "; ".join(errors) if errors else None)
+
+def detect_llama_gpu_support(server_cmd):
+    """Determine whether the resolved llama-server binary can offload to a GPU.
+
+    Probes, most reliable first:
+
+    1. `--list-devices` - llama.cpp enumerates the non-CPU devices it can
+       actually use. Correct on every platform and on every recent build, and
+       it also catches "GPU build but no working driver".
+    2. GPU backend libraries next to the binary, plus `ldd` on POSIX (there is
+       no `ldd` on Windows, so it is never attempted there).
+    3. Backend keywords in `--version` output (older builds printed them).
+
+    Returns (status, backends, note):
+        status True  - a GPU backend/device is available, offload is safe.
+        status False - llama.cpp enumerated devices and found no GPU at all.
+        status None  - unknown; the caller must NOT report "CPU-only" and
+                       should leave the device choice to llama.cpp.
+    """
+    backends = set()
+    notes = []
+
+    # 1) Ask llama.cpp itself which devices it can use.
+    text, err = _run_llama_probe(server_cmd, "--list-devices")
+    if err:
+        notes.append(err)
+    elif "available devices" in text.lower():
+        backends |= _backends_in_text(text)
+        if backends:
+            return (True, sorted(backends), None)
+        # Enumeration worked but the build/driver exposes no GPU device.
+        return (False, [], "llama-server reported no GPU device (CPU-only build or missing driver)")
+
+    # 2) Backend libraries shipped next to the binary.
+    backends |= _scan_backend_libraries(server_cmd)
+
+    # 2b) Linked shared libraries - POSIX only.
+    if os.name != "nt" and backends == set():
+        try:
+            ldd_result = subprocess.run(
+                ["ldd", server_cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+            backends |= _backends_in_text(ldd_result.stdout or "")
+        except FileNotFoundError:
+            pass  # no ldd on this platform (macOS, busybox, ...)
+        except Exception as e:
+            notes.append(str(e))
+
+    if backends:
+        return (True, sorted(backends), None)
+
+    # 3) Version/build info - older builds name the backend here.
+    text, err = _run_llama_probe(server_cmd, "--version")
+    if err:
+        notes.append(err)
+    backends |= _backends_in_text(text)
+    if backends:
+        return (True, sorted(backends), None)
+
+    return (None, [], "; ".join(notes) if notes else None)
 
 
 class PromptGenerator:
@@ -1409,24 +1474,43 @@ class PromptGenerator:
                 print_pg("llama-server:", f"{server_cmd}")
 
             # Detect whether the resolved binary actually supports GPU offload.
-            has_binary_gpu, gpu_backends, gpu_detect_error = detect_llama_gpu_support(server_cmd)
-            if gpu_detect_error:
-                print_pg("Warning:", f"Could not detect llama-server GPU support: {gpu_detect_error}", YELLOW)
-            elif gpu_backends:
+            # Detect whether the resolved binary can actually offload to a GPU.
+            gpu_support, gpu_backends, gpu_note = detect_llama_gpu_support(server_cmd)
+            if gpu_backends:
                 print_pg("llama-server backends:", ", ".join(gpu_backends))
-
-            torch_cuda = torch.cuda.is_available()
-            if torch_cuda and not has_binary_gpu:
+            if gpu_support is None and gpu_note:
                 print_pg(
-                    "ERROR:",
-                    f"PyTorch sees a CUDA GPU, but the resolved llama-server binary ({server_cmd}) "
-                    "is a CPU-only build. GPU offload flags will be ignored and inference will run on CPU. "
-                    "To use your GPU, install or configure a CUDA-enabled llama.cpp build.",
-                    RED,
+                    "Warning:",
+                    f"Could not determine llama-server GPU support: {gpu_note}. "
+                    "Leaving the device choice to llama.cpp.",
+                    YELLOW,
                 )
 
-            # Only request GPU offload when both PyTorch sees CUDA *and* the binary supports it.
-            use_gpu_offload = torch_cuda and has_binary_gpu
+            torch_cuda = torch.cuda.is_available()
+
+            if gpu_support is False:
+                # Only printed when llama.cpp itself enumerated devices and found none.
+                print_pg(
+                    "WARNING:",
+                    f"The resolved llama-server binary ({server_cmd}) reports no usable GPU device, "
+                    "so inference will run on CPU. To use your GPU, install a CUDA/Vulkan-enabled "
+                    "llama.cpp build (the official release archives ship separate GPU variants, and the "
+                    "CUDA ones need their CUDA DLLs next to llama-server.exe) and check your driver.",
+                    RED,
+                )
+            elif gpu_support is None and torch_cuda:
+                print_pg(
+                    "Note:",
+                    "This llama-server build did not report its GPU backends; requesting GPU offload anyway. "
+                    "If it is a CPU-only build, llama.cpp will simply keep the model on CPU.",
+                    YELLOW,
+                )
+
+            # `--n-gpu-layers` is accepted by every llama.cpp build, so asking for
+            # offload on a CPU-only build is harmless, while forcing `--n-gpu-layers 0`
+            # on a GPU build silently costs the user all of their VRAM. Only skip
+            # offload when llama.cpp itself confirmed there is no GPU device.
+            use_gpu_offload = gpu_support is True or (gpu_support is None and torch_cuda)
 
             # Build command arguments
             cmd_args = [
