@@ -31,12 +31,16 @@ const HIDDEN_WIDGETS = ["aspect_ratio", "megapixels", "prompt", "meta", "canvas"
 const OUTPUT_FORMATS = [
     { value: "MOSS", title: "MOSS-Image layout JSON (pixels from the canvas centre, yxyx)" },
     { value: "Ideogram", title: "Ideogram 4 JSON caption (0-1000 yxyx elements)" },
+    { value: "Krea 2", title: "Krea 2 grounding lines for krea2-turbo-bbox (0-1000 x-first boxes)" },
 ];
 const BOX_TYPES = [
     { value: "object", label: "Object", tag: "OBJ" },
     { value: "character", label: "Character", tag: "CHR" },
     { value: "text", label: "Text", tag: "TXT" },
+    { value: "panel", label: "Panel", tag: "PNL" },
 ];
+// Krea 2 character tags (krea2-turbo-bbox PROMPTING.md).
+const KREA_TAGS = [["pe", "Person"], ["ac", "Anime character"], ["fc", "Furry / anthro"]];
 // Prompt Composer subject accent hues.
 const BOX_HUES = [205, 40, 92, 8, 248, 155, 332];
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
@@ -110,9 +114,10 @@ function readState(node) {
             boxes: Array.isArray(state.boxes) ? state.boxes : [],
             palette: Array.isArray(state.palette) ? state.palette : [],
             ideogram: state.ideogram && typeof state.ideogram === "object" ? state.ideogram : {},
+            krea: state.krea && typeof state.krea === "object" ? state.krea : {},
         };
     } catch {
-        return { boxes: [], palette: [], ideogram: {} };
+        return { boxes: [], palette: [], ideogram: {}, krea: {} };
     }
 }
 
@@ -180,7 +185,8 @@ function ensureStyle() {
         .pm-layout .pm-layout-coord input { height: 28px; padding: 0 4px; text-align: center; -moz-appearance: textfield; }
         .pm-layout .pm-layout-coord input::-webkit-inner-spin-button,
         .pm-layout .pm-layout-coord input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-        .pm-layout-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+        .pm-layout-types { display: flex; gap: 6px; }
+        .pm-layout-types > button { flex: 1 1 0; min-width: 0; }
         .pm-layout-desc { display: flex; gap: 6px; align-items: stretch; }
         .pm-layout .pm-layout-thumb { flex: 0 0 52px; width: 52px; height: 52px; padding: 0; overflow: hidden; font-size: 18px;
             display: flex; align-items: center; justify-content: center; color: ${UI.textHint}; }
@@ -499,6 +505,16 @@ function createLayoutEditor(node) {
         [ideoLighting, "lighting"], [ideoMedium, "medium"]];
     for (const [input, key] of ideogramInputs) input.addEventListener("input", () => setIdeogram(key, input.value));
     ideoStyle.addEventListener("change", () => { setIdeogram("style", ideoStyle.value); render(); });
+    const kreaBlock = el("div", "pm-layout-ideogram", sceneFields);
+    const kreaStyleRow = el("div", "pm-layout-split", kreaBlock);
+    const kreaStyle = el("input", "", labeled(kreaStyleRow, "Style (camera, lighting, look)").wrap);
+    kreaStyle.placeholder = "eye-level, shallow depth of field, natural light";
+    const kreaMedium = el("input", "", labeled(kreaStyleRow, "Medium").wrap);
+    kreaMedium.placeholder = "Photograph";
+    const kreaBackground = el("input", "", labeled(kreaBlock, "Background").wrap);
+    kreaBackground.placeholder = "The environment behind and around the subjects";
+    const kreaInputs = [[kreaStyle, "style"], [kreaMedium, "medium"], [kreaBackground, "background"]];
+    for (const [input, key] of kreaInputs) input.addEventListener("input", () => setSceneField("krea", key, input.value));
     const scenePalette = createPaletteField(sceneFields, "Scene palette", SUMMARY_PALETTE_MAX,
         (colors) => edit(() => { state.palette = colors; }));
     const sceneHint = el("div", "pm-layout-hint", sceneFields);
@@ -559,6 +575,19 @@ function createLayoutEditor(node) {
         edit(() => { state.boxes[selected].type = type.value; });
     }));
 
+    const kreaCharRow = el("div", "pm-layout-split", boxFields);
+    const kreaTagSelect = el("select", "", labeled(kreaCharRow, "Krea character tag").wrap);
+    for (const [value, label] of KREA_TAGS) kreaTagSelect.append(new Option(label, value));
+    kreaTagSelect.addEventListener("change", () => edit(() => { state.boxes[selected].krea_tag = kreaTagSelect.value; }));
+    const charIdInput = el("input", "", labeled(kreaCharRow, "Character ID").wrap);
+    charIdInput.placeholder = "1";
+    charIdInput.title = "Reuse the same ID for the same character across panels";
+    bindLive(charIdInput, (box, value) => {
+        const id = value.trim().toLowerCase();
+        if (id) box.char_id = id;
+        else delete box.char_id;
+    });
+
     const textField = labeled(boxFields, "Text content");
     const textInput = el("textarea", "", textField.wrap);
     textInput.placeholder = "Exact text to render in this region";
@@ -599,13 +628,14 @@ function createLayoutEditor(node) {
         setWidgetValue("layout_data", JSON.stringify(state));
     }
 
-    // Ideogram-only scene fields live in layout_data; typing does not add undo steps (like the scene prompt).
-    function setIdeogram(key, value) {
+    // Format-specific scene fields live in layout_data; typing does not add undo steps (like the scene prompt).
+    function setSceneField(group, key, value) {
         if (isLocked()) return;
-        state.ideogram = { ...(state.ideogram || {}), [key]: value };
+        state[group] = { ...(state[group] || {}), [key]: value };
         persist();
         renderSceneHint();
     }
+    const setIdeogram = (key, value) => setSceneField("ideogram", key, value);
 
     const outputFormat = () => {
         const widget = getWidget(node, "output_format");
@@ -786,10 +816,20 @@ function createLayoutEditor(node) {
         boxCard.style.display = selected >= 0 ? "" : "none";
         if (selected < 0) return;
         const box = state.boxes[selected];
+        const format = outputFormat();
         const [W, H] = canvasSize(node);
         boxCard.style.borderColor = rgba(boxRgb(box, selected), 0.7);
         [box.x * W, box.y * H, box.w * W, box.h * H].forEach((value, index) => setValue(coordInputs[index], String(Math.round(value))));
-        typeButtons.forEach((button, index) => button.classList.toggle("active", BOX_TYPES[index].value === box.type));
+        typeButtons.forEach((button, index) => {
+            const value = BOX_TYPES[index].value;
+            button.classList.toggle("active", value === box.type);
+            // Panels only exist in Krea 2; elsewhere they export as objects.
+            button.style.display = value !== "panel" || format === "Krea 2" || box.type === "panel" ? "" : "none";
+        });
+        kreaCharRow.style.display = format === "Krea 2" && box.type === "character" ? "" : "none";
+        kreaTagSelect.value = KREA_TAGS.some(([value]) => value === box.krea_tag) ? box.krea_tag : "pe";
+        setValue(charIdInput, String(box.char_id ?? ""));
+        boxPalette.wrap.style.display = format === "Krea 2" ? "none" : "";
         textField.wrap.classList.toggle("pm-layout-ghost", box.type !== "text");
         textInput.disabled = box.type !== "text";
         setValue(textInput, box.text || "");
@@ -817,7 +857,7 @@ function createLayoutEditor(node) {
         const format = outputFormat();
         const missing = [];
         if (format !== "MOSS" && !String(getWidget(node, "prompt")?.value || "").trim()) {
-            missing.push("a high-level description");
+            missing.push(format === "Krea 2" ? "a summary" : "a high-level description");
         }
         // An undescribed box still claims its region, leaving the model to guess what goes there.
         const blank = state.boxes.map((box, index) => (String(box.desc || "").trim() || (box.type === "text" && String(box.text || "").trim()) ? null : pad2(index + 1))).filter(Boolean);
@@ -829,11 +869,14 @@ function createLayoutEditor(node) {
     function renderScene() {
         const format = outputFormat();
         const ideogram = state.ideogram || {};
-        promptField.label.textContent = format === "Ideogram" ? "High-level description" : "Prompt";
-        scenePrompt.placeholder = format === "Ideogram" ? "One or two sentences summarizing the whole image"
-            : "Scene description (summary caption)";
+        promptField.label.textContent = { Ideogram: "High-level description", "Krea 2": "Summary" }[format] || "Prompt";
+        scenePrompt.placeholder = { Ideogram: "One or two sentences summarizing the whole image",
+            "Krea 2": "One sentence summarizing the whole image" }[format] || "Scene description (summary caption)";
         sceneRow.style.display = format === "MOSS" ? "" : "none";
         ideogramBlock.style.display = format === "Ideogram" ? "" : "none";
+        kreaBlock.style.display = format === "Krea 2" ? "" : "none";
+        for (const [input, key] of kreaInputs) setValue(input, String(state.krea?.[key] ?? ""));
+        scenePalette.wrap.style.display = format === "Krea 2" ? "none" : "";
         scenePalette.label.textContent = format === "Ideogram" ? "Style palette" : "Scene palette";
         const style = ["photo", "art_style"].includes(ideogram.style) ? ideogram.style : "none";
         ideoStyle.value = style;
@@ -1213,6 +1256,7 @@ function createLayoutEditor(node) {
                     boxes: imported.boxes || [],
                     palette: imported.palette || [],
                     ideogram: imported.ideogram || state.ideogram || {},
+                    krea: imported.krea || state.krea || {},
                 };
                 if (JSON.stringify(next) !== snapshot()) {
                     pushUndo(snapshot());
@@ -1290,5 +1334,34 @@ app.registerExtension({
             this._layoutEditor?.dispose();
             return onRemoved?.apply(this, arguments);
         };
+    },
+});
+
+// The source toggle only matters when both inputs are linked.
+function syncBboxConverter(node) {
+    const widget = getWidget(node, "use_bboxes");
+    if (!widget) return;
+    const linked = (name) => node.inputs?.find((input) => input.name === name)?.link != null;
+    const show = linked("layout_json") && linked("bboxes");
+    if (!widget.hidden === show) return;
+    widget.hidden = !show;
+    if (show) delete widget.computeSize;
+    else widget.computeSize = () => [0, -4];
+    node.setSize([node.size[0], node.computeSize()[1]]);
+    node.setDirtyCanvas(true, true);
+}
+
+app.registerExtension({
+    name: "PromptManager.BboxConverter",
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name !== "BboxConverter") return;
+        for (const method of ["onNodeCreated", "onConfigure", "onConnectionsChange"]) {
+            const original = nodeType.prototype[method];
+            nodeType.prototype[method] = function () {
+                const result = original?.apply(this, arguments);
+                syncBboxConverter(this);
+                return result;
+            };
+        }
     },
 });

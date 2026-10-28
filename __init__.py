@@ -17,7 +17,7 @@ from .nodes.prompt_generator import PromptGenerator, PromptGeneratorDataStore
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_generator_kill_switch import PromptGeneratorKillSwitch
 from .nodes.prompt_extractor import PromptExtractor
-from .nodes.prompt_layout_builder import PromptLayoutBuilder, PromptLayoutToBBoxes, BBoxesToPromptLayout
+from .nodes.prompt_layout_builder import PromptLayoutBuilder, BboxConverter
 from .nodes.prompt_extractor import WorkflowExtractor as RecipeExtractor
 from .nodes.recipe_builder import RecipeBuilder
 from .nodes.recipe_renderer import WorkflowRenderer as RecipeRenderer
@@ -38,8 +38,7 @@ NODE_CLASS_MAPPINGS = {
     "PromptGeneratorKillSwitch": PromptGeneratorKillSwitch,
     "PromptExtractor":           PromptExtractor,
     "PromptLayoutBuilder":       PromptLayoutBuilder,
-    "PromptLayoutToBBoxes":      PromptLayoutToBBoxes,
-    "BBoxesToPromptLayout":      BBoxesToPromptLayout,
+    "BboxConverter":             BboxConverter,
     "RecipeExtractor":           RecipeExtractor,
     "RecipeBuilder":             RecipeBuilder,
     "RecipeRenderer":            RecipeRenderer,
@@ -64,8 +63,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptGeneratorKillSwitch":  "Prompt Generator Kill Switch",
     "PromptExtractor":            "Prompt Extractor",
     "PromptLayoutBuilder":        "Prompt Layout Builder",
-    "PromptLayoutToBBoxes":       "Layout JSON to BBoxes",
-    "BBoxesToPromptLayout":       "BBoxes to Layout JSON",
+    "BboxConverter":              "Bbox Converter",
     "RecipeExtractor":            "Recipe Extractor",
     "RecipeBuilder":              "Recipe Builder",
     "RecipeRenderer":             "Recipe Renderer",

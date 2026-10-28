@@ -72,7 +72,7 @@ async function createFixture() {
         {
             app, api, showThumbnailBrowser, ...adapters, ...textLock,
             document: { createElement: tagName => new Element(tagName) },
-            console: { log() {}, error() {} },
+            console: { log() {}, error() {}, warn() {} },
         },
     );
     class Generator {
@@ -128,6 +128,18 @@ async function createFixture() {
     return { state, node, widget, originalWidgets, click, setup };
 }
 
+const settle = async () => {
+    for (let i = 0; i < 3; i++) await new Promise(setImmediate);
+};
+const library = (labels) => {
+    const prompts = {};
+    for (const label of labels) {
+        const [category, name] = label.split(" / ");
+        (prompts[category] ??= {})[name] = { prompt: `${label} instruction` };
+    }
+    return prompts;
+};
+
 test("replaces the native combo with a DOM widget in the same serialized slot", async () => {
     const { node, widget, originalWidgets, setup } = await createFixture();
     const values = originalWidgets.map(entry => entry.value);
@@ -166,9 +178,11 @@ test("round-trips the bundled Generator workflow without shifting stored values"
     const workflow = JSON.parse(await readFile(new URL("../example_workflows/generator_workflow.json", import.meta.url), "utf8"));
     const savedNode = workflow.nodes.find(entry => entry.type === "PromptGenerator");
     assert.ok(savedNode);
-    const { node, widget, click, originalWidgets } = await createFixture();
+    const { node, widget, click, originalWidgets, state } = await createFixture();
     originalWidgets[2].options.values.push(savedNode.widgets_values[2]);
+    state.prompts = library([...originalWidgets[2].options.values]);
     node.onConfigure(savedNode);
+    await settle();
     const serialize = () => JSON.parse(JSON.stringify(node.widgets.map(entry => entry.value)));
     assert.deepEqual(serialize(), savedNode.widgets_values);
     await click(380);
@@ -255,9 +269,12 @@ test("long labels use a constrained DOM button and expose the full name as a too
 test("migrates the exact legacy value stored by Krea2_Workflow-09 on configure", async () => {
     const { node, widget, originalWidgets, click, state } = await createFixture();
     originalWidgets[2].options.values = ["Audio / Enhance Prompt", "Image / Enhance Prompt", "Video / Enhance Prompt"];
+    state.prompts = library(originalWidgets[2].options.values);
     const values = node.widgets.map(entry => entry.value);
     values[2] = "Enhance Prompt (Image)";
     node.onConfigure({ widgets_values: values });
+    assert.equal(widget.value, "Image / Enhance Prompt");
+    await settle();
     assert.equal(widget.value, "Image / Enhance Prompt");
     assert.equal(widget.element.children[1].textContent, "Image : Enhance Prompt");
     assert.equal(widget.serializeValue(), "Image / Enhance Prompt");
@@ -269,11 +286,12 @@ test("migrates the exact legacy value stored by Krea2_Workflow-09 on configure",
 });
 
 test("matches legacy categories and unique bare names, defaulting missing or ambiguous names", async () => {
-    const { node, widget, originalWidgets } = await createFixture();
+    const { node, widget, originalWidgets, state } = await createFixture();
     originalWidgets[2].options.values = [
         "Audio / Enhance Prompt", "Image / Enhance Prompt", "Video / Enhance Prompt",
         "Other / Analyze Image", "Image / Shared", "Video / Shared",
     ];
+    state.prompts = library(originalWidgets[2].options.values);
     for (const [saved, expected] of [
         ["Enhance Prompt (Video)", "Video / Enhance Prompt"],
         ["Enhance Prompt (Audio)", "Audio / Enhance Prompt"],
@@ -286,17 +304,39 @@ test("matches legacy categories and unique bare names, defaulting missing or amb
         const values = node.widgets.map(entry => entry.value);
         values[2] = saved;
         node.onConfigure({ widgets_values: values });
+        await settle();
         assert.equal(widget.value, expected, saved);
     }
 });
 
-test("uses another available entry if Enhance Prompt was removed, preserving values when choices are unavailable", async () => {
-    const { node, widget, originalWidgets } = await createFixture();
+test("uses another available entry if Enhance Prompt was removed, preserving values when the list cannot load", async () => {
+    const { node, widget, state } = await createFixture();
     const values = node.widgets.map(entry => entry.value);
     values[2] = "Deleted Prompt";
     node.onConfigure({ widgets_values: values });
+    await settle();
     assert.equal(widget.value, "Image / First");
-    originalWidgets[2].options.values = [];
+    state.responseOk = false;
     node.onConfigure({ widgets_values: values });
+    await settle();
     assert.equal(widget.value, "Deleted Prompt");
+});
+
+test("keeps prompts added or moved after page load instead of resetting them", async () => {
+    const { node, widget, originalWidgets, state } = await createFixture();
+    // Page-load list: the prompt still sat in Image and Bbox did not exist yet.
+    originalWidgets[2].options.values = ["Image / Enhance Prompt", "Image / Layout"];
+    state.prompts = library(["Image / Enhance Prompt", "Bbox / Layout", "Bbox / New"]);
+    const values = node.widgets.map(entry => entry.value);
+    for (const [saved, expected] of [
+        ["Bbox / New", "Bbox / New"],
+        ["Image / Layout", "Bbox / Layout"],
+    ]) {
+        values[2] = saved;
+        node.onConfigure({ widgets_values: values });
+        assert.equal(widget.value, saved);
+        await settle();
+        assert.equal(widget.value, expected, saved);
+    }
+    assert.ok(originalWidgets[2].options.values.includes("Bbox / New"));
 });

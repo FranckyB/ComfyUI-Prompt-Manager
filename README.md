@@ -68,6 +68,7 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
 - Prompt Generator: prompt creation and enhancement using llama.cpp, Ollama, or a connected ComfyUI CLIP/text encoder.
 - Prompt Extractor: Reads metadata from images/videos/JSON and outputs prompt + LoRA + recipe context.
 - Prompt Composer: Build prompts from reusable fragments, with random prompt groups, subject-aware composition, LoRA/RefMod support, and image/video generation modes.
+- Prompt Layout Builder: Draw boxes over a scene prompt (or load them from an LLM) and output a layout prompt for MOSS-Image, Ideogram 4 or Krea 2.
 - Prompt Browser: A node meant to allow access and write prompts for:
   - System Prompts used by Prompt Generator.
   - Compose Data used by Prompt Composer, including v2 prompt-group libraries with export, open, and merge workflows.
@@ -155,6 +156,20 @@ The **Prompt Browser Node** lets you create and edit all three prompt libraries 
   - **Prompt Manager prompts**: your saved user prompts
 
 System prompts now feed straight into the **Prompt Generator**, so you can author your own and pick them right in the node. Sample system prompts ship in the node's `/prompts` folder to get you started. If new prompts are added and you don't have them, you can use the Prompt Browser's Import JSON feature to add them.
+
+## Prompt Layout Builder
+
+Prompt Layout Builder places the parts of an image in boxes: draw them over a scene prompt, or let the Prompt Generator write the layout for you, then output it in the format your model reads.
+
+- Each box is an Object, Character, Text (with the exact words to render) or Panel, with its own description and colors. Box descriptions can come from Prompt Composer snippets.
+- **Output** formats:
+  - **MOSS**: MOSS-Image layout JSON.
+  - **Ideogram**: Ideogram 4 JSON caption, with background, style, lighting and medium fields.
+  - **Krea 2**: Krea 2 grounding lines, with style, medium and background, panels, and character tags and IDs to keep a character consistent across panels. Requires the **krea2-turbo-bbox** model or LoRA, found here: [jimmycarter/krea2-turbo-bbox](https://huggingface.co/jimmycarter/krea2-turbo-bbox). Its PROMPTING.md covers the prompt format and sampler settings.
+- **Use import_json** loads a layout from the Prompt Generator (system prompts **MOSS Layout**, **Ideogram Layout** and **Krea 2 Layout** in the **Bbox** category, each with Create and From Image versions), from Create Bounding Boxes, or from a layout saved with Library Manager. Turn it off to keep editing the imported boxes.
+- **Bbox Converter** converts layouts to and from ComfyUI's bounding-box types.
+
+See [docs/feature-reference.md](docs/feature-reference.md#prompt-layout-builder) for details.
 
 ## Installation
 

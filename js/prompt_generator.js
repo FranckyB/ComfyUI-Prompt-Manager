@@ -20,6 +20,9 @@ function setupSystemPromptSelector(node) {
         if (!response.ok) throw new Error(`Could not load system prompts (${response.status})`);
         const prompts = await response.json();
         node.prompts = prompts;
+        // The combo list comes from page load; keep it current with prompts added or moved since.
+        const choices = getChoices(prompts);
+        if (choices.length && widget.options && typeof widget.options.values !== "function") widget.options.values = choices;
         return prompts;
     };
 
@@ -166,29 +169,48 @@ function setupSystemPromptSelector(node) {
     selector.serializeValue = () => widget.value;
     node.widgets.splice(node.widgets.indexOf(selector), 1);
     node.widgets.splice(index, 1, selector);
-    const onConfigure = node.onConfigure;
-    node.onConfigure = function() {
-        const result = onConfigure?.apply(this, arguments);
-        const choices = typeof widget.options?.values === "function"
-            ? widget.options.values()
-            : widget.options?.values;
-        if (!Array.isArray(choices) || !choices.length) return result;
-        const previous = String(widget.value ?? "").trim();
-        const normalized = previous.toLowerCase();
-        const entries = choices.map(value => {
-            const separator = value.indexOf(" / ");
-            return { value, category: value.slice(0, separator), name: value.slice(separator + 3) };
+    const matchChoice = (value, choices, allowFallback) => {
+        const normalized = String(value ?? "").trim().toLowerCase();
+        const entries = choices.map(choice => {
+            const separator = choice.indexOf(" / ");
+            return { value: choice, category: choice.slice(0, separator), name: choice.slice(separator + 3) };
         });
         const exact = entries.find(entry => entry.value.toLowerCase() === normalized);
         const legacy = entries.find(entry => `${entry.name} (${entry.category})`.toLowerCase() === normalized);
-        const names = entries.filter(entry => entry.name.toLowerCase() === normalized);
-        const fallback = entries.find(entry => entry.value.toLowerCase() === "image / enhance prompt") || entries[0];
-        const match = exact || legacy || (names.length === 1 ? names[0] : null) || fallback;
-        if (widget.value !== match.value) {
-            selector.value = match.value;
-            console.log(`[PromptGenerator] Migrated system prompt '${previous}' to '${match.value}'.`);
-            node.setDirtyCanvas(true, true);
+        // A prompt moved to another category keeps its name.
+        const previousName = normalized.includes(" / ") ? normalized.slice(normalized.indexOf(" / ") + 3) : normalized;
+        const names = entries.filter(entry => entry.name.toLowerCase() === previousName);
+        const match = exact || legacy || (names.length === 1 ? names[0] : null);
+        if (match || !allowFallback) return match;
+        return entries.find(entry => entry.value.toLowerCase() === "image / enhance prompt") || entries[0] || null;
+    };
+    const applyMatch = (match) => {
+        if (!match || widget.value === match.value) return;
+        const previous = widget.value;
+        selector.value = match.value;
+        console.log(`[PromptGenerator] Migrated system prompt '${previous}' to '${match.value}'.`);
+        node.setDirtyCanvas(true, true);
+    };
+    // The combo's choices date from page load, so canonical values are checked against the live list.
+    const reconcileSelection = async () => {
+        let choices;
+        try {
+            choices = getChoices(await loadSystemPrompts());
+        } catch (error) {
+            console.warn("[PromptGenerator] Could not refresh system prompts; keeping the saved selection.", error);
+            return;
         }
+        if (choices.length) applyMatch(matchChoice(widget.value, choices, true));
+    };
+    const onConfigure = node.onConfigure;
+    node.onConfigure = function() {
+        const result = onConfigure?.apply(this, arguments);
+        // Legacy labels such as "Enhance Prompt (Image)" migrate at once so an immediate queue never sends them.
+        if (!String(widget.value ?? "").includes(" / ")) {
+            const choices = typeof widget.options?.values === "function" ? widget.options.values() : widget.options?.values;
+            if (Array.isArray(choices) && choices.length) applyMatch(matchChoice(widget.value, choices, false));
+        }
+        void reconcileSelection();
         return result;
     };
     updateDisplay();

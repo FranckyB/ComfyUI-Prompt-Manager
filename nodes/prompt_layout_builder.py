@@ -4,9 +4,10 @@ Prompt Layout Builder - draw a MOSS-Image layout (scene prompt + boxed regions) 
 The editor stores boxes as canvas fractions {x, y, w, h, type, text, desc, palette} in the layout_data widget.
 The prompt output follows output_format: the native MOSS-Image layout JSON (bbox in pixels from the canvas centre,
 yxyx, the same format as MOSS-Image Layout Prompt), an Ideogram 4 JSON caption (0-1000 yxyx elements, as Build JSON
-Prompt (Ideogram)). import_json accepts the MOSS
+Prompt (Ideogram)) or the Krea 2 grounding lines of jimmycarter/krea2-turbo-bbox (x-first 0-1000 boxes).
+import_json accepts the MOSS
 format, percent or 0-1000 yxyx layouts written by
-an LLM, and the elements list from Create Bounding Boxes. The two converter nodes translate layouts to and from the
+an LLM, Ideogram 4 captions, Krea 2 grounding lines, and the elements list from Create Bounding Boxes. The two converter nodes translate layouts to and from the
 core BOUNDING_BOX / elements types so the builder can be chained with other box nodes.
 """
 import json
@@ -35,12 +36,15 @@ REF_RATIO = "Use Reference Ratio"
 LAYOUT_RECIPE_KEY = "prompt_layout"
 SIZE_MULTIPLE = 16
 CANVASES = ("single", "multi_panel", "collage")
-BOX_TYPES = ("object", "character", "text")
+BOX_TYPES = ("object", "character", "text", "panel")
 BOX_PALETTE_MAX = 8
 SUMMARY_PALETTE_MAX = 16
 HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 RELATIVE_SPACES = {"percent": 100.0, "relative_1000": 1000.0}
-OUTPUT_FORMATS = ("MOSS", "Ideogram")
+OUTPUT_FORMATS = ("MOSS", "Ideogram", "Krea 2")
+# Krea 2 character tags: person, anime character, furry / anthro character.
+KREA_CHARACTER_TAGS = ("pe", "ac", "fc")
+KREA_CHARACTER_ID = re.compile(r"[a-z0-9_]+")
 
 
 def _resolution(aspect_ratio, megapixels, ref_size):
@@ -78,6 +82,12 @@ def _clean_box(raw):
     ref = raw.get("prompt_ref")
     if isinstance(ref, dict) and ref.get("name"):
         box["prompt_ref"] = {"category": str(ref.get("category") or ""), "name": str(ref["name"])}
+    if box_type == "character":
+        if raw.get("krea_tag") in KREA_CHARACTER_TAGS:
+            box["krea_tag"] = raw["krea_tag"]
+        char_id = str(raw.get("char_id") or "").strip().lower()
+        if KREA_CHARACTER_ID.fullmatch(char_id):
+            box["char_id"] = char_id
     return box
 
 
@@ -94,6 +104,101 @@ def _find_layout(text):
         if isinstance(value, list) and value and all(isinstance(v, dict) and "bbox" in v and "type" in v for v in value):
             return {"items": value, "bbox_coord_space": "relative_1000"}
     raise ValueError('Prompt Layout Builder: import_json has no layout (an object with "items", or a list of elements).')
+
+
+KREA_ELEMENT = re.compile(r"(p|o|t|pe|ac|fc)(?::([a-z0-9_]+))?\[\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\]\s*(.*)")
+KREA_TEXT = re.compile(r'"((?:[^"\\]|\\.)*)"\s*(.*)')
+KREA_BOX_TYPES = {"p": "panel", "o": "object", "t": "text", "pe": "character", "ac": "character", "fc": "character"}
+
+
+def _parse_krea(text):
+    # Krea 2 grounding lines (krea2-turbo-bbox); None when the text has no element, @ or ~ line.
+    fence = re.search(r"```[^\n]*\n(.*?)```", text, re.S)
+    lines = [line.strip() for line in (fence.group(1) if fence else text).splitlines() if line.strip()]
+    summary, fields, boxes, grounded = "", {}, [], False
+    for line in lines:
+        element = KREA_ELEMENT.fullmatch(line)
+        if element:
+            tag, char_id, rest = element.group(1), element.group(2), element.group(7)
+            x0, y0, x1, y1 = (float(element.group(i)) / 1000 for i in range(3, 7))
+            box = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "type": KREA_BOX_TYPES[tag], "desc": rest}
+            if tag == "t":
+                quoted = KREA_TEXT.match(rest)
+                if quoted:
+                    box["text"] = re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), quoted.group(1))
+                    box["desc"] = quoted.group(2)
+            if box["type"] == "character":
+                box.update(krea_tag=tag, char_id=char_id)
+            boxes.append(_clean_box(box))
+            grounded = True
+        elif line.startswith("@"):
+            head, sep, tail = line[1:].rpartition(";")
+            fields["style"], fields["medium"] = (head.strip(), tail.strip()) if sep else (tail.strip(), "")
+            grounded = True
+        elif line.startswith("~"):
+            fields["background"] = line[1:].strip()
+            grounded = True
+        elif not summary and not grounded:
+            summary = line
+    return {"prompt": summary, "krea": fields, "boxes": boxes} if grounded else None
+
+
+def _parse_ideogram(text):
+    # Ideogram 4 JSON caption (Build JSON Prompt (Ideogram)); None when the text has none.
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            caption, _ = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(caption, dict) and isinstance(caption.get("compositional_deconstruction"), dict):
+            break
+    else:
+        return None
+    scene = caption["compositional_deconstruction"]
+    style = caption.get("style_description") if isinstance(caption.get("style_description"), dict) else {}
+    text_of = lambda value: str(value or "").strip()
+    fields = {"background": text_of(scene.get("background"))}
+    if style:
+        kind = "art_style" if "art_style" in style else "photo" if "photo" in style else (
+            "photo" if text_of(style.get("medium")).lower() == "photograph" else "art_style")
+        fields.update(style=kind, style_detail=text_of(style.get(kind)), aesthetics=text_of(style.get("aesthetics")),
+                      lighting=text_of(style.get("lighting")), medium=text_of(style.get("medium")))
+    elements = [e for e in scene.get("elements") or [] if isinstance(e, dict)]
+    return {
+        "prompt": text_of(caption.get("high_level_description")),
+        "ideogram": fields,
+        "palette": _palette(style.get("color_palette"), SUMMARY_PALETTE_MAX),
+        "boxes": _import_boxes({"items": elements, "bbox_coord_space": "relative_1000"}, 1, 1),
+    }
+
+def _parse_text_layout(text, width, height, label):
+    parsed = _parse_krea(text) or _parse_ideogram(text)
+    if parsed:
+        return parsed
+    try:
+        layout = _find_layout(text)
+    except ValueError:
+        received = " ".join(text.split())
+        raise ValueError(f"{label} has no layout. Expected layout JSON (an object with \"items\" or a list of elements), "
+                         "an Ideogram 4 caption or Krea 2 grounding lines; check the Prompt Generator system prompt. "
+                         f"Received: {received[:200]!r}{'...' if len(received) > 200 else ''}") from None
+    return {"layout": layout, "boxes": _import_boxes(layout, width, height)}
+
+
+def _boxes_from_bboxes(bboxes, width, height):
+    boxes = []
+    for raw in boxes_from_input(bboxes, width, height):
+        metadata = raw.get("metadata") or {}
+        box_type = "text" if metadata.get("type") == "text" else "character" if metadata.get("is_character") else "object"
+        boxes.append(_clean_box({
+            **pixels_to_fractions(raw, width, height),
+            "type": box_type,
+            "text": metadata.get("text"),
+            "desc": metadata.get("desc"),
+            "palette": metadata.get("palette"),
+        }))
+    return boxes
 
 
 def _import_boxes(layout, width, height):
@@ -136,7 +241,7 @@ def _moss_bbox(box, width, height):
 def _layout_prompt(prompt, meta, canvas, palette, boxes, width, height):
     items = []
     for box in boxes:
-        item = {"label": box["type"], "caption": box["desc"]}
+        item = {"label": "object" if box["type"] == "panel" else box["type"], "caption": box["desc"]}
         if box["type"] == "text":
             item["text"] = box["text"]
         if box["palette"]:
@@ -178,12 +283,46 @@ def _ideogram_prompt(prompt, palette, boxes, fields):
     return json.dumps(caption, ensure_ascii=False, separators=(",", ":"))
 
 
-def _format_prompt(output_format, prompt, meta, canvas, palette, boxes, width, height, ideogram=None):
+def _format_prompt(output_format, prompt, meta, canvas, palette, boxes, width, height, ideogram=None, krea=None):
     if output_format == "Ideogram":
         return _ideogram_prompt(prompt, palette, boxes, ideogram)
+    if output_format == "Krea 2":
+        return _krea_prompt(prompt, boxes, krea)
     if not boxes:
         return prompt
     return _layout_prompt(prompt, meta, canvas, palette, boxes, width, height)
+
+
+def _one_line(text):
+    return " ".join(str(text or "").split())
+
+
+def _krea_prompt(prompt, boxes, fields):
+    # Grounding DSL from jimmycarter/krea2-turbo-bbox PROMPTING.md: summary, @style; medium, ~background, one line per box.
+    fields = fields if isinstance(fields, dict) else {}
+    lines = []
+    if _one_line(prompt):
+        lines.append(_one_line(prompt))
+    style_line = "; ".join(part for part in (_one_line(fields.get("style")), _one_line(fields.get("medium"))) if part)
+    if style_line:
+        lines.append("@" + style_line)
+    if _one_line(fields.get("background")):
+        lines.append("~" + _one_line(fields.get("background")))
+    # Panels first, as in the training data; the rest keep the editor order.
+    for box in sorted(boxes, key=lambda b: b["type"] != "panel"):
+        bbox = ",".join(str(round(v * 1000)) for v in (box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]))
+        if box["type"] == "character":
+            head = box.get("krea_tag", "pe") + (f":{box['char_id']}" if box.get("char_id") else "")
+        else:
+            head = {"panel": "p", "text": "t"}.get(box["type"], "o")
+        line = f"{head}[{bbox}]"
+        if box["type"] == "text":
+            escaped = box["text"].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            line += f'"{escaped}"'
+        if _one_line(box["desc"]):
+            line += " " + _one_line(box["desc"])
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _fit_background(image, width, height):
@@ -231,74 +370,50 @@ _SIZE_INPUT = {"default": 1024, "min": 16, "max": 16384, "step": 8,
                "tooltip": "Canvas size the pixel boxes refer to, e.g. the layout builder's width/height outputs."}
 
 
-class PromptLayoutToBBoxes:
+class BboxConverter:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "layout_json": ("STRING", {
-                    "forceInput": True,
-                    "tooltip": "Layout JSON: MOSS-native, percent or 0-1000 boxes (same formats as import_json).",
-                }),
                 "width": ("INT", _SIZE_INPUT),
                 "height": ("INT", _SIZE_INPUT),
+                "use_bboxes": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "bboxes",
+                    "label_off": "layout_json",
+                    "tooltip": "Input to convert when both are connected (shown only then).",
+                }),
             },
-        }
-
-    RETURN_TYPES = ("BOUNDING_BOX", "ARRAY")
-    RETURN_NAMES = ("bboxes", "elements")
-    FUNCTION = "convert"
-    CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Convert a layout JSON to pixel bounding boxes and Create Bounding Boxes elements."
-
-    def convert(self, layout_json, width, height):
-        boxes = _import_boxes(_find_layout(layout_json), width, height)
-        return (_pixel_frame(boxes, width, height), build_elements(boxes))
-
-
-class BBoxesToPromptLayout:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
+            "optional": {
+                "layout_json": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Layout JSON (MOSS-native, percent or 0-1000 boxes), an Ideogram 4 caption or Krea 2 "
+                               "grounding lines. Passed through to the layout_json output.",
+                }),
                 "bboxes": ("BOUNDING_BOX,ARRAY,STRING", {
                     "forceInput": True,
                     "tooltip": "Bounding boxes, Create Bounding Boxes elements, or their JSON.",
                 }),
-                "width": ("INT", _SIZE_INPUT),
-                "height": ("INT", _SIZE_INPUT),
-            },
-            "optional": {
-                "prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "dynamicPrompts": False,
-                    "tooltip": "Optional scene description, written as summary.caption.",
-                }),
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("layout_json",)
+    RETURN_TYPES = ("STRING", "BOUNDING_BOX", "ARRAY")
+    RETURN_NAMES = ("layout_json", "bboxes", "elements")
     FUNCTION = "convert"
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Convert bounding boxes or elements to a percent layout JSON for the layout builder's import_json."
+    DESCRIPTION = ("Convert between a layout JSON and bounding boxes. Outputs the layout JSON (percent boxes when "
+                   "converting bboxes), pixel bounding boxes and Create Bounding Boxes elements.")
 
-    def convert(self, bboxes, width, height, prompt=""):
-        items = []
-        for raw in boxes_from_input(bboxes, width, height):
-            metadata = raw.get("metadata") or {}
-            box_type = "text" if metadata.get("type") == "text" else "character" if metadata.get("is_character") else "object"
-            items.append(_percent_item(_clean_box({
-                **pixels_to_fractions(raw, width, height),
-                "type": box_type,
-                "text": metadata.get("text"),
-                "desc": metadata.get("desc"),
-                "palette": metadata.get("palette"),
-            })))
-        layout = {"summary": {"caption": prompt.strip()}} if prompt.strip() else {}
-        layout.update(items=items, bbox_coord_space="percent", bbox_format="yxyx")
-        return (json.dumps(layout, ensure_ascii=False, indent=2),)
+    def convert(self, width, height, use_bboxes=False, layout_json=None, bboxes=None):
+        if bboxes is not None and (use_bboxes or layout_json is None):
+            boxes = _boxes_from_bboxes(bboxes, width, height)
+            layout_json = json.dumps({"items": [_percent_item(box) for box in boxes], "bbox_coord_space": "percent",
+                                      "bbox_format": "yxyx"}, ensure_ascii=False, indent=2)
+        elif layout_json is not None:
+            boxes = _parse_text_layout(layout_json, width, height, "Bbox Converter: layout_json")["boxes"]
+        else:
+            raise ValueError("Bbox Converter: connect layout_json or bboxes.")
+        return (layout_json, _pixel_frame(boxes, width, height), build_elements(boxes))
 
 
 class PromptLayoutBuilder:
@@ -337,7 +452,7 @@ class PromptLayoutBuilder:
                 "layout_data": ("STRING", {"default": "{}", "tooltip": "Editor boxes (managed by the node UI)."}),
                 "output_format": (list(OUTPUT_FORMATS), {
                     "default": "MOSS",
-                    "tooltip": "Prompt format: MOSS-Image layout JSON or Ideogram 4 JSON caption.",
+                    "tooltip": "Prompt format: MOSS-Image layout JSON, Ideogram 4 JSON caption or Krea 2 grounding lines.",
                 }),
             },
             "optional": {
@@ -345,7 +460,8 @@ class PromptLayoutBuilder:
                 "import_json": ("STRING,MANAGER_DATA", {
                     "forceInput": True,
                     "lazy": True,
-                    "tooltip": "Layout JSON (e.g. from Prompt Generator: percent, 0-1000 or MOSS-native boxes) or a saved "
+                    "tooltip": "Layout JSON (e.g. from Prompt Generator: percent, 0-1000 or MOSS-native boxes), an "
+                               "Ideogram 4 caption, Krea 2 grounding lines, or a saved "
                                "layout's manager_data from Library Manager. Only evaluated when use_import_json is on.",
                 }),
             },
@@ -356,7 +472,8 @@ class PromptLayoutBuilder:
     FUNCTION = "build"
     CATEGORY = "Prompt Manager"
     OUTPUT_NODE = True
-    DESCRIPTION = "Draw layout boxes over a scene prompt, or load them from an LLM layout JSON. Outputs a MOSS-Image or Ideogram 4 prompt."
+    DESCRIPTION = ("Draw layout boxes over a scene prompt, or load them from an LLM layout. "
+                   "Outputs a MOSS-Image, Ideogram 4 or Krea 2 prompt.")
 
     def check_lazy_status(self, use_import_json, **kwargs):
         return ["import_json"] if use_import_json else []
@@ -381,6 +498,7 @@ class PromptLayoutBuilder:
         boxes = [_clean_box(box) for box in state.get("boxes", []) if isinstance(box, dict)]
         palette = _palette(state.get("palette"), SUMMARY_PALETTE_MAX)
         ideogram = state.get("ideogram") if isinstance(state.get("ideogram"), dict) else {}
+        krea = state.get("krea") if isinstance(state.get("krea"), dict) else {}
         meta_tags = _strs(meta)
         ui = {}
 
@@ -389,9 +507,12 @@ class PromptLayoutBuilder:
             meta_tags = _strs(saved.get("meta"))
             canvas = saved.get("canvas") if saved.get("canvas") in CANVASES else "none"
         elif text_import:
-            layout = _find_layout(import_json)
-            boxes = _import_boxes(layout, width, height)
-            summary = layout.get("summary")
+            parsed = _parse_text_layout(import_json, width, height, "Prompt Layout Builder: import_json")
+            prompt, boxes = parsed.get("prompt", prompt), parsed["boxes"]
+            krea = parsed.get("krea", krea)
+            ideogram = parsed.get("ideogram", ideogram)
+            palette = parsed.get("palette", palette)
+            summary = (parsed.get("layout") or {}).get("summary")
             if isinstance(summary, dict):
                 prompt = str(summary.get("caption") or "")
                 meta_tags = _strs(summary.get("meta"))
@@ -400,7 +521,8 @@ class PromptLayoutBuilder:
         if saved or text_import:
             ui["pm_layout_import"] = [{
                 "boxes": boxes, "palette": palette, "prompt": prompt, "meta": ", ".join(meta_tags), "canvas": canvas,
-                **({"ideogram": ideogram} if saved and ideogram else {}),
+                **({"ideogram": ideogram} if ideogram and (saved or text_import) else {}),
+                **({"krea": krea} if krea and (saved or text_import) else {}),
             }]
 
         ui["pm_layout_ref_size"] = list(ref_size) if ref_size else []
@@ -412,10 +534,10 @@ class PromptLayoutBuilder:
             preview_bg = Image.fromarray((background[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
             ui["pm_layout_background"] = nodes.PreviewImage().save_images(background, "pm.layout.background")["ui"]["images"]
 
-        layout_prompt = _format_prompt(output_format, prompt, meta_tags, canvas, palette, boxes, width, height, ideogram)
+        layout_prompt = _format_prompt(output_format, prompt, meta_tags, canvas, palette, boxes, width, height, ideogram, krea)
         editor_state = {
             "boxes": boxes, "palette": palette, "prompt": prompt, "meta": meta_tags, "canvas": canvas,
-            "aspect_ratio": aspect_ratio, "megapixels": megapixels, "ideogram": ideogram,
+            "aspect_ratio": aspect_ratio, "megapixels": megapixels, "ideogram": ideogram, "krea": krea,
         }
         return {
             "ui": ui,

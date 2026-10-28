@@ -108,6 +108,22 @@ Extract prompt, model, and LoRA info out of images, videos, and JSON workflow fi
 - Can browse from either the input or output folders directly.
 - Can also be used as an advanced media loader with metadata awareness
 
+### Prompt Layout Builder
+Draw a layout of boxes over a scene prompt, or load one from an LLM, and output it as a layout prompt for MOSS-Image, Ideogram 4 or Krea 2.
+- The canvas follows the aspect ratio and megapixels, or a connected image's ratio with **Use Reference Ratio**. A connected image is also shown behind the boxes.
+- Draw, move and resize boxes on the canvas, or type exact x/y/width/height values. Each box is an **Object**, **Character**, **Text** (with the exact words to render) or **Panel** (shown in Krea 2 mode), with a description and an optional color palette.
+- The thumbnail button beside a description picks a Prompt Composer snippet for the box.
+- Full screen editor, grid overlay, canvas text size, undo/redo (Ctrl/Cmd+Z), duplicate (Ctrl/Cmd+D) and delete (Del).
+- A hint lists what is missing, such as a box without a description.
+- **Output** formats:
+  - **MOSS**: MOSS-Image layout JSON (the same format as the core MOSS-Image Layout Prompt), with meta tags, canvas type and palettes.
+  - **Ideogram**: Ideogram 4 JSON caption (the same format as Build JSON Prompt (Ideogram)), with background, photo or art style, aesthetics, lighting, medium and a style palette.
+  - **Krea 2**: Krea 2 grounding lines: a one-sentence summary, `@style; medium`, `~background`, then one line per box (panels first). Character boxes get a Person / Anime character / Furry tag and an optional ID; reuse the ID to keep the same character across panels. Requires the **krea2-turbo-bbox** model or LoRA, found here: [jimmycarter/krea2-turbo-bbox](https://huggingface.co/jimmycarter/krea2-turbo-bbox). See its PROMPTING.md for the prompt format and sampler settings.
+- **Use import_json** reads the layout from `import_json` and locks the editor. It accepts layout JSON (percent, 0-1000 or MOSS-native boxes), Ideogram 4 captions, Krea 2 grounding lines, Create Bounding Boxes elements, or a saved layout's `manager_data` from Library Manager. Turn it off to keep editing the imported boxes.
+- Prompt Generator system prompts for layouts (**Bbox** category): **MOSS Layout**, **Ideogram Layout** and **Krea 2 Layout**, each with **Create** and **From Image** versions. If they are missing, use **Restore defaults** for System Prompts in the Prompt Library Hub.
+- Outputs: prompt, preview (the boxes drawn over the canvas), width, height and `manager_data` (save it with Library Manager).
+- **Bbox Converter** converts layouts to and from ComfyUI's bounding-box types, so the builder can be chained with other box nodes. Connect a `layout_json` (any format the builder imports) or `bboxes` (bounding boxes, Create Bounding Boxes elements or their JSON); with both connected, a toggle picks the source. It outputs `layout_json` (passed through, or a percent layout when converting bboxes, without a prompt), pixel `bboxes` and `elements`.
+
 ## Recipe Toolset (Experimental)
 
 The Recipe Toolset are a set of experimental nodes to lets you build, manage, and rerun reusable pipelines. You can write recipes from scratch in Builder, combine them with Prompt Manager / Prompt Manager Advanced to reuse saved prompts, or import existing metadata through Extractor when you want to bootstrap from something you already made. Then saved them as complete Recipes.

@@ -1110,6 +1110,11 @@ class PromptGenerator:
             if e["name"] == name:
                 return {"category": e["category"], "name": e["name"], "prompt": e["prompt"]}
 
+        # A prompt moved to another category keeps its name.
+        named = [e for e in entries.values() if e["name"] == name]
+        if len(named) == 1:
+            return {"category": named[0]["category"], "name": name, "prompt": named[0]["prompt"]}
+
         # Use the default entry for this category if one exists.
         default_label = None
         for mode, (cat, entry_name) in LEGACY_MODE_TO_ENTRY.items():
