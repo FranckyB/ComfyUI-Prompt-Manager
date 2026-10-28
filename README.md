@@ -1,7 +1,7 @@
 # ComfyUI Prompt Manager
 ## A comprehensive prompt and recipe toolkit for [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
 
-ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, save, and reuse prompts along with their LoRAs and trigger words. It can generate prompts using a local LLM through llama.cpp or Ollama, or generate them directly with ComfyUI’s own CLIP/text encoders. It also extracts metadata from images, videos, and JSON files, so you can turn them into reusable prompts — and it includes a prompt browser and save/load tools to keep everything organized.
+ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, save, and reuse prompts along with their LoRAs and trigger words. It can generate prompts using a local LLM through llama.cpp or Ollama, or generate them directly with ComfyUI’s own CLIP/text encoders. It also extracts metadata from images, videos, and JSON files, so you can turn them into reusable prompts — and the **Prompts** sidebar and save/load tools keep everything organized.
 
 [See Installation Guide](#installation)
 
@@ -17,9 +17,6 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
 - **Prompt Generator**:
   - To run a local LLM (llama.cpp or Ollama), or directly use ComfyUI's CLIP/text encoders.
   - Also supports image analysis when using Vision Capable models.
-- **Prompt Browser**:
-  - For viewing or editing all data types used by the add-on.
-  - This node is how one modifies System Prompts used by **Prompt Generator**.
 - **Prompt Composer**:
   - For building prompts from reusable prompt fragments such as attire, expression, action, style, ambience, and more.
   - Supports the v2 Prompt Composer library format with thumbnails, prompt groups, subject-aware group behavior, LoRAs, RefMods, random multi-prompt selection, and video/image composition modes.
@@ -69,10 +66,6 @@ ComfyUI Prompt Manager is a prompt toolkit for ComfyUI. It helps you manage, sav
 - Prompt Extractor: Reads metadata from images/videos/JSON and outputs prompt + LoRA + recipe context.
 - Prompt Composer: Build prompts from reusable fragments, with random prompt groups, subject-aware composition, LoRA/RefMod support, and image/video generation modes.
 - Prompt Layout Builder: Draw boxes over a scene prompt (or load them from an LLM) and output a layout prompt for MOSS-Image, Ideogram 4 or Krea 2.
-- Prompt Browser: A node meant to allow access and write prompts for:
-  - System Prompts used by Prompt Generator.
-  - Compose Data used by Prompt Composer, including v2 prompt-group libraries with export, open, and merge workflows.
-  - Prompt Data used by our Prompt Manager.
 - Prompt Library Hub (sidebar **Prompts** button, can be hidden in Settings): browse, edit, import and export System Prompts, Prompt Snippets, and Saved Compose / Prompts / Layouts / Recipes from one panel, with per-category export.
 
 ### Recipe Toolset (Experimental)
@@ -95,7 +88,7 @@ Workflow examples are provided to help understand the basics.
 - This is where you set model/backend defaults, NSFW visibility defaults, view preferences, and more.
 - If you want the Prompt Generator dropdowns to show only your local models, enable `Hide downloadable built-in models` in these settings.
 - Prompt Generator backend choices (llama.cpp, Ollama) and related options are configured there.
-- The Prompt Generator's system prompts are fully user-customizable. They're stored in `user/default/prompt_generator_data.json` and can be created and edited with the **Prompt Library Hub** (sidebar) or the **Prompt Browser** — your custom prompts then show up directly in the Prompt Generator node. (Press r for refresh if not visible)
+- The Prompt Generator's system prompts are fully user-customizable. They're stored in `user/default/prompt_generator_data.json` and can be created and edited with the **Prompt Library Hub** (sidebar) — your custom prompts then show up directly in the Prompt Generator node.
 
 ## Documentation
 
@@ -148,14 +141,6 @@ This allows `compose_data` to take priority over directly connected prompt and L
   <img src="docs/images/prompt_browser_ui.png" alt="Prompt Browser Editor">
 </div>
 
-
-
-The **Prompt Browser Node** lets you create and edit all three prompt libraries from a single interface:
-  - **System prompts**: the instructions that steer the Prompt Generator's LLM
-  - **Compose prompts**: Prompt Composer v2 fragment libraries, including prompt groups, category types, thumbnails, LoRAs, RefMods, and tools to export, open, or merge existing composer libraries/workflows
-  - **Prompt Manager prompts**: your saved user prompts
-
-System prompts now feed straight into the **Prompt Generator**, so you can author your own and pick them right in the node. Sample system prompts ship in the node's `/prompts` folder to get you started. If new prompts are added and you don't have them, you can use the Prompt Browser's Import JSON feature to add them.
 
 ## Prompt Layout Builder
 

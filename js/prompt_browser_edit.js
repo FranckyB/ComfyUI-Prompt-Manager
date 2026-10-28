@@ -7,7 +7,7 @@ import { mediaFileUrl } from "./path_browser.js";
 // to break the module cycle:
 //   prompt_manager_advanced -> prompt_browser -> prompt_browser_edit -> prompt_manager_advanced
 // which left prompt_browser's bindings in the temporal dead zone and intermittently
-// prevented the PromptBrowser node's JS from registering.
+// prevented extensions importing prompt_browser.js from registering.
 const DEFAULT_THUMBNAIL = new URL("./placeholder.png", import.meta.url).href;
 const IMAGE_PREVIEW_EXTS = [".png", ".jpg", ".jpeg", ".webp"];
 

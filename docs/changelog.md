@@ -8,6 +8,7 @@
   - Saves and reloads the `manager_data` of Prompt Manager, the Recipe nodes, Prompt Composer and Prompt Layout Builder, with thumbnails.
   - Filters for All / Prompt / Recipe / Compose / Layout.
 - **New Prompt Library Hub** (sidebar **Prompts** button, can be hidden in Settings)
+  - Replaces the Prompt Browser node, which has been removed.
   - Browse & Edit, Import and Export for Saved Prompts (Prompt Manager / Prompt Composer / Prompt Layout / Prompt Recipe), Saved Snippets and Saved System Prompts.
   - Per-category export; Snippets and System Prompts can also be replaced from a file, and System Prompts can restore the built-in defaults.
 - **New Prompt Layout Builder**

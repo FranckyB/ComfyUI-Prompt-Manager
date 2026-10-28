@@ -575,7 +575,7 @@ async def generator_reimport_default_prompts(request):
 
     Missing entries are added; existing entries are left untouched so the user
     does not lose custom edits. This is a manual action triggered from the
-    Prompt Browser node.
+    Prompt Library Hub.
     """
     try:
         data_path = _ensure_prompt_generator_data()
@@ -1271,7 +1271,7 @@ class PromptGenerator:
             "optional": {
                 "system_prompt": (_system_prompt_choices(), {
                     "default": _default_system_prompt(),
-                    "tooltip": "System prompt to use. Prompts are grouped by category and managed via the Prompt Browser 'System Prompts' source."
+                    "tooltip": "System prompt to use. Prompts are grouped by category and managed in the Prompts sidebar (Saved System Prompts)."
                 }),
                 "prompt": ("STRING", {
                     "multiline": True,

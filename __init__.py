@@ -12,7 +12,6 @@ from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
 from .nodes.prompt_composer import PromptComposer
 from .nodes.library_manager import LibraryManager
-from .nodes.prompt_browser import PromptBrowser
 from .nodes.prompt_generator import PromptGenerator, PromptGeneratorDataStore
 from .nodes.prompt_generator_options import PromptGenOptions
 from .nodes.prompt_generator_kill_switch import PromptGeneratorKillSwitch
@@ -30,7 +29,6 @@ from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, Mult
 NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
-    "PromptBrowser":             PromptBrowser,
     "PromptComposer":            PromptComposer,
     "LibraryManager":            LibraryManager,
     "PromptGenerator":           PromptGenerator,
@@ -57,7 +55,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptManager":              "Prompt Manager (Basic)",
     "PromptComposer":             "Prompt Composer",
     "LibraryManager":             "Library Manager",
-    "PromptBrowser":              "Prompt Browser",
     "PromptGenerator":            "Prompt Generator",
     "PromptGenOptions":           "Prompt Generator Options",
     "PromptGeneratorKillSwitch":  "Prompt Generator Kill Switch",

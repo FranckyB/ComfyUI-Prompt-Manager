@@ -91,14 +91,7 @@ Every section has the same three buttons:
 - **Import**: merge a file; when entries already exist you choose to keep or overwrite them. Snippets and System Prompts can also be replaced from a file, and System Prompts can restore the built-in defaults (adds back missing built-in prompts without touching yours). Saved Prompt types share one file, so they only merge.
 - **Export**: pick the categories to export as one JSON file (Snippets export selected prompt groups as a ZIP).
 
-### Prompt Browser
-Prompt Browser lets you create and edit all 3 prompt libraries from a single interface:
-- System prompts: The System Prompts used by Prompt Generator.
-- Compose prompts: Snippets used by Prompt Composer
-- Prompt Manager prompts: Our saved workflow prompts
-
-Prompt Generator now uses a *prompt_generator_data.json*, so you can author your own prompts instead of being limited to the previous simple presets. The add-on also comes with new default prompts; these can be imported back into your saved user system prompts with **Restore Defaults** in the Prompt Library Hub.
-
+The Prompt Generator's system prompts are stored in *prompt_generator_data.json*, so you can author your own. Built-in prompts added by updates can be brought into your saved system prompts with **Restore defaults**.
 
 ### Prompt Extractor
 Extract prompt, model, and LoRA info out of images, videos, and JSON workflow files.
