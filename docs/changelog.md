@@ -1,5 +1,85 @@
 # Changelog
 
+## version 3.0.0
+- **Breaking: one `MANAGER_DATA` type**
+  - Prompt Manager, Prompt Composer, Prompt Layout Builder and the Recipe nodes now share `manager_data` (replaces `RECIPE_DATA` and `COMPOSE_DATA`). Older workflows need these links reconnected.
+  - Recipe Renderer outputs `output_image`, `output_latent`, `manager_data`; Recipe Extractor outputs `image`, `manager_data`.
+- **New Library Manager** (replaces Composition Manager and Recipe Manager)
+  - Saves and reloads the `manager_data` of Prompt Manager, the Recipe nodes, Prompt Composer and Prompt Layout Builder, with thumbnails.
+  - Filters for All / Prompt / Recipe / Compose / Layout.
+- **New Prompt Library Hub** (sidebar **Prompts** button, can be hidden in Settings)
+  - Browse & Edit, Import and Export for Saved Prompts (Prompt Manager / Prompt Composer / Prompt Layout / Prompt Recipe), Saved Snippets and Saved System Prompts.
+  - Per-category export; Snippets and System Prompts can also be replaced from a file, and System Prompts can restore the built-in defaults.
+- **New Prompt Layout Builder**
+  - Draw Object, Character, Text and Panel boxes over a scene prompt, or load them from an LLM.
+  - Outputs MOSS-Image layout JSON, Ideogram 4 JSON captions or Krea 2 grounding lines (needs [krea2-turbo-bbox](https://huggingface.co/jimmycarter/krea2-turbo-bbox)).
+  - `import_json` reads all three formats, Create Bounding Boxes elements, and layouts saved with Library Manager.
+  - Box descriptions can come from Prompt Composer snippets.
+- **New Bbox Converter**: converts a layout JSON to bounding boxes and elements, or bounding boxes back to a layout JSON.
+- **Prompt Generator**
+  - The system prompt dropdown is replaced by a selector: arrows cycle through prompts, the name opens the Prompt Browser.
+  - New **Bbox** category with **MOSS Layout**, **Ideogram Layout** and **Krea 2 Layout** system prompts (Create and From Image).
+  - Fixed: the selected system prompt was reset to Enhance Prompt when reopening a workflow or switching tabs if the prompt was added or moved after the page loaded. Prompts moved to another category are now found by name.
+- **Prompt Manager and editor**
+  - Export only selected categories.
+  - Preferred model settings, draft handling and clearer save/rename buttons in the prompt editor.
+  - Improved NSFW handling in the browser.
+- **Prompt Composer**
+  - Prompt text tooltips, clear muted parts, RefMod rows.
+  - Picker renamed to "Select Prompt Snippet".
+- Customizable thumbnail generation steps.
+- Nodes 2.0 compatibility.
+- Larger text across the node UIs.
+- New Krea layout example workflow.
+
+## version 2.8.0
+- **Prompt Composer v2**
+  - New library format built around prompt groups, with a dialog to create groups and pick their category.
+  - Output as text or JSON, before or after the selected prompt, or on its own.
+  - Image and video generation modes.
+  - Subject numbers and subject types, mute for prompt parts.
+  - Export and import of composer libraries; new Generate Bulk Snippets system prompt.
+- **Prompt Composer Manager** to save and reload Composer setups with thumbnails.
+  - Input prompt and LoRA modes on Prompt Composer and Prompt Manager, so compose data passing through Prompt Manager can add LoRAs and be saved for reuse.
+- **Prompt Browser**: double-click to select, Home button, more responsive dialogs.
+- Anima family support for thumbnail rendering.
+- Preference to hide the downloadable built-in models in Prompt Generator.
+- llama-server GPU support detection.
+- Trigger word fixes: only connected words are pruned, words saved with the prompt are kept.
+- Fixed LoRA stack cards collapsing or stretching to viewport height (thanks Martlet-Tech).
+- Prompt Composer example workflows.
+
+## version 2.7.2
+- LoRA blacklist keywords for MiniMax and distilled LoRAs.
+- Prompt Generator code moved to its own `prompt_generator.js`.
+- Converter for the older system prompt storage format.
+- README and feature reference updates.
+
+## version 2.7.1
+- Prompt text widgets become read-only while an external prompt input is connected; the received prompt is shown after execution.
+- Prompt Extractor accepts a video input.
+- Video prompt writing guides for MiniMax.
+- Prompt Generator input prompt handling and model management improvements.
+
+## version 2.7.0
+- **New Prompt Composer** (started as Prompt Mixer): build prompts from multiple reusable parts.
+- **System prompts are now user data**
+  - Stored in `prompt_generator_data.json` and editable in the Prompt Browser, grouped by category.
+  - New default system prompts for image and video models.
+- **Prompt Browser**: multi-select, category type filter, scrolling category bar, view modes, unsaved-changes confirmation, bulk prompt builder.
+- **llama.cpp** (thanks sophosympatheia)
+  - GPU device selection for multi-GPU systems.
+  - Fixed the server port ignoring the saved setting.
+  - Models and mmproj files are found in subfolders.
+- Rotating backups for prompt data files.
+- VRAM flush fixes when using a CLIP/text encoder.
+
+## version 2.6.0
+- Prompt Generator can use a connected CLIP/text encoder directly.
+- Expression Selector: arrow navigation and strength slider.
+- Multi LoRA Stacker: configurable stack count.
+- Krea2 example workflow.
+
 ## version 2.5.4
 - **Prompt Manager Advanced browser overhaul**
   - Larger non-compact prompt browser with bigger 3:4 thumbnails.
