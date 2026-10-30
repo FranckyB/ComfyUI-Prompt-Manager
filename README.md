@@ -176,13 +176,24 @@ See [docs/feature-reference.md](docs/feature-reference.md#prompt-layout-builder)
      ```bash
      winget install llama.cpp
      ```
+     This installs the `ggml.llamacpp` package, which ships the official **Vulkan** Windows build (for example `llama-b11946-bin-win-vulkan-x64.zip`), so GPU offload works on NVIDIA / AMD / Intel GPUs with a working Vulkan driver, and falls back to CPU when there is no Vulkan-capable driver.
+     If you want CUDA instead (needed for the node's GPU device selector, and generally the fastest on NVIDIA), download `Windows x64 (CUDA 12/13)` from the [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) page, keep its CUDA DLLs next to `llama-server.exe`, and point **Settings → Prompt Manager → 2. Llama Preferences → Custom Llama Path** at that folder.
    - Linux:
      ```bash
      brew install llama.cpp
      ```
+     Homebrew builds ggml with **Vulkan** and OpenBLAS on Linux (and Metal on Apple Silicon), so GPU offload works there as well. Otherwise build llama.cpp yourself with `-DGGML_CUDA=ON` (or `-DGGML_VULKAN=ON`) and set **Custom Llama Path** to the build folder.
 5. Place custom `.gguf` models in models/gguf.
    - Or use preferences to set a custom path.
 6. Restart ComfyUI.
+
+**Checking that your llama.cpp can use the GPU** — run this in a terminal, using the same path the Prompt Generator resolves (it is printed as `llama-server:` in the console):
+
+```bash
+llama-server --list-devices
+```
+
+If it prints `Available devices:` followed by `CUDA0: ...` or `Vulkan0: ...`, GPU offload works. If it prints `(none)`, that build (or its driver) cannot use your GPU — Prompt Generator will then run the model on CPU and say so at startup.
 
 **Using the CLIP/text encoder backend**: No additional setup is needed. Connect any ComfyUI `CLIP` output to the Prompt Generator node's `clip` input. When `clip` is connected, the node bypasses llama.cpp/Ollama and generates prompts directly through the text encoder.
 

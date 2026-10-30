@@ -1,5 +1,12 @@
 # Changelog
 
+## version 3.0.1
+- **Prompt Generator: GPU detection fix for Windows (and recent llama.cpp builds)**
+  - `--n-gpu-layers 0` is no longer forced just because GPU support could not be detected. On Windows the old check always failed (`ldd` does not exist there, `--version` no longer names the backend, and `-h` lists `--n-gpu-layers` on every build), which pushed CUDA users into CPU inference and printed a misleading "CPU-only build" error.
+  - Detection now asks llama.cpp itself with `--list-devices`, and falls back to the GPU backend libraries next to the binary (`ggml-cuda.dll` etc.) or `ldd` on Linux.
+  - Console output now distinguishes "no GPU device in this build" (warning, CPU is correct) from "unknown" (offload is requested and llama.cpp decides).
+  - README: corrected install notes (winget `ggml.llamacpp` ships the official **Vulkan** build, Homebrew builds ggml with Vulkan/OpenBLAS on Linux and Metal on Apple Silicon) and added a `llama-server --list-devices` check.
+
 ## version 3.0.0
 - **Breaking: one `MANAGER_DATA` type**
   - Prompt Manager, Prompt Composer, Prompt Layout Builder and the Recipe nodes now share `manager_data` (replaces `RECIPE_DATA` and `COMPOSE_DATA`). Older workflows need these links reconnected.
