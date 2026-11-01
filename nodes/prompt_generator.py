@@ -1057,7 +1057,8 @@ def _scan_backend_libraries(server_cmd):
         return set()
 
     try:
-        entries = os.listdir(os.path.dirname(os.path.abspath(exe)))
+        # Follow launcher symlinks (e.g. winget Links) to the real install folder.
+        entries = os.listdir(os.path.dirname(os.path.realpath(exe)))
     except OSError:
         return set()
 
@@ -1066,6 +1067,21 @@ def _scan_backend_libraries(server_cmd):
         if entry.lower().endswith(_BACKEND_LIBRARY_SUFFIXES):
             found |= _backends_in_text(entry)
     return found
+
+
+def _listed_device_names(text):
+    """Return device names from the indented block after `Available devices:`."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip().lower() == "available devices:"), None)
+    if start is None:
+        return []
+    names = []
+    for line in lines[start + 1:]:
+        match = re.match(r"^\s+([^\s:()][^:]*):\s", line)
+        if not match:
+            break
+        names.append(match.group(1).strip())
+    return names
 
 
 def detect_llama_gpu_support(server_cmd):
@@ -1097,6 +1113,9 @@ def detect_llama_gpu_support(server_cmd):
         backends |= _backends_in_text(text)
         if backends:
             return (True, sorted(backends), None)
+        devices = _listed_device_names(text)
+        if devices:
+            return (True, devices, None)
         # Enumeration worked but the build/driver exposes no GPU device.
         return (False, [], "llama-server reported no GPU device (CPU-only build or missing driver)")
 
@@ -1473,7 +1492,6 @@ class PromptGenerator:
             if custom_llama_path:
                 print_pg("llama-server:", f"{server_cmd}")
 
-            # Detect whether the resolved binary actually supports GPU offload.
             # Detect whether the resolved binary can actually offload to a GPU.
             gpu_support, gpu_backends, gpu_note = detect_llama_gpu_support(server_cmd)
             if gpu_backends:
