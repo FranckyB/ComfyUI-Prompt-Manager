@@ -27,7 +27,7 @@ BLOCK_START = '_BACKEND_LIBRARY_SUFFIXES = ('
 BLOCK_END = 'class PromptGenerator:'
 
 
-def load_detection_code(os_name, fake_subprocess, fake_shutil=None, listdir=None):
+def load_detection_code(os_name, fake_subprocess, fake_shutil=None, listdir=None, realpath=None):
     """Exec the detection helpers from prompt_generator.py in a stubbed namespace."""
     with open(SOURCE, "r", encoding="utf-8") as handle:
         source = handle.read()
@@ -40,6 +40,7 @@ def load_detection_code(os_name, fake_subprocess, fake_shutil=None, listdir=None
         isfile=lambda path: path in fake_subprocess.existing_files,
         dirname=os.path.dirname,
         abspath=os.path.abspath,
+        realpath=realpath or os.path.abspath,
         sep=os.sep,
     )
     stub_os = types.SimpleNamespace(
@@ -178,6 +179,32 @@ def test_windows_cpu_archive_stays_unknown():
     status, backends, note = ns["detect_llama_gpu_support"](exe)
     assert status is None, (status, backends, note)
     assert backends == [], backends
+
+
+def test_unrecognised_listed_device_counts_as_gpu():
+    """A listed device with an unknown name is still a GPU, not CPU-only."""
+    fake = FakeSubprocess(outputs={"llama-server": CompletedRun(
+        stdout="Available devices:\n  MTL0: Apple M3 Max (49152 MiB, 49152 MiB free)\n",
+        stderr="load_backend: loaded CPU backend\n  Device 0: something: else\n",
+    )})
+    ns = load_detection_code("posix", fake)
+    status, backends, note = ns["detect_llama_gpu_support"]("llama-server")
+    assert status is True, (status, backends, note)
+    assert backends == ["MTL0"], backends
+
+
+def test_dll_scan_follows_launcher_symlink():
+    """winget-style launcher link: DLLs live next to the link target, not the link."""
+    link = os.path.abspath(os.path.join("Links", "llama-server.exe"))
+    target_dir = os.path.abspath("llama.cpp")
+    fake = FakeSubprocess(outputs={link: UNSUPPORTED_FLAG}, existing_files={link})
+    fake_shutil = types.SimpleNamespace(which=lambda name: link)
+    listdir = lambda directory: ["ggml-vulkan.dll"] if directory == target_dir else []
+    realpath = lambda path: os.path.join(target_dir, "llama-server.exe") if path == link else path
+    ns = load_detection_code("nt", fake, fake_shutil=fake_shutil, listdir=listdir, realpath=realpath)
+    status, backends, note = ns["detect_llama_gpu_support"](link)
+    assert status is True, (status, backends, note)
+    assert backends == ["Vulkan"], backends
 
 
 def test_missing_binary_reports_note():
