@@ -4,6 +4,7 @@ import {
     getCategoryPromptEntriesForEndpoint,
     getCategoryPromptEntryForEndpoint,
     isHiddenPromptEntryKey,
+    SYSTEM_PROMPTS_ENDPOINT_PREFIX,
 } from "./prompt_store_adapters.js";
 
 let app = null;
@@ -89,6 +90,18 @@ function _formatThumbnailPromptText(text, promptData) {
     const strength = _normalizeThumbnailPromptStrength(promptData?.__pm_part_strength);
     if (strength === 1.0) return trimmed;
     return `(${trimmed}:${strength.toFixed(15).replace(/\.?0+$/, "")})`;
+}
+
+// System prompts are instructions, not image descriptions, so their thumbnail is a title card.
+function _buildTitleCardThumbnailPrompt(promptName) {
+    const title = String(promptName || "").replace(/["“”]/g, "'").replace(/\s+/g, " ").trim() || "Untitled";
+    return [
+        `A clean minimalist typographic title card. The only text on the card is "${title}",`,
+        "spelled exactly, written in large bold modern sans-serif lettering, perfectly centered and crisp.",
+        "Flat dark charcoal background with a soft subtle color gradient and a thin glowing accent border with rounded corners,",
+        "sleek app-icon poster design, high contrast, sharp edges, balanced negative space, vector graphic style.",
+        "No other words, no letters besides the title, no people, no photos, no logos, no watermark.",
+    ].join(" ");
 }
 
 let _thumbQueueTotal = 0;
@@ -538,15 +551,21 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
         promptData.__pm_generation_mode = String(generationMode || "image").trim().toLowerCase() || "image";
     }
 
-    const categoryBasePrompt = getCategoryBasePrompt(node, category);
-    const categoryPromptPrefix = getCategoryPromptPrefix(node, category);
-    const prefixedPromptText = prependCategoryPromptPrefix(
-        categoryPromptPrefix,
-        _formatThumbnailPromptText(promptData.prompt || promptName || "", promptData)
-    );
-    const promptText = [String(categoryBasePrompt || "").trim(), prefixedPromptText]
-        .filter(Boolean)
-        .join(" ");
+    let promptText;
+    let categoryBasePrompt = "";
+    if (endpointPrefix === SYSTEM_PROMPTS_ENDPOINT_PREFIX) {
+        promptText = _buildTitleCardThumbnailPrompt(promptName);
+    } else {
+        categoryBasePrompt = getCategoryBasePrompt(node, category);
+        const categoryPromptPrefix = getCategoryPromptPrefix(node, category);
+        const prefixedPromptText = prependCategoryPromptPrefix(
+            categoryPromptPrefix,
+            _formatThumbnailPromptText(promptData.prompt || promptName || "", promptData)
+        );
+        promptText = [String(categoryBasePrompt || "").trim(), prefixedPromptText]
+            .filter(Boolean)
+            .join(" ");
+    }
 
     const isComposerManager = endpointPrefix === "/prompt-manager/compose";
     const numericSeed = Number(staticSeed);

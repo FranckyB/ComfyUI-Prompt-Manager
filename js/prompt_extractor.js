@@ -1210,6 +1210,52 @@ function isPreviewableFile(filename) {
     return imageExtensions.includes(ext) || videoExtensions.includes(ext);
 }
 
+// --- Arrow-key media navigation (Left/Right steps files while hovering a node) ---
+let _peHoveredNode = null;
+let _peKeyListenerInstalled = false;
+
+function isPromptExtractorNodeInGraph(node) {
+    if (!node || !app.graph?._nodes) return false;
+    return app.graph._nodes.includes(node);
+}
+
+function getActivePromptExtractorNode() {
+    // Hover-only: only react when the cursor is actually over a live node.
+    if (_peHoveredNode && !_peHoveredNode.flags?.collapsed && isPromptExtractorNodeInGraph(_peHoveredNode)) {
+        return _peHoveredNode;
+    }
+    if (_peHoveredNode && !isPromptExtractorNodeInGraph(_peHoveredNode)) {
+        _peHoveredNode = null;
+    }
+    return null;
+}
+
+function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = String(target.tagName || "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!target.isContentEditable;
+}
+
+function installArrowKeyNavigation() {
+    if (_peKeyListenerInstalled) return;
+    _peKeyListenerInstalled = true;
+
+    window.addEventListener("keydown", (event) => {
+        if (event.defaultPrevented) return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+        if (isTypingTarget(event.target)) return;
+
+        const node = getActivePromptExtractorNode();
+        if (!node || typeof node._stepImageByDelta !== "function") return;
+
+        const dir = event.key === "ArrowRight" ? 1 : -1;
+        if (!node._stepImageByDelta(dir)) return;
+        event.preventDefault();
+        event.stopPropagation();
+    }, true);
+}
+
 app.registerExtension({
     name: "PromptExtractor",
 
@@ -1495,6 +1541,64 @@ app.registerExtension({
                         }
                         node.setDirtyCanvas(true);
                     };
+
+                    // Build the flat list of selectable file values (same order as
+                    // the picker combo) for arrow-key stepping.
+                    const listImageValues = () => {
+                        const out = [];
+                        const seen = new Set();
+
+                        const add = (v) => {
+                            if (typeof v !== "string") return;
+                            const value = stripAnnotation(v);
+                            if (!value || value === "(none)" || seen.has(value)) return;
+                            seen.add(value);
+                            out.push(value);
+                        };
+
+                        const map = node._imagePickerMap;
+                        if (map && typeof map === "object") {
+                            for (const value of Object.values(map)) {
+                                add(value);
+                            }
+                            if (out.length > 0) return out;
+                        }
+
+                        const values = imageWidget.options.values;
+                        if (Array.isArray(values)) {
+                            for (const value of values) add(value);
+                        } else if (values && typeof values === "object") {
+                            for (const value of Object.values(values)) add(value);
+                        }
+
+                        return out;
+                    };
+
+                    node._stepImageByDelta = (delta) => {
+                        if (!imageWidget) return false;
+
+                        // When the video input is connected the picker UI is hidden,
+                        // so stepping files is not meaningful.
+                        const videoInput = (node.inputs || []).find(i => i?.name === "video");
+                        if (videoInput && videoInput.link != null) return false;
+
+                        const values = listImageValues();
+                        if (values.length <= 1) return false;
+
+                        const dir = delta >= 0 ? 1 : -1;
+                        const current = stripAnnotation(imageWidget.value);
+                        const currentIndex = values.indexOf(current);
+
+                        let nextIndex;
+                        if (currentIndex < 0) {
+                            nextIndex = dir > 0 ? 0 : values.length - 1;
+                        } else {
+                            nextIndex = (currentIndex + dir + values.length) % values.length;
+                        }
+
+                        setImageFilename(values[nextIndex]);
+                        return true;
+                    };
                     
                     // Watch for value changes to update metadata indicator
                     const originalOnDrawForeground = node.onDrawForeground;
@@ -1609,6 +1713,7 @@ app.registerExtension({
                     // Insert button right after the image widget
                     this.widgets.splice(imageWidgetIndex + 2, 0, browseButton);
                     Object.defineProperty(browseButton, "node", { value: node });
+                    node._browseFilesButton = browseButton;
 
                     // Track if current file is a video for UI behavior
                     node._isVideoFile = false;
@@ -1997,11 +2102,47 @@ app.registerExtension({
                             }
                             canvas.canvas.style.cursor = '';
                         }
+                    } else if (isPosOverPreview(localPos)) {
+                        canvas.canvas.style.cursor = 'pointer';
+                        canvas.canvas.title = 'Click to browse files';
+                    } else {
+                        canvas.canvas.style.cursor = '';
                     }
                     
                     return result;
                 };
                 
+                // ── Click on the preview thumbnail to open the file browser ──
+                // The preview is drawn by LiteGraph in the node body below all
+                // visible widgets, so hit-test that area on the canvas.
+                const isVideoInputConnected = () =>
+                    (node.inputs || []).some(i => i?.name === "video" && i.link != null);
+
+                const getPreviewBodyTop = () => {
+                    const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+                    const widgetHeight = LiteGraph.NODE_WIDGET_HEIGHT || 20;
+                    let bodyTop = titleHeight;
+                    for (const w of node.widgets || []) {
+                        if (w.hidden || !Number.isFinite(w.last_y)) continue;
+                        const size = typeof w.computeSize === "function" ? w.computeSize(node.size?.[0] || 320) : null;
+                        const height = Number(size?.[1]) || widgetHeight;
+                        bodyTop = Math.max(bodyTop, w.last_y + Math.max(1, height));
+                    }
+                    return bodyTop + 6;
+                };
+
+                const isPosOverPreview = (localPos) => {
+                    if (!node.imgs || node.imgs.length === 0) return false;
+                    if (node.flags && node.flags.collapsed) return false;
+                    if (!node._browseFilesButton) return false;
+                    if (isVideoInputConnected()) return false;
+                    const bodyTop = getPreviewBodyTop();
+                    const bodyH = (node.size?.[1] || 0) - bodyTop;
+                    if (bodyH <= 10) return false;
+                    return localPos[0] >= 0 && localPos[0] <= (node.size?.[0] || 0) &&
+                        localPos[1] >= bodyTop && localPos[1] <= bodyTop + bodyH;
+                };
+
                 // Handle click on preview icon
                 const onMouseDown = node.onMouseDown;
                 node.onMouseDown = function(e, localPos, canvas) {
@@ -2036,7 +2177,37 @@ app.registerExtension({
                         }
                     }
 
+                    // Left click on the preview thumbnail opens the file browser
+                    // (on mouse up, so node drags don't trigger it).
+                    if (e.button === 0 && isPosOverPreview(localPos)) {
+                        node._previewClickCandidate = { x: localPos[0], y: localPos[1] };
+                    } else {
+                        node._previewClickCandidate = null;
+                    }
+
                     return onMouseDown ? onMouseDown.apply(this, arguments) : undefined;
+                };
+
+                const origOnMouseUp = node.onMouseUp;
+                node.onMouseUp = function(e, localPos, canvas) {
+                    const candidate = node._previewClickCandidate;
+                    node._previewClickCandidate = null;
+                    if (candidate && e.button === 0 && isPosOverPreview(localPos)) {
+                        const dx = localPos[0] - candidate.x;
+                        const dy = localPos[1] - candidate.y;
+                        // Only treat it as a click if the pointer barely moved
+                        // (a drag to move the node should not open the browser).
+                        if (dx * dx + dy * dy <= 25) {
+                            const browseButton = node._browseFilesButton;
+                            if (browseButton && typeof browseButton.callback === "function") {
+                                Promise.resolve(browseButton.callback()).catch((err) =>
+                                    console.error('[PromptExtractor] Error opening browser from preview:', err)
+                                );
+                            }
+                            return true; // Consume the event
+                        }
+                    }
+                    return origOnMouseUp ? origOnMouseUp.apply(this, arguments) : undefined;
                 };
 
                 // ── Ghost the file-picker UI when a VIDEO input is connected ──
@@ -2098,6 +2269,22 @@ app.registerExtension({
                 };
                 // Initial state.
                 setTimeout(updateVideoConnectedUI, 100);
+
+                // Install arrow-key file navigation (Left/Right steps media while
+                // hovering this node).
+                installArrowKeyNavigation();
+
+                const origOnMouseEnter = node.onMouseEnter;
+                node.onMouseEnter = function () {
+                    _peHoveredNode = this;
+                    return origOnMouseEnter ? origOnMouseEnter.apply(this, arguments) : undefined;
+                };
+
+                const origOnMouseLeave = node.onMouseLeave;
+                node.onMouseLeave = function () {
+                    if (_peHoveredNode === this) _peHoveredNode = null;
+                    return origOnMouseLeave ? origOnMouseLeave.apply(this, arguments) : undefined;
+                };
 
                 return result;
             };

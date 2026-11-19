@@ -791,10 +791,10 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         background: rgba(40, 44, 52, 0.98);
         border: 1px solid rgba(255,255,255,0.1);
         border-radius: 6px;
-        width: 90%;
-        max-width: 1200px;
-        height: 80%;
-        max-height: 800px;
+        width: 95%;
+        max-width: 1304px;
+        height: 95%;
+        max-height: 1185px;
         display: flex;
         flex-direction: column;
         overflow: hidden;
