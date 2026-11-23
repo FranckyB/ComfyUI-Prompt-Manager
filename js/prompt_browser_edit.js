@@ -1685,7 +1685,7 @@ export function createPromptBrowserEditPanel(options) {
             "Save Prompt Group Settings",
             `Save prompt group settings for "${groupMeta.typeName || promptType}"?`,
             "Save",
-            "#2b6d3a"
+            { danger: false }
         );
         if (!confirmed) return;
 
@@ -1790,7 +1790,6 @@ export function createPromptBrowserEditPanel(options) {
                 "Update Category Settings",
                 `Category settings for "${categoryLabel}" already exist. Update them?`,
                 "Update",
-                "#c44"
             );
             if (!confirmed) return;
         }
@@ -2244,7 +2243,7 @@ export function createPromptBrowserEditPanel(options) {
                 ? `Update prompt "${originalName}" in category "${categoryLabel}"?`
                 : `Update prompt "${originalName}" and rename it to "${nextName}" in category "${categoryLabel}"?`,
             "Update",
-            "#2b6d3a"
+            { danger: false }
         );
         if (!confirmed) return { success: false };
 
@@ -2442,7 +2441,6 @@ export function createPromptBrowserEditPanel(options) {
                     "Overwrite Prompt",
                     `Prompt "${name}" already exists in category "${categoryLabel}". Replace it?`,
                     "Replace",
-                    "#c44"
                 );
             }
             if (!overwrite) return { success: false };
@@ -2527,7 +2525,6 @@ export function createPromptBrowserEditPanel(options) {
             "Unsaved Changes",
             "You have unsaved changes. Discard them?",
             "Discard",
-            "#c44"
         );
         return confirmed;
     }
