@@ -7,7 +7,7 @@
 
 // Bump on any change to the CSS below. Two packs shipping the same version
 // inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 11;
+export const KIT_VERSION = 12;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -124,6 +124,11 @@ textarea.fbui-text{background:${T.card};border-color:${T.plateEdge}}
 .fbui-btn.small{height:20px;padding:0 7px;font-size:10px}
 .fbui-btn.icon{width:${ROW_HEIGHT}px;padding:0}
 .fbui-btn.icon.small{width:20px}
+.fbui-slide{display:flex;align-items:center;gap:5px;align-self:stretch;margin:2px 0;padding:0 4px;border-radius:${RADIUS}px;touch-action:none}
+.fbui-slide>span{overflow:hidden;text-overflow:ellipsis}
+.fbui-slide svg{flex:none;color:${T.faint}}
+.fbui-slide:hover,.fbui-slide.on{background:${T.fill};color:${T.ink}}
+.fbui-slide:hover svg,.fbui-slide.on svg{color:${T.brand}}
 .fbui-rail{position:relative;height:24px;margin:0 7px;touch-action:none;cursor:pointer;user-select:none;pointer-events:auto}
 .fbui-rail::before{content:"";position:absolute;left:0;right:0;top:10px;height:5px;border-radius:3px;background:${T.fill}}
 .fbui-rail.disabled{opacity:.45;cursor:default}

@@ -13,9 +13,9 @@
 //       groups: (value, values, node) => heading, for a select's <optgroup>s
 //   { pair: [a, b], label, sep?, when?, group? }
 //   { section: "Caption", when? }
-//   { label, control: (node, card) => ({ element, sync?(values) }), widgets?, when?, group? }
+//   { label, control: (node, card) => ({ element, label?, sync?(values) }), widgets?, when?, group? }
 //       a labelled row holding the node's own control; `widgets` names the
-//       hidden widgets it drives
+//       hidden widgets it drives; a returned `label` element replaces the text
 //   { panel: (node, card) => ({ element, sync?(values) }), height, grow?, when? }
 //       grow takes the node's spare height
 //   { group: "more", label: "More", tools? }   later rows with group: "more" fold under it
@@ -208,7 +208,7 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
       const control = el("div", "fbui-control");
       const built = row.control(node, card);
       control.append(built.element);
-      line.append(el("span", "fbui-label", row.label ?? ""), control);
+      line.append(built.label ?? el("span", "fbui-label", row.label ?? ""), control);
       card.entries.push({ row: { ...row, inGroup: row.group ?? null }, element: line, names, syncs: built.sync ? [built.sync] : [] });
       root.append(line);
       continue;
