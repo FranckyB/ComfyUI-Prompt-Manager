@@ -82,7 +82,7 @@ This node provides extra control to **Prompt Generator** and is NOT mandatory.
 
 ### Prompt Library Hub
 The **Prompts** button in ComfyUI's left sidebar opens the Prompt Library Hub (hide it with Settings > Prompt Manager > 4. Advanced Preferences > Show Prompts Sidebar Button): one place to browse, edit, import and export every Prompt Manager library. It has three sections:
-- **Saved Prompts**: pick the type with the Prompt Manager / Prompt Composer / Prompt Layout / Prompt Recipe buttons (saved through Prompt Manager or Library Manager).
+- **Saved Prompts**: everything saved through Prompt Manager or Library Manager (prompts, recipes, Composer setups and layouts); the Prompt Browser's **Type** button filters them.
 - **Saved Snippets**: the snippets used by Prompt Composer.
 - **Saved System Prompts**: the system prompts used by Prompt Generator.
 

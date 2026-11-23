@@ -22,27 +22,18 @@ import {
 
 const HUB_TITLE = "Prompt Library Hub";
 const STYLE_ID = "pm-library-hub-style";
-const KIND_STORAGE_KEY = "pm-library-hub-kind";
-
-// Saved prompt kinds share prompt_manager_data.json and are told apart by the browser's Type filter.
-const PROMPT_KINDS = [
-    { id: "prompt", label: "Prompt Manager", badge: "P", color: "56, 130, 246", hint: "Saved from Prompt Manager or Library Manager." },
-    { id: "compose", label: "Prompt Composer", badge: "C", color: "47, 146, 72", hint: "Prompt Composer setups saved with Library Manager." },
-    { id: "layout", label: "Prompt Layout", badge: "L", color: "124, 92, 220", hint: "Prompt Layout Builder layouts saved with Library Manager." },
-    { id: "recipe", label: "Prompt Recipe", badge: "R", color: "235, 140, 35", hint: "Recipes saved with Library Manager." },
-];
-
+// Saved prompts of every type (prompts, recipes, Composer setups, layouts) share
+// prompt_manager_data.json; the Prompt Browser's Type filter tells them apart.
 const SECTIONS = [
-    { id: "prompts", title: "Saved Prompts", store: "manager", kinds: PROMPT_KINDS, unit: "entr" },
+    { id: "prompts", title: "Saved Prompts", store: "manager", hint: "Prompts, recipes, Composer setups and layouts saved from Prompt Manager or Library Manager. Filter them by Type in the browser.", unit: "entr" },
     { id: "snippets", title: "Saved Snippets", browseTitle: "Saved Composer Snippets", store: "composer", hint: "Prompt snippets used by Prompt Composer.", unit: "snippet" },
     { id: "system", title: "Saved System Prompts", store: "generator", hint: "System prompts used by Prompt Generator.", unit: "prompt" },
 ];
 
 const plural = (count, unit) => `${count} ${unit === "entr" ? (count === 1 ? "entry" : "entries") : `${unit}${count === 1 ? "" : "s"}`}`;
 
-function libraryFor(section, kind) {
-    if (!kind) return { id: section.id, title: section.browseTitle || section.title, store: section.store, unit: section.unit };
-    return { id: `${section.id}_${kind.id}`, title: `${section.title} - ${kind.label}`, store: section.store, filter: kind.id, unit: section.unit };
+function libraryFor(section) {
+    return { id: section.id, title: section.browseTitle || section.title, store: section.store, unit: section.unit };
 }
 
 const STORE_ENDPOINTS = {
@@ -77,7 +68,7 @@ function categoryNames(data) {
 function entryNames(library, category) {
     const data = hosts[library.store].prompts;
     if (library.store === "manager") {
-        return getPromptNamesForCategory(hosts.manager, category, { contentFilter: library.filter, endpointPrefix: PROMPT_ADVANCED_ENDPOINT_PREFIX });
+        return getPromptNamesForCategory(hosts.manager, category, { endpointPrefix: PROMPT_ADVANCED_ENDPOINT_PREFIX });
     }
     return Object.keys(getCategoryPromptEntries(data?.[category], library.store));
 }
@@ -401,8 +392,7 @@ async function browseLibrary(library) {
         await showThumbnailBrowser(hosts.manager, "", "", {
             title,
             loadPromptsFn: loadManagerPrompts,
-            contentFilter: library.filter,
-            hideContentFilterControl: true,
+            contentFilter: "all",
             filterEmptyCategories: true,
             allowMultiSelect: false,
             editMode: true,
@@ -425,14 +415,6 @@ function ensureStyle() {
         .pm-hub-section-head { display: flex; align-items: baseline; gap: 8px; }
         .pm-hub-name { font-size: 15px; font-weight: 700; color: ${UI.textHeading}; }
         .pm-hub-count { margin-left: auto; color: ${UI.textHint}; font-size: 13px; white-space: nowrap; }
-        .pm-hub-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
-        .pm-hub-kind { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer;
-            border: 1px solid ${UI.inputBorder}; background: ${UI.inputBg}; color: ${UI.textPrimary}; font: inherit; font-size: 13px; text-align: left; }
-        .pm-hub-kind:hover { border-color: rgba(var(--pm-hub-rgb), 0.8); }
-        .pm-hub-kind.active { border-color: rgba(var(--pm-hub-rgb), 0.95); background: rgba(var(--pm-hub-rgb), 0.18); }
-        .pm-hub-kind-count { margin-left: auto; color: ${UI.textHint}; }
-        .pm-hub-badge { flex: 0 0 20px; height: 20px; border-radius: 5px; display: flex; align-items: center; justify-content: center;
-            font-weight: 700; font-size: 12px; color: #fff; background: rgba(var(--pm-hub-rgb), 0.9); }
         .pm-hub-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
         .pm-hub-btn { padding: 6px 10px; border-radius: 6px; border: 1px solid ${UI.inputBorder}; background: ${UI.buttonBg};
             color: ${UI.textPrimary}; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
@@ -477,7 +459,6 @@ function renderHub(container) {
     status.className = "pm-hub-muted";
     root.append(header);
 
-    let selectedKind = PROMPT_KINDS.find((kind) => kind.id === localStorage.getItem(KIND_STORAGE_KEY)) || PROMPT_KINDS[0];
     let busy = false;
     const updaters = [];
     const update = () => updaters.forEach((fn) => fn());
@@ -522,64 +503,30 @@ function renderHub(container) {
         head.append(name, count);
         const hint = document.createElement("div");
         hint.className = "pm-hub-muted";
-        card.append(head);
-
-        const current = () => libraryFor(section, section.kinds ? selectedKind : null);
-
-        if (section.kinds) {
-            const kinds = document.createElement("div");
-            kinds.className = "pm-hub-kinds";
-            for (const kind of section.kinds) {
-                const chip = document.createElement("button");
-                chip.type = "button";
-                chip.className = "pm-hub-kind";
-                chip.style.setProperty("--pm-hub-rgb", kind.color);
-                const badge = document.createElement("span");
-                badge.className = "pm-hub-badge";
-                badge.textContent = kind.badge;
-                const label = document.createElement("span");
-                label.textContent = kind.label;
-                const kindCount = document.createElement("span");
-                kindCount.className = "pm-hub-kind-count";
-                chip.append(badge, label, kindCount);
-                chip.onclick = () => {
-                    selectedKind = kind;
-                    localStorage.setItem(KIND_STORAGE_KEY, kind.id);
-                    update();
-                };
-                updaters.push(() => {
-                    chip.classList.toggle("active", kind === selectedKind);
-                    kindCount.textContent = String(summarize(libraryFor(section, kind)).entries);
-                });
-                kinds.appendChild(chip);
-            }
-            card.appendChild(kinds);
-        }
-        card.appendChild(hint);
+        hint.textContent = section.hint;
+        card.append(head, hint);
+        const library = libraryFor(section);
 
         const actions = document.createElement("div");
         actions.className = "pm-hub-actions";
         const browse = makeButton("Browse & Edit", { primary: true });
-        browse.onclick = () => run(() => browseLibrary(current()));
+        browse.onclick = () => run(() => browseLibrary(library));
         const importButton = makeButton("Import");
-        importButton.onclick = () => run(() => importLibrary(current()));
+        importButton.onclick = () => run(() => importLibrary(library));
         const exportButton = makeButton("Export");
-        exportButton.onclick = () => run(() => exportLibrary(current()));
+        exportButton.onclick = () => run(() => exportLibrary(library));
         actions.append(browse, importButton, exportButton);
         card.appendChild(actions);
-
+        browse.title = `Open ${library.title} in the Prompt Browser with editing on`;
+        importButton.title = section.store === "manager"
+            ? "Merge a JSON file into Saved Prompts (entries keep their own type)"
+            : `Merge or replace ${library.title} from a file`;
+        exportButton.title = section.store === "composer" ? "Export selected prompt groups as a ZIP" : "Export selected categories as JSON";
         updaters.push(() => {
-            const library = current();
             const { entries, categories, groups } = summarize(library);
             const parts = [plural(entries, library.unit), `${categories} categor${categories === 1 ? "y" : "ies"}`];
             if (groups) parts.push(`${groups} group${groups === 1 ? "" : "s"}`);
             count.textContent = parts.join(" · ");
-            hint.textContent = section.kinds ? selectedKind.hint : section.hint;
-            browse.title = `Open ${library.title} in the Prompt Browser with editing on`;
-            importButton.title = section.store === "manager"
-                ? "Merge a JSON file into Saved Prompts (entries keep their own type)"
-                : `Merge or replace ${library.title} from a file`;
-            exportButton.title = section.store === "composer" ? "Export selected prompt groups as a ZIP" : "Export selected categories as JSON";
         });
 
         root.appendChild(card);
