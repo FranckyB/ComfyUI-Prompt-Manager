@@ -216,6 +216,8 @@ export const ICONS = {
   expand: svg('<path d="M10 2.5h3.5V6M6 13.5H2.5V10M13.5 2.5 9 7M2.5 13.5 7 9"/>'),
   brush: svg('<path d="M10.5 2.5l3 3-6 6-3-3zM4.5 8.5l-2 5 5-2"/>'),
   crop: svg('<path d="M4 1.5V12h10.5M1.5 4H12v10.5"/>'),
+  feather: svg('<path d="M13.5 2.5C8 2.5 4.5 6 4.5 11.5h2c5.5 0 7-4 7-9z"/><path d="M2.5 13.5l7-7"/>'),
+  pad: svg('<rect x="5.5" y="5.5" width="5" height="5" rx=".5"/><path d="M1.5 5V1.5H5M11 1.5h3.5V5M14.5 11v3.5H11M5 14.5H1.5V11"/>'),
   eraser: svg('<path d="M6 13.5h7.5M2.5 10l6-6.5 5 5-5 5h-3z"/>'),
   undo: svg('<path d="M4.5 6.5h6a3 3 0 0 1 0 6h-3M6.5 4l-2.5 2.5L6.5 9"/>'),
   redo: svg('<path d="M11.5 6.5h-6a3 3 0 0 0 0 6h3M9.5 4l2.5 2.5L9.5 9"/>'),
