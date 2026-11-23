@@ -121,8 +121,11 @@ export function widgetTooltip(node, name) {
 
 // For a node that draws its own preview: keep the frontend's run-output
 // picture off it in both renderers. Nodes 2.0 reads hideOutputImages; the
-// classic canvas draws node.imgs through a "$$canvas-image-preview" widget.
+// classic canvas draws node.imgs through a "$$canvas-image-preview" widget,
+// and an animated (video) output through a "video-preview" DOM widget, which
+// it adds without looking at hideOutputImages.
 const CORE_PREVIEW = "$$canvas-image-preview";
+const CORE_VIDEO_PREVIEW = "video-preview";
 export function suppressCorePreview(node) {
   node.hideOutputImages = true;
   const index = node.widgets?.findIndex((widget) => widget.name === CORE_PREVIEW) ?? -1;
@@ -131,6 +134,20 @@ export function suppressCorePreview(node) {
     node.widgets.splice(index, 1);
   }
   if (Object.getOwnPropertyDescriptor(node, "imgs")?.get) return;
+  const addDom = node.addDOMWidget;
+  if (typeof addDom === "function") {
+    node.addDOMWidget = function (name, type, element, options) {
+      const widget = addDom.call(this, name, type, element, options);
+      if (name === CORE_VIDEO_PREVIEW) {
+        hideWidget(widget);
+        element.style.display = "none";
+        // Nothing plays or stays loaded behind the node's own player.
+        element.removeAttribute?.("src");
+        element.load?.();
+      }
+      return widget;
+    };
+  }
   const add = node.addCustomWidget;
   if (typeof add === "function") {
     node.addCustomWidget = function (widget) {
