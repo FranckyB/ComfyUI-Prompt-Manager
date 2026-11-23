@@ -202,6 +202,31 @@ function showVideoThumb(holder, path, { refresh = false } = {}) {
     img.src = api.apiURL(`${BROWSER_ROUTES.videoFrame}?${new URLSearchParams({ filename: path, position: "0" })}`);
 }
 
+// Resting on a video plays it in its tile, muted and looping (as AusBoss's
+// media picker does); one the browser cannot play keeps its still.
+const HOVER_PLAY_DELAY = 150;
+function playOnHover(thumb, path) {
+    let timer = 0;
+    let player = null;
+    const stop = () => {
+        clearTimeout(timer);
+        if (!player) return;
+        player.removeAttribute("src");
+        player.load();
+        player.remove();
+        player = null;
+    };
+    thumb.addEventListener("pointerenter", () => {
+        timer = setTimeout(() => {
+            player = Object.assign(el("video", "hover-play"), { muted: true, loop: true, autoplay: true, playsInline: true });
+            player.addEventListener("error", stop);
+            player.src = mediaFileUrl(path);
+            thumb.append(player);
+        }, HOVER_PLAY_DELAY);
+    });
+    thumb.addEventListener("pointerleave", stop);
+}
+
 function clearThumbCache() {
     try {
         const keys = [];
@@ -235,7 +260,7 @@ function fillThumb(holder, file) {
 
 // ---------------------------------------------------------------- styles
 
-const CSS_ID = "fbnodes-browser-css-v1";
+const CSS_ID = "fbnodes-browser-css-v2";
 
 function ensureBrowserCss() {
     if (document.getElementById(CSS_ID)) return;
@@ -260,10 +285,11 @@ function ensureBrowserCss() {
 .fbnodes-browser-card:hover{border-color:${T.brand}}
 .fbnodes-browser-card .thumb{position:relative;height:var(--thumb);border-radius:${RADIUS}px;background:${T.card};display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;overflow:hidden;color:${T.faint}}
 .fbnodes-browser-card .thumb img{width:100%;height:100%;object-fit:contain;display:block}
+.fbnodes-browser-card .thumb .hover-play{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:${T.card}}
 .fbnodes-browser-card .glyph{display:flex;color:${T.label}}
 .fbnodes-browser-card .glyph svg{width:42px;height:42px;stroke-width:1.1}
 .fbnodes-browser-items.icon .glyph svg{width:30px;height:30px}
-.fbnodes-browser-card .chip-time{position:absolute;right:6px;bottom:6px;padding:2px 6px;border-radius:999px;background:rgba(0,0,0,.65);color:${T.ink};font:600 10px ${FONT};font-variant-numeric:tabular-nums}
+.fbnodes-browser-card .chip-time{position:absolute;z-index:1;right:6px;bottom:6px;padding:2px 6px;border-radius:999px;background:rgba(0,0,0,.65);color:${T.ink};font:600 10px ${FONT};font-variant-numeric:tabular-nums}
 .fbnodes-browser-card .name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:center;color:${T.inkSoft};font:12px ${FONT}}
 .fbnodes-browser-items .note{font:11px ${FONT};color:${T.faint}}
 .fbnodes-browser-items .spin{width:18px;height:18px;border-radius:50%;border:2px solid ${T.fill};border-top-color:${T.brand};animation:fbnodes-browser-spin .8s linear infinite}
@@ -667,6 +693,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
             fillThumb(thumb, entry);
             const time = (entry.type === "video" || entry.type === "audio") && formatDuration(entry.duration);
             if (time) thumb.append(el("span", "chip-time", time));
+            if (entry.type === "video") playOnHover(thumb, entry.path);
         } else {
             thumb.append(iconFor(kind === "up" ? "up" : "folder"));
         }

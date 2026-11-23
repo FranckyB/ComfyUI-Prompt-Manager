@@ -7,7 +7,7 @@
 
 // Bump on any change to the CSS below. Two packs shipping the same version
 // inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 9;
+export const KIT_VERSION = 10;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -108,6 +108,7 @@ export function kitCss() {
 .fbui-select option{background:${T.panel};color:${T.ink}}
 .fbui-text{width:100%;height:${ROW_HEIGHT}px;padding:0 8px;box-sizing:border-box;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill};color:${T.ink};font:12px ${FONT};min-width:0}
 .fbui-text:focus{outline:none;border-color:${T.brand}}
+textarea.fbui-text{background:${T.card};border-color:${T.plateEdge}}
 .fbui-text::placeholder{color:${T.faint}}
 .fbui-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:${ROW_HEIGHT}px;padding:0 10px;box-sizing:border-box;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill};color:${T.inkSoft};font:600 11px/1 ${FONT};cursor:pointer;white-space:nowrap;pointer-events:auto}
 .fbui-btn:hover{background:${T.fillHover};color:${T.inkHover}}

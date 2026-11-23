@@ -41,8 +41,8 @@ function ensurePromptBrowserCss() {
 .pm-search .fbui-text{flex:1;min-width:0;height:100%;padding:0;border:none;background:transparent;user-select:text;-webkit-user-select:text}
 .pm-viewgroup{display:flex;gap:2px}
 .pm-categories{display:flex;gap:8px;min-height:0;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid ${T.rule}}
-.pm-category-controls{display:flex;gap:6px;flex:none;align-items:center}
-.pm-tabs{display:flex;gap:4px;flex:1;min-width:0;align-items:center;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:${T.fill} transparent}
+.pm-category-controls{display:flex;gap:6px;flex:none;align-items:flex-start}
+.pm-tabs{display:flex;flex-wrap:wrap;align-content:flex-start;gap:4px;flex:1;min-width:0;max-height:${ROW_HEIGHT * 3 + 8}px;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin;scrollbar-color:${T.fill} transparent}
 .pm-tab{flex:none;height:${ROW_HEIGHT}px;padding:0 12px;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill};color:${T.label};font:500 12px ${FONT};white-space:nowrap;cursor:pointer}
 .pm-tab:hover{background:${T.fillHover};color:${T.ink}}
 .pm-tab.on{background:${T.brandSoftHover};border-color:${T.brand};color:${T.ink}}
@@ -68,7 +68,7 @@ function ensurePromptBrowserCss() {
 .pm-row.on{background:${T.brandSoftHover};box-shadow:inset 0 0 0 1px ${T.brand}}
 .pm-row-name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:${T.ink};font-size:13px}
 .thumbnail-grid-container::-webkit-scrollbar{display:none}
-.category-scroll-bar::-webkit-scrollbar{height:6px}
+.category-scroll-bar::-webkit-scrollbar{width:6px}
 .category-scroll-bar::-webkit-scrollbar-track,.pm-type-rail-list::-webkit-scrollbar-track,.category-scroll-bar::-webkit-scrollbar-corner{background:transparent}
 .category-scroll-bar::-webkit-scrollbar-thumb,.pm-type-rail-list::-webkit-scrollbar-thumb{background:${T.fill};border-radius:3px}
 .category-scroll-bar::-webkit-scrollbar-thumb:hover,.pm-type-rail-list::-webkit-scrollbar-thumb:hover{background:${T.fillHover}}
@@ -2137,12 +2137,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // Horizontally scrollable category tabs
         const categoryContainer = el("div", "category-scroll-bar pm-tabs");
-        categoryContainer.addEventListener("wheel", (e) => {
-            if (e.deltaY !== 0) {
-                e.preventDefault();
-                categoryContainer.scrollLeft += e.deltaY;
-            }
-        }, { passive: false });
 
         const categoryContainerLeftBorder = el("div", "pm-divider");
 
