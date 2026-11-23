@@ -1695,17 +1695,11 @@ app.registerExtension({
                                 // Mark node as needing update
                                 node.setDirtyCanvas(true);
                             }, sf, {
-                                                                enableNavigation: true,
-                                                                navKind: "all",
-                                                                allowedTypes: ["image", "video", "json"],
-                                                                initialPath,
-                                                                selectedAbsPath,
-                                                                viewMode: node.properties?._fileBrowserViewMode || "medium",
-                                                                onViewModeChange: (mode) => {
-                                                                    if (!node.properties) node.properties = {};
-                                                                    node.properties._fileBrowserViewMode = mode;
-                                                                },
-                                                            });
+                                navKind: "all",
+                                allowedTypes: ["image", "video", "json"],
+                                initialPath,
+                                selectedAbsPath,
+                            });
                         },
                         serialize: false // Don't save button state
                     };

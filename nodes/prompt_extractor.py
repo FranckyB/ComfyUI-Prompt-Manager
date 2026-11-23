@@ -120,8 +120,28 @@ def _exts_for_kind(kind):
     if kind == 'audiovideo':
         return AUDIO_EXTS | VIDEO_EXTS
     if kind == 'all':
-        return ALL_MEDIA_EXTS
+        return ALL_MEDIA_EXTS | JSON_EXTS
     return IMAGE_EXTS | VIDEO_EXTS
+
+
+def _load_hidden_names(directory):
+    """Names listed in a folder's .hidden file (one per line, # comments)."""
+    hidden_names = set()
+    try:
+        with open(os.path.join(directory, '.hidden'), 'r', encoding='utf-8') as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                normalized = line.replace('\\', '/')
+                while normalized.startswith('./'):
+                    normalized = normalized[2:]
+                direct_child = normalized.strip('/').split('/', 1)[0]
+                if direct_child and direct_child not in {'.', '..'}:
+                    hidden_names.add(direct_child)
+    except OSError:
+        pass
+    return hidden_names
 
 
 def _probe_media_meta(file_path, ext):
@@ -549,9 +569,10 @@ async def prompt_extractor_path_browser_list(request):
 
         dirs = []
         files = []
+        hidden_names = _load_hidden_names(current)
         for entry in entries:
             name = entry.name
-            if name.startswith('.'):
+            if name.startswith('.') or name in hidden_names:
                 continue
             try:
                 if entry.is_dir(follow_symlinks=False):
@@ -624,6 +645,36 @@ async def prompt_extractor_path_browser_file(request):
             return server.web.json_response({"ok": False, "error": "Unsupported file type"}, status=403)
 
         return server.web.FileResponse(real_path, headers={"Cache-Control": "no-cache"})
+    except Exception as e:
+        return server.web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/prompt-extractor/path-browser/delete")
+async def prompt_extractor_path_browser_delete(request):
+    """Delete one listed file, by absolute path or source + relative filename."""
+    try:
+        data = await request.json()
+        source = (data.get('source') or '').strip().lower()
+        filename = (data.get('filename') or '').strip()
+        path = (data.get('path') or '').strip()
+
+        if source in ('input', 'output') and filename:
+            base_dir = _resolve_source_base_dir(source)
+            file_path = os.path.realpath(os.path.join(base_dir, filename.replace('/', os.sep)))
+            if not _is_within(base_dir, file_path):
+                return server.web.json_response({"ok": False, "error": "Invalid path"}, status=403)
+        elif path:
+            file_path = os.path.realpath(_safe_abspath(path))
+        else:
+            return server.web.json_response({"ok": False, "error": "Missing path"}, status=400)
+
+        if not os.path.isfile(file_path):
+            return server.web.json_response({"ok": False, "error": "File not found"}, status=404)
+        if os.path.splitext(file_path)[1].lower() not in ALL_MEDIA_EXTS | JSON_EXTS:
+            return server.web.json_response({"ok": False, "error": "Unsupported file type"}, status=403)
+
+        os.remove(file_path)
+        return server.web.json_response({"ok": True})
     except Exception as e:
         return server.web.json_response({"ok": False, "error": str(e)}, status=500)
 

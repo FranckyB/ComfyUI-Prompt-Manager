@@ -1,10 +1,8 @@
 /**
- * Shared media path browser helpers for FBnodes Load+ nodes.
- *
- * Provides the backend-list/file URL helpers, root resolution, and the
- * input/output/absolute selection classifier used by the thumbnail browser
- * (file_browser.js) so the loader nodes can browse anywhere while keeping
- * old workflows working.
+ * Prompt Manager's side of the shared file browser (file_browser.js, the
+ * same file as in FBnodes): its routes and Custom-folder setting, root
+ * resolution, and the input/output/absolute selection classifier, so the
+ * Prompt Extractor can browse anywhere while keeping old workflows working.
  */
 
 import { app } from "../../scripts/app.js";
@@ -12,14 +10,27 @@ import { api } from "../../scripts/api.js";
 
 export const SETTING_CUSTOM_PATH = "PromptManager.PromptExtractorCustomPath";
 
+// This pack's routes for the shared file browser.
+export const BROWSER_ROUTES = {
+    list: "/prompt-extractor/path-browser/list",
+    file: "/prompt-extractor/path-browser/file",
+    remove: "/prompt-extractor/path-browser/delete",
+    videoFrame: "/prompt-extractor/video-frame",
+};
+
 export function getCustomPresetPath() {
     const pref = app.ui?.settings?.getSettingValue(SETTING_CUSTOM_PATH) || "";
     return typeof pref === "string" ? pref.trim() : "";
 }
 
+/** Store the Custom folder (the same setting as in Preferences). */
+export function setCustomPresetPath(path) {
+    return app.ui.settings.setSettingValueAsync(SETTING_CUSTOM_PATH, String(path || "").trim());
+}
+
 /** URL that streams a media file from any path (for previews of out-of-tree files). */
 export function mediaFileUrl(absPath) {
-    return api.apiURL(`/prompt-extractor/path-browser/file?path=${encodeURIComponent(absPath)}`);
+    return api.apiURL(`${BROWSER_ROUTES.file}?path=${encodeURIComponent(absPath)}`);
 }
 
 function normalizeSlashes(p) {
@@ -66,7 +77,7 @@ async function fetchBrowser(path, kind) {
     if (path) params.push(`path=${encodeURIComponent(path)}`);
     if (kind) params.push(`kind=${encodeURIComponent(kind)}`);
     const query = params.length ? `?${params.join("&")}` : "";
-    const resp = await api.fetchApi(`/prompt-extractor/path-browser/list${query}`);
+    const resp = await api.fetchApi(`${BROWSER_ROUTES.list}${query}`);
     if (!resp.ok) {
         let msg = `Request failed (${resp.status})`;
         try {
@@ -99,7 +110,7 @@ app.registerExtension({
             id: SETTING_CUSTOM_PATH,
             category: ["Prompt Manager", "Prompt Extractor", "Custom Browser Path"],
             name: "Prompt Extractor Custom Browser Path",
-            tooltip: "Optional folder shown as the 'Custom' preset in the Load+ file browsers.",
+            tooltip: "The folder the Custom button opens in the Prompt Extractor's file browser.",
             type: "text",
             defaultValue: "",
         },

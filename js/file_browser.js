@@ -1,2287 +1,978 @@
 /**
- * File Browser Modal for FBnodes LoadImagePlus
- * Shows thumbnails of files in input directory
+ * File browser modal for the packs' loaders and lists (FBnodes' Load+
+ * nodes, Stitchers and LoRA pickers, Prompt Manager's Prompt Extractor):
+ * browse any folder on disk, preview thumbnails, pick a file (or several
+ * with multiSelect). Built on the FB UI kit (js/fbui/).
+ * The same file in every pack (tools/sync_fbui.py copies it): the pack's own
+ * path_browser.js names its routes and its Custom-folder setting.
+ *
+ * createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options)
+ *   currentFile     the value now in the node (relative to initialPath, or absolute)
+ *   onFileSelect    (absPath, { absPath, dir, roots }) when a file is picked
+ *   sourceFolder    "input" | "output": the root to open when nothing else says
+ *   options:
+ *     initialPath, selectedAbsPath     the folder to open, the file to highlight
+ *     navKind                          what the backend lists: media | video | audiovideo | lora ...
+ *     allowedTypes                     types shown: image | video | audio | json | other
+ *     filterTypeOptions, defaultFilter the Type filter's choices and its default
+ *     showListKindSelector             the Type filter offers All / Audio / Video
+ *     multiSelect, onMultiSelect([{ value, meta }])
+ *     places                           quick folders instead of Input / Output:
+ *                                      [{ label, title, path() }] (path may be async)
+ *     custom                           the Custom folder: { get(), set(path), message };
+ *                                      by default the Load+ one (Settings → FBnodes)
  */
 
-import { mediaFileUrl, getCustomPresetPath } from "./path_browser.js";
+import { api } from "../../scripts/api.js";
+import { BROWSER_ROUTES, getCustomPresetPath, mediaFileUrl, setCustomPresetPath } from "./path_browser.js";
+import { toast } from "./fbui/comfy.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { el } from "./fbui/dom.js";
+import { confirm, openMenu, openModal, prompt } from "./fbui/modal.js";
+import { FONT, RADIUS, RADIUS_CARD, ROW_HEIGHT, T } from "./fbui/theme.js";
 
-// Track current subfolder for navigation
-let currentSubfolder = '';
+const PLACEHOLDER = new URL("./placeholder.png", import.meta.url).href;
+const VIEW_KEY = "FBnodes.FileBrowser.ViewMode";
+const VIEWS = {
+    grid: { icon: ICONS.grid, title: "Large thumbnails" },
+    icon: { icon: ICONS.tiles, title: "Small thumbnails" },
+    list: { icon: ICONS.list, title: "Details list" },
+};
+// Video thumbnails are kept in localStorage; "Regenerate cache" clears every
+// key with the shorter prefix (older releases used it too).
+const THUMB_KEY = "video_thumb_pyav_";
+const THUMB_PREFIX = "video_thumb_";
 
-// ---- Arbitrary-path ("browse anywhere") navigation state ----
-// 'legacy' = input/output relative browsing; 'abs' = absolute-path browsing.
-let currentNavMode = 'legacy';
-let currentAbsDir = '';
-let currentAbsParent = null;
-let currentAbsRoots = { input: '', output: '' };
-let currentNavKind = 'media';
-let currentAbsFocusName = '';
+// The types the loaders accept (gif, mkv, ogg ... are listed by the backend
+// for some kinds but read as "other", so allowedTypes keeps them out).
+const EXTENSIONS = {
+    image: ["png", "jpg", "jpeg", "webp"],
+    video: ["mp4", "webm", "mov", "avi"],
+    audio: ["wav", "flac", "mp3", "m4a"],
+    json: ["json"],
+};
+const LORA_EXTENSIONS = ["safetensors", "ckpt", "pt", "bin", "pth"];
+const TYPE_LABELS = { image: "Image", video: "Video", audio: "Audio", json: "JSON", other: "File" };
+const FILTER_LABELS = { all: "All files", image: "Images", video: "Videos", audio: "Audio", json: "JSON", other: "Other files" };
 
-function isAbsBrowserPath(p) {
-    return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(p || '');
+const extensionOf = (path) => String(path || "").split(".").pop().toLowerCase();
+const basename = (path) => String(path || "").replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop();
+const isAbsolute = (path) => /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(path || "");
+const pathKey = (path) => String(path || "").replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase();
+const samePath = (a, b) => pathKey(a) === pathKey(b);
+const joinPath = (dir, leaf) => `${String(dir).replace(/[\\/]+$/, "")}/${String(leaf).replace(/^[\\/]+/, "")}`;
+const parentOf = (path) => String(path || "").replace(/[\\/][^\\/]*$/, "");
+const compareText = (a, b) => String(a || "").localeCompare(String(b || ""), undefined, { numeric: true, sensitivity: "base" });
+
+function fileType(path) {
+    const ext = extensionOf(path);
+    for (const [type, list] of Object.entries(EXTENSIONS)) if (list.includes(ext)) return type;
+    return "other";
 }
 
-function browserBasename(p) {
-    if (!p) return p;
-    const norm = String(p).replace(/\\/g, '/');
-    const idx = norm.lastIndexOf('/');
-    return idx >= 0 ? norm.slice(idx + 1) : norm;
-}
-
-function normalizePathKey(p) {
-    return String(p || "").replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
-}
-
-function pathsEqual(a, b) {
-    return normalizePathKey(a) === normalizePathKey(b);
-}
-
-async function fetchAbsListing(path, kind) {
-    const params = [];
-    if (path) params.push(`path=${encodeURIComponent(path)}`);
-    if (kind) params.push(`kind=${encodeURIComponent(kind)}`);
-    const query = params.length ? `?${params.join('&')}` : '';
-    const resp = await fetch(`/prompt-extractor/path-browser/list${query}`);
-    if (!resp.ok) {
-        let msg = `Request failed (${resp.status})`;
-        try {
-            const err = await resp.json();
-            if (err?.error) msg = err.error;
-        } catch { /* ignore */ }
-        throw new Error(msg);
-    }
-    return await resp.json();
-}
-
-function extractRootPaths(roots) {
-    const out = { input: '', output: '' };
-    if (!Array.isArray(roots)) return out;
-
-    // Supports both legacy string roots and object roots with ids.
-    if (roots.length > 0 && typeof roots[0] === 'string') {
-        out.input = roots[0] || '';
-        out.output = roots[1] || '';
-        return out;
-    }
-
-    const inputRoot = roots.find(r => r?.id === 'input');
-    const outputRoot = roots.find(r => r?.id === 'output');
-    out.input = inputRoot?.path || '';
-    out.output = outputRoot?.path || '';
-    if (!out.input && roots[0]?.path) out.input = roots[0].path;
-    if (!out.output && roots[1]?.path) out.output = roots[1].path;
-    return out;
-}
-
-// Track current source folder (input or output)
-let currentSourceFolder = 'input';
-// Track selected list mode and backend query kind.
-let currentListMode = 'media';
-let currentListKind = 'media';
-let currentAllowedTypes = null;
-let currentViewMode = 'medium';
-let currentDetailSortKey = 'name';
-let currentDetailSortDir = 'asc';
-// Track active audio preview in modal
-let activeAudioPreview = null;
-let activeAudioPreviewFilename = null;
-let activeAudioPreviewItem = null;
-
-function normalizeListMode(mode) {
-    if (mode === 'all' || mode === 'audio' || mode === 'video' || mode === 'media') {
-        return mode;
-    }
-    return 'media';
-}
-
-function setListMode(mode) {
-    currentListMode = normalizeListMode(mode);
-    if (currentListMode === 'all') {
-        currentListKind = 'all';
-    } else if (currentListMode === 'audio') {
-        currentListKind = 'audio';
-    } else {
-        // Backend has media/all/audio. Video mode uses media + client-side filter.
-        currentListKind = 'media';
-    }
-}
-
-function normalizeAllowedTypes(types) {
-    if (!Array.isArray(types) || types.length === 0) return null;
-    const allowed = ['image', 'video', 'audio', 'json', 'other'];
-    const normalized = types
-        .map(t => String(t || '').toLowerCase())
-        .filter(t => allowed.includes(t));
-    return normalized.length > 0 ? normalized : null;
-}
-
-function normalizeFilterTypeOptions(types, fallback) {
-    const allowed = ['all', 'image', 'video', 'audio', 'json'];
-    if (!Array.isArray(types) || types.length === 0) return fallback;
-
-    const normalized = [];
-    for (const t of types) {
-        const value = String(t || '').toLowerCase();
-        if (allowed.includes(value) && !normalized.includes(value)) {
-            normalized.push(value);
-        }
-    }
-
-    return normalized.length > 0 ? normalized : fallback;
-}
-
-function normalizeViewMode(mode) {
-    const m = String(mode || '').toLowerCase();
-    if (m === 'large' || m === 'detail' || m === 'medium') {
-        return m;
-    }
-    return 'medium';
-}
-
-function normalizeFileEntry(entry) {
-    if (typeof entry === 'string') {
-        return { path: entry, name: browserBasename(entry), size: null, modified: null, duration: null, width: null, height: null };
-    }
-    if (entry && typeof entry === 'object') {
-        const path = entry.path || entry.filename || entry.name || '';
-        const size = entry.size != null ? entry.size : (entry.bytes != null ? entry.bytes : null);
-        const modified = entry.modified != null
-            ? entry.modified
-            : (entry.mtime != null
-                ? entry.mtime
-                : (entry.date != null ? entry.date : (entry.timestamp != null ? entry.timestamp : null)));
-        return {
-            path,
-            name: entry.name || browserBasename(path),
-            size,
-            modified,
-            duration: entry.duration != null ? entry.duration : null,
-            width: entry.width != null ? entry.width : null,
-            height: entry.height != null ? entry.height : null,
-        };
-    }
-    return { path: '', name: '', size: null, modified: null, duration: null, width: null, height: null };
-}
-
-function formatFileSize(size) {
-    const n = Number(size);
-    if (!Number.isFinite(n) || n < 0) return '-';
+function formatSize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n < 0) return "—";
     if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+    return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-function formatFileDate(raw) {
-    if (raw == null || raw === '') return '-';
-    let ts = raw;
-    if (typeof ts === 'number' && ts > 0 && ts < 1e12) {
-        ts *= 1000;
-    }
-    const d = new Date(ts);
-    if (Number.isNaN(d.getTime())) return '-';
-    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+function toMillis(raw) {
+    if (raw == null || raw === "") return null;
+    const ms = new Date(typeof raw === "number" && raw > 0 && raw < 1e12 ? raw * 1000 : raw).getTime();
+    return Number.isFinite(ms) ? ms : null;
+}
+
+function formatDate(raw) {
+    const ms = toMillis(raw);
+    if (ms === null) return "—";
+    const date = new Date(ms);
+    return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function formatDuration(raw) {
     const n = Number(raw);
-    if (!Number.isFinite(n) || n < 0) return '-';
+    if (!Number.isFinite(n) || n < 0) return "";
     const total = Math.round(n);
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    if (h > 0) {
-        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    }
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    const pad = (value) => String(value).padStart(2, "0");
+    const hours = Math.floor(total / 3600);
+    const rest = `${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
+    return hours > 0 ? `${pad(hours)}:${rest}` : rest;
 }
 
-function getCardPreviewHeight() {
-    return currentViewMode === 'large' ? 250 : 150;
+function fileDetails(file) {
+    const duration = formatDuration(file.duration);
+    if (file.type === "video") return [duration, file.width && file.height ? `${file.width}×${file.height}` : ""].filter(Boolean).join(" · ") || "—";
+    if (file.type === "audio") return duration || "—";
+    return "—";
 }
 
-function detailSortIndicator(key) {
-    if (currentDetailSortKey !== key) return '';
-    return currentDetailSortDir === 'asc' ? ' ▲' : ' ▼';
-}
-
-function parseSortDate(raw) {
-    if (raw == null || raw === '') return null;
-    let ts = raw;
-    if (typeof ts === 'number' && ts > 0 && ts < 1e12) ts *= 1000;
-    const n = new Date(ts).getTime();
-    return Number.isFinite(n) ? n : null;
-}
-
-function compareText(a, b) {
-    return String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
-}
-
-function compareMaybeNumber(a, b) {
-    const an = Number(a);
-    const bn = Number(b);
-    const aOk = Number.isFinite(an);
-    const bOk = Number.isFinite(bn);
-    if (!aOk && !bOk) return 0;
-    if (!aOk) return 1;
-    if (!bOk) return -1;
-    return an - bn;
-}
-
-function getTypeLabel(fileType) {
-    if (fileType === 'image') return 'Image';
-    if (fileType === 'video') return 'Video';
-    if (fileType === 'audio') return 'Audio';
-    if (fileType === 'json') return 'JSON';
-    return 'File';
-}
-
-function compareFilesForDetailSort(a, b) {
-    let result = 0;
-    const aType = getFileType(a.path || '');
-    const bType = getFileType(b.path || '');
-
-    if (currentDetailSortKey === 'type') {
-        result = compareText(getTypeLabel(aType), getTypeLabel(bType));
-        if (result === 0) result = compareText(browserBasename(a.path), browserBasename(b.path));
-    } else if (currentDetailSortKey === 'size') {
-        result = compareMaybeNumber(a.size, b.size);
-        if (result === 0) result = compareText(browserBasename(a.path), browserBasename(b.path));
-    } else if (currentDetailSortKey === 'modified') {
-        result = compareMaybeNumber(parseSortDate(a.modified), parseSortDate(b.modified));
-        if (result === 0) result = compareText(browserBasename(a.path), browserBasename(b.path));
-    } else if (currentDetailSortKey === 'details') {
-        const aTypeSort = getFileType(a.path || '');
-        const bTypeSort = getFileType(b.path || '');
-        if (aTypeSort === 'video' && bTypeSort === 'video') {
-            result = compareMaybeNumber(a.duration, b.duration);
-        } else if (aTypeSort === 'audio' && bTypeSort === 'audio') {
-            result = compareMaybeNumber(a.duration, b.duration);
-        } else {
-            result = compareText(browserBasename(a.path), browserBasename(b.path));
-        }
-    } else {
-        result = compareText(browserBasename(a.path), browserBasename(b.path));
-    }
-
-    return currentDetailSortDir === 'asc' ? result : -result;
-}
-
-function toggleDetailSort(key) {
-    if (currentDetailSortKey === key) {
-        currentDetailSortDir = currentDetailSortDir === 'asc' ? 'desc' : 'asc';
-    } else {
-        currentDetailSortKey = key;
-        currentDetailSortDir = 'asc';
-    }
-}
-
-function createDetailHeader(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode !== 'detail') return;
-
-    const header = document.createElement('div');
-    header.className = 'detail-header-row';
-    header.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 6px 10px;
-        border-bottom: 1px solid rgba(226, 232, 240, 0.18);
-        color: #aeb8c8;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        position: sticky;
-        top: 0;
-        background: rgba(26, 31, 40, 0.96);
-        z-index: 2;
-    `;
-
-    const makeHeaderCell = (label, width, key, alignRight = false) => {
-        const cell = document.createElement('button');
-        cell.type = 'button';
-        cell.textContent = `${label}${detailSortIndicator(key)}`;
-        cell.style.cssText = `
-            background: transparent;
-            border: 0;
-            color: #aeb8c8;
-            cursor: pointer;
-            padding: 2px 0;
-            font-size: 11px;
-            text-align: ${alignRight ? 'right' : 'left'};
-            ${width ? `width: ${width};` : 'flex: 1; min-width: 0;'}
-        `;
-        cell.onclick = () => {
-            toggleDetailSort(key);
-            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-        };
-        return cell;
+function normalizeFile(entry) {
+    const path = typeof entry === "string" ? entry : entry?.path || entry?.filename || entry?.name || "";
+    const data = typeof entry === "object" && entry ? entry : {};
+    return {
+        path,
+        name: data.name || basename(path),
+        type: fileType(path),
+        size: data.size ?? data.bytes ?? null,
+        modified: data.modified ?? data.mtime ?? data.date ?? data.timestamp ?? null,
+        duration: data.duration ?? null,
+        width: data.width ?? null,
+        height: data.height ?? null,
     };
-
-    const iconSpacer = document.createElement('div');
-    iconSpacer.style.cssText = 'width: 20px; min-width: 20px;';
-    header.appendChild(iconSpacer);
-    header.appendChild(makeHeaderCell('Name', '', 'name'));
-    header.appendChild(makeHeaderCell('Type', '110px', 'type'));
-    header.appendChild(makeHeaderCell('Details', '190px', 'details'));
-    header.appendChild(makeHeaderCell('Size', '110px', 'size', true));
-    header.appendChild(makeHeaderCell('Modified', '170px', 'modified'));
-    container.appendChild(header);
 }
 
-function createDetailFolderRow(name, typeLabel, iconText) {
-    const item = document.createElement('div');
-    item.className = 'folder-item';
-    item.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        border-bottom: 1px solid rgba(226, 232, 240, 0.12);
-        background: transparent;
-        cursor: pointer;
-        transition: background 0.15s ease;
-    `;
-
-    const icon = document.createElement('div');
-    icon.style.cssText = `
-        width: 20px;
-        height: 20px;
-        min-width: 20px;
-        border-radius: 3px;
-        background: rgba(0, 0, 0, 0.45);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 13px;
-    `;
-    icon.textContent = iconText;
-
-    const nameCol = document.createElement('div');
-    nameCol.style.cssText = 'flex: 1; min-width: 0; font-size: 12px; color: #d3dbe7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
-    nameCol.textContent = name;
-    nameCol.title = name;
-
-    const typeCol = document.createElement('div');
-    typeCol.style.cssText = 'width: 110px; font-size: 11px; color: rgba(178, 191, 208, 0.92);';
-    typeCol.textContent = typeLabel;
-
-    const detailCol = document.createElement('div');
-    detailCol.style.cssText = 'width: 190px; font-size: 11px; color: rgba(178, 191, 208, 0.92);';
-    detailCol.textContent = '-';
-
-    const sizeCol = document.createElement('div');
-    sizeCol.style.cssText = 'width: 110px; font-size: 11px; color: rgba(178, 191, 208, 0.92); text-align: right;';
-    sizeCol.textContent = '-';
-
-    const dateCol = document.createElement('div');
-    dateCol.style.cssText = 'width: 170px; font-size: 11px; color: rgba(178, 191, 208, 0.92); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
-    dateCol.textContent = '-';
-
-    item.appendChild(icon);
-    item.appendChild(nameCol);
-    item.appendChild(typeCol);
-    item.appendChild(detailCol);
-    item.appendChild(sizeCol);
-    item.appendChild(dateCol);
-
-    item.onmouseenter = () => {
-        item.style.background = 'rgba(50, 112, 163, 0.28)';
-    };
-    item.onmouseleave = () => {
-        item.style.background = 'transparent';
-    };
-
-    return item;
+// Backend roots come as ["input", "output"] paths or as [{ id, path }].
+function rootPaths(roots) {
+    if (!Array.isArray(roots)) return { input: "", output: "" };
+    if (typeof roots[0] === "string") return { input: roots[0] || "", output: roots[1] || "" };
+    const byId = (id, index) => roots.find((root) => root?.id === id)?.path || roots[index]?.path || "";
+    return { input: byId("input", 0), output: byId("output", 1) };
 }
 
-function applyViewLayout(container) {
-    if (!container) return;
-    if (currentViewMode === 'detail') {
-        container.style.display = 'block';
-        container.style.gridTemplateColumns = '';
-        container.style.gap = '0';
-        return;
-    }
-
-    const minW = currentViewMode === 'large' ? 300 : 180;
-    container.style.display = 'grid';
-    container.style.gridTemplateColumns = `repeat(auto-fill, minmax(${minW}px, 1fr))`;
-    container.style.gap = '15px';
+async function fetchListing(path, kind) {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    if (kind) params.set("kind", kind);
+    const response = await api.fetchApi(`${BROWSER_ROUTES.list}?${params}`);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
+    return data;
 }
 
-function buildViewUrl(filename) {
-    if (isAbsBrowserPath(filename)) {
-        return mediaFileUrl(filename);
-    }
-    let subfolder = '';
-    let basename = filename;
-    if (filename.includes('/')) {
-        const lastSlash = filename.lastIndexOf('/');
-        subfolder = filename.substring(0, lastSlash);
-        basename = filename.substring(lastSlash + 1);
-    }
-
-    let url = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}`;
-    if (subfolder) {
-        url += `&subfolder=${encodeURIComponent(subfolder)}`;
-    }
-    return url;
-}
-
-function clearPreviewItemState() {
-    if (!activeAudioPreviewItem) return;
-    activeAudioPreviewItem.style.boxShadow = '';
-    activeAudioPreviewItem = null;
-}
-
-function stopAudioPreview() {
-    if (activeAudioPreview) {
-        try {
-            activeAudioPreview.pause();
-            activeAudioPreview.currentTime = 0;
-        } catch (error) {
-            // Ignore preview stop errors.
-        }
-    }
-    activeAudioPreviewFilename = null;
-    clearPreviewItemState();
-}
-
-function closeBrowserModal(overlay) {
-    stopAudioPreview();
-    if (overlay && overlay._keydownHandler) {
-        document.removeEventListener('keydown', overlay._keydownHandler, true);
-        overlay._keydownHandler = null;
-    }
-    if (overlay && overlay.parentNode) {
-        overlay.parentNode.removeChild(overlay);
-    }
-}
-
-function setThumbnailSelected(item, selected) {
-    if (!item) return;
-    item.dataset.selected = selected ? '1' : '0';
-    const isDetail = item.dataset.viewMode === 'detail';
-    if (isDetail) {
-        item.style.background = selected ? 'rgba(50, 112, 163, 0.28)' : 'transparent';
-    } else {
-        item.style.borderColor = selected ? 'rgba(66, 153, 225, 0.9)' : 'rgba(226, 232, 240, 0.2)';
-        item.style.background = selected ? 'rgba(50, 112, 163, 0.28)' : 'rgba(45, 55, 72, 0.7)';
-        item.style.transform = 'translateY(0)';
-    }
-}
-
-function selectThumbnailItem(container, item, shouldScroll = false) {
-    if (!container || !item) return;
-    const current = container.querySelectorAll('.thumbnail-item[data-selected="1"]');
-    current.forEach((it) => setThumbnailSelected(it, false));
-    setThumbnailSelected(item, true);
-    if (shouldScroll) {
-        item.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-    }
-}
-
-function getVisibleThumbnailItems(container) {
-    if (!container) return [];
-    return Array.from(container.querySelectorAll('.thumbnail-item')).filter((item) => {
-        return item.style.display !== 'none';
-    });
-}
-
-function buildThumbnailRows(items) {
-    const rows = [];
-    const tolerance = 10;
-    for (const item of items) {
-        const top = item.offsetTop;
-        let row = rows.find((r) => Math.abs(r.top - top) <= tolerance);
-        if (!row) {
-            row = { top, items: [] };
-            rows.push(row);
-        }
-        row.items.push(item);
-    }
-    rows.sort((a, b) => a.top - b.top);
-    return rows.map((r) => r.items);
-}
-
-function findNearestByX(items, targetX) {
-    if (!items.length) return null;
-    let best = items[0];
-    let bestDist = Math.abs((best.offsetLeft + best.offsetWidth / 2) - targetX);
-    for (let i = 1; i < items.length; i++) {
-        const it = items[i];
-        const cx = it.offsetLeft + it.offsetWidth / 2;
-        const dist = Math.abs(cx - targetX);
-        if (dist < bestDist) {
-            best = it;
-            bestDist = dist;
-        }
-    }
-    return best;
-}
-
-function moveThumbnailSelection(container, key) {
-    const items = getVisibleThumbnailItems(container);
-    if (!items.length) return false;
-
-    let selected = container.querySelector('.thumbnail-item[data-selected="1"]');
-    if (!selected || !items.includes(selected)) {
-        selectThumbnailItem(container, items[0], true);
-        return true;
-    }
-
-    const currentView = selected.dataset.viewMode || currentViewMode;
-    const index = items.indexOf(selected);
-
-    if (currentView === 'detail') {
-        if (key === 'ArrowUp' && index > 0) {
-            selectThumbnailItem(container, items[index - 1], true);
-            return true;
-        }
-        if (key === 'ArrowDown' && index < items.length - 1) {
-            selectThumbnailItem(container, items[index + 1], true);
-            return true;
-        }
-        return false;
-    }
-
-    const rows = buildThumbnailRows(items);
-    let rowIndex = -1;
-    let colIndex = -1;
-    for (let r = 0; r < rows.length; r++) {
-        const c = rows[r].indexOf(selected);
-        if (c >= 0) {
-            rowIndex = r;
-            colIndex = c;
-            break;
-        }
-    }
-    if (rowIndex < 0 || colIndex < 0) return false;
-
-    if (key === 'ArrowLeft') {
-        if (index <= 0) return false;
-        selectThumbnailItem(container, items[index - 1], true);
-        return true;
-    }
-
-    if (key === 'ArrowRight') {
-        if (index >= items.length - 1) return false;
-        selectThumbnailItem(container, items[index + 1], true);
-        return true;
-    }
-
-    const targetRowIndex = key === 'ArrowUp' ? rowIndex - 1 : (key === 'ArrowDown' ? rowIndex + 1 : rowIndex);
-    if (targetRowIndex < 0 || targetRowIndex >= rows.length) return false;
-
-    const targetX = selected.offsetLeft + selected.offsetWidth / 2;
-    const targetItem = findNearestByX(rows[targetRowIndex], targetX);
-    if (!targetItem) return false;
-    selectThumbnailItem(container, targetItem, true);
-    return true;
-}
-
-function openSelectedThumbnail(container) {
-    const items = getVisibleThumbnailItems(container);
-    if (!items.length) return false;
-
-    let selected = container.querySelector('.thumbnail-item[data-selected="1"]');
-    if (!selected || !items.includes(selected)) {
-        selected = items[0];
-        selectThumbnailItem(container, selected, true);
-    }
-
-    if (selected && typeof selected._openFile === 'function') {
-        selected._openFile();
-        return true;
-    }
-    return false;
-}
-
-function splitFolderPath(path) {
-    const normalized = String(path || '').replace(/\\/g, '/').replace(/\/+$/, '');
-    const idx = normalized.lastIndexOf('/');
-    if (idx <= 0) {
-        return { parent: '', name: normalized };
-    }
-    return { parent: normalized.slice(0, idx), name: normalized.slice(idx + 1) };
-}
-
-async function navigateSiblingFolder(direction, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    const dir = direction >= 0 ? 1 : -1;
-
-    if (currentNavMode === 'abs') {
-        const currentPath = String(currentAbsDir || '').replace(/\/+$/, '');
-        if (!currentPath) return false;
-
-        let parentPath = currentAbsParent;
-        if (!parentPath) {
-            try {
-                const here = await fetchAbsListing(currentPath, currentNavKind);
-                parentPath = here?.parent_path || null;
-            } catch {
-                return false;
-            }
-        }
-        if (!parentPath) return false;
-
-        let parentListing;
-        try {
-            parentListing = await fetchAbsListing(parentPath, currentNavKind);
-        } catch {
-            return false;
-        }
-
-        const siblings = (parentListing?.dirs || []).slice().sort((a, b) => compareText(a?.name, b?.name));
-        if (!siblings.length) return false;
-
-        let index = siblings.findIndex((d) => pathsEqual(d?.path, currentPath));
-        if (index < 0) {
-            const currentName = browserBasename(currentPath);
-            index = siblings.findIndex((d) => d?.name === currentName);
-        }
-        if (index < 0) return false;
-
-        const next = siblings[(index + dir + siblings.length) % siblings.length];
-        if (!next?.path || pathsEqual(next.path, currentPath)) return false;
-
-        currentAbsFocusName = '';
-        currentAbsDir = next.path;
-        await loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-        return true;
-    }
-
-    if (!currentSubfolder) return false;
-
+function storedView() {
     try {
-        const response = await fetch(`/prompt-extractor/list-files?source=${encodeURIComponent(currentSourceFolder)}&kind=${encodeURIComponent(currentListKind)}&include_meta=1`);
-        const data = await response.json();
-        const allFiles = (data.files || [])
-            .filter(f => (typeof f === 'string' ? f !== '(none)' : (f?.path || f?.filename || f?.name) !== '(none)'))
-            .map(normalizeFileEntry)
-            .map((f) => f.path);
-
-        const parts = splitFolderPath(currentSubfolder);
-        const parentPrefix = parts.parent ? `${parts.parent}/` : '';
-        const siblingSet = new Set();
-
-        allFiles.forEach((filepath) => {
-            if (!filepath.startsWith(parentPrefix)) return;
-            const remainder = filepath.substring(parentPrefix.length);
-            const slashIndex = remainder.indexOf('/');
-            if (slashIndex > 0) {
-                siblingSet.add(remainder.substring(0, slashIndex));
-            }
-        });
-
-        const siblings = Array.from(siblingSet).sort(compareText);
-        if (!siblings.length) return false;
-
-        const idx = siblings.indexOf(parts.name);
-        if (idx < 0) return false;
-
-        const nextName = siblings[(idx + dir + siblings.length) % siblings.length];
-        const nextPath = parts.parent ? `${parts.parent}/${nextName}` : nextName;
-        if (nextPath === currentSubfolder) return false;
-
-        currentSubfolder = nextPath;
-        await loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-        return true;
+        const value = localStorage.getItem(VIEW_KEY);
+        // "large" / "medium" / "detail" are the names older releases stored.
+        return { large: "grid", medium: "icon", detail: "list" }[value] ?? (VIEWS[value] ? value : "grid");
     } catch {
-        return false;
+        return "grid";
     }
 }
 
-async function toggleAudioPreview(filename, item) {
-    const sourceUrl = `${buildViewUrl(filename)}&${Date.now()}`;
-
-    if (!activeAudioPreview) {
-        activeAudioPreview = document.createElement('audio');
-        activeAudioPreview.preload = 'metadata';
-        activeAudioPreview.style.display = 'none';
-        activeAudioPreview.onended = () => {
-            activeAudioPreviewFilename = null;
-            clearPreviewItemState();
-        };
-        document.body.appendChild(activeAudioPreview);
-    }
-
-    if (activeAudioPreviewFilename === filename && !activeAudioPreview.paused) {
-        stopAudioPreview();
-        return;
-    }
-
-    stopAudioPreview();
-    activeAudioPreviewFilename = filename;
-    activeAudioPreviewItem = item;
-    activeAudioPreviewItem.style.boxShadow = 'inset 0 0 0 1px rgba(64, 192, 255, 0.85)';
-
-    try {
-        activeAudioPreview.src = sourceUrl;
-        await activeAudioPreview.play();
-    } catch (error) {
-        console.warn('[FileBrowser] Failed to preview audio:', error);
-        stopAudioPreview();
-    }
-}
-
-export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options) {
-    const opts = options || {};
-    const joinBrowserPath = (base, leaf) => {
-        if (!base || !leaf) return leaf || base || "";
-        const cleanBase = String(base).replace(/[\\/]+$/, "");
-        const cleanLeaf = String(leaf).replace(/^[\\/]+/, "");
-        return `${cleanBase}/${cleanLeaf}`;
-    };
-    const showListKindSelector = opts.showListKindSelector === true;
-    const onViewModeChange = typeof opts.onViewModeChange === 'function' ? opts.onViewModeChange : null;
-    // Store source folder
-    currentSourceFolder = sourceFolder || 'input';
-    setListMode(opts.listKind || 'media');
-    currentAllowedTypes = normalizeAllowedTypes(opts.allowedTypes);
-    currentViewMode = normalizeViewMode(opts.viewMode || 'medium');
-
-    // Arbitrary-path navigation mode ("browse anywhere").
-    currentNavMode = opts.enableNavigation ? 'abs' : 'legacy';
-    currentNavKind = opts.navKind || 'media';
-    if (currentNavMode === 'abs') {
-        if (opts.selectedAbsPath && isAbsBrowserPath(opts.selectedAbsPath)) {
-            currentFile = opts.selectedAbsPath;
-        }
-        currentAbsDir = opts.initialPath || (isAbsBrowserPath(currentFile) ? currentFile.replace(/[\\/][^\\/]*$/, '') : '');
-        currentAbsParent = null;
-        currentAbsRoots = { input: '', output: '' };
-        currentAbsFocusName = '';
-
-        // If loader passes a relative selected file, resolve it against initialPath so
-        // absolute-mode listing can highlight/scroll to that file on open.
-        if (currentFile && !isAbsBrowserPath(currentFile) && currentAbsDir) {
-            currentFile = joinBrowserPath(currentAbsDir, currentFile);
-        }
-    }
-
-    // If a file is currently selected and lives in a subfolder, open in that folder
-    if (currentNavMode === 'legacy' && currentFile && currentFile.includes('/')) {
-        currentSubfolder = currentFile.substring(0, currentFile.lastIndexOf('/'));
-    } else {
-        currentSubfolder = '';
-    }
-
-    // Create modal overlay
-    const overlay = document.createElement('div');
-    overlay.className = 'prompt-extractor-browser-overlay';
-    overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.8);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 10000;
-    `;
-    overlay._initialAbsLoadPending = currentNavMode === 'abs';
-
-    // Create modal container (match PromptManagerAdvanced styling)
-    const modal = document.createElement('div');
-    modal.className = 'prompt-extractor-browser-modal';
-    modal.style.cssText = `
-        background: rgba(40, 44, 52, 0.98);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 6px;
-        width: 95%;
-        max-width: 1304px;
-        height: 95%;
-        max-height: 1185px;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-    `;
-
-    // Create header
-    const header = document.createElement('div');
-    header.style.cssText = `
-        padding: 15px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    `;
-    
-    const topRow = document.createElement('div');
-    topRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
-    const headerTitle = currentNavMode === 'abs'
-        ? 'Select File'
-        : `Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder`;
-    topRow.innerHTML = `
-        <h3 style="margin: 0; color: #aaa;">${headerTitle}</h3>
-        <div style="display: flex; gap: 10px; align-items: center;">
-            <button class="close-btn" style="
-                background: none;
-                border: none;
-                color: #aaa;
-                font-size: 24px;
-                cursor: pointer;
-                padding: 0;
-                width: 30px;
-                height: 30px;
-            ">×</button>
-        </div>
-    `;
-    
-    const breadcrumb = document.createElement('div');
-    breadcrumb.className = 'folder-breadcrumb';
-    breadcrumb.style.cssText = 'font-size: 12px; color: #888; cursor: pointer;';
-    breadcrumb.textContent = `${currentSourceFolder}/`;
-    breadcrumb.onclick = () => {
-        if (currentNavMode === 'legacy' && currentSubfolder) {
-            currentSubfolder = '';
-            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
-        }
-    };
-
-    header.appendChild(topRow);
-
-    // Navigation toolbar (browse-anywhere mode): Up / Refresh / path box + presets.
-    if (currentNavMode === 'abs') {
-        const navRow = document.createElement('div');
-        navRow.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
-
-        const mkBtn = (label) => {
-            const b = document.createElement('button');
-            b.textContent = label;
-            b.style.cssText = 'background:#2e3b4a;border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#dce6f2;padding:5px 12px;cursor:pointer;font-size:12px;';
-            b.onmouseenter = () => { b.style.background = '#3a4a5c'; };
-            b.onmouseleave = () => { b.style.background = '#2e3b4a'; };
-            return b;
-        };
-
-        const upBtn = mkBtn('Up');
-        const refreshBtn = mkBtn('Refresh');
-        const pathInput = document.createElement('input');
-        pathInput.type = 'text';
-        pathInput.placeholder = 'Paste folder path and press Enter';
-        pathInput.style.cssText = 'flex:1;min-width:240px;font-size:12px;color:#dce6f2;background:#222a33;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 8px;';
-
-        const regenerateCacheBtn = document.createElement('button');
-        regenerateCacheBtn.className = 'regenerate-cache-btn';
-        regenerateCacheBtn.textContent = '\u267B\uFE0F Regenerate Cache';
-        regenerateCacheBtn.style.cssText = 'background:#333;border:1px solid #555;border-radius:6px;color:#ccc;padding:5px 12px;cursor:pointer;font-size:12px;';
-
-        const inputPreset = mkBtn('Input');
-        const outputPreset = mkBtn('Output');
-        const customPreset = mkBtn('Custom');
-
-        const goUp = () => {
-            if (!currentAbsParent) return;
-            currentAbsFocusName = browserBasename(currentAbsDir);
-            currentAbsDir = currentAbsParent;
-            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
-        };
-
-        upBtn.onclick = () => {
-            goUp();
-        };
-        refreshBtn.onclick = () => loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
-        pathInput.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter') return;
-            const next = pathInput.value.trim();
-            if (!next) return;
-            currentAbsDir = next;
-            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
-        });
-        inputPreset.onclick = () => {
-            if (currentAbsRoots.input) { currentAbsDir = currentAbsRoots.input; loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb); }
-        };
-        outputPreset.onclick = () => {
-            if (currentAbsRoots.output) { currentAbsDir = currentAbsRoots.output; loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb); }
-        };
-        customPreset.onclick = () => {
-            const p = getCustomPresetPath();
-            if (p) { currentAbsDir = p; loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb); }
-        };
-        if (!getCustomPresetPath()) customPreset.style.display = 'none';
-
-        navRow.appendChild(upBtn);
-        navRow.appendChild(refreshBtn);
-        navRow.appendChild(inputPreset);
-        navRow.appendChild(outputPreset);
-        navRow.appendChild(customPreset);
-        navRow.appendChild(pathInput);
-        navRow.appendChild(regenerateCacheBtn);
-        header.appendChild(navRow);
-
-        // Expose the path box so the loader can keep it in sync.
-        overlay._navPathInput = pathInput;
-        overlay._regenerateCacheBtn = regenerateCacheBtn;
-        overlay._goUp = goUp;
-    } else {
-        // Keep the legacy placement when absolute navigation is disabled.
-        const legacyRegenerateBtn = document.createElement('button');
-        legacyRegenerateBtn.className = 'regenerate-cache-btn';
-        legacyRegenerateBtn.textContent = '\u267B\uFE0F Regenerate Cache';
-        legacyRegenerateBtn.style.cssText = 'background:#333;border:1px solid #555;border-radius:6px;color:#ccc;padding:5px 12px;cursor:pointer;font-size:12px;';
-        topRow.querySelector('div').prepend(legacyRegenerateBtn);
-    }
-
-    // Breadcrumb row intentionally hidden: path input on the toolbar already shows current location.
-
-
-    // Create search/filter bar
-    const filterBar = document.createElement('div');
-    filterBar.style.cssText = `
-        padding: 10px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        display: flex;
-        gap: 10px;
-    `;
-
-    const defaultFilterValues = showListKindSelector
-        ? ['all', 'audio', 'video']
-        : ['all', 'image', 'video', 'audio', 'json'];
-    const filterValues = normalizeFilterTypeOptions(opts.filterTypeOptions, defaultFilterValues);
-    const filterLabels = {
-        all: 'All Files',
-        image: 'Images',
-        video: 'Videos',
-        audio: 'Audio',
-        json: 'JSON',
-    };
-    const typeFilterOptions = filterValues
-        .map(value => `<option value="${value}">${filterLabels[value] || value}</option>`)
-        .join('');
-
-    filterBar.innerHTML = `
-        <button class="sibling-prev" title="Previous sibling folder (Ctrl+Up)" style="
-            width: 34px;
-            min-width: 34px;
-            height: 34px;
-            padding: 0;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
-            border-radius: 6px;
-            color: #ccc;
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 1;
-        ">^</button>
-        <button class="sibling-next" title="Next sibling folder (Ctrl+Down)" style="
-            width: 34px;
-            min-width: 34px;
-            height: 34px;
-            padding: 0;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
-            border-radius: 6px;
-            color: #ccc;
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 1;
-        ">v</button>
-        <input type="text" placeholder="Search files..." class="search-input" style="
-            flex: 1;
-            padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
-            border-radius: 6px;
-            color: #ccc;
-        ">
-        <select class="filter-type" style="
-            padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
-            border-radius: 6px;
-            color: #ccc;
-        ">
-            ${typeFilterOptions}
-        </select>
-        <select class="view-mode" style="
-            padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
-            border-radius: 6px;
-            color: #ccc;
-        ">
-            <option value="large">Large</option>
-            <option value="medium">Medium</option>
-            <option value="detail">Detail</option>
-        </select>
-    `;
-
-    // Create thumbnail grid container
-    const gridContainer = document.createElement('div');
-    gridContainer.className = 'thumbnail-grid';
-    gridContainer.style.cssText = `
-        flex: 1;
-        overflow-y: auto;
-        padding: 20px;
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-        gap: 15px;
-        align-content: start;
-    `;
-    applyViewLayout(gridContainer);
-
-    // Create loading indicator
-    const loading = document.createElement('div');
-    loading.style.cssText = `
-        text-align: center;
-        padding: 40px;
-        color: #aaa;
-    `;
-    loading.textContent = 'Loading files...';
-    gridContainer.appendChild(loading);
-
-    // Assemble modal
-    modal.appendChild(header);
-    modal.appendChild(filterBar);
-    modal.appendChild(gridContainer);
-    overlay.appendChild(modal);
-
-    // Prevent right-click context menu everywhere in the browser
-    // (video thumbnails have their own handler that will show the refresh menu)
-    overlay.oncontextmenu = (e) => {
-        e.preventDefault();
-        return false;
-    };
-
-    // Close button handler
-    const closeBtn = topRow.querySelector('.close-btn');
-    closeBtn.onclick = () => closeBrowserModal(overlay);
-    overlay.onclick = (e) => {
-        if (e.target === overlay) closeBrowserModal(overlay);
-    };
-    overlay._keydownHandler = (e) => {
-        if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-            e.preventDefault();
-            e.stopPropagation();
-            if (typeof overlay._navigateSibling === 'function') {
-                const dir = e.key === 'ArrowUp' ? -1 : 1;
-                overlay._navigateSibling(dir);
-            }
-            return;
-        }
-
-        const target = e.target;
-        const targetTag = target && target.tagName ? target.tagName.toUpperCase() : '';
-        const isEditing = target && (targetTag === 'INPUT' || targetTag === 'TEXTAREA' || targetTag === 'SELECT' || target.isContentEditable);
-
-        if (!isEditing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-            e.preventDefault();
-            e.stopPropagation();
-            moveThumbnailSelection(gridContainer, e.key);
-            return;
-        }
-
-        if (!isEditing && e.key === 'Enter') {
-            e.preventDefault();
-            e.stopPropagation();
-            openSelectedThumbnail(gridContainer);
-            return;
-        }
-
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            closeBrowserModal(overlay);
-        }
-    };
-    document.addEventListener('keydown', overlay._keydownHandler, true);
-    // Mouse "Back" button should behave like Up while browsing.
-    overlay.onmouseup = (e) => {
-        if (e.button === 3 && typeof overlay._goUp === 'function') {
-            e.preventDefault();
-            e.stopPropagation();
-            overlay._goUp();
-        }
-    };
-
-    // Regenerate cache button handler
-    const regenerateCacheBtn = overlay._regenerateCacheBtn || topRow.querySelector('.regenerate-cache-btn');
-    regenerateCacheBtn.onclick = () => {
-        clearThumbnailCache();
-        // Reload thumbnails to regenerate them
-        loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
-    };
-
-    // Add to DOM
-    document.body.appendChild(overlay);
-
-    // Setup search/filter
-    const searchInput = filterBar.querySelector('.search-input');
-    const filterType = filterBar.querySelector('.filter-type');
-    const viewMode = filterBar.querySelector('.view-mode');
-    const siblingPrevBtn = filterBar.querySelector('.sibling-prev');
-    const siblingNextBtn = filterBar.querySelector('.sibling-next');
-
-    overlay._navigateSibling = async (dir) => {
-        await navigateSiblingFolder(dir, gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
-        filterThumbnails(gridContainer, searchInput.value, filterType.value);
-    };
-
-    siblingPrevBtn.onclick = () => {
-        overlay._navigateSibling(-1);
-    };
-    siblingNextBtn.onclick = () => {
-        overlay._navigateSibling(1);
-    };
-
-    // Apply default filter if specified
-    if (opts.defaultFilter && filterValues.includes(opts.defaultFilter)) {
-        filterType.value = opts.defaultFilter;
-    } else if (showListKindSelector) {
-        filterType.value = currentListMode === 'audio' ? 'audio'
-            : currentListMode === 'video' ? 'video'
-            : 'all';
-    } else if (filterValues.length > 0) {
-        filterType.value = filterValues[0];
-    }
-
-    if (showListKindSelector) {
-        setListMode(filterType.value || 'all');
-    }
-    viewMode.value = currentViewMode;
-    
-    searchInput.oninput = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
-    filterType.onchange = () => {
-        if (showListKindSelector) {
-            setListMode(filterType.value || 'all');
-            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
-                filterThumbnails(gridContainer, searchInput.value, filterType.value);
-            });
-            return;
-        }
-        filterThumbnails(gridContainer, searchInput.value, filterType.value);
-    };
-
-    viewMode.onchange = () => {
-        currentViewMode = normalizeViewMode(viewMode.value);
-        if (onViewModeChange) {
-            onViewModeChange(currentViewMode);
-        }
-        applyViewLayout(gridContainer);
-        loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
-            filterThumbnails(gridContainer, searchInput.value, filterType.value);
-        });
-    };
-
-    // Load files then apply initial filter
-    loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
-        filterThumbnails(gridContainer, searchInput.value, filterType.value);
-    });
-}
-
-async function loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentNavMode === 'abs') {
-        return loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-    }
-    try {
-        // Update breadcrumb
-        if (!currentSubfolder) {
-            breadcrumbElement.textContent = `${currentSourceFolder}/`;
-        } else {
-            breadcrumbElement.textContent = `${currentSourceFolder}/${currentSubfolder}/`;
-        }
-        
-        // Fetch file list from server
-        const response = await fetch(`/prompt-extractor/list-files?source=${encodeURIComponent(currentSourceFolder)}&kind=${encodeURIComponent(currentListKind)}&include_meta=1`);
-        const data = await response.json();
-        
-        container.innerHTML = '';
-        
-        if (!data.files || data.files.length === 0) {
-            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #aaa;">No files found in ' + currentSourceFolder + ' directory</div>';
-            return;
-        }
-
-        // Get all files with their full paths
-        const allFiles = data.files
-            .filter(f => (typeof f === 'string' ? f !== '(none)' : (f?.path || f?.filename || f?.name) !== '(none)'))
-            .map(normalizeFileEntry);
-        
-        // Filter files/folders for current directory
-        const currentFiles = [];
-        const subfolders = new Set();
-        
-        const prefix = currentSubfolder ? currentSubfolder + '/' : '';
-        
-        allFiles.forEach(fileEntry => {
-            const filepath = fileEntry.path;
-            if (filepath.startsWith(prefix)) {
-                const remainder = filepath.substring(prefix.length);
-                const slashIndex = remainder.indexOf('/');
-                
-                if (slashIndex === -1) {
-                    // It's a file in current directory
-                    currentFiles.push(fileEntry);
-                } else {
-                    // It's in a subdirectory - extract folder name
-                    const folderName = remainder.substring(0, slashIndex);
-                    subfolders.add(folderName);
-                }
-            }
-        });
-
-        const sortedFolders = Array.from(subfolders).sort((a, b) => compareText(a, b));
-        const sortedFiles = currentFiles.slice().sort(compareFilesForDetailSort);
-
-        createDetailHeader(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-        
-        // Add "back" button if in subfolder
-        if (currentSubfolder) {
-            const backItem = createBackItem(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-            container.appendChild(backItem);
-        }
-        
-        // Add folder items
-        sortedFolders.forEach(folderName => {
-            const folderItem = createFolderItem(folderName, container, currentFile, onFileSelect, overlay, breadcrumbElement);
-            container.appendChild(folderItem);
-        });
-
-        // Create thumbnail for each file
-        sortedFiles.forEach(fileEntry => {
-            const item = createThumbnailItem(fileEntry, currentFile, onFileSelect, overlay);
-            container.appendChild(item);
-        });
-
-        // Scroll to the currently selected file
-        if (currentFile) {
-            const selectedItem = container.querySelector(`.thumbnail-item[data-filename="${CSS.escape(currentFile)}"]`) ||
-                Array.from(container.querySelectorAll('.thumbnail-item')).find(it => pathsEqual(it.dataset.filename, currentFile));
-            if (selectedItem) {
-                // Use requestAnimationFrame to ensure layout is complete before scrolling
-                requestAnimationFrame(() => {
-                    selectedItem.scrollIntoView({ block: 'center', behavior: 'instant' });
-                });
-            }
-        }
-
-    } catch (error) {
-        console.error('[FileBrowser] Error loading files:', error);
-        container.innerHTML = '<div style="text-align: center; padding: 40px; color: rgba(220, 53, 69, 0.9);">Error loading files</div>';
-    }
-}
-
-async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888;">Loading...</div>';
-    try {
-        let data = await fetchAbsListing(currentAbsDir, currentNavKind);
-
-        // No directory yet -> backend returns the available roots; jump into the first one.
-        if (data.mode === 'roots') {
-            const roots = data.roots || [];
-            currentAbsRoots = extractRootPaths(roots);
-            const firstPath = (currentSourceFolder === 'output' && currentAbsRoots.output)
-                ? currentAbsRoots.output
-                : (currentAbsRoots.input || currentAbsRoots.output);
-            if (!firstPath) {
-                container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888;">No locations available</div>';
-                return;
-            }
-            currentAbsDir = firstPath;
-            data = await fetchAbsListing(currentAbsDir, currentNavKind);
-        }
-
-        currentAbsDir = data.current_path || currentAbsDir;
-        currentAbsParent = data.parent_path || null;
-        if (Array.isArray(data.roots)) {
-            currentAbsRoots = extractRootPaths(data.roots);
-        }
-
-        if (breadcrumbElement) breadcrumbElement.textContent = currentAbsDir;
-        if (overlay && overlay._navPathInput && document.activeElement !== overlay._navPathInput) {
-            overlay._navPathInput.value = currentAbsDir;
-        }
-
-        container.innerHTML = '';
-
-        createDetailHeader(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-
-        // Sub-directories
-        const dirs = (data.dirs || []).slice().sort((a, b) => compareText(a?.name, b?.name));
-        let focusItem = null;
-        for (const dir of dirs) {
-            const item = createAbsFolderItem(dir.name, dir.path, container, currentFile, onFileSelect, overlay, breadcrumbElement);
-            if (currentAbsFocusName && dir.name === currentAbsFocusName) {
-                focusItem = item;
-                item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
-                item.style.boxShadow = '0 0 0 2px rgba(66, 153, 225, 0.35)';
-            }
-            container.appendChild(item);
-        }
-        if (focusItem) {
-            requestAnimationFrame(() => {
-                focusItem.scrollIntoView({ block: 'center', behavior: 'instant' });
-            });
-            currentAbsFocusName = '';
-        }
-
-        // Files (absolute paths; thumbnail/url helpers detect abs paths)
-        const files = (data.files || []).map(normalizeFileEntry).sort(compareFilesForDetailSort);
-        let selectedItem = null;
-        for (const file of files) {
-            const thumb = createThumbnailItem(file, currentFile, onFileSelect, overlay);
-            if (thumb) {
-                container.appendChild(thumb);
-                if (currentFile && pathsEqual(file.path, currentFile)) selectedItem = thumb;
-            }
-        }
-
-        if (!dirs.length && !files.length && !currentAbsParent) {
-            const empty = document.createElement('div');
-            empty.style.cssText = 'text-align: center; padding: 40px; color: #888; grid-column: 1 / -1;';
-            empty.textContent = 'This folder is empty';
-            container.appendChild(empty);
-        }
-
-        if (selectedItem) {
-            requestAnimationFrame(() => {
-                selectedItem.scrollIntoView({ block: 'center', behavior: 'instant' });
-            });
-        }
-
-        if (overlay && overlay._initialAbsLoadPending) {
-            overlay._initialAbsLoadPending = false;
-        }
-    } catch (error) {
-        // On first open, invalid remembered paths should fall back to Comfy's input root.
-        if (overlay && overlay._initialAbsLoadPending) {
-            overlay._initialAbsLoadPending = false;
-            try {
-                const rootsData = await fetchAbsListing('', currentNavKind);
-                const fallbackRoots = extractRootPaths(rootsData?.roots || []);
-                const fallbackPath = fallbackRoots.input || fallbackRoots.output;
-                if (fallbackPath && !pathsEqual(currentAbsDir, fallbackPath)) {
-                    currentAbsRoots = fallbackRoots;
-                    currentAbsDir = fallbackPath;
-                    return loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-                }
-            } catch {
-                // Ignore fallback probe failures and show original error below.
-            }
-        }
-
-        console.error('[FileBrowser] Error loading absolute path:', error);
-        container.innerHTML = `<div style="text-align: center; padding: 40px; color: rgba(220, 53, 69, 0.9);">${error.message || 'Error loading files'}</div>`;
-    }
-}
-
-function createAbsFolderItem(name, absPath, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode === 'detail') {
-        const row = createDetailFolderRow(name, 'Folder', '📁');
-        row.onclick = () => {
-            currentAbsFocusName = '';
-            currentAbsDir = absPath;
-            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-        };
-        return row;
-    }
-
-    const item = document.createElement('div');
-    item.className = 'folder-item';
-    item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid rgba(226, 232, 240, 0.2);
-        border-radius: 6px;
-        padding: 8px;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    `;
-
-    const preview = document.createElement('div');
-    preview.style.cssText = `
-        width: 100%;
-        height: ${getCardPreviewHeight()}px;
-        background: rgba(0, 0, 0, 0.5);
-        border-radius: 4px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 64px;
-    `;
-    preview.textContent = '\uD83D\uDCC1';
-
-    const label = document.createElement('div');
-    label.textContent = name;
-    label.style.cssText = `
-        font-size: 12px;
-        color: #ccc;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        text-align: center;
-    `;
-    label.title = name;
-
-    item.appendChild(preview);
-    item.appendChild(label);
-
-    item.onmouseenter = () => {
-        item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
-        item.style.transform = 'translateY(-2px)';
-        item.style.background = 'rgba(50, 112, 163, 0.5)';
-    };
-    item.onmouseleave = () => {
-        item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
-        item.style.transform = 'translateY(0)';
-        item.style.background = 'rgba(45, 55, 72, 0.7)';
-    };
-
-    item.onclick = () => {
-        currentAbsFocusName = '';
-        currentAbsDir = absPath;
-        loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-    };
-    return item;
-}
-
-function createBackItem(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode === 'detail') {
-        const row = createDetailFolderRow('..', 'Parent Folder', '←');
-        row.onclick = () => {
-            const parts = currentSubfolder.split('/');
-            parts.pop();
-            currentSubfolder = parts.join('/');
-            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-        };
-        return row;
-    }
-
-    const item = document.createElement('div');
-    item.className = 'folder-item';
-    item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid rgba(226, 232, 240, 0.2);
-        border-radius: 6px;
-        padding: 8px;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    `;
-    
-    const preview = document.createElement('div');
-    preview.style.cssText = `
-        width: 100%;
-        height: ${getCardPreviewHeight()}px;
-        background: rgba(0, 0, 0, 0.5);
-        border-radius: 4px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 64px;
-    `;
-    preview.textContent = '←';
-    
-    const label = document.createElement('div');
-    label.textContent = 'Back';
-    label.style.cssText = `
-        font-size: 12px;
-        color: #ccc;
-        text-align: center;
-    `;
-    
-    item.appendChild(preview);
-    item.appendChild(label);
-    
-    item.onmouseenter = () => {
-        item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
-        item.style.transform = 'translateY(-2px)';
-        item.style.background = 'rgba(50, 112, 163, 0.5)';
-    };
-    item.onmouseleave = () => {
-        item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
-        item.style.transform = 'translateY(0)';
-        item.style.background = 'rgba(45, 55, 72, 0.7)';
-    };
-    
-    item.onclick = () => {
-        // Go up one level
-        const parts = currentSubfolder.split('/');
-        parts.pop();
-        currentSubfolder = parts.join('/');
-        loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-    };
-    
-    return item;
-}
-
-function createFolderItem(folderName, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode === 'detail') {
-        const row = createDetailFolderRow(folderName, 'Folder', '📁');
-        row.onclick = () => {
-            currentSubfolder = currentSubfolder ? `${currentSubfolder}/${folderName}` : folderName;
-            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-        };
-        return row;
-    }
-
-    const item = document.createElement('div');
-    item.className = 'folder-item';
-    item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid rgba(226, 232, 240, 0.2);
-        border-radius: 6px;
-        padding: 8px;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    `;
-    
-    const preview = document.createElement('div');
-    preview.style.cssText = `
-        width: 100%;
-        height: ${getCardPreviewHeight()}px;
-        background: rgba(0, 0, 0, 0.5);
-        border-radius: 4px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 64px;
-    `;
-    preview.textContent = '📁';
-    
-    const label = document.createElement('div');
-    label.textContent = folderName;
-    label.style.cssText = `
-        font-size: 12px;
-        color: #ccc;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        text-align: center;
-    `;
-    label.title = folderName;
-    
-    item.appendChild(preview);
-    item.appendChild(label);
-    
-    item.onmouseenter = () => {
-        item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
-        item.style.transform = 'translateY(-2px)';
-        item.style.background = 'rgba(50, 112, 163, 0.5)';
-    };
-    item.onmouseleave = () => {
-        item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
-        item.style.transform = 'translateY(0)';
-        item.style.background = 'rgba(45, 55, 72, 0.7)';
-    };
-    
-    item.onclick = () => {
-        // Navigate into folder
-        currentSubfolder = currentSubfolder ? `${currentSubfolder}/${folderName}` : folderName;
-        loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
-    };
-    
-    return item;
-}
-
-function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay) {
-    const fileEntry = normalizeFileEntry(fileEntryInput);
-    const filename = fileEntry.path;
-    const item = document.createElement('div');
-    item.className = 'thumbnail-item';
-    item.dataset.filename = filename;
-    item.dataset.type = getFileType(filename);
-    item.dataset.viewMode = currentViewMode;
-    const fileType = item.dataset.type;
-    
-    const isSelected = pathsEqual(filename, currentFile);
-    
-    if (currentViewMode === 'detail') {
-        item.style.cssText = `
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 10px;
-            border-bottom: 1px solid rgba(226, 232, 240, 0.12);
-            background: transparent;
-            cursor: pointer;
-            transition: background 0.15s ease;
-        `;
-    } else {
-        item.style.cssText = `
-        background: rgba(45, 55, 72, 0.7);
-        border: 1px solid rgba(226, 232, 240, 0.2);
-        border-radius: 6px;
-        padding: 8px;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    `;
-    }
-
-    // Thumbnail preview
-    const preview = document.createElement('div');
-    preview.style.cssText = currentViewMode === 'detail'
-        ? `
-            width: 20px;
-            height: 20px;
-            min-width: 20px;
-            min-height: 20px;
-            background: rgba(0, 0, 0, 0.45);
-            border-radius: 3px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            position: relative;
-        `
-        : `
-            width: 100%;
-            height: ${getCardPreviewHeight()}px;
-            background: rgba(0, 0, 0, 0.5);
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            position: relative;
-        `;
-
-    const ext = filename.split('.').pop().toLowerCase();
-    const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
-    const videoExts = ['mp4', 'webm', 'mov', 'avi'];
-    const audioExts = ['wav', 'flac', 'mp3', 'm4a'];
-
-    if (imageExts.includes(ext)) {
-        const img = document.createElement('img');
-        if (isAbsBrowserPath(filename)) {
-            img.src = mediaFileUrl(filename);
-        } else {
-            // Handle subfolder paths: split filename into folder and basename
-            let subfolder = '';
-            let basename = filename;
-            if (filename.includes('/')) {
-                const lastSlash = filename.lastIndexOf('/');
-                subfolder = filename.substring(0, lastSlash);
-                basename = filename.substring(lastSlash + 1);
-            }
-            img.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}`;
-        }
-        img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-        img.onerror = () => {
-            // Use placeholder image
-            img.src = new URL("./placeholder.png", import.meta.url).href;
-        };
-        preview.appendChild(img);
-    } else if (audioExts.includes(ext) && (currentListMode === 'audio' || !videoExts.includes(ext))) {
-        const audioBadge = document.createElement('div');
-        audioBadge.style.cssText = `
-            color: #9ec5fe;
-            font-size: 12px;
-            letter-spacing: 0.08em;
-            border: 1px solid rgba(158, 197, 254, 0.4);
-            border-radius: 999px;
-            padding: 4px 10px;
-            font-family: sans-serif;
-        `;
-        audioBadge.textContent = 'AUDIO';
-        preview.appendChild(audioBadge);
-    } else if (videoExts.includes(ext)) {
-        // Extract video thumbnail via server-side PyAV
-        extractVideoThumbnailServer(filename, preview);
-    } else if (ext === 'json') {
-        // Use placeholder for JSON
-        const img = document.createElement('img');
-        img.src = new URL("./placeholder.png", import.meta.url).href;
-        img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-        preview.appendChild(img);
-    } else {
-        // Use placeholder for unknown types
-        const img = document.createElement('img');
-        img.src = new URL("./placeholder.png", import.meta.url).href;
-        img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-        preview.appendChild(img);
-    }
-
-    item.appendChild(preview);
-
-    if (currentViewMode === 'detail') {
-        const nameCol = document.createElement('div');
-        nameCol.style.cssText = `
-            flex: 1;
-            min-width: 0;
-            font-size: 12px;
-            color: ${isSelected ? '#fff' : '#d3dbe7'};
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        `;
-        nameCol.textContent = browserBasename(filename);
-        nameCol.title = filename;
-
-        const typeCol = document.createElement('div');
-        typeCol.style.cssText = `
-            width: 110px;
-            font-size: 11px;
-            color: rgba(178, 191, 208, 0.92);
-        `;
-        typeCol.textContent = getTypeLabel(fileType);
-
-        const detailsCol = document.createElement('div');
-        detailsCol.style.cssText = `
-            width: 190px;
-            font-size: 11px;
-            color: rgba(178, 191, 208, 0.92);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        `;
-        if (fileType === 'video') {
-            const dims = (fileEntry.width && fileEntry.height) ? `${fileEntry.width}x${fileEntry.height}` : '-';
-            detailsCol.textContent = `${formatDuration(fileEntry.duration)}  ${dims}`;
-        } else if (fileType === 'audio') {
-            detailsCol.textContent = `${formatDuration(fileEntry.duration)}`;
-        } else {
-            detailsCol.textContent = '-';
-        }
-
-        const sizeCol = document.createElement('div');
-        sizeCol.style.cssText = `
-            flex-shrink: 0;
-            width: 110px;
-            font-size: 11px;
-            color: rgba(178, 191, 208, 0.92);
-            text-align: right;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        `;
-        sizeCol.textContent = formatFileSize(fileEntry.size);
-
-        const modifiedCol = document.createElement('div');
-        modifiedCol.style.cssText = `
-            width: 170px;
-            font-size: 11px;
-            color: rgba(178, 191, 208, 0.92);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        `;
-        modifiedCol.textContent = formatFileDate(fileEntry.modified);
-
-        item.appendChild(nameCol);
-        item.appendChild(typeCol);
-        item.appendChild(detailsCol);
-        item.appendChild(sizeCol);
-        item.appendChild(modifiedCol);
-    } else {
-        // Filename label (show only basename, not full path)
-        const label = document.createElement('div');
-        const basename = browserBasename(filename);
-        label.textContent = basename;
-        label.style.cssText = `
-            font-size: 12px;
-            color: ${isSelected ? '#fff' : '#ccc'};
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            text-align: center;
-        `;
-        label.title = filename;
-        item.appendChild(label);
-    }
-
-    // Hover effect
-    item.onmouseenter = () => {
-        if (!isSelected) {
-            if (currentViewMode === 'detail') {
-                item.style.background = 'rgba(50, 112, 163, 0.28)';
-            } else {
-                item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
-                item.style.transform = 'translateY(-2px)';
-                item.style.background = 'rgba(50, 112, 163, 0.5)';
-            }
-        }
-    };
-    item.onmouseleave = () => {
-        if (!isSelected) {
-            if (currentViewMode === 'detail') {
-                item.style.background = 'transparent';
-            } else {
-                item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
-                item.style.transform = 'translateY(0)';
-                item.style.background = 'rgba(45, 55, 72, 0.7)';
-            }
-        }
-    };
-
-    const selectFile = () => {
-        if (currentNavMode === 'abs') {
-            onFileSelect(filename, { absPath: filename, dir: currentAbsDir, roots: { ...currentAbsRoots } });
-        } else {
-            onFileSelect(filename);
-        }
-    };
-
-    item._openFile = () => {
-        selectFile();
-        closeBrowserModal(overlay);
-    };
-
-    setThumbnailSelected(item, isSelected);
-
-    // Click handler
-    if (item.dataset.type === 'audio') {
-        item.onclick = async (e) => {
-            // Don't preview if clicking to close context menu
-            if (document.querySelector('.thumbnail-context-menu')) {
-                return;
-            }
-            selectThumbnailItem(item.parentElement, item);
-            await toggleAudioPreview(filename, item);
-        };
-
-        item.ondblclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            item._openFile();
-        };
-    } else {
-        item.onclick = (e) => {
-            // Don't select if clicking to close context menu
-            if (document.querySelector('.thumbnail-context-menu')) {
-                return;
-            }
-            item._openFile();
-        };
-
-        item.ondblclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            item._openFile();
-        };
-    }
-
-    // Right-click context menu - only for video thumbnails
-    if (videoExts.includes(ext)) {
-        item.oncontextmenu = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            showThumbnailContextMenu(e, filename, preview);
-            return false;
-        };
-    }
-
-    return item;
-}
-
-function getFileType(filename) {
-    const ext = filename.split('.').pop().toLowerCase();
-    const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
-    const videoExts = ['mp4', 'webm', 'mov', 'avi'];
-    const audioExts = ['wav', 'flac', 'mp3', 'm4a'];
-    
-    if (audioExts.includes(ext) && (currentListMode === 'audio' || !videoExts.includes(ext))) return 'audio';
-    if (imageExts.includes(ext)) return 'image';
-    if (videoExts.includes(ext)) return 'video';
-    if (ext === 'json') return 'json';
-    return 'other';
-}
-
-/**
- * Show context menu for thumbnail with refresh option
- */
-function showThumbnailContextMenu(event, filename, previewElement) {
-    // Remove any existing context menu
-    const existingMenu = document.querySelector('.thumbnail-context-menu');
-    if (existingMenu) {
-        existingMenu.remove();
-    }
-
-    // Create context menu
-    const menu = document.createElement('div');
-    menu.className = 'thumbnail-context-menu';
-    menu.style.cssText = `
-        position: fixed;
-        left: ${event.pageX}px;
-        top: ${event.pageY}px;
-        background: rgba(30, 30, 30, 0.98);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        border-radius: 6px;
-        padding: 4px;
-        z-index: 10001;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-        min-width: 160px;
-    `;
-
-    // Refresh option
-    const refreshBtn = document.createElement('div');
-    refreshBtn.textContent = '🔄 Refresh Thumbnail';
-    refreshBtn.style.cssText = `
-        padding: 8px 12px;
-        color: #ccc;
-        cursor: pointer;
-        border-radius: 4px;
-        font-size: 13px;
-        transition: background 0.15s ease;
-    `;
-    refreshBtn.onmouseenter = () => {
-        refreshBtn.style.background = 'rgba(66, 153, 225, 0.3)';
-    };
-    refreshBtn.onmouseleave = () => {
-        refreshBtn.style.background = 'transparent';
-    };
-    refreshBtn.onclick = () => {
-        refreshIndividualThumbnail(filename, previewElement);
-        menu.remove();
-    };
-
-    menu.appendChild(refreshBtn);
-    document.body.appendChild(menu);
-
-    // Close menu when clicking outside
-    const closeMenu = (e) => {
-        if (!menu.contains(e.target)) {
-            e.stopPropagation(); // Prevent click from going through to elements below
-            menu.remove();
-            document.removeEventListener('click', closeMenu, true); // Remove from capture phase
-        }
-    };
-    // Use capture phase to catch the click before it reaches other elements
-    setTimeout(() => {
-        document.addEventListener('click', closeMenu, true);
-    }, 10);
-}
-
-/**
- * Refresh thumbnail for a single file
- */
-function refreshIndividualThumbnail(filename, previewElement) {
-    console.log(`[FileBrowser] Refreshing thumbnail for: ${filename}`);
-    
-    // Clear cache for this specific file
-    const cacheKey = `video_thumb_${filename.replace(/[\/\\]/g, '_')}`;
-    
-    try {
-        localStorage.removeItem(cacheKey);
-        console.log(`[FileBrowser] Cleared cache for: ${filename}`);
-    } catch (error) {
-        console.error('[FileBrowser] Error clearing cache:', error);
-    }
-    
-    // Re-extract thumbnail
-    extractVideoThumbnail(filename, previewElement, cacheKey);
-}
-
-function filterThumbnails(container, searchText, fileType) {
-    const items = container.querySelectorAll('.thumbnail-item');
-    const search = searchText.toLowerCase();
-    
-    items.forEach(item => {
-        const filename = item.dataset.filename.toLowerCase();
-        const type = item.dataset.type;
-        
-        const matchesSearch = !searchText || filename.includes(search);
-        const matchesType = fileType === 'all' || type === fileType;
-        const matchesAllowedTypes = !currentAllowedTypes || currentAllowedTypes.includes(type);
-        
-        item.style.display = (matchesSearch && matchesType && matchesAllowedTypes) ? 'flex' : 'none';
-    });
-}
-
-/**
- * Extract thumbnail from video file with caching
- * Caches thumbnails in browser's localStorage
- */
-async function extractVideoThumbnailCached(filename, previewElement) {
-    // Use full path as cache key to avoid conflicts between subfolders
-    const cacheKey = `video_thumb_${filename.replace(/[\/\\]/g, '_')}`;
-    
-    try {
-        // Check if we have a cached thumbnail
-        const cachedThumb = localStorage.getItem(cacheKey);
-        
-        // If cache exists, use it (trust localStorage until manual regeneration)
-        if (cachedThumb) {
-            const img = document.createElement('img');
-            img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-            img.src = cachedThumb;
-            previewElement.innerHTML = '';
-            previewElement.appendChild(img);
-            return;
-        }
-    } catch (error) {
-        console.log('[FileBrowser] Cache check failed, generating new thumbnail:', error);
-    }
-    
-    // No cache, extract new thumbnail
-    extractVideoThumbnail(filename, previewElement, cacheKey);
-}
-
-/**
- * Extract thumbnail from video file
- * Fast, lightweight version for preview purposes only
- */
-async function extractVideoThumbnail(filename, previewElement, cacheKey = null) {
-    // Show placeholder while loading
-    const placeholderImg = document.createElement('img');
-    placeholderImg.src = new URL("./placeholder.png", import.meta.url).href;
-    placeholderImg.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-    previewElement.innerHTML = '';
-    previewElement.appendChild(placeholderImg);
-    
-    // Create video element - append to DOM for reliable codec detection
-    const video = document.createElement('video');
-    video.crossOrigin = 'anonymous';
-    video.preload = 'auto';
-    video.muted = true;
-    video.playsInline = true;
-    video.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-
-    const cleanupVideo = () => {
-        video.onloadedmetadata = null;
-        video.onseeked = null;
-        video.onerror = null;
-        try { video.src = ''; video.load(); } catch (e) { /* ignore */ }
-        if (video.parentNode) video.parentNode.removeChild(video);
-    };
-    
-    video.onloadedmetadata = () => {
-        // Use absolute first frame (no seeking = fastest)
-        video.currentTime = 0;
-    };
-    
-    video.onseeked = async () => {
-        try {
-            // Create small canvas for fast rendering (thumbnail size)
-            const maxWidth = 180;
-            const maxHeight = 150;
-            const aspectRatio = video.videoWidth / video.videoHeight;
-            
-            let width, height;
-            if (aspectRatio > maxWidth / maxHeight) {
-                width = maxWidth;
-                height = maxWidth / aspectRatio;
-            } else {
-                height = maxHeight;
-                width = maxHeight * aspectRatio;
-            }
-            
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d', { alpha: false });
-            
-            // Draw video frame to small canvas
-            ctx.drawImage(video, 0, 0, width, height);
-            
-            // Create image from canvas with lower quality for speed
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-            const img = document.createElement('img');
-            img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-            img.src = dataUrl;
-            
-            // Replace placeholder with thumbnail (display first, cache later)
-            previewElement.innerHTML = '';
-            previewElement.appendChild(img);
-            
-            // Cache the thumbnail asynchronously after display (non-blocking)
-            if (cacheKey) {
-                setTimeout(() => {
-                    try {
-                        localStorage.setItem(cacheKey, dataUrl);
-                        console.log(`[FileBrowser] Cached thumbnail for: ${filename}`);
-                    } catch (cacheError) {
-                        console.log('[FileBrowser] Failed to cache thumbnail:', cacheError);
-                    }
-                }, 0);
-            }
-            
-            // Clean up
-            cleanupVideo();
-        } catch (error) {
-            console.error('[FileBrowser] Error extracting video thumbnail:', error);
-            // Keep placeholder on error
-            cleanupVideo();
-        }
-    };
-    
-    video.onerror = () => {
-        console.log('[FileBrowser] Browser cannot decode video, trying server-side extraction:', filename);
-        cleanupVideo();
-        // Fall back to server-side frame extraction (PyAV handles H265/yuv444)
-        const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${currentSourceFolder}&position=0`;
-        const img = document.createElement('img');
-        img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-        img.onload = () => {
-            previewElement.innerHTML = '';
-            previewElement.appendChild(img);
-            // Cache the server-extracted thumbnail
-            if (cacheKey) {
-                try {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.naturalWidth;
-                    canvas.height = img.naturalHeight;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
-                    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-                    localStorage.setItem(cacheKey, dataUrl);
-                } catch (e) {
-                    console.log('[FileBrowser] Failed to cache server thumbnail:', e);
-                }
-            }
-        };
-        img.onerror = () => {
-            // Show "can't display" message
-            previewElement.innerHTML = `
-                <div style="text-align: center; color: #888; font-size: 11px; padding: 10px;">
-                    <div style="font-size: 24px; margin-bottom: 6px;">🎬</div>
-                    <div>Preview unavailable</div>
-                    <div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">H265/yuv444 format</div>
-                </div>`;
-        };
-        img.src = frameUrl;
-    };
-    
-    // Load video from input directory
-    // Handle subfolder paths: split filename into folder and basename
-    let subfolder = '';
-    let basename = filename;
-    if (filename.includes('/')) {
-        const lastSlash = filename.lastIndexOf('/');
-        subfolder = filename.substring(0, lastSlash);
-        basename = filename.substring(lastSlash + 1);
-    }
-    document.body.appendChild(video);
-    video.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}&${Date.now()}`;
-}
-
-/**
- * Extract thumbnail using server-side PyAV for all videos.
- * Fetches a JPEG frame from /prompt-extractor/video-frame and caches to localStorage.
- */
-function extractVideoThumbnailServer(filename, previewElement) {
-    const cacheKey = `video_thumb_pyav_${filename.replace(/[\/\\]/g, '_')}`;
-    try {
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-            const img = document.createElement('img');
-            // Stretch to preview box size so large mode shows larger cached thumbs.
-            img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
-            img.src = cached;
-            previewElement.innerHTML = '';
-            previewElement.appendChild(img);
-            return;
-        }
-    } catch (e) { /* ignore */ }
-
-    // Show placeholder while loading
-    const placeholderImg = document.createElement('img');
-    placeholderImg.src = new URL("./placeholder.png", import.meta.url).href;
-    placeholderImg.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-    previewElement.innerHTML = '';
-    previewElement.appendChild(placeholderImg);
-
-    const frameUrl = `/prompt-extractor/video-frame?filename=${encodeURIComponent(filename)}&source=${currentSourceFolder}&position=0`;
-    const img = document.createElement('img');
-    img.onload = () => {
-        // Scale down to thumbnail size
-        const maxW = 180, maxH = 150;
-        const ar = img.naturalWidth / img.naturalHeight;
-        let w, h;
-        if (ar > maxW / maxH) { w = maxW; h = maxW / ar; }
-        else { h = maxH; w = maxH * ar; }
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d', { alpha: false });
-        ctx.drawImage(img, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-        const result = document.createElement('img');
-        // Stretch to preview box size so medium/large use the same cached asset at different display sizes.
-        result.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
-        result.src = dataUrl;
-        previewElement.innerHTML = '';
-        previewElement.appendChild(result);
-        try { localStorage.setItem(cacheKey, dataUrl); } catch (e) { /* ignore */ }
-    };
+// ---------------------------------------------------------------- thumbnails
+
+const thumbKey = (path) => `${THUMB_KEY}${String(path).replace(/[\/\\]/g, "_")}`;
+
+function showImage(holder, src, { fallbacks = [] } = {}) {
+    const img = el("img");
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.draggable = false;
+    const queue = [...fallbacks];
     img.onerror = () => {
-        previewElement.innerHTML = `
-            <div style="text-align: center; color: #888; font-size: 11px; padding: 10px;">
-                <div style="font-size: 24px; margin-bottom: 6px;">🎬</div>
-                <div>Preview unavailable</div>
-            </div>`;
+        const next = queue.shift();
+        img.src = next ?? PLACEHOLDER;
+        if (!next) img.onerror = null;
     };
-    img.src = frameUrl;
+    img.src = src;
+    holder.replaceChildren(img);
 }
 
-/**
- * Clear all video thumbnail cache
- */
-function clearThumbnailCache() {
+// The first frame, decoded by the backend (works for H265 / yuv444 too),
+// shrunk and cached so a folder opens instantly next time.
+function showVideoThumb(holder, path, { refresh = false } = {}) {
+    const key = thumbKey(path);
     try {
-        const cachePrefix = 'video_thumb_';
-        const keysToRemove = [];
-        
-        // Find all cache keys in localStorage
+        if (refresh) localStorage.removeItem(key);
+        const cached = localStorage.getItem(key);
+        if (cached) return showImage(holder, cached);
+    } catch {
+        // No localStorage: decode every time.
+    }
+    holder.replaceChildren(el("span", "spin"));
+    const img = new Image();
+    img.onload = () => {
+        const scale = Math.min(1, 320 / img.naturalWidth, 240 / img.naturalHeight);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        canvas.getContext("2d", { alpha: false }).drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        showImage(holder, dataUrl);
+        try {
+            localStorage.setItem(key, dataUrl);
+        } catch {
+            // Storage full: the thumbnail still shows, it is just not kept.
+        }
+    };
+    img.onerror = () => holder.replaceChildren(iconFor("video"), el("span", "note", "Preview unavailable"));
+    img.src = api.apiURL(`${BROWSER_ROUTES.videoFrame}?${new URLSearchParams({ filename: path, position: "0" })}`);
+}
+
+function clearThumbCache() {
+    try {
+        const keys = [];
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && key.startsWith(cachePrefix)) {
-                keysToRemove.push(key);
-            }
+            if (key?.startsWith(THUMB_PREFIX)) keys.push(key);
         }
-        
-        // Remove all cache entries
-        keysToRemove.forEach(key => {
-            localStorage.removeItem(key);
-        });
-        
-        console.log(`[FileBrowser] Cleared ${keysToRemove.length} cache entries`);
-    } catch (error) {
-        console.error('[FileBrowser] Error clearing cache:', error);
+        for (const key of keys) localStorage.removeItem(key);
+    } catch {
+        // Nothing cached.
     }
 }
 
-/**
- * Clean up orphaned thumbnail cache entries
- * Removes cache for files that no longer exist in the input directory
- */
-function cleanupOrphanedThumbnailCache(currentFiles) {
-    try {
-        const cachePrefix = 'video_thumb_';
-        const timePrefix = 'video_thumb_time_';
-        const keysToRemove = [];
-        
-        // Find all cache keys in localStorage
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            
-            // Check if it's a video thumbnail cache key
-            if (key && key.startsWith(cachePrefix)) {
-                // Extract filename from cache key
-                const filename = key.substring(cachePrefix.length);
-                
-                // If this filename is not in current files list, mark for removal
-                if (!currentFiles.includes(filename)) {
-                    keysToRemove.push(key);
-                    keysToRemove.push(timePrefix + filename);
-                }
-            }
-        }
-        
-        // Remove orphaned cache entries
-        keysToRemove.forEach(key => {
-            localStorage.removeItem(key);
-        });
-        
-        if (keysToRemove.length > 0) {
-            console.log(`[FileBrowser] Cleaned up ${keysToRemove.length / 2} orphaned thumbnail cache entries`);
-        }
-    } catch (error) {
-        console.error('[FileBrowser] Error cleaning up cache:', error);
-    }
+function iconFor(type) {
+    const holder = el("span", "glyph");
+    holder.innerHTML = { folder: ICONS.folder, up: ICONS.up, video: ICONS.film, audio: ICONS.music }[type] ?? ICONS.file;
+    return holder;
 }
 
+function fillThumb(holder, file) {
+    if (file.type === "image") return showImage(holder, mediaFileUrl(file.path));
+    if (file.type === "video") return showVideoThumb(holder, file.path);
+    // A LoRA shows the picture saved beside it with the same base name.
+    if (LORA_EXTENSIONS.includes(extensionOf(file.path))) {
+        const base = file.path.slice(0, -(extensionOf(file.path).length + 1));
+        const [first, ...rest] = ["png", "jpg", "jpeg", "webp"].map((ext) => mediaFileUrl(`${base}.${ext}`));
+        return showImage(holder, first, { fallbacks: rest });
+    }
+    holder.replaceChildren(iconFor(file.type));
+}
+
+// ---------------------------------------------------------------- styles
+
+const CSS_ID = "fbnodes-browser-css-v1";
+
+function ensureBrowserCss() {
+    if (document.getElementById(CSS_ID)) return;
+    const style = document.createElement("style");
+    style.id = CSS_ID;
+    style.textContent = `
+.fbnodes-browser .fbui-modal-body{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.fbnodes-browser-bar{flex:none;display:flex;align-items:center;gap:6px;padding:0 12px 8px}
+.fbnodes-browser-bar .fbui-text{flex:1 1 220px;min-width:0}
+.fbnodes-browser-search{position:relative;flex:1 1 220px;min-width:0;display:flex}
+.fbnodes-browser-search .fbui-text{padding:0 28px}
+.fbnodes-browser-search>.lead{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:${T.faint};pointer-events:none;display:flex}
+.fbnodes-browser-search>.fbui-btn{position:absolute;right:3px;top:3px;height:20px;width:20px;background:transparent}
+.fbnodes-browser-bar>.fbui-select{width:auto;flex:none;min-width:120px}
+.fbnodes-browser-view{flex:none;width:96px}
+.fbnodes-browser-view button{display:grid;place-items:center}
+.fbnodes-browser-items{flex:1 1 auto;min-height:0;overflow:auto;display:grid;gap:12px;padding:4px 12px 12px;align-content:start}
+.fbnodes-browser-items.grid{grid-template-columns:repeat(auto-fill,minmax(260px,1fr));--thumb:220px}
+.fbnodes-browser-items.icon{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));--thumb:120px}
+.fbnodes-browser-items.list{display:block;padding-top:0}
+.fbnodes-browser-card{display:flex;flex-direction:column;gap:6px;padding:6px;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.plate};cursor:pointer;min-width:0}
+.fbnodes-browser-card:hover{border-color:${T.brand}}
+.fbnodes-browser-card .thumb{position:relative;height:var(--thumb);border-radius:${RADIUS}px;background:${T.card};display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;overflow:hidden;color:${T.faint}}
+.fbnodes-browser-card .thumb img{width:100%;height:100%;object-fit:contain;display:block}
+.fbnodes-browser-card .glyph{display:flex;color:${T.label}}
+.fbnodes-browser-card .glyph svg{width:42px;height:42px;stroke-width:1.1}
+.fbnodes-browser-items.icon .glyph svg{width:30px;height:30px}
+.fbnodes-browser-card .chip-time{position:absolute;right:6px;bottom:6px;padding:2px 6px;border-radius:999px;background:rgba(0,0,0,.65);color:${T.ink};font:600 10px ${FONT};font-variant-numeric:tabular-nums}
+.fbnodes-browser-card .name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:center;color:${T.inkSoft};font:12px ${FONT}}
+.fbnodes-browser-items .note{font:11px ${FONT};color:${T.faint}}
+.fbnodes-browser-items .spin{width:18px;height:18px;border-radius:50%;border:2px solid ${T.fill};border-top-color:${T.brand};animation:fbnodes-browser-spin .8s linear infinite}
+@keyframes fbnodes-browser-spin{to{transform:rotate(360deg)}}
+.fbnodes-browser-row{display:grid;grid-template-columns:24px minmax(0,1fr) 70px 150px 80px 140px;align-items:center;gap:10px;height:32px;padding:0 8px;border-bottom:1px solid ${T.rule};cursor:pointer;color:${T.label};font:11px ${FONT};font-variant-numeric:tabular-nums}
+.fbnodes-browser-row:hover{background:${T.fill}}
+.fbnodes-browser-row>*{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fbnodes-browser-row .name{color:${T.inkSoft};font-size:12px}
+.fbnodes-browser-row .size{text-align:right}
+.fbnodes-browser-row .thumb{width:24px;height:24px;border-radius:4px;background:${T.card};display:grid;place-items:center;overflow:hidden;color:${T.label}}
+.fbnodes-browser-row .thumb img{width:100%;height:100%;object-fit:cover}
+.fbnodes-browser-row .thumb svg{width:14px;height:14px}
+.fbnodes-browser-row .thumb .spin{width:10px;height:10px;border-width:1.5px}
+.fbnodes-browser-head{position:sticky;top:0;z-index:1;height:30px;background:${T.panel};cursor:default;color:${T.faint};font:600 10px ${FONT};letter-spacing:.08em;text-transform:uppercase}
+.fbnodes-browser-head:hover{background:${T.panel}}
+.fbnodes-browser-head button{all:unset;cursor:pointer;overflow:hidden;text-overflow:ellipsis}
+.fbnodes-browser-head button:hover,.fbnodes-browser-head button.on{color:${T.ink}}
+.fbnodes-browser-head .size{text-align:right}
+.fbnodes-browser-items .selected{border-color:${T.brand};background:${T.brandSoft};box-shadow:0 0 0 1px ${T.brand}}
+.fbnodes-browser-items .selected .name{color:${T.ink}}
+.fbnodes-browser-row.selected{box-shadow:inset 3px 0 0 ${T.brand}}
+.fbnodes-browser-items .cursor{outline:2px solid ${T.brandInk};outline-offset:1px}
+.fbnodes-browser-items .playing{box-shadow:inset 0 0 0 1px ${T.brand}}
+.fbnodes-browser-items .came-from{border-color:${T.brandInk}}
+.fbnodes-browser-empty{grid-column:1/-1;padding:48px 12px;text-align:center;color:${T.faint};font:12px ${FONT}}
+.fbnodes-browser-empty.error{color:${T.dangerInk}}
+.fbnodes-browser .count{margin-right:auto;align-self:center;color:${T.label};font:12px ${FONT}}
+`;
+    document.head.append(style);
+}
+
+// ---------------------------------------------------------------- the modal
+
+// Firefox on Linux turns the mouse's side buttons into the browser's own
+// Back / Forward without sending the page any mouse event; all the page sees
+// is the history move. So while the browser is open the page stands on a
+// history entry of its own, with one entry behind it and one ahead: a move
+// either way is read as that button (onPress(true) for Back), swallowed
+// before ComfyUI's router hears of it, and undone. Release steps back to
+// the entry the page started on, once any move still in flight has landed.
+// The entries reuse the router's own state, so the URL and the router's
+// position never change.
+function trapHistoryButtons(onPress) {
+    const MARK = "fbnodesBrowser";
+    const base = history.state;
+    let pending = 1; // the back() below, onto the middle entry
+    let closing = false;
+    let finalStepDone = false;
+    const onPop = (event) => {
+        event.stopImmediatePropagation();
+        if (pending > 0) {
+            pending -= 1;
+            if (pending > 0 || !closing) return;
+            if (!finalStepDone) {
+                finalStepDone = true;
+                pending = 1;
+                history.back();
+                return;
+            }
+            window.removeEventListener("popstate", onPop, true);
+            return;
+        }
+        if (closing) return;
+        pending = 1;
+        if (event.state?.[MARK] === "ahead") {
+            history.back();
+            onPress(false);
+        } else {
+            history.forward();
+            onPress(true);
+        }
+    };
+    window.addEventListener("popstate", onPop, true);
+    history.pushState({ ...base, [MARK]: "middle" }, "");
+    history.pushState({ ...base, [MARK]: "ahead" }, "");
+    history.back();
+    return () => {
+        closing = true;
+        if (pending > 0) return; // the last move lands first, then steps back
+        finalStepDone = true;
+        pending = 1;
+        history.back();
+    };
+}
+
+export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options = {}) {
+    ensureBrowserCss();
+    const multi = options.multiSelect === true;
+    const allowed = Array.isArray(options.allowedTypes) && options.allowedTypes.length
+        ? options.allowedTypes.map((type) => String(type).toLowerCase())
+        : null;
+    const defaultFilters = options.showListKindSelector ? ["all", "audio", "video"] : ["all", "image", "video", "audio", "json"];
+    const filters = (Array.isArray(options.filterTypeOptions) ? options.filterTypeOptions : defaultFilters)
+        .map((type) => String(type).toLowerCase())
+        .filter((type, index, list) => FILTER_LABELS[type] && list.indexOf(type) === index);
+
+    let current = isAbsolute(options.selectedAbsPath) ? options.selectedAbsPath : currentFile || "";
+    const state = {
+        dir: options.initialPath || (isAbsolute(current) ? parentOf(current) : ""),
+        parent: null,
+        roots: { input: "", output: "" },
+        kind: options.navKind || "media",
+        view: storedView(),
+        sort: { key: "name", dir: 1 },
+        filter: options.defaultFilter && filters.includes(options.defaultFilter) ? options.defaultFilter : filters[0] ?? "all",
+        search: "",
+        dirs: [],
+        files: [],
+        items: [], // { kind: "dir" | "file", entry, element }
+        cursor: null,
+        cameFrom: "",
+        picked: new Map(), // multiSelect: path -> meta
+        down: [], // folders left by going up, newest last (Forward side button)
+        firstLoad: true,
+        request: 0,
+        audio: null,
+        playing: null,
+    };
+    // A relative current value lives in the folder the browser opens on.
+    if (current && !isAbsolute(current) && state.dir) current = joinPath(state.dir, current);
+
+    const metaFor = (path) => ({ absPath: path, dir: parentOf(path) || state.dir, roots: { ...state.roots } });
+
+    // ---- toolbar: where
+    const pathField = el("input", "fbui-text");
+    pathField.type = "text";
+    pathField.spellcheck = false;
+    pathField.placeholder = "Paste a folder path and press Enter";
+    pathField.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        const next = pathField.value.trim();
+        if (next) go(next);
+    });
+    const custom = options.custom ?? {
+        get: getCustomPresetPath,
+        set: setCustomPresetPath,
+        message: "The folder the Custom button opens, in every Load+ browser.",
+    };
+    const customButton = button("Custom", { onClick: () => {
+        const path = custom.get();
+        if (path) go(path);
+        else askCustomPath();
+    } });
+    customButton.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        askCustomPath();
+    });
+    const updateCustomTitle = () => {
+        const path = custom.get();
+        customButton.title = path ? `${path}\nRight-click to choose another folder` : "Click to choose your Custom folder";
+    };
+    // Asks for the Custom folder (this one, to start with), keeps it in its
+    // setting and opens it.
+    async function askCustomPath() {
+        const path = await prompt({
+            title: "Custom folder",
+            message: custom.message,
+            value: custom.get() || state.dir,
+            placeholder: "/path/to/folder",
+            confirmText: "Set and open",
+        });
+        if (!path) return;
+        try {
+            await custom.set(path);
+        } catch (error) {
+            toast(`Could not save the Custom folder: ${error.message}`, { severity: "error" });
+        }
+        updateCustomTitle();
+        go(path);
+    }
+    updateCustomTitle();
+
+    const places = options.places ?? [
+        { label: "Input", title: "ComfyUI's input folder", path: () => state.roots.input },
+        { label: "Output", title: "ComfyUI's output folder", path: () => state.roots.output },
+    ];
+    const whereBar = el("div", "fbnodes-browser-bar");
+    whereBar.append(
+        button("", { icon: ICONS.up, title: "Up one folder (Backspace, mouse Back button)", onClick: () => goUp() }),
+        button("", { icon: ICONS.refresh, title: "Reload this folder", onClick: () => load() }),
+        ...places.map((place) => button(place.label, { title: place.title, onClick: async () => {
+            const path = await place.path();
+            if (path) go(path);
+        } })),
+        customButton,
+        pathField,
+        ...(state.kind === "lora" ? [] : [button("Regenerate cache", { icon: ICONS.film, title: "Rebuild every video thumbnail", onClick: () => { clearThumbCache(); load(); } })]),
+    );
+
+    // ---- toolbar: what
+    const searchField = el("input", "fbui-text");
+    searchField.type = "text";
+    searchField.spellcheck = false;
+    searchField.placeholder = "Search files…";
+    const clearSearch = button("", { icon: ICONS.close, small: true, title: "Clear search", onClick: () => {
+        searchField.value = "";
+        state.search = "";
+        applyFilter();
+        searchField.focus();
+    } });
+    searchField.addEventListener("input", () => {
+        state.search = searchField.value;
+        applyFilter();
+    });
+    const search = el("div", "fbnodes-browser-search");
+    const lead = el("span", "lead");
+    lead.innerHTML = ICONS.search;
+    search.append(lead, searchField, clearSearch);
+
+    const typeSelect = el("select", "fbui-select");
+    for (const type of filters) {
+        const option = el("option", "", FILTER_LABELS[type]);
+        option.value = type;
+        typeSelect.append(option);
+    }
+    typeSelect.value = state.filter;
+    typeSelect.addEventListener("change", () => {
+        state.filter = typeSelect.value;
+        applyFilter();
+    });
+
+    const viewSwitch = el("div", "fbui-seg fbnodes-browser-view");
+    const viewButtons = {};
+    for (const [mode, view] of Object.entries(VIEWS)) {
+        const choice = el("button");
+        choice.type = "button";
+        choice.title = view.title;
+        choice.innerHTML = view.icon;
+        choice.addEventListener("click", () => setView(mode));
+        viewButtons[mode] = choice;
+        viewSwitch.append(choice);
+    }
+
+    const whatBar = el("div", "fbnodes-browser-bar");
+    whatBar.append(
+        button("", { icon: ICONS.chevronUp, title: "Previous folder beside this one (Ctrl+↑)", onClick: () => goSibling(-1) }),
+        button("", { icon: ICONS.chevronDown, title: "Next folder beside this one (Ctrl+↓)", onClick: () => goSibling(1) }),
+        search,
+        typeSelect,
+        viewSwitch,
+    );
+
+    const items = el("div", "fbnodes-browser-items");
+
+    // ---- footer (multiSelect)
+    let footer = null;
+    let countLabel = null;
+    let addButton = null;
+    if (multi) {
+        countLabel = el("span", "count");
+        addButton = button("Add selected", { primary: true, onClick: () => addPicked() });
+        footer = [countLabel, button("Cancel", { onClick: () => modal.close() }), addButton];
+    }
+
+    const modal = openModal({
+        title: multi ? "Select files" : "Select a file",
+        body: [whereBar, whatBar, items],
+        footer,
+        width: "min(1304px, 95vw)",
+        height: "min(1185px, 92vh)",
+        onClose: () => {
+            stopAudio();
+            document.removeEventListener("keydown", onKey, true);
+            for (const type of sideButtonEvents) window.removeEventListener(type, onSideButton, true);
+            releaseHistory();
+        },
+    });
+    modal.overlay.classList.add("fbnodes-browser");
+    modal.modal.style.maxWidth = "none";
+    modal.modal.style.maxHeight = "none";
+    // Our own menus only; the browser's would offer "Back" over a file.
+    modal.overlay.addEventListener("contextmenu", (event) => event.preventDefault());
+    // The mouse's side buttons: Back goes up a folder, Forward goes back down
+    // into the folder last left that way. Chromium browsers send them as
+    // mouse events (button 3 / 4); acting on pointerup matters because a page
+    // handler that cancels pointerdown stops mouseup from being sent at all.
+    // Every side-button event is swallowed, so the page never navigates.
+    // Firefox on Linux sends no mouse event at all, only a history move,
+    // which trapHistoryButtons catches.
+    let lastSidePress = 0;
+    const sideAction = (back) => {
+        if (!modal.isTop()) return;
+        if (back) goUp();
+        else goDown();
+    };
+    const sideButtonEvents = ["pointerdown", "pointerup", "mousedown", "mouseup", "auxclick"];
+    const onSideButton = (event) => {
+        if (event.button !== 3 && event.button !== 4) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.type !== "pointerup") return;
+        lastSidePress = performance.now();
+        sideAction(event.button === 3);
+    };
+    for (const type of sideButtonEvents) window.addEventListener(type, onSideButton, true);
+    const releaseHistory = trapHistoryButtons((back) => {
+        // A press the pointer events already handled.
+        if (performance.now() - lastSidePress > 500) sideAction(back);
+    });
+
+    // ---- picking
+    function updateCount() {
+        if (!multi) return;
+        const n = state.picked.size;
+        countLabel.textContent = `${n} selected`;
+        addButton.disabled = n === 0;
+        addButton.querySelector("span").textContent = n ? `Add ${n} clip${n === 1 ? "" : "s"}` : "Add selected";
+    }
+
+    function addPicked() {
+        if (!state.picked.size) return;
+        const picked = [...state.picked].map(([value, meta]) => ({ value, meta }));
+        if (typeof options.onMultiSelect === "function") options.onMultiSelect(picked);
+        else onFileSelect(picked.map((item) => item.value), { multi: true, items: picked });
+        modal.close();
+    }
+
+    function isPicked(path) {
+        return multi ? state.picked.has(path) : samePath(path, current);
+    }
+
+    function openItem(item) {
+        if (item.kind === "dir") return go(item.entry.path);
+        if (item.kind === "up") return goUp();
+        const path = item.entry.path;
+        if (multi) {
+            if (state.picked.has(path)) state.picked.delete(path);
+            else state.picked.set(path, metaFor(path));
+            item.element.classList.toggle("selected", state.picked.has(path));
+            updateCount();
+            return;
+        }
+        onFileSelect(path, metaFor(path));
+        modal.close();
+    }
+
+    // ---- audio preview: one click plays or stops, a double click picks
+    function stopAudio() {
+        if (state.audio) {
+            state.audio.pause();
+            state.audio.removeAttribute("src");
+        }
+        state.playing?.classList.remove("playing");
+        state.playing = null;
+    }
+
+    async function toggleAudio(item) {
+        const wasPlaying = state.playing === item.element;
+        stopAudio();
+        if (wasPlaying) return;
+        state.audio ??= Object.assign(new Audio(), { preload: "metadata", onended: stopAudio });
+        state.playing = item.element;
+        item.element.classList.add("playing");
+        try {
+            state.audio.src = mediaFileUrl(item.entry.path);
+            await state.audio.play();
+        } catch (error) {
+            stopAudio();
+            toast(`Could not play ${item.entry.name}: ${error.message}`, { severity: "warn" });
+        }
+    }
+
+    // ---- context menu
+    function showMenu(event, item) {
+        const file = item.entry;
+        const entries = [];
+        if (file.type === "video") {
+            entries.push({ label: "Refresh thumbnail", action: () => showVideoThumb(item.element.querySelector(".thumb"), file.path, { refresh: true }) });
+        }
+        entries.push({ label: "Delete file…", danger: true, action: () => deleteFile(file) });
+        openMenu(event.clientX, event.clientY, entries);
+    }
+
+    async function deleteFile(file) {
+        const sure = await confirm({ title: "Delete file", message: `Delete "${file.name}"? This cannot be undone.`, confirmText: "Delete", danger: true });
+        if (!sure) return;
+        try {
+            const response = await api.fetchApi(BROWSER_ROUTES.remove, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: file.path }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!data.ok) throw new Error(data.error || `Request failed (${response.status})`);
+            try { localStorage.removeItem(thumbKey(file.path)); } catch { /* nothing cached */ }
+            state.picked.delete(file.path);
+            updateCount();
+            load();
+        } catch (error) {
+            toast(`Could not delete ${file.name}: ${error.message}`, { severity: "error" });
+        }
+    }
+
+    // ---- building the items
+    function makeCard(item) {
+        const { kind, entry } = item;
+        const card = el("div", "fbnodes-browser-card");
+        const thumb = el("div", "thumb");
+        if (kind === "file") {
+            fillThumb(thumb, entry);
+            const time = (entry.type === "video" || entry.type === "audio") && formatDuration(entry.duration);
+            if (time) thumb.append(el("span", "chip-time", time));
+        } else {
+            thumb.append(iconFor(kind === "up" ? "up" : "folder"));
+        }
+        const name = el("div", "name", kind === "up" ? "Up" : entry.name);
+        name.title = entry.path || "";
+        card.append(thumb, name);
+        return card;
+    }
+
+    function makeRow(item) {
+        const { kind, entry } = item;
+        const row = el("div", "fbnodes-browser-row");
+        const thumb = el("div", "thumb");
+        if (kind === "file") {
+            if (entry.type === "image") showImage(thumb, mediaFileUrl(entry.path));
+            else if (entry.type === "video") showVideoThumb(thumb, entry.path);
+            else thumb.append(iconFor(entry.type));
+        } else {
+            thumb.append(iconFor(kind === "up" ? "up" : "folder"));
+        }
+        const name = el("span", "name", kind === "up" ? ".." : entry.name);
+        name.title = entry.path || "";
+        const isFile = kind === "file";
+        row.append(
+            thumb,
+            name,
+            el("span", "", isFile ? TYPE_LABELS[entry.type] : kind === "up" ? "Parent" : "Folder"),
+            el("span", "", isFile ? fileDetails(entry) : "—"),
+            el("span", "size", isFile ? formatSize(entry.size) : "—"),
+            el("span", "", isFile ? formatDate(entry.modified) : "—"),
+        );
+        return row;
+    }
+
+    function makeHeader() {
+        const head = el("div", "fbnodes-browser-row fbnodes-browser-head");
+        head.append(el("span"));
+        for (const [key, label] of [["name", "Name"], ["type", "Type"], ["details", "Details"], ["size", "Size"], ["modified", "Modified"]]) {
+            const cell = el("button", key === "size" ? "size" : "", label + (state.sort.key === key ? (state.sort.dir > 0 ? " ▲" : " ▼") : ""));
+            cell.type = "button";
+            cell.classList.toggle("on", state.sort.key === key);
+            cell.addEventListener("click", () => {
+                state.sort = { key, dir: state.sort.key === key ? -state.sort.dir : 1 };
+                render();
+            });
+            head.append(cell);
+        }
+        return head;
+    }
+
+    function compareFiles(a, b) {
+        const byName = compareText(a.name, b.name);
+        const number = (x, y) => {
+            const okX = Number.isFinite(x);
+            const okY = Number.isFinite(y);
+            if (!okX || !okY) return okX ? -1 : okY ? 1 : 0;
+            return x - y;
+        };
+        let result = 0;
+        switch (state.sort.key) {
+            case "type": result = compareText(TYPE_LABELS[a.type], TYPE_LABELS[b.type]); break;
+            case "size": result = number(Number(a.size), Number(b.size)); break;
+            case "modified": result = number(toMillis(a.modified) ?? NaN, toMillis(b.modified) ?? NaN); break;
+            case "details": result = a.type === b.type && (a.type === "video" || a.type === "audio") ? number(Number(a.duration), Number(b.duration)) : 0; break;
+        }
+        return (result || byName) * state.sort.dir;
+    }
+
+    function render() {
+        stopAudio();
+        const list = state.view === "list";
+        items.className = `fbnodes-browser-items ${state.view}`;
+        items.replaceChildren();
+        if (list) items.append(makeHeader());
+        state.items = [];
+        const add = (item) => {
+            item.element = list ? makeRow(item) : makeCard(item);
+            wire(item);
+            state.items.push(item);
+            items.append(item.element);
+        };
+        if (state.parent && list) add({ kind: "up", entry: { path: state.parent, name: ".." } });
+        for (const dir of state.dirs) add({ kind: "dir", entry: dir });
+        for (const file of [...state.files].sort(compareFiles)) add({ kind: "file", entry: file });
+        applyFilter();
+    }
+
+    function wire(item) {
+        const element = item.element;
+        if (item.kind === "dir" && samePath(item.entry.path, state.cameFrom)) element.classList.add("came-from");
+        if (item.kind !== "file") {
+            element.addEventListener("click", () => openItem(item));
+            return;
+        }
+        element.classList.toggle("selected", isPicked(item.entry.path));
+        element.addEventListener("click", () => {
+            setCursor(item);
+            if (item.entry.type === "audio" && !multi) toggleAudio(item);
+            else openItem(item);
+        });
+        // Audio plays on a click, so a double click is what picks it.
+        if (item.entry.type === "audio" && !multi) {
+            element.addEventListener("dblclick", (event) => {
+                event.preventDefault();
+                openItem(item);
+            });
+        }
+        element.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            showMenu(event, item);
+        });
+    }
+
+    function applyFilter() {
+        clearSearch.hidden = !state.search;
+        const needle = state.search.toLowerCase();
+        let shown = 0;
+        for (const item of state.items) {
+            if (item.kind !== "file") continue;
+            const type = item.entry.type;
+            const visible = (!needle || item.entry.name.toLowerCase().includes(needle))
+                && (state.filter === "all" || type === state.filter)
+                && (!allowed || allowed.includes(type));
+            item.element.hidden = !visible;
+            if (visible) shown += 1;
+        }
+        items.querySelector(".fbnodes-browser-empty")?.remove();
+        if (!shown && !state.dirs.length) {
+            items.append(el("div", "fbnodes-browser-empty", state.files.length ? "No files match the search or filter" : "This folder has no files to show"));
+        }
+        if (state.cursor?.element.hidden) setCursor(null);
+    }
+
+    function setView(mode) {
+        state.view = mode;
+        try { localStorage.setItem(VIEW_KEY, mode); } catch { /* not kept */ }
+        for (const [key, choice] of Object.entries(viewButtons)) choice.classList.toggle("on", key === mode);
+        render();
+        revealCurrent();
+    }
+
+    // ---- loading a folder
+    async function load() {
+        const request = ++state.request;
+        items.className = `fbnodes-browser-items ${state.view}`;
+        items.replaceChildren(el("div", "fbnodes-browser-empty", "Loading…"));
+        try {
+            let data = await fetchListing(state.dir, state.kind);
+            if (data.mode === "roots") {
+                state.roots = rootPaths(data.roots);
+                state.dir = (sourceFolder === "output" && state.roots.output) || state.roots.input || state.roots.output;
+                if (!state.dir) throw new Error("No folders available");
+                data = await fetchListing(state.dir, state.kind);
+            }
+            if (request !== state.request) return;
+            state.dir = data.current_path || state.dir;
+            state.parent = data.parent_path || null;
+            if (Array.isArray(data.roots)) state.roots = rootPaths(data.roots);
+            state.dirs = (data.dirs || []).slice().sort((a, b) => compareText(a?.name, b?.name));
+            state.files = (data.files || []).map(normalizeFile);
+            state.firstLoad = false;
+        } catch (error) {
+            if (request !== state.request) return;
+            // A remembered folder that no longer exists opens the input folder instead.
+            if (state.firstLoad) {
+                state.firstLoad = false;
+                state.dir = "";
+                return load();
+            }
+            items.replaceChildren(el("div", "fbnodes-browser-empty error", error.message || "Could not open this folder"));
+            return;
+        }
+        if (document.activeElement !== pathField) pathField.value = state.dir;
+        render();
+        revealCurrent();
+    }
+
+    // Every folder change goes through here. Going up remembers the folder
+    // left, so the Forward side button can go back down into it; going
+    // anywhere else forgets that trail.
+    function navigate(path, { cameFrom = "", trail = false } = {}) {
+        if (!path) return;
+        if (!trail) state.down = [];
+        state.cameFrom = cameFrom;
+        state.dir = path;
+        load();
+    }
+
+    function go(path) {
+        navigate(path);
+    }
+
+    function goUp() {
+        if (!state.parent) return;
+        state.down.push(state.dir);
+        navigate(state.parent, { cameFrom: state.dir, trail: true });
+    }
+
+    function goDown() {
+        if (state.down.length) navigate(state.down.pop(), { trail: true });
+    }
+
+    async function goSibling(direction) {
+        if (!state.parent) return;
+        try {
+            const listing = await fetchListing(state.parent, state.kind);
+            const siblings = (listing.dirs || []).slice().sort((a, b) => compareText(a?.name, b?.name));
+            const index = siblings.findIndex((dir) => samePath(dir.path, state.dir));
+            if (index < 0 || siblings.length < 2) return;
+            go(siblings[(index + direction + siblings.length) % siblings.length].path);
+        } catch {
+            // The parent cannot be read: stay here.
+        }
+    }
+
+    // Scroll to the file the node holds, or to the folder we just came up from.
+    function revealCurrent() {
+        const target = state.items.find((item) => item.kind === "file" && samePath(item.entry.path, current))
+            ?? state.items.find((item) => item.kind === "dir" && samePath(item.entry.path, state.cameFrom));
+        if (!target) return;
+        setCursor(target);
+        requestAnimationFrame(() => target.element.scrollIntoView({ block: "center" }));
+    }
+
+    // ---- keyboard
+    function setCursor(item) {
+        state.cursor?.element.classList.remove("cursor");
+        state.cursor = item;
+        item?.element.classList.add("cursor");
+    }
+
+    // Arrows move one item (one row up / down in a grid), Page Up / Down move
+    // a screenful of rows, Home / End jump to the first / last item.
+    const NAV_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"]);
+
+    function moveCursor(key) {
+        const visible = state.items.filter((item) => !item.element.hidden);
+        if (!visible.length) return;
+        const index = visible.indexOf(state.cursor);
+        let next = null;
+        if (key === "Home") next = visible[0];
+        else if (key === "End") next = visible[visible.length - 1];
+        else if (index < 0) next = visible[0];
+        else if (key === "ArrowLeft" || key === "ArrowRight" || (state.view === "list" && key.startsWith("Arrow"))) {
+            next = visible[index + (key === "ArrowLeft" || key === "ArrowUp" ? -1 : 1)];
+        } else {
+            // The card nearest the cursor's column, in the row one step (arrows)
+            // or one screen (pages) above or below; a list is a grid of one column.
+            const here = state.cursor.element;
+            const centre = here.offsetLeft + here.offsetWidth / 2;
+            const rows = [...new Set(visible.map((item) => item.element.offsetTop))].sort((a, b) => a - b);
+            const at = rows.indexOf(here.offsetTop);
+            const down = key === "ArrowDown" || key === "PageDown";
+            let target;
+            if (key.startsWith("Arrow")) {
+                target = rows[at + (down ? 1 : -1)];
+            } else {
+                const page = Math.max(here.offsetHeight, items.clientHeight - here.offsetHeight);
+                const wanted = here.offsetTop + (down ? page : -page);
+                target = rows.reduce((best, row) => (Math.abs(row - wanted) < Math.abs(best - wanted) ? row : best), rows[0]);
+                if (target === here.offsetTop) target = rows[at + (down ? 1 : -1)];
+            }
+            if (target === undefined) return;
+            next = visible
+                .filter((item) => item.element.offsetTop === target)
+                .reduce((best, item) => {
+                    const distance = Math.abs(item.element.offsetLeft + item.element.offsetWidth / 2 - centre);
+                    return !best || distance < best.distance ? { item, distance } : best;
+                }, null)?.item;
+        }
+        if (!next) return;
+        setCursor(next);
+        next.element.scrollIntoView({ block: "nearest" });
+    }
+
+    function onKey(event) {
+        // A dialog opened over the browser (Delete) takes its own keys.
+        if (!modal.isTop()) return;
+        if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+            event.preventDefault();
+            event.stopPropagation();
+            goSibling(event.key === "ArrowUp" ? -1 : 1);
+            return;
+        }
+        const editing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName ?? "");
+        if (editing) return;
+        if (NAV_KEYS.has(event.key)) {
+            event.preventDefault();
+            event.stopPropagation();
+            moveCursor(event.key);
+        } else if (event.key === "Enter") {
+            event.preventDefault();
+            event.stopPropagation();
+            // With files picked, Enter adds them; otherwise it opens what the cursor is on.
+            if (multi && state.picked.size) addPicked();
+            else if (state.cursor) openItem(state.cursor);
+        } else if (event.key === "Backspace") {
+            event.preventDefault();
+            goUp();
+        }
+    }
+    document.addEventListener("keydown", onKey, true);
+
+    for (const [key, choice] of Object.entries(viewButtons)) choice.classList.toggle("on", key === state.view);
+    clearSearch.hidden = true;
+    updateCount();
+    load();
+}
