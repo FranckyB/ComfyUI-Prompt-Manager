@@ -5,7 +5,7 @@ import { api } from "../../scripts/api.js";
 import { button, ICONS } from "./fbui/controls.js";
 import { el } from "./fbui/dom.js";
 import { openMenu, prompt } from "./fbui/modal.js";
-import { ensureKitCss, FONT, RADIUS, RADIUS_CARD, T, Z_MENU } from "./fbui/theme.js";
+import { ensureKitCss, FONT, RADIUS, RADIUS_CARD, ROW_HEIGHT, T, Z_MENU, Z_MODAL } from "./fbui/theme.js";
 import {
     buildSavePromptRequestBodyForEndpoint,
     getCategoryPromptEntriesForEndpoint,
@@ -31,6 +31,29 @@ function ensurePromptBrowserCss() {
 .pm-spin{flex:none;width:16px;height:16px;box-sizing:border-box;border:2.5px solid ${T.brand};border-top-color:transparent;border-radius:50%;animation:pm-spin 1s linear infinite}
 .pm-progress{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:${Z_MENU};display:flex;align-items:center;gap:10px;min-width:320px;max-width:min(560px,90vw);padding:12px 12px 12px 16px;box-sizing:border-box;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.panel};box-shadow:0 12px 40px rgba(0,0,0,.6);color:${T.inkSoft};font:13px ${FONT}}
 .pm-progress .text{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.pm-browser{position:fixed;top:50%;transform:translateY(-50%);z-index:${Z_MODAL};max-height:95vh;display:flex;flex-direction:column;padding:16px;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.panel};box-shadow:0 12px 40px rgba(0,0,0,.6);color:${T.inkSoft};font:12px ${FONT};user-select:none;-webkit-user-select:none}
+.pm-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid ${T.rule}}
+.pm-head .title{color:${T.ink};font:600 15px ${FONT}}
+.pm-controls{display:flex;align-items:center;gap:6px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid ${T.rule}}
+.pm-controls .fbui-btn{white-space:nowrap}
+.pm-search{flex:1;min-width:0;display:flex;align-items:center;gap:4px;height:${ROW_HEIGHT}px;padding:0 3px 0 8px;border-radius:${RADIUS}px;background:${T.fill}}
+.pm-search .lead{display:grid;color:${T.faint}}
+.pm-search .fbui-text{flex:1;min-width:0;height:100%;padding:0;border:none;background:transparent;user-select:text;-webkit-user-select:text}
+.pm-viewgroup{display:flex;gap:2px}
+.pm-categories{display:flex;gap:8px;min-height:0;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid ${T.rule}}
+.pm-category-controls{display:flex;gap:6px;flex:none;align-items:center}
+.pm-tabs{display:flex;gap:4px;flex:1;min-width:0;align-items:center;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:${T.fill} transparent}
+.pm-tab{flex:none;height:${ROW_HEIGHT}px;padding:0 12px;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill};color:${T.label};font:500 12px ${FONT};white-space:nowrap;cursor:pointer}
+.pm-tab:hover{background:${T.fillHover};color:${T.ink}}
+.pm-tab.on{background:${T.brandSoftHover};border-color:${T.brand};color:${T.ink}}
+.pm-tab.nsfw:not(.on){border-color:${T.danger}}
+.pm-divider{flex:none;width:1px;align-self:stretch;margin:0 2px;background:${T.rule}}
+.thumbnail-grid-container::-webkit-scrollbar{display:none}
+.category-scroll-bar::-webkit-scrollbar{height:6px}
+.category-scroll-bar::-webkit-scrollbar-track,.pm-type-rail-list::-webkit-scrollbar-track,.category-scroll-bar::-webkit-scrollbar-corner{background:transparent}
+.category-scroll-bar::-webkit-scrollbar-thumb,.pm-type-rail-list::-webkit-scrollbar-thumb{background:${T.fill};border-radius:3px}
+.category-scroll-bar::-webkit-scrollbar-thumb:hover,.pm-type-rail-list::-webkit-scrollbar-thumb:hover{background:${T.fillHover}}
+.pm-type-rail-list::-webkit-scrollbar{width:6px}
 `;
     document.head.append(style);
 }
@@ -1815,25 +1838,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         let browserLayout = getActiveBrowserLayout();
         const computeMinGridWidth = () => browserLayout.cols * browserLayout.itemWidth + Math.max(0, browserLayout.cols - 1) * browserLayout.gap;
 
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: ${getDialogLeftPosition()}px;
-            transform: translateY(-50%);
-            background: ${UI.panel};
-            border: 1px solid ${UI.panelBorder};
-            border-radius: 12px;
-            padding: 16px;
-            z-index: 10000;
-            width: ${getDialogContentWidth()}px;
-            max-height: 95vh;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-            user-select: none;
-            -webkit-user-select: none;
-        `;
+        ensurePromptBrowserCss();
+        const dialog = el("div", "pm-browser");
+        dialog.style.left = `${getDialogLeftPosition()}px`;
+        dialog.style.width = `${getDialogContentWidth()}px`;
 
         // Keep native text editing context menus for input fields while preserving
         // custom right-click handling elsewhere in the browser.
@@ -1851,121 +1859,39 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             e.preventDefault();
         });
 
-        // Header with close button
-        const header = document.createElement("div");
-        header.style.cssText = `
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid ${UI.sectionBorder};
-        `;
-
-        const title = document.createElement("div");
-        title.textContent = mode === "save"
+        // Header: the title and a close button.
+        const header = el("div", "pm-head");
+        const title = el("div", "title", mode === "save"
             ? saveTitle
-            : (selectTitle || (workflowOnly ? "Select Recipe" : "Select Prompt"));
-        title.style.cssText = `
-            font-size: 18px;
-            font-weight: bold;
-            color: #fff;
-        `;
+            : (selectTitle || (workflowOnly ? "Select Recipe" : "Select Prompt")));
+        const closeBtn = button("", { icon: ICONS.close, small: true, title: "Close (Esc)" });
+        header.append(title, closeBtn);
 
-        const closeBtn = document.createElement("button");
-        closeBtn.textContent = "✕";
-        closeBtn.style.cssText = `
-            background: transparent;
-            border: none;
-            color: #888;
-            font-size: 20px;
-            cursor: pointer;
-            padding: 4px 8px;
-            border-radius: 4px;
-        `;
-        closeBtn.onmouseover = () => closeBtn.style.color = "#fff";
-        closeBtn.onmouseout = () => closeBtn.style.color = "#888";
-
-        header.appendChild(title);
-        header.appendChild(closeBtn);
-
-        // Controls bar: Search + NSFW button + View Mode button
-        const controlsBar = document.createElement("div");
-        controlsBar.style.cssText = `
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 10px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid ${UI.sectionBorder};
-        `;
-
-        // Search input (fills remaining space)
-        const searchInput = document.createElement("input");
+        // Controls bar: search, then the filters and view switches.
+        const controlsBar = el("div", "pm-controls");
+        const searchInput = el("input", "fbui-text");
         searchInput.type = "text";
-        searchInput.placeholder = workflowOnly ? "Search recipes and prompts..." : "Search prompts...";
-        searchInput.style.cssText = `
-            flex: 1;
-            min-width: 0;
-            padding: 6px 10px;
-            background: ${UI.inputBg};
-            border: 1px solid ${UI.inputBorder};
-            border-radius: 4px;
-            color: #fff;
-            font-size: 13px;
-            box-sizing: border-box;
-            outline: none;
-            user-select: text;
-            -webkit-user-select: text;
-        `;
-        searchInput.onfocus = () => searchInput.style.borderColor = UI.accent;
-        searchInput.onblur = () => searchInput.style.borderColor = UI.inputBorder;
-
-        // Wrap search input in a container with clear button
-        const searchWrapper = document.createElement("div");
-        searchWrapper.style.cssText = `
-            flex: 1;
-            min-width: 0;
-            position: relative;
-            display: flex;
-            align-items: center;
-        `;
-        searchInput.style.flex = "1";
-        searchInput.style.paddingRight = "28px";
-        const clearBtn = document.createElement("span");
-        clearBtn.textContent = "\u00d7";
-        clearBtn.title = "Clear search";
-        clearBtn.style.cssText = `
-            position: absolute;
-            right: 8px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #666;
-            font-size: 16px;
-            cursor: pointer;
-            line-height: 1;
-            display: none;
-            user-select: none;
-        `;
-        clearBtn.onmouseover = () => clearBtn.style.color = "#fff";
-        clearBtn.onmouseout = () => clearBtn.style.color = "#666";
-        clearBtn.onclick = () => {
+        searchInput.spellcheck = false;
+        searchInput.placeholder = workflowOnly ? "Search recipes and prompts…" : "Search prompts…";
+        const clearBtn = button("", { icon: ICONS.close, small: true, title: "Clear search", onClick: () => {
             searchInput.value = "";
-            clearBtn.style.display = "none";
+            clearBtn.hidden = true;
             searchInput.focus();
             rebuildCategoryList();
             renderContent("");
-        };
-        const origOninput = searchInput.oninput;
+        } });
+        clearBtn.hidden = true;
         searchInput.addEventListener("input", () => {
-            clearBtn.style.display = searchInput.value ? "" : "none";
+            clearBtn.hidden = !searchInput.value;
         });
-        searchWrapper.appendChild(searchInput);
-        searchWrapper.appendChild(clearBtn);
+        const searchWrapper = el("div", "pm-search");
+        const searchLead = el("span", "lead");
+        searchLead.innerHTML = ICONS.search;
+        searchWrapper.append(searchLead, searchInput, clearBtn);
 
         // Prompt/Recipe/Compose/All filter button
         let contentFilterState = initialContentFilter || getBrowserContentFilter(app);
-        const contentFilterBtn = document.createElement("button");
+        const contentFilterBtn = button("");
 
         // For prompt-only stores (e.g. Prompt Composer) the content filter has no meaning.
         if (promptOnly) {
@@ -1974,74 +1900,42 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // NSFW toggle button
         let hideNSFWState = options?.showNSFWOnOpen === true ? false : getHideNSFW(app);
-        const nsfwBtn = document.createElement("button");
-        const btnStyle = `
-            background: ${UI.buttonBg};
-            border: 1px solid ${UI.inputBorder};
-            color: #aaa;
-            padding: 4px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            white-space: nowrap;
-        `;
+        const nsfwBtn = button("");
+        // Toolbar toggles are kit buttons: "on" while the filter or mode is active.
         const updateNsfwBtn = () => {
-            if (hideNSFWState) {
-                nsfwBtn.textContent = "NSFW: Hidden";
-                nsfwBtn.style.cssText = btnStyle + `background: #453339; border-color: #9b727b; color: #d2a8b0;`;
-            } else {
-                nsfwBtn.textContent = "NSFW: Visible";
-                nsfwBtn.style.cssText = btnStyle;
-            }
+            nsfwBtn.textContent = hideNSFWState ? "NSFW: Hidden" : "NSFW: Visible";
+            nsfwBtn.classList.toggle("on", hideNSFWState);
             nsfwBtn.title = hideNSFWState ? "NSFW content is hidden — click to show" : "NSFW content is visible — click to hide";
         };
-        const updateContentFilterBtn = () => {
-            if (contentFilterState === "prompt") {
-                contentFilterBtn.textContent = "Type: Prompt";
-                contentFilterBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.18); border-color: rgba(56, 130, 246, 0.75); color: #dbeafe;`;
-                contentFilterBtn.title = "Showing prompt entries only";
-            } else if (contentFilterState === "compose") {
-                contentFilterBtn.textContent = "Type: Compose";
-                contentFilterBtn.style.cssText = btnStyle + `background: rgba(47, 111, 146, 0.18); border-color: rgba(47, 111, 146, 0.82); color: #d7edf8;`;
-                contentFilterBtn.title = "Showing compose entries only";
-            } else if (contentFilterState === "layout") {
-                contentFilterBtn.textContent = "Type: Layout";
-                contentFilterBtn.style.cssText = btnStyle + `background: rgba(124, 92, 220, 0.18); border-color: rgba(124, 92, 220, 0.82); color: #e6defc;`;
-                contentFilterBtn.title = "Showing layout entries only";
-            } else if (contentFilterState === "recipe") {
-                contentFilterBtn.textContent = "Type: Recipe";
-                contentFilterBtn.style.cssText = btnStyle + `background: rgba(235, 140, 35, 0.18); border-color: rgba(235, 140, 35, 0.8); color: #ffe7c2;`;
-                contentFilterBtn.title = "Showing recipe entries only";
-            } else {
-                contentFilterBtn.textContent = "Type: All";
-                contentFilterBtn.style.cssText = btnStyle;
-                contentFilterBtn.title = "Showing prompts, recipes, compose and layout entries";
-            }
+        const CONTENT_FILTER_LABELS = {
+            prompt: ["Type: Prompt", "Showing prompt entries only"],
+            compose: ["Type: Compose", "Showing compose entries only"],
+            layout: ["Type: Layout", "Showing layout entries only"],
+            recipe: ["Type: Recipe", "Showing recipe entries only"],
+            all: ["Type: All", "Showing prompts, recipes, compose and layout entries"],
         };
-        const allCategoriesBtn = document.createElement("button");
+        const updateContentFilterBtn = () => {
+            const [text, tip] = CONTENT_FILTER_LABELS[contentFilterState] ?? CONTENT_FILTER_LABELS.all;
+            contentFilterBtn.textContent = text;
+            contentFilterBtn.title = tip;
+            contentFilterBtn.classList.toggle("on", contentFilterState !== "all" && Boolean(CONTENT_FILTER_LABELS[contentFilterState]));
+        };
+        const allCategoriesBtn = button("Category");
         const updateAllCategoriesBtn = () => {
-            if (showAllCategoriesState) {
-                allCategoriesBtn.textContent = "Category";
-                allCategoriesBtn.style.cssText = btnStyle + `background: rgba(94, 179, 123, 0.18); border-color: rgba(94, 179, 123, 0.78); color: #dff6e7;`;
-                allCategoriesBtn.title = "Showing all categories, including empty ones for the current type filter";
-            } else {
-                allCategoriesBtn.textContent = "Category";
-                allCategoriesBtn.style.cssText = btnStyle + `background: rgba(75, 85, 99, 0.12); border-color: rgba(107, 114, 128, 0.42); color: #8a93a2;`;
-                allCategoriesBtn.title = "Hide categories with no entries for the current type filter";
-            }
+            allCategoriesBtn.classList.toggle("on", showAllCategoriesState);
+            allCategoriesBtn.title = showAllCategoriesState
+                ? "Showing all categories, including empty ones for the current type filter"
+                : "Hide categories with no entries for the current type filter";
         };
         updateContentFilterBtn();
         updateAllCategoriesBtn();
         updateNsfwBtn();
-        const thumbnailModelBtn = document.createElement("button");
+        const thumbnailModelBtn = button("");
         const updateThumbnailModelBtn = () => {
             const label = getThumbnailRenderLabelParts();
             thumbnailModelBtn.textContent = label.iconLabel || "🔧";
             thumbnailModelBtn.title = label.fullLabel;
-            thumbnailModelBtn.style.cssText = btnStyle;
         };
-        thumbnailModelBtn.onmouseover = () => { thumbnailModelBtn.style.background = '#38414c'; thumbnailModelBtn.style.color = '#fff'; };
-        thumbnailModelBtn.onmouseout = () => { thumbnailModelBtn.style.background = '#313843'; thumbnailModelBtn.style.color = '#aaa'; };
         thumbnailModelBtn.onclick = async () => {
             const picked = await showThumbnailRenderPicker(
                 _thumbnailRenderFamily,
@@ -2057,50 +1951,24 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         };
         updateThumbnailModelBtn();
-        contentFilterBtn.onmouseover = () => {
-            if (contentFilterState === "all") {
-                contentFilterBtn.style.background = "#38414c";
-                contentFilterBtn.style.color = "#fff";
-            }
-        };
-        contentFilterBtn.onmouseout = () => {
-            if (contentFilterState === "all") {
-                contentFilterBtn.style.background = "#313843";
-                contentFilterBtn.style.color = "#aaa";
-            }
-        };
-        allCategoriesBtn.onmouseover = () => {
-            if (!showAllCategoriesState) {
-                allCategoriesBtn.style.background = "#38414c";
-                allCategoriesBtn.style.color = "#fff";
-            }
-        };
-        allCategoriesBtn.onmouseout = () => {
-            updateAllCategoriesBtn();
-        };
-        nsfwBtn.onmouseover = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#38414c'; nsfwBtn.style.color = '#fff'; } };
-        nsfwBtn.onmouseout = () => { if (!hideNSFWState) { nsfwBtn.style.background = '#313843'; nsfwBtn.style.color = '#aaa'; } };
 
-        // View mode toggle button
+        // View mode: Grid (large), Icon (small), List; compact windows have
+        // no Icon view.
         let currentViewMode = getViewMode(compactBrowser, browserPrefScope);
-        const viewModeBtn = document.createElement("button");
+        const VIEW_MODES = [
+            ["grid", ICONS.grid, "Large thumbnails"],
+            ["icon", ICONS.tiles, "Small thumbnails"],
+            ["list", ICONS.list, "List"],
+        ].filter(([mode]) => !compactBrowser || mode !== "icon");
+        const viewModeBtn = el("div", "pm-viewgroup");
+        const viewModeButtons = new Map(VIEW_MODES.map(([mode, icon, tip]) => {
+            const item = button("", { icon, title: tip, onClick: () => setBrowserViewMode(mode) });
+            viewModeBtn.append(item);
+            return [mode, item];
+        }));
         const updateViewModeBtn = () => {
-            const labels = {
-                grid: "⊞ Grid",
-                icon: "⊞ Icon",
-                list: "☰ List",
-            };
-            viewModeBtn.textContent = labels[currentViewMode] || labels.grid;
-            const titles = {
-                grid: "Large thumbnail grid",
-                icon: "Small icon grid",
-                list: "Compact list view",
-            };
-            viewModeBtn.title = titles[currentViewMode] || titles.grid;
+            for (const [mode, item] of viewModeButtons) item.classList.toggle("on", mode === currentViewMode);
         };
-        viewModeBtn.style.cssText = btnStyle;
-        viewModeBtn.onmouseover = () => { viewModeBtn.style.background = '#38414c'; viewModeBtn.style.color = '#fff'; };
-        viewModeBtn.onmouseout = () => { viewModeBtn.style.background = '#313843'; viewModeBtn.style.color = '#aaa'; };
         updateViewModeBtn();
 
         // Multi-select toggle
@@ -2126,23 +1994,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             updateSelectionToolbar();
         };
         if (supportsMultiSelect) {
-            multiSelectBtn = document.createElement("button");
+            multiSelectBtn = button("Multi", { icon: ICONS.check });
             updateMultiSelectBtn = () => {
-                if (multiSelectMode) {
-                    multiSelectBtn.textContent = "☑ Multi: On";
-                    multiSelectBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.22); border-color: rgba(56, 130, 246, 0.85); color: #dbeafe;`;
-                    multiSelectBtn.title = "Multi-select is on";
-                } else {
-                    multiSelectBtn.textContent = "☐ Multi: Off";
-                    multiSelectBtn.style.cssText = btnStyle;
-                    multiSelectBtn.title = "Turn on multi-select";
-                }
-            };
-            multiSelectBtn.onmouseover = () => {
-                if (!multiSelectMode) { multiSelectBtn.style.background = '#38414c'; multiSelectBtn.style.color = '#fff'; }
-            };
-            multiSelectBtn.onmouseout = () => {
-                updateMultiSelectBtn();
+                multiSelectBtn.classList.toggle("on", multiSelectMode);
+                multiSelectBtn.title = multiSelectMode ? "Multi-select is on (Shift / Ctrl-click also picks several)" : "Pick several prompts (Shift / Ctrl-click)";
             };
             multiSelectBtn.onclick = () => {
                 if (multiSelectMode) {
@@ -2212,23 +2067,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             app.graph.setDirtyCanvas(true, true);
         };
         if (allowEditMode && mode !== "save") {
-            editModeBtn = document.createElement("button");
+            editModeBtn = button("Edit", { icon: ICONS.brush });
             updateEditModeBtn = () => {
-                if (editMode) {
-                    editModeBtn.textContent = "✎ Edit: On";
-                    editModeBtn.style.cssText = btnStyle + `background: rgba(56, 130, 246, 0.22); border-color: rgba(56, 130, 246, 0.85); color: #dbeafe;`;
-                    editModeBtn.title = "Edit mode is on — click to turn off";
-                } else {
-                    editModeBtn.textContent = "✎ Edit: Off";
-                    editModeBtn.style.cssText = btnStyle;
-                    editModeBtn.title = "Toggle edit mode";
-                }
-            };
-            editModeBtn.onmouseover = () => {
-                if (!editMode) { editModeBtn.style.background = '#38414c'; editModeBtn.style.color = '#fff'; }
-            };
-            editModeBtn.onmouseout = () => {
-                updateEditModeBtn();
+                editModeBtn.classList.toggle("on", editMode);
+                editModeBtn.title = editMode ? "Edit mode is on — click to turn off" : "Edit prompts, categories and thumbnails";
             };
             editModeBtn.onclick = () => {
                 const nextEditMode = !editMode;
@@ -2265,48 +2107,17 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         }
 
         // Category bar: static filter/add controls + horizontally scrollable category tabs
-        const categoryBar = document.createElement("div");
-        categoryBar.style.cssText = `
-            display: flex;
-            gap: 8px;
-            margin-bottom: 10px;
-            padding: 8px 0;
-            border-top: 1px solid rgba(255, 255, 255, 0.15);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-            min-height: 0;
-        `;
+        const categoryBar = el("div", "pm-categories");
 
         // Static controls (always visible, left side)
-        const categoryControls = document.createElement("div");
-        categoryControls.style.cssText = `
-            display: flex;
-            gap: 6px;
-            flex-shrink: 0;
-            align-items: flex-start;
-        `;
+        const categoryControls = el("div", "pm-category-controls");
 
-        const addCategoryBtn = document.createElement("button");
-        addCategoryBtn.textContent = "+";
-        addCategoryBtn.title = "New Category";
-        addCategoryBtn.style.cssText = `
-            padding: 6px 14px;
-            border-radius: 6px;
-            border: 1px solid #5f6773;
-            background: #313843;
-            color: #aaa;
-            cursor: pointer;
-            font-size: 13px;
-            transition: all 0.15s ease;
-            flex-shrink: 0;
-            margin-top: 1px;
-        `;
+        const addCategoryBtn = button("+", { title: "New category" });
         const updateCategoryCreateControls = () => {
             const showCategoryCreate = !showCategoryTypeFilter || categoryTypeFilter !== "__all__";
             addCategoryBtn.style.display = showCategoryCreate ? "" : "none";
             categoryContainerLeftBorder.style.display = showCategoryCreate ? "block" : "none";
         };
-        addCategoryBtn.onmouseover = () => { addCategoryBtn.style.background = '#38414c'; addCategoryBtn.style.color = '#fff'; };
-        addCategoryBtn.onmouseout = () => { addCategoryBtn.style.background = '#313843'; addCategoryBtn.style.color = '#aaa'; };
         addCategoryBtn.onclick = async () => {
             if (showCategoryTypeFilter && categoryTypeFilter === "__all__") return;
             const result = await showNewCategoryDialog();
@@ -2354,21 +2165,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         categoryControls.appendChild(addCategoryBtn);
 
         // Horizontally scrollable category tabs
-        const categoryContainer = document.createElement("div");
-        categoryContainer.className = "category-scroll-bar";
-        categoryContainer.style.cssText = `
-            display: flex;
-            gap: 6px;
-            flex-wrap: nowrap;
-            align-items: center;
-            overflow-x: auto;
-            overflow-y: hidden;
-            scrollbar-width: thin;
-            scrollbar-color: rgba(74, 138, 212, 0.65) transparent;
-            flex: 1;
-            min-width: 0;
-            padding-right: 1px;
-        `;
+        const categoryContainer = el("div", "category-scroll-bar pm-tabs");
         categoryContainer.addEventListener("wheel", (e) => {
             if (e.deltaY !== 0) {
                 e.preventDefault();
@@ -2376,15 +2173,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         }, { passive: false });
 
-        const categoryContainerLeftBorder = document.createElement("div");
-        categoryContainerLeftBorder.style.cssText = `
-            width: 1px;
-            align-self: stretch;
-            background: rgba(255, 255, 255, 0.22);
-            margin: 0 2px;
-            flex-shrink: 0;
-            display: block;
-        `;
+        const categoryContainerLeftBorder = el("div", "pm-divider");
 
         categoryBar.appendChild(categoryControls);
         categoryBar.appendChild(categoryContainerLeftBorder);
@@ -3131,16 +2920,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
                 btn.style.display = "";
 
-                btn.style.background = isSelected ? '#4a8ad4' : '#2a2a2a';
-                btn.style.background = isSelected ? UI.accentSoft : UI.buttonBg;
-                btn.style.color = isSelected ? '#fff' : '#aaa';
-
-                // NSFW categories get a red border, otherwise normal
-                if (isNSFW && !isSelected) {
-                    btn.style.borderColor = '#944';
-                } else {
-                    btn.style.borderColor = isSelected ? '#5a9ae4' : '#444';
-                }
+                btn.classList.toggle("on", isSelected);
+                btn.classList.toggle("nsfw", isNSFW);
 
                 if (isSelected) selectedBtn = btn;
             });
@@ -3546,22 +3327,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             categoryButtons = [];
             categoryContainer.innerHTML = "";
             categories.forEach(cat => {
-                const btn = document.createElement("button");
+                const btn = el("button", "pm-tab");
+                btn.type = "button";
                 btn.dataset.category = cat;
-                btn.style.cssText = `
-                    padding: 6px 14px;
-                    border-radius: 6px;
-                    border: 1px solid ${UI.inputBorder};
-                    background: ${UI.buttonBg};
-                    color: #aaa;
-                    cursor: pointer;
-                    font-size: 13px;
-                    transition: all 0.15s ease;
-                    position: relative;
-                    flex-shrink: 0;
-                    white-space: nowrap;
-                    margin-top: 1px;
-                `;
 
                 btn.textContent = showCategoryTypeFilter ? getComposerCategoryDisplayName(node, cat) : cat;
 
@@ -3585,72 +3353,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 categoryContainer.appendChild(btn);
             });
 
-            // Add "+" button to create a new category
-            const addBtn = document.createElement("button");
-            addBtn.textContent = "+";
-            addBtn.title = "New Category";
-            addBtn.style.cssText = `
-                padding: 6px 14px;
-                border-radius: 6px;
-                border: 1px solid #5f6773;
-                background: #313843;
-                color: #aaa;
-                cursor: pointer;
-                font-size: 13px;
-                transition: all 0.15s ease;
-                flex-shrink: 0;
-                margin-bottom: 2px;
-            `;
-            const canCreateCategoryInCurrentFilter = !showCategoryTypeFilter || categoryTypeFilter !== "__all__";
-            addBtn.style.display = canCreateCategoryInCurrentFilter ? "" : "none";
-            addBtn.onmouseover = () => { addBtn.style.background = '#38414c'; addBtn.style.color = '#fff'; };
-            addBtn.onmouseout = () => { addBtn.style.background = '#313843'; addBtn.style.color = '#aaa'; };
-            addBtn.onclick = async () => {
-                if (!canCreateCategoryInCurrentFilter) return;
-                const result = await showNewCategoryDialog();
-                if (result && result.name && result.name.trim()) {
-                    const categoryName = result.name.trim();
-                    const existingCategories = showCategoryTypeFilter ? [] : Object.keys(node.prompts || {});
-                    const existingCategoryName = existingCategories.find(cat => cat.toLowerCase() === categoryName.toLowerCase());
-                    if (existingCategoryName) {
-                        await showInfo("Category Exists", `Category already exists as "${existingCategoryName}".`);
-                        return;
-                    }
-                    try {
-                        const promptType = showCategoryTypeFilter && categoryTypeFilter !== "__all__"
-                            ? categoryTypeFilter
-                            : "";
-                        const resp = await api.fetchApi(`${endpointPrefix}/save-category`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ category_name: categoryName, nsfw: result.nsfw, prompt_type: promptType })
-                        });
-                        const data = await resp.json();
-                        if (data.success) {
-                            applyPromptPayloadToNode(node, data);
-                            const canProceed = await canChangeEditorContext();
-                            if (!canProceed) {
-                                rebuildCategoryList();
-                                renderContent(searchInput.value);
-                                return;
-                            }
-                            setBlankPromptSelection();
-                            if (editMode && editPanel && typeof editPanel.clearPrompt === "function") {
-                                await editPanel.clearPrompt({ skipConfirm: true });
-                            }
-                            const nextCategoryKey = resolveComposerCategoryKey(node, categoryName, data.type_file || "");
-                            syncComposerTypeFilterForCategory(nextCategoryKey, data.type_file || "");
-                            setSelectedCategory(nextCategoryKey);
-                            rebuildCategoryList();
-                            renderContent(searchInput.value);
-                        } else {
-                            await showInfo("Error", data.error);
-                        }
-                    } catch (err) {
-                        console.error("[PromptManagerAdvanced] Error creating category:", err);
-                    }
-                }
-            };
             updateCategoryButtons();
         };
         rebuildCategoryList();
@@ -3688,22 +3390,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             scrollbar-width: none;
             -ms-overflow-style: none;
         `;
-        // Hide grid scrollbar; style category scrollbar for webkit browsers
-        const style = document.createElement("style");
-        style.textContent = `
-            .thumbnail-grid-container::-webkit-scrollbar { display: none; }
-            .category-scroll-bar::-webkit-scrollbar { height: 6px; }
-            .category-scroll-bar::-webkit-scrollbar:horizontal { display: block; }
-            .category-scroll-bar::-webkit-scrollbar-track { background: transparent; }
-            .category-scroll-bar::-webkit-scrollbar-thumb { background: rgba(74, 138, 212, 0.55); border-radius: 3px; }
-            .category-scroll-bar::-webkit-scrollbar-thumb:hover { background: rgba(74, 138, 212, 0.85); }
-            .category-scroll-bar::-webkit-scrollbar-corner { background: transparent; }
-            .pm-type-rail-list::-webkit-scrollbar { width: 6px; }
-            .pm-type-rail-list::-webkit-scrollbar-track { background: transparent; }
-            .pm-type-rail-list::-webkit-scrollbar-thumb { background: rgba(74, 138, 212, 0.45); border-radius: 3px; }
-            .pm-type-rail-list::-webkit-scrollbar-thumb:hover { background: rgba(74, 138, 212, 0.75); }
-        `;
-        document.head.appendChild(style);
 
         if (typeRail) {
             updateTypeRailButtons();
@@ -5715,25 +5401,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             renderContent(searchInput.value);
         };
 
-        viewModeBtn.onclick = () => {
-            if (compactBrowser) {
-                // Compact mode: only Grid and List make sense.
-                currentViewMode = currentViewMode === "grid" ? "list" : "grid";
-            } else {
-                // Full mode: cycle Grid (large) -> Icon (medium) -> List (small) -> Grid.
-                if (currentViewMode === "grid") {
-                    currentViewMode = "icon";
-                } else if (currentViewMode === "icon") {
-                    currentViewMode = "list";
-                } else {
-                    currentViewMode = "grid";
-                }
-            }
+        function setBrowserViewMode(mode) {
+            if (mode === currentViewMode) return;
+            currentViewMode = mode;
             setViewMode(currentViewMode, browserPrefScope);
             localStorage.setItem(getViewModeStorageKey(browserPrefScope), currentViewMode);
             updateViewModeBtn();
             renderContent(searchInput.value);
-        };
+        }
 
         let saveNameInput = null;
         let saveActionButton = null;
