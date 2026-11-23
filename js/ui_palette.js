@@ -1,43 +1,50 @@
-// Shared UI palette used by Prompt Manager modals.
-// Keep this aligned with Workflow Builder's neutral + blue accent styling.
+// Prompt Manager's modal palette, now the FB UI kit's colours (js/fbui/theme.js)
+// under the names the modals already use. Selected and hover states follow
+// the kit: soft blue fill, solid blue edge.
+import { T } from "./fbui/theme.js";
+
 export const PM_UI_PALETTE = {
     // Backdrop behind modal dialogs
-    overlay: "hsl(0 0% 0% / 0.8)",
+    overlay: T.overlay,
     // Main modal surface
-    panel: "hsl(216 11% 15%)",
+    panel: T.panel,
     // Outer border of modal containers
-    panelBorder: "hsl(216 20% 65% / 0.24)",
+    panelBorder: T.plateEdge,
     // Dividers between modal sections (header/body/footer)
-    sectionBorder: "hsl(216 20% 65% / 0.20)",
+    sectionBorder: T.rule,
 
     // Text input/select control surface
-    inputBg: "hsl(220 15% 10%)",
+    inputBg: T.card,
     // Input/select/button neutral stroke
-    inputBorder: "hsl(218 10% 41%)",
-    // Neutral button/chip background
-    buttonBg: "hsl(219 16% 18%)",
+    inputBorder: T.plateEdge,
+    // Neutral button/chip background, and its hover
+    buttonBg: T.fill,
+    buttonHover: T.fillHover,
 
     // Primary foreground text
-    textPrimary: "hsl(0 0% 87%)",
+    textPrimary: T.inkSoft,
     // Titles and important labels
-    textHeading: "hsl(220 13% 85%)",
+    textHeading: T.ink,
     // Secondary text
-    textMuted: "hsl(0 0% 67%)",
+    textMuted: T.label,
     // Hints and helper text
-    textHint: "hsl(216 15% 65%)",
+    textHint: T.faint,
 
     // Card/tile background (thumbnails, prompt cards)
-    cardBg: "hsl(219 16% 18%)",
+    cardBg: T.plate,
     // Card default border
-    cardBorder: "hsl(217 12% 22%)",
+    cardBorder: T.plateEdge,
 
-    // Exact Builder accent family (from workflow_builder.js)
-    // Primary blue accent (focus/selected)
-    accent: "hsl(208 73% 57% / 0.9)",
-    // Slightly dimmed accent (hover/secondary accent)
-    accentDim: "hsl(208 73% 57% / 0.7)",
-    // Soft accent fill for selected backgrounds
-    accentSoft: "hsl(208 73% 57% / 0.55)",
-    // Accent border used on selected elements
-    accentBorder: "hsl(208 73% 57% / 0.95)",
+    // The accent (focus/selected), dimmed, as a soft fill, as an edge
+    accent: T.brand,
+    accentDim: T.brandInk,
+    accentSoft: T.brandSoftHover,
+    accentBorder: T.brand,
+    // Text on a solid accent fill
+    onAccent: T.onBrand,
+
+    // Destructive actions
+    danger: T.danger,
+    dangerSoft: T.dangerSoft,
+    dangerInk: T.dangerInk,
 };

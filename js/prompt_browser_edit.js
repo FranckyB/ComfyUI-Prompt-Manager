@@ -2,6 +2,7 @@ import { saveComposerCategorySettings, saveComposerTypeSettings } from "./prompt
 import { api } from "../../scripts/api.js";
 import { getCategoryPromptEntries, getCategoryPromptEntriesForEndpoint, getCategoryPromptEntryForEndpoint } from "./prompt_store_adapters.js";
 import { mediaFileUrl } from "./path_browser.js";
+import { PM_UI_PALETTE } from "./ui_palette.js";
 
 // Placeholder thumbnail. Defined locally (NOT imported from prompt_manager_advanced.js)
 // to break the module cycle:
@@ -241,20 +242,7 @@ function getComposerCategoryMetadata(composerLibrary, category, promptType = "")
     };
 }
 
-const STYLE = {
-    panel: "hsl(216 11% 15%)",
-    panelBorder: "hsl(216 20% 65% / 0.24)",
-    sectionBorder: "hsl(216 20% 65% / 0.20)",
-    inputBg: "hsl(220 15% 10%)",
-    inputBorder: "hsl(218 10% 41%)",
-    buttonBg: "hsl(219 16% 18%)",
-    cardBg: "hsl(219 16% 18%)",
-    textPrimary: "hsl(0 0% 87%)",
-    textMuted: "hsl(0 0% 67%)",
-    accent: "hsl(208 73% 57% / 0.9)",
-    accentBorder: "hsl(208 73% 57% / 0.65)",
-    accentSoft: "hsl(208 73% 57% / 0.16)",
-};
+const STYLE = PM_UI_PALETTE;
 
 let _composerLoraPickerCache = null;
 let _composerLoraPickerPromise = null;

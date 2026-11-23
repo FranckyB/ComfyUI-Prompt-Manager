@@ -1,4 +1,5 @@
 import { createPromptBrowserEditPanel, getPromptTypeChoices } from "./prompt_browser_edit.js";
+import { PM_UI_PALETTE } from "./ui_palette.js";
 import {
     buildSavePromptRequestBodyForEndpoint,
     getCategoryPromptEntriesForEndpoint,
@@ -8,18 +9,7 @@ import {
 } from "./prompt_store_adapters.js";
 
 let app = null;
-let UI = {
-    overlay: "hsl(0 0% 0% / 0.8)",
-    panel: "hsl(216 11% 15%)",
-    panelBorder: "hsl(216 20% 65% / 0.24)",
-    sectionBorder: "hsl(216 20% 65% / 0.20)",
-    inputBg: "hsl(220 15% 10%)",
-    inputBorder: "hsl(218 10% 41%)",
-    buttonBg: "hsl(219 16% 18%)",
-    cardBg: "hsl(219 16% 18%)",
-    accentSoft: "hsl(208 73% 57% / 0.16)",
-    accentBorder: "hsl(208 73% 57% / 0.65)",
-};
+let UI = PM_UI_PALETTE;
 
 let DEFAULT_THUMBNAIL = "";
 let loadPrompts = async () => ({});
@@ -2165,10 +2155,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const FULL_DIALOG_WIDTH = 1480;
         const compactBrowser = compactBrowserPref || (
             window.innerHeight < FULL_DIALOG_HEIGHT || window.innerWidth < FULL_DIALOG_WIDTH
-        );
-        console.log(
-            `[PromptBrowser] viewport=${window.innerWidth}x${window.innerHeight}, ` +
-            `pref=${compactBrowserPref}, compact=${compactBrowser}`
         );
         const EDIT_PANEL_WIDTH = compactBrowser ? 280 : 320;
         const TYPE_RAIL_COLLAPSED_WIDTH = showCategoryTypeFilter ? (compactBrowser ? 54 : 60) : 0;
@@ -4491,7 +4477,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         const nextCategory = showCategoryTypeFilter ? resolveComposerCategoryKey(node, category) : category;
                         syncComposerTypeFilterForCategory(nextCategory);
                         selectedCategory = nextCategory;
-                        renderCategoryTabs();
+                        rebuildCategoryList();
                     }
                     setCurrentPromptSelection(name);
                     renderContent(searchInput.value);
