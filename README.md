@@ -89,6 +89,7 @@ Workflow examples are provided to help understand the basics.
 - If you want the Prompt Generator dropdowns to show only your local models, enable `Hide downloadable built-in models` in these settings.
 - Prompt Generator backend choices (llama.cpp, Ollama) and related options are configured there.
 - The Prompt Generator's system prompts are fully user-customizable. They're stored in `user/default/prompt_generator_data.json` and can be created and edited with the **Prompt Library Hub** (sidebar) — your custom prompts then show up directly in the Prompt Generator node.
+- **Edit / Generate Prompt MiniMax Outpaint** writes a MiniMax H3 Image outpaint prompt: connect the outpaint canvas (the picture on its gray-padded canvas, e.g. Load Image+'s `canvas` with Pad on) and optionally say what you want in the new area. Existing installs get it with the Prompt Library Hub's re-import of the default prompts.
 
 ## Documentation
 
