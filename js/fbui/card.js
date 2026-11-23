@@ -18,7 +18,8 @@
 //       hidden widgets it drives
 //   { panel: (node, card) => ({ element, sync?(values) }), height, grow?, when? }
 //       grow takes the node's spare height
-//   { group: "more", label: "More" }   later rows with group: "more" fold under it
+//   { group: "more", label: "More", tools? }   later rows with group: "more" fold under it
+//       tools: (node, card) => ({ element, sync?(values) }) at the header's right
 // Options: minWidth, first (place before the node's other DOM widgets).
 import { chainCallback, el, keepDomWidgetWidthAuto, keepKeyInField } from "./dom.js";
 import { notifyChange } from "./comfy.js";
@@ -214,10 +215,13 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
     }
     if (isGroupHeader(row)) {
       currentGroup = row.group;
-      const header = el("button", "fbui-group");
-      header.type = "button";
-      header.append(el("span", "glyph", "▸"), el("span", "", row.label ?? row.group));
-      header.addEventListener("click", () => {
+      const header = el("div", "fbui-group");
+      const toggle = el("button", "toggle");
+      toggle.type = "button";
+      toggle.append(el("span", "glyph", "▸"), el("span", "", row.label ?? row.group));
+      const tools = row.tools?.(node, card);
+      header.append(toggle, ...(tools ? [tools.element] : []));
+      toggle.addEventListener("click", () => {
         node.properties ??= {};
         node.properties[groupKey(row.group)] = !groupOpen(row.group);
         card.byHand = true;
@@ -227,7 +231,7 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
           card.byHand = false;
         }
       });
-      card.entries.push({ row, element: header, header: true, syncs: [] });
+      card.entries.push({ row, element: header, header: true, syncs: tools?.sync ? [tools.sync] : [] });
       root.append(header);
       continue;
     }

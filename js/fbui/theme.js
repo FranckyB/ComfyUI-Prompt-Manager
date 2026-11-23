@@ -7,7 +7,7 @@
 
 // Bump on any change to the CSS below. Two packs shipping the same version
 // inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 10;
+export const KIT_VERSION = 11;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -93,8 +93,9 @@ export function kitCss() {
 .fbui-sep{flex:none;color:${T.faint};font-size:11px}
 .fbui-section{height:${SECTION_HEIGHT}px;flex:none;display:flex;align-items:flex-end;gap:8px;color:${T.faint};font:600 10px/1 ${FONT};letter-spacing:.1em;text-transform:uppercase;user-select:none}
 .fbui-section::after{content:"";flex:1;height:1px;margin-bottom:4px;background:${T.rule}}
-.fbui-group{height:${GROUP_HEIGHT}px;flex:none;display:flex;align-items:center;gap:6px;padding:0 4px;border:none;border-radius:${RADIUS}px;background:transparent;color:${T.faint};font:600 10px/1 ${FONT};letter-spacing:.1em;text-transform:uppercase;cursor:pointer;text-align:left;pointer-events:auto}
-.fbui-group:hover{color:${T.inkHover}}
+.fbui-group{height:${GROUP_HEIGHT}px;flex:none;display:flex;align-items:center;gap:6px;padding:0 0 0 4px;color:${T.faint};font:600 10px/1 ${FONT};letter-spacing:.1em;text-transform:uppercase;pointer-events:auto}
+.fbui-group .toggle{flex:1;min-width:0;height:100%;display:flex;align-items:center;gap:6px;padding:0;border:none;border-radius:${RADIUS}px;background:transparent;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer;text-align:left}
+.fbui-group .toggle:hover{color:${T.inkHover}}
 .fbui-group .glyph{display:inline-block;width:10px;transition:transform .12s}
 .fbui-group.open .glyph{transform:rotate(90deg)}
 .fbui-seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;width:100%;height:${ROW_HEIGHT}px;padding:2px;box-sizing:border-box;border-radius:${RADIUS}px;background:${T.fill}}
