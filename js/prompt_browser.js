@@ -48,6 +48,25 @@ function ensurePromptBrowserCss() {
 .pm-tab.on{background:${T.brandSoftHover};border-color:${T.brand};color:${T.ink}}
 .pm-tab.nsfw:not(.on){border-color:${T.danger}}
 .pm-divider{flex:none;width:1px;align-self:stretch;margin:0 2px;background:${T.rule}}
+.pm-grid{display:grid;align-content:start;padding:4px 0}
+.pm-empty{grid-column:1/-1;padding:40px;color:${T.faint};font-style:italic;text-align:center}
+.pm-card{position:relative;display:flex;flex-direction:column;align-items:center;padding:6px;border:2px solid transparent;border-radius:${RADIUS_CARD - 2}px;background:${T.plate};cursor:pointer;transition:background .12s,border-color .12s}
+.pm-card:hover{background:${T.fill};border-color:${T.plateEdge}}
+.pm-card.on{background:${T.brandSoftHover};border-color:${T.brand}}
+.pm-card.blank{justify-content:center;border-style:dashed;border-color:${T.plateEdge}}
+.pm-thumb{flex:none;border-radius:${RADIUS}px;background:${T.card} center/cover no-repeat}
+.pm-thumb.blank{display:flex;align-items:center;justify-content:center;box-sizing:border-box;border:1px dashed ${T.plateEdge};color:${T.faint};line-height:1}
+.pm-name{width:100%;margin-top:6px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:center;color:${T.inkSoft};font-size:12px}
+.pm-badges{position:absolute;top:4px;right:4px;z-index:1;display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.pm-badge-nsfw{padding:1px 4px;border-radius:3px;background:${T.danger};color:${T.ink};font:700 8px/1.2 ${FONT}}
+.pm-kind{display:grid;place-items:center;width:14px;height:14px;border-radius:50%;color:${T.ink};font:700 9px/1 ${FONT}}
+.pm-badges.corner{top:auto;right:-2px;bottom:-2px}
+.pm-badges.corner .pm-kind{width:12px;height:12px;font-size:8px}
+.pm-list{display:flex;flex-direction:column;position:relative}
+.pm-row{display:grid;align-items:center;padding:0 8px;border-radius:${RADIUS}px;cursor:pointer;transition:background .1s}
+.pm-row:hover{background:${T.fill}}
+.pm-row.on{background:${T.brandSoftHover};box-shadow:inset 0 0 0 1px ${T.brand}}
+.pm-row-name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:${T.ink};font-size:13px}
 .thumbnail-grid-container::-webkit-scrollbar{display:none}
 .category-scroll-bar::-webkit-scrollbar{height:6px}
 .category-scroll-bar::-webkit-scrollbar-track,.pm-type-rail-list::-webkit-scrollbar-track,.category-scroll-bar::-webkit-scrollbar-corner{background:transparent}
@@ -1381,6 +1400,7 @@ export function hasPromptManagerPayload(promptData) {
 
 const LAYOUT_BADGE_COLOR = "rgba(124, 92, 220, 0.95)";
 const COMPOSE_BADGE_COLOR = "rgba(47, 146, 72, 0.95)";
+const RECIPE_BADGE_COLOR = "rgba(235, 140, 35, 0.95)";
 
 export function hasRecipeLikePayload(promptData) {
     if (!promptData || typeof promptData !== "object") return false;
@@ -3725,13 +3745,41 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         };
 
         // ---- Grid (Large Thumbnail) View ----
-        const renderGridView = (filter = "") => {
-            grid.style.cssText = `
-                display: grid;
-                grid-template-columns: repeat(${browserLayout.cols}, ${browserLayout.itemWidth}px);
-                gap: ${browserLayout.gap}px;
-                padding: 4px 0;
-            `;
+        // The badges in a card's corner: NSFW, then one mark for the entry's
+        // kind (C compose, L layout, R recipe, P prompt manager). Null when none.
+        const promptBadges = (promptData, { isNSFW, hasWorkflowData, hasComposeData, hasPromptPayload }) => {
+            const showManagerBadge = !hasComposeData && hasPromptManagerPayload(promptData);
+            const showWorkflowBadge = !hasComposeData && !showManagerBadge && !workflowOnly && hasWorkflowData;
+            const showPromptBadge = showManagerBadge || (!hasComposeData && workflowOnly && !hasWorkflowData && hasPromptPayload);
+            const marks = [];
+            if (hasComposeData) {
+                const layout = hasLayoutPayload(promptData);
+                marks.push(layout ? ["L", "Has Layout Data", LAYOUT_BADGE_COLOR] : ["C", "Has Compose Data", COMPOSE_BADGE_COLOR]);
+            } else if (showWorkflowBadge) {
+                marks.push(["R", "Has Recipe Data", RECIPE_BADGE_COLOR]);
+            } else if (showPromptBadge) {
+                marks.push(["P", showManagerBadge ? "Has Prompt Manager Data" : "Prompt Data (Converted to Recipe)", T.brand]);
+            }
+            if (!isNSFW && !marks.length) return null;
+            const stack = el("div", "pm-badges");
+            if (isNSFW) stack.append(el("div", "pm-badge-nsfw", "NSFW"));
+            for (const [letter, tip, color] of marks) {
+                const mark = el("div", "pm-kind", letter);
+                mark.title = tip;
+                mark.style.background = color;
+                stack.append(mark);
+            }
+            return stack;
+        };
+
+        // Thumbnail cards; `small` is the Icon view's sizes.
+        const renderGridView = (filter = "", small = false) => {
+            const cols = small ? browserLayout.iconCols : browserLayout.cols;
+            const itemWidth = small ? browserLayout.iconItemWidth : browserLayout.itemWidth;
+            const thumbWidth = small ? browserLayout.iconThumbWidth : browserLayout.thumbWidth;
+            const thumbHeight = small ? browserLayout.iconThumbHeight : browserLayout.thumbHeight;
+            grid.className = "pm-grid";
+            grid.style.cssText = `grid-template-columns: repeat(${cols}, ${itemWidth}px); gap: ${small ? browserLayout.iconGap : browserLayout.gap}px;`;
             grid.innerHTML = "";
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
@@ -3739,15 +3787,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const showEditBlank = editMode && !!editPanel;
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
-                const emptyMsg = document.createElement("div");
-                emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
-                emptyMsg.style.cssText = `
-                    grid-column: 1 / -1;
-                    text-align: center;
-                    color: #666;
-                    padding: 40px;
-                    font-style: italic;
-                `;
+                const emptyMsg = el("div", "pm-empty", filter ? "No matching prompts found" : "No prompts in this category");
                 grid.appendChild(emptyMsg);
                 return;
             }
@@ -3755,8 +3795,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const updateCardSelection = (card, promptName) => {
                 const isSel = selectedNames.has(promptName);
                 card.dataset.selectedPrompt = isSel ? "true" : "false";
-                card.style.background = isSel ? UI.accentSoft : UI.cardBg;
-                card.style.borderColor = isSel ? UI.accentBorder : UI.cardBorder;
+                card.classList.toggle("on", isSel);
                 updateSelectButton();
             };
 
@@ -3780,151 +3819,24 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const hasComposeData = !promptOnly && hasComposeLikePayload(promptData);
                 const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
 
-                const card = document.createElement("div");
+                const card = el("div", "pm-card");
                 card.dataset.promptName = promptName;
                 if (isSelected) {
                     card.dataset.selectedPrompt = "true";
+                    card.classList.add("on");
                 }
-                card.style.cssText = `
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    padding: 8px;
-                    background: ${isSelected ? UI.accentSoft : UI.cardBg};
-                    border: 2px solid ${isSelected ? UI.accentBorder : UI.cardBorder};
-                    border-radius: 8px;
-                    cursor: pointer;
-                    transition: all 0.15s ease;
-                    position: relative;
-                `;
 
-                card.onmouseenter = () => {
-                    if (!selectedNames.has(promptName)) {
-                        card.style.background = UI.accentSoft;
-                        card.style.borderColor = UI.accentBorder;
-                    }
-                };
-                card.onmouseleave = () => {
-                    updateCardSelection(card, promptName);
-                };
-
-                // Top-right badge stack: NSFW first, workflow badge under it.
-                const showComposeBadge = hasComposeData;
-                const showManagerBadge = !showComposeBadge && hasPromptManagerPayload(promptData);
-                const showWorkflowBadge = !showComposeBadge && !showManagerBadge && !workflowOnly && hasWorkflowData;
-                const showPromptBadge = showManagerBadge || (!showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload);
-                if (isNSFW || showComposeBadge || showWorkflowBadge || showPromptBadge) {
-                    const badgeStack = document.createElement("div");
-                    badgeStack.style.cssText = `
-                        position: absolute;
-                        top: 4px;
-                        right: 4px;
-                        display: flex;
-                        flex-direction: column;
-                        align-items: flex-end;
-                        gap: 2px;
-                        z-index: 1;
-                    `;
-
-                    if (isNSFW) {
-                        const badge = document.createElement("div");
-                        badge.textContent = "NSFW";
-                        badge.style.cssText = `
-                            background: rgba(204, 0, 0, 0.85);
-                            color: #fff;
-                            font-size: 8px;
-                            font-weight: bold;
-                            padding: 1px 4px;
-                            border-radius: 3px;
-                            line-height: 1.2;
-                        `;
-                        badgeStack.appendChild(badge);
-                    }
-
-                    if (showComposeBadge) {
-                        const isLayoutEntry = hasLayoutPayload(promptData);
-                        const composeBadge = document.createElement("div");
-                        composeBadge.textContent = isLayoutEntry ? "L" : "C";
-                        composeBadge.title = isLayoutEntry ? "Has Layout Data" : "Has Compose Data";
-                        composeBadge.style.cssText = `
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 50%;
-                            background: ${isLayoutEntry ? LAYOUT_BADGE_COLOR : COMPOSE_BADGE_COLOR};
-                            color: #fff;
-                            font-size: 9px;
-                            font-weight: bold;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            line-height: 1;
-                        `;
-                        badgeStack.appendChild(composeBadge);
-                    }
-
-                    if (showWorkflowBadge) {
-                        const workflowBadge = document.createElement("div");
-                        workflowBadge.textContent = "R";
-                        workflowBadge.title = "Has Recipe Data";
-                        workflowBadge.style.cssText = `
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 50%;
-                            background: rgba(235, 140, 35, 0.95);
-                            color: #fff;
-                            font-size: 9px;
-                            font-weight: bold;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            line-height: 1;
-                        `;
-                        badgeStack.appendChild(workflowBadge);
-                    }
-
-                    if (showPromptBadge) {
-                        const promptBadge = document.createElement("div");
-                        promptBadge.textContent = "P";
-                        promptBadge.title = showManagerBadge ? "Has Prompt Manager Data" : "Prompt Data (Converted to Recipe)";
-                        promptBadge.style.cssText = `
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 50%;
-                            background: rgba(56, 130, 246, 0.96);
-                            color: #fff;
-                            font-size: 9px;
-                            font-weight: bold;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            line-height: 1;
-                        `;
-                        badgeStack.appendChild(promptBadge);
-                    }
-
-                    card.appendChild(badgeStack);
-                }
+                // Top-right badge stack: NSFW first, the entry's kind under it.
+                const badges = promptBadges(promptData, { isNSFW, hasWorkflowData, hasComposeData, hasPromptPayload });
+                if (badges) card.appendChild(badges);
 
                 // Thumbnail (using div with background-image to avoid browser extension interference)
-                const thumbWidth = browserLayout.thumbWidth;
-                const thumbHeight = browserLayout.thumbHeight;
-                const thumbDiv = document.createElement("div");
-                thumbDiv.style.cssText = `
-                    width: ${thumbWidth}px;
-                    height: ${thumbHeight}px;
-                    background-image: url(${thumbnail});
-                    background-size: cover;
-                    background-position: center;
-                    border-radius: 6px;
-                    background-color: #1a1a1a;
-                    flex-shrink: 0;
-                    cursor: pointer;
-                `;
+                const thumbDiv = el("div", "pm-thumb");
+                thumbDiv.style.cssText = `width: ${thumbWidth}px; height: ${thumbHeight}px; background-image: url(${thumbnail});`;
                 _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value), endpointPrefix);
 
-                // Add hover preview with proper event handling (if enabled and not placeholder)
-                // Hover preview is only useful in compact mode; disabled when thumbnails are already large.
-                if (compactBrowser && previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
+                // A hover preview helps only where the thumbnails are small.
+                if ((small || compactBrowser) && previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
                     thumbDiv.addEventListener("mouseenter", (e) => {
                         e.stopPropagation();
                         showPreviewWithDelay(thumbnail, thumbDiv);
@@ -3936,19 +3848,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
 
                 // Prompt name
-                const nameLabel = document.createElement("div");
-                nameLabel.textContent = promptName;
+                const nameLabel = el("div", "pm-name", promptName);
                 nameLabel.title = promptName;
-                nameLabel.style.cssText = `
-                    margin-top: 8px;
-                    font-size: 12px;
-                    color: #ccc;
-                    text-align: center;
-                    width: 100%;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                `;
 
                 card.appendChild(thumbDiv);
                 card.appendChild(nameLabel);
@@ -4063,47 +3964,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             });
 
             if (showEditBlank) {
-                const blankCard = document.createElement("div");
-                blankCard.style.cssText = `
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 8px;
-                    background: ${UI.cardBg};
-                    border: 2px dashed ${UI.cardBorder};
-                    border-radius: 8px;
-                    cursor: pointer;
-                    transition: all 0.15s ease;
-                    min-height: ${browserLayout.thumbHeight + 34}px;
-                `;
-
-                const blankThumb = document.createElement("div");
-                blankThumb.style.cssText = `
-                    width: ${browserLayout.thumbWidth}px;
-                    height: ${browserLayout.thumbHeight}px;
-                    border-radius: 6px;
-                    background: ${UI.inputBg};
-                    border: 1px dashed ${UI.inputBorder};
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #98a3af;
-                    font-size: 36px;
-                    line-height: 1;
-                `;
-                blankThumb.textContent = "+";
-
-                const blankLabel = document.createElement("div");
-                blankLabel.textContent = "Blank Prompt";
-                blankLabel.style.cssText = `
-                    margin-top: 8px;
-                    font-size: 12px;
-                    color: #ccc;
-                    text-align: center;
-                    width: 100%;
-                    white-space: nowrap;
-                `;
+                const blankCard = el("div", "pm-card blank");
+                const blankThumb = el("div", "pm-thumb blank", "+");
+                blankThumb.style.cssText = `width: ${thumbWidth}px; height: ${thumbHeight}px; font-size: ${small ? 24 : 36}px;`;
+                const blankLabel = el("div", "pm-name", "Blank Prompt");
 
                 blankCard.appendChild(blankThumb);
                 blankCard.appendChild(blankLabel);
@@ -4122,408 +3986,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             }
         };
 
-        // ---- Icon (Small Thumbnail) Grid View ----
-        const renderCompactGridView = (filter = "") => {
-            grid.style.cssText = `
-                display: grid;
-                grid-template-columns: repeat(${browserLayout.iconCols}, ${browserLayout.iconItemWidth}px);
-                gap: ${browserLayout.iconGap}px;
-                padding: 4px 0;
-            `;
-            grid.innerHTML = "";
-
-            const categoryPrompts = node.prompts[selectedCategory] || {};
-            const filteredPrompts = getFilteredPrompts(filter);
-            const showEditBlank = editMode && !!editPanel;
-
-            if (filteredPrompts.length === 0 && !showEditBlank) {
-                const emptyMsg = document.createElement("div");
-                emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
-                emptyMsg.style.cssText = `
-                    grid-column: 1 / -1;
-                    text-align: center;
-                    color: #666;
-                    padding: 40px;
-                    font-style: italic;
-                `;
-                grid.appendChild(emptyMsg);
-                return;
-            }
-
-            const updateCardSelection = (card, promptName) => {
-                const isSel = selectedNames.has(promptName);
-                card.dataset.selectedPrompt = isSel ? "true" : "false";
-                card.style.background = isSel ? UI.accentSoft : UI.cardBg;
-                card.style.borderColor = isSel ? UI.accentBorder : UI.cardBorder;
-                updateSelectButton();
-            };
-
-            const updateCompactGridSelections = () => {
-                grid.querySelectorAll("[data-prompt-name]").forEach((item) => {
-                    updateCardSelection(item, item.dataset.promptName || "");
-                });
-                updateEditModeLayout();
-            };
-
-            filteredPrompts.forEach(promptName => {
-                const promptData = getCategoryPromptEntry(categoryPrompts, promptName, endpointPrefix);
-                const thumbnail = promptData?.thumbnail || DEFAULT_THUMBNAIL;
-                const isSelected = isMultiSelectActive() ? selectedNames.has(promptName) : (promptName === currentPrompt && selectedCategory === currentPromptCategory);
-                const isNSFW = promptData?.nsfw === true || isCategoryNSFW(selectedCategory);
-                const rawWorkflowData = promptData?.workflow_data;
-                const hasWorkflowData = !promptOnly && (
-                    (typeof rawWorkflowData === "string" && rawWorkflowData.trim().length > 0) ||
-                    (rawWorkflowData && typeof rawWorkflowData === "object" && Object.keys(rawWorkflowData).length > 0)
-                );
-                const hasComposeData = !promptOnly && hasComposeLikePayload(promptData);
-                const hasPromptPayload = !promptOnly && hasPromptPresetPayload(promptData);
-
-                const card = document.createElement("div");
-                card.dataset.promptName = promptName;
-                if (isSelected) {
-                    card.dataset.selectedPrompt = "true";
-                }
-                card.style.cssText = `
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    padding: 8px;
-                    background: ${isSelected ? UI.accentSoft : UI.cardBg};
-                    border: 2px solid ${isSelected ? UI.accentBorder : UI.cardBorder};
-                    border-radius: 8px;
-                    cursor: pointer;
-                    transition: all 0.15s ease;
-                    position: relative;
-                `;
-
-                card.onmouseenter = () => {
-                    if (!selectedNames.has(promptName)) {
-                        card.style.background = UI.accentSoft;
-                        card.style.borderColor = UI.accentBorder;
-                    }
-                };
-                card.onmouseleave = () => {
-                    updateCardSelection(card, promptName);
-                };
-
-                // Top-right badge stack: NSFW first, workflow badge under it.
-                const showComposeBadge = hasComposeData;
-                const showManagerBadge = !showComposeBadge && hasPromptManagerPayload(promptData);
-                const showWorkflowBadge = !showComposeBadge && !showManagerBadge && !workflowOnly && hasWorkflowData;
-                const showPromptBadge = showManagerBadge || (!showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload);
-                if (isNSFW || showComposeBadge || showWorkflowBadge || showPromptBadge) {
-                    const badgeStack = document.createElement("div");
-                    badgeStack.style.cssText = `
-                        position: absolute;
-                        top: 4px;
-                        right: 4px;
-                        display: flex;
-                        flex-direction: column;
-                        align-items: flex-end;
-                        gap: 2px;
-                        z-index: 1;
-                    `;
-
-                    if (isNSFW) {
-                        const badge = document.createElement("div");
-                        badge.textContent = "NSFW";
-                        badge.style.cssText = `
-                            background: rgba(204, 0, 0, 0.85);
-                            color: #fff;
-                            font-size: 8px;
-                            font-weight: bold;
-                            padding: 1px 4px;
-                            border-radius: 3px;
-                            line-height: 1.2;
-                        `;
-                        badgeStack.appendChild(badge);
-                    }
-
-                    if (showComposeBadge) {
-                        const isLayoutEntry = hasLayoutPayload(promptData);
-                        const composeBadge = document.createElement("div");
-                        composeBadge.textContent = isLayoutEntry ? "L" : "C";
-                        composeBadge.title = isLayoutEntry ? "Has Layout Data" : "Has Compose Data";
-                        composeBadge.style.cssText = `
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 50%;
-                            background: ${isLayoutEntry ? LAYOUT_BADGE_COLOR : COMPOSE_BADGE_COLOR};
-                            color: #fff;
-                            font-size: 9px;
-                            font-weight: bold;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            line-height: 1;
-                        `;
-                        badgeStack.appendChild(composeBadge);
-                    }
-
-                    if (showWorkflowBadge) {
-                        const workflowBadge = document.createElement("div");
-                        workflowBadge.textContent = "R";
-                        workflowBadge.title = "Has Recipe Data";
-                        workflowBadge.style.cssText = `
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 50%;
-                            background: rgba(235, 140, 35, 0.95);
-                            color: #fff;
-                            font-size: 9px;
-                            font-weight: bold;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            line-height: 1;
-                        `;
-                        badgeStack.appendChild(workflowBadge);
-                    }
-
-                    if (showPromptBadge) {
-                        const promptBadge = document.createElement("div");
-                        promptBadge.textContent = "P";
-                        promptBadge.title = showManagerBadge ? "Has Prompt Manager Data" : "Prompt Data (Converted to Recipe)";
-                        promptBadge.style.cssText = `
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 50%;
-                            background: rgba(56, 130, 246, 0.96);
-                            color: #fff;
-                            font-size: 9px;
-                            font-weight: bold;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            line-height: 1;
-                        `;
-                        badgeStack.appendChild(promptBadge);
-                    }
-
-                    card.appendChild(badgeStack);
-                }
-
-                // Thumbnail (using div with background-image to avoid browser extension interference)
-                const thumbDiv = document.createElement("div");
-                thumbDiv.style.cssText = `
-                    width: ${browserLayout.iconThumbWidth}px;
-                    height: ${browserLayout.iconThumbHeight}px;
-                    background-image: url(${thumbnail});
-                    background-size: cover;
-                    background-position: center;
-                    border-radius: 6px;
-                    background-color: #1a1a1a;
-                    flex-shrink: 0;
-                    cursor: pointer;
-                `;
-                _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value), endpointPrefix);
-
-                // Hover preview enabled for compact grid thumbnails.
-                if (previewEnabled && thumbnail !== DEFAULT_THUMBNAIL) {
-                    thumbDiv.addEventListener("mouseenter", (e) => {
-                        e.stopPropagation();
-                        showPreviewWithDelay(thumbnail, thumbDiv);
-                    });
-                    thumbDiv.addEventListener("mouseleave", (e) => {
-                        e.stopPropagation();
-                        scheduleHidePreview();
-                    });
-                }
-
-                // Prompt name
-                const nameLabel = document.createElement("div");
-                nameLabel.textContent = promptName;
-                nameLabel.title = promptName;
-                nameLabel.style.cssText = `
-                    margin-top: 8px;
-                    font-size: 12px;
-                    color: #ccc;
-                    text-align: center;
-                    width: 100%;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                `;
-
-                card.appendChild(thumbDiv);
-                card.appendChild(nameLabel);
-
-                card.onclick = async (e) => {
-                    if (supportsMultiSelect && (e.shiftKey || e.ctrlKey || e.metaKey)) {
-                        enableMultiSelect({ preserveCurrentSelection: true });
-                        applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (editMode && editPanel && !saveUsesEditPanel) {
-                            editPanel.loadPrompt(selectedCategory, promptName);
-                        }
-                        renderContent(searchInput.value);
-                        return;
-                    }
-
-                    if (isMultiSelectActive()) {
-                        const action = applyMultiSelectInteraction(promptName, filteredPrompts, e);
-                        if (action === "rerender") {
-                            if (editMode && editPanel && !saveUsesEditPanel) {
-                                editPanel.loadPrompt(selectedCategory, promptName);
-                            }
-                            renderContent(searchInput.value);
-                            return;
-                        }
-                        if (editMode && editPanel && !saveUsesEditPanel) {
-                            editPanel.loadPrompt(selectedCategory, promptName);
-                        }
-                        updateCardSelection(card, promptName);
-                        updateEditModeLayout();
-                        return;
-                    }
-
-                    if (editMode && editPanel && !saveUsesEditPanel) {
-                        const now = Date.now();
-                        if (editModeLastClickPrompt === promptName && (now - editModeLastClickAt) <= 500) {
-                            resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
-                            cleanup();
-                            return;
-                        }
-                        const loaded = await editPanel.loadPrompt(selectedCategory, promptName);
-                        if (!loaded) return; // user cancelled, keep previous selection
-                        editModeLastClickPrompt = promptName;
-                        editModeLastClickAt = now;
-                        selectedNames.clear();
-                        if (multiCategorySelect) {
-                            Object.keys(selectedByCategory).forEach((cat) => {
-                                selectedByCategory[cat].clear();
-                            });
-                        }
-                        setCurrentPromptSelection(promptName);
-                        renderContent(searchInput.value);
-                        return;
-                    }
-
-                    if (mode === "save") {
-                        selectedSaveName = promptName;
-                        if (saveUsesEditPanel && editPanel?.setPromptName) {
-                            editPanel.setPromptName(promptName);
-                        }
-                        if (saveNameInput) {
-                            saveNameInput.value = promptName;
-                            saveNameInput.focus();
-                            saveNameInput.select();
-                        }
-                        setCurrentPromptSelection(promptName);
-                        updateCompactGridSelections();
-                        return;
-                    }
-
-                    // Normal click: forget any initial pre-selection and select only this prompt.
-                    selectedNames.clear();
-                    if (multiCategorySelect) {
-                        Object.keys(selectedByCategory).forEach((cat) => {
-                            selectedByCategory[cat].clear();
-                        });
-                    }
-                    setCurrentPromptSelection(promptName);
-
-                    if (requireDoubleClickToSelect) {
-                        selectedNames.add(promptName);
-                        updateCompactGridSelections();
-                        return;
-                    }
-
-                    resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
-                    cleanup();
-                };
-
-                if (mode === "save") {
-                    card.ondblclick = async () => {
-                        selectedSaveName = promptName;
-                        if (saveUsesEditPanel && editPanel?.setPromptName) {
-                            editPanel.setPromptName(promptName);
-                        }
-                        if (saveNameInput) {
-                            saveNameInput.value = promptName;
-                        }
-                        setCurrentPromptSelection(promptName);
-                        await handleSaveAction();
-                    };
-                } else if (requireDoubleClickToSelect || isMultiSelectActive()) {
-                    card.ondblclick = () => {
-                        resolve({ category: getSelectionCategory(), prompt: promptName, prompts: [promptName] });
-                        cleanup();
-                    };
-                }
-
-                card.oncontextmenu = (e) => promptContextMenu(e, promptName);
-
-                grid.appendChild(card);
-            });
-
-            if (showEditBlank) {
-                const blankCard = document.createElement("div");
-                blankCard.style.cssText = `
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 8px;
-                    background: ${UI.cardBg};
-                    border: 2px dashed ${UI.cardBorder};
-                    border-radius: 8px;
-                    cursor: pointer;
-                    transition: all 0.15s ease;
-                `;
-
-                const blankThumb = document.createElement("div");
-                blankThumb.style.cssText = `
-                    width: ${browserLayout.iconThumbWidth}px;
-                    height: ${browserLayout.iconThumbHeight}px;
-                    border-radius: 6px;
-                    background: ${UI.inputBg};
-                    border: 1px dashed ${UI.inputBorder};
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #98a3af;
-                    font-size: 24px;
-                    line-height: 1;
-                `;
-                blankThumb.textContent = "+";
-
-                const blankLabel = document.createElement("div");
-                blankLabel.textContent = "Blank Prompt";
-                blankLabel.style.cssText = `
-                    margin-top: 8px;
-                    font-size: 12px;
-                    color: #ccc;
-                    text-align: center;
-                    width: 100%;
-                    white-space: nowrap;
-                `;
-
-                blankCard.appendChild(blankThumb);
-                blankCard.appendChild(blankLabel);
-                blankCard.onclick = () => {
-                    setBlankPromptSelection();
-                    if (typeof editPanel.clearPrompt === "function") {
-                        editPanel.clearPrompt();
-                    }
-                    if (typeof editPanel.showPromptSettings === "function") {
-                        editPanel.showPromptSettings();
-                    }
-                    renderContent(searchInput.value);
-                };
-
-                grid.appendChild(blankCard);
-            }
-        };
+        // ---- Icon (Small Thumbnail) Grid View: the grid at icon sizes ----
+        const renderCompactGridView = (filter = "") => renderGridView(filter, true);
 
         // ---- List View ----
         const renderListView = (filter = "") => {
-            grid.style.cssText = `
-                display: flex;
-                flex-direction: column;
-                gap: 0;
-                padding: 0;
-                position: relative;
-            `;
+            grid.className = "pm-list";
+            grid.style.cssText = "";
             grid.innerHTML = "";
 
             const categoryPrompts = node.prompts[selectedCategory] || {};
@@ -4531,14 +4000,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const showEditBlank = editMode && !!editPanel;
 
             if (filteredPrompts.length === 0 && !showEditBlank) {
-                const emptyMsg = document.createElement("div");
-                emptyMsg.textContent = filter ? "No matching prompts found" : "No prompts in this category";
-                emptyMsg.style.cssText = `
-                    text-align: center;
-                    color: #666;
-                    padding: 40px;
-                    font-style: italic;
-                `;
+                const emptyMsg = el("div", "pm-empty", filter ? "No matching prompts found" : "No prompts in this category");
                 grid.appendChild(emptyMsg);
                 return;
             }
@@ -4546,10 +4008,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const updateRowSelection = (row, promptName) => {
                 const isSel = selectedNames.has(promptName);
                 row.dataset.selectedPrompt = isSel ? "true" : "false";
-                row.style.background = isSel ? UI.accentSoft : 'transparent';
-                row.style.outline = isSel ? `2px solid ${UI.accentBorder}` : "none";
-                row.style.outlineOffset = isSel ? "-2px" : "0";
-                row.style.boxShadow = isSel ? `0 0 8px ${UI.accentSoft}` : "none";
+                row.classList.toggle("on", isSel);
                 updateSelectButton();
             };
 
@@ -4587,7 +4046,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 grid-template-columns: ${listColumns};
                 gap: 0;
                 padding: 0 8px 6px 8px;
-                border-bottom: 1px solid rgba(148,163,184,0.2);
+                border-bottom: 1px solid ${T.rule};
                 margin-bottom: 4px;
                 align-items: center;
                 position: relative;
@@ -4607,7 +4066,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
                 hDiv.style.cssText = `
                     font-size: 10px;
-                    color: #888;
+                    color: ${T.faint};
                     font-weight: bold;
                     text-transform: uppercase;
                     text-align: ${i === 0 ? 'center' : (!promptOnly && i >= 3 ? 'center' : 'left')};
@@ -4740,28 +4199,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (isSelected) {
                     row.dataset.selectedPrompt = "true";
                 }
-                row.style.cssText = `
-                    display: grid;
-                    grid-template-columns: ${listColumns};
-                    gap: 0;
-                    padding: 0 8px;
-                    background: ${isSelected ? UI.accentSoft : 'transparent'};
-                    border-radius: 4px;
-                    cursor: pointer;
-                    align-items: center;
-                    transition: background 0.1s ease;
-                    outline: ${isSelected ? `2px solid ${UI.accentBorder}` : "none"};
-                    outline-offset: ${isSelected ? "-2px" : "0"};
-                    box-shadow: ${isSelected ? `0 0 8px ${UI.accentSoft}` : "none"};
-                `;
-                row.onmouseenter = () => {
-                    if (!selectedNames.has(promptName)) {
-                        row.style.background = '#2a2a2a';
-                        row.style.outline = `1px solid ${UI.accentBorder}`;
-                        row.style.outlineOffset = "-1px";
-                    }
-                };
-                row.onmouseleave = () => { updateRowSelection(row, promptName); };
+                row.className = isSelected ? "pm-row on" : "pm-row";
+                row.style.gridTemplateColumns = listColumns;
 
                 // Thumbnail icon (using div with background-image to avoid browser extension interference)
                 const thumbWrap = document.createElement("div");
@@ -4773,17 +4212,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     margin: 0 auto;
                 `;
 
-                const thumbDiv = document.createElement("div");
-                thumbDiv.style.cssText = `
-                    width: 36px;
-                    height: 36px;
-                    background-image: url(${thumbnail});
-                    background-size: cover;
-                    background-position: center;
-                    border-radius: 4px;
-                    background-color: #1a1a1a;
-                    cursor: pointer;
-                `;
+                const thumbDiv = el("div", "pm-thumb");
+                thumbDiv.style.cssText = `width: 36px; height: 36px; background-image: url(${thumbnail});`;
                 _attachThumbnailDropHandlers(thumbDiv, node, selectedCategory, promptName, () => renderContent(searchInput.value), endpointPrefix);
 
                 // Add hover preview with proper event handling (if enabled and not placeholder)
@@ -4801,83 +4231,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 thumbWrap.appendChild(thumbDiv);
 
                 const hasComposeData = !promptOnly && hasComposeLikePayload(promptData);
-                const showComposeBadge = hasComposeData;
-                const showManagerBadge = !showComposeBadge && hasPromptManagerPayload(promptData);
-                const showWorkflowBadge = !showComposeBadge && !showManagerBadge && !workflowOnly && hasWorkflowData;
-                const showPromptBadge = showManagerBadge || (!showComposeBadge && workflowOnly && !hasWorkflowData && hasPromptPayload);
-                if (showComposeBadge) {
-                    const isLayoutEntry = hasLayoutPayload(promptData);
-                    const composeBadge = document.createElement("div");
-                    composeBadge.textContent = isLayoutEntry ? "L" : "C";
-                    composeBadge.title = isLayoutEntry ? "Has Layout Data" : "Has Compose Data";
-                    composeBadge.style.cssText = `
-                        position: absolute;
-                        right: -2px;
-                        bottom: -2px;
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 50%;
-                        background: ${isLayoutEntry ? LAYOUT_BADGE_COLOR : COMPOSE_BADGE_COLOR};
-                        color: #fff;
-                        font-size: 8px;
-                        font-weight: bold;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        line-height: 1;
-                        border: 1px solid rgba(0, 0, 0, 0.4);
-                        z-index: 1;
-                    `;
-                    thumbWrap.appendChild(composeBadge);
-                }
-                if (showWorkflowBadge) {
-                    const workflowBadge = document.createElement("div");
-                    workflowBadge.textContent = "R";
-                    workflowBadge.title = "Has Recipe Data";
-                    workflowBadge.style.cssText = `
-                        position: absolute;
-                        right: -2px;
-                        bottom: -2px;
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 50%;
-                        background: rgba(235, 140, 35, 0.95);
-                        color: #fff;
-                        font-size: 8px;
-                        font-weight: bold;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        line-height: 1;
-                        border: 1px solid rgba(0, 0, 0, 0.4);
-                        z-index: 1;
-                    `;
-                    thumbWrap.appendChild(workflowBadge);
-                }
-
-                if (showPromptBadge) {
-                    const promptBadge = document.createElement("div");
-                    promptBadge.textContent = "P";
-                    promptBadge.title = showManagerBadge ? "Has Prompt Manager Data" : "Prompt Data (Converted to Recipe)";
-                    promptBadge.style.cssText = `
-                        position: absolute;
-                        right: -2px;
-                        bottom: -2px;
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 50%;
-                        background: rgba(56, 130, 246, 0.96);
-                        color: #fff;
-                        font-size: 8px;
-                        font-weight: bold;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        line-height: 1;
-                        border: 1px solid rgba(0, 0, 0, 0.4);
-                        z-index: 1;
-                    `;
-                    thumbWrap.appendChild(promptBadge);
+                const badges = promptBadges(promptData, { isNSFW: false, hasWorkflowData, hasComposeData, hasPromptPayload });
+                if (badges) {
+                    badges.classList.add("corner");
+                    thumbWrap.appendChild(badges);
                 }
 
                 // Name + optional NSFW badge
@@ -4893,26 +4250,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const nameSpan = document.createElement("span");
                 nameSpan.textContent = promptName;
                 nameSpan.title = promptName;
-                nameSpan.style.cssText = `
-                    font-size: 13px;
-                    color: #ddd;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                `;
+                nameSpan.className = "pm-row-name";
                 nameDiv.appendChild(nameSpan);
                 if (isNSFW) {
-                    const badge = document.createElement("span");
-                    badge.textContent = "NSFW";
-                    badge.style.cssText = `
-                        background: rgba(204, 0, 0, 0.85);
-                        color: #fff;
-                        font-size: 8px;
-                        font-weight: bold;
-                        padding: 1px 4px;
-                        border-radius: 3px;
-                        flex-shrink: 0;
-                    `;
+                    const badge = el("span", "pm-badge-nsfw", "NSFW");
                     nameDiv.appendChild(badge);
                 }
 
@@ -4921,7 +4262,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const promptDiv = document.createElement("div");
                 promptDiv.style.cssText = `
                     font-size: 12px;
-                    color: #9fb0c3;
+                    color: ${T.label};
                     padding: 4px 16px;
                     box-sizing: border-box;
                     white-space: nowrap;
@@ -4948,7 +4289,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     d.textContent = n > 0 ? n : "—";
                     d.style.cssText = `
                         font-size: 12px;
-                        color: ${n > 0 ? '#aaa' : '#555'};
+                        color: ${n > 0 ? T.label : T.faint};
                         text-align: center;
                         padding: 4px 16px;
                         box-sizing: border-box;
@@ -5074,54 +4415,21 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             });
 
             if (showEditBlank) {
-                const row = document.createElement("div");
+                const row = el("div", "pm-row");
                 row.dataset.pmListRow = "true";
-                row.style.cssText = `
-                    display: grid;
-                    grid-template-columns: ${listColumns};
-                    gap: 0;
-                    padding: 0 8px;
-                    background: transparent;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    align-items: center;
-                    transition: background 0.1s ease;
-                    outline: none;
-                    outline-offset: 0;
-                    box-shadow: none;
-                `;
+                row.style.gridTemplateColumns = listColumns;
 
-                const blankThumbWrap = document.createElement("div");
-                blankThumbWrap.style.cssText = `
-                    width: 36px;
-                    height: 36px;
-                    margin: 0 auto;
-                    border-radius: 4px;
-                    background: ${UI.inputBg};
-                    border: 1px dashed ${UI.inputBorder};
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #98a3af;
-                    font-size: 20px;
-                    line-height: 1;
-                `;
-                blankThumbWrap.textContent = "+";
+                const blankThumbWrap = el("div", "pm-thumb blank", "+");
+                blankThumbWrap.style.cssText = "width: 36px; height: 36px; margin: 0 auto; font-size: 20px;";
 
-                const blankName = document.createElement("div");
-                blankName.textContent = "Blank Prompt";
-                blankName.style.cssText = `
-                    font-size: 13px;
-                    color: #ddd;
-                    padding: 4px 16px;
-                    box-sizing: border-box;
-                `;
+                const blankName = el("div", "pm-row-name", "Blank Prompt");
+                blankName.style.padding = "4px 16px";
 
                 const blankPrompt = document.createElement("div");
                 blankPrompt.textContent = "New empty prompt";
                 blankPrompt.style.cssText = `
                     font-size: 12px;
-                    color: #9fb0c3;
+                    color: ${T.label};
                     padding: 4px 16px;
                     box-sizing: border-box;
                     white-space: nowrap;
@@ -5136,7 +4444,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const dash = () => {
                         const d = document.createElement("div");
                         d.textContent = "—";
-                        d.style.cssText = `font-size: 12px; color: #555; text-align: center; padding: 4px 16px; box-sizing: border-box;`;
+                        d.style.cssText = `font-size: 12px; color: ${T.faint}; text-align: center; padding: 4px 16px; box-sizing: border-box;`;
                         return d;
                     };
                     row.appendChild(dash());
@@ -5188,15 +4496,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 overflow: auto;
                 white-space: pre-wrap;
                 word-break: break-word;
-                background: ${UI.panel};
-                border: 1px solid ${UI.accentBorder};
-                border-radius: 8px;
-                color: ${UI.textPrimary || "#ddd"};
-                font-size: 15px;
-                line-height: 1.55;
+                background: ${T.panel};
+                border: 1px solid ${T.plateEdge};
+                border-radius: ${RADIUS_CARD}px;
+                color: ${T.inkSoft};
+                font: 14px/1.55 ${FONT};
                 padding: 12px 14px;
                 box-shadow: 0 10px 28px rgba(0,0,0,0.55);
-                z-index: 10003;
+                z-index: ${Z_MENU};
                 pointer-events: none;
             `;
             document.body.appendChild(promptTextTooltip);
@@ -5240,12 +4547,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 hoverPreview.style.cssText = `
                     position: fixed;
                     pointer-events: none;
-                    z-index: 10001;
+                    z-index: ${Z_MENU};
                     display: none;
-                    border: 2px solid ${UI.inputBorder};
-                    border-radius: 8px;
+                    border: 1px solid ${T.plateEdge};
+                    border-radius: ${RADIUS_CARD}px;
                     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
-                    background-color: #1a1a1a;
+                    background-color: ${T.card};
                     background-size: contain;
                     background-position: center;
                     background-repeat: no-repeat;
