@@ -20,7 +20,9 @@
  *     places                           quick folders instead of Input / Output:
  *                                      [{ label, title, path() }] (path may be async)
  *     custom                           the Custom folder: { get(), set(path), message };
- *                                      by default the Load+ one (Settings → FBnodes)
+ *                                      by default the pack's own; null: no Custom button
+ *     canDelete                        false: no "Delete file…" (a file that is more than
+ *                                      one file on disk)
  */
 
 import { api } from "../../scripts/api.js";
@@ -103,6 +105,7 @@ function formatDuration(raw) {
 }
 
 function fileDetails(file) {
+    if (file.details) return file.details;
     const duration = formatDuration(file.duration);
     if (file.type === "video") return [duration, file.width && file.height ? `${file.width}×${file.height}` : ""].filter(Boolean).join(" · ") || "—";
     if (file.type === "audio") return duration || "—";
@@ -121,6 +124,9 @@ function normalizeFile(entry) {
         duration: data.duration ?? null,
         width: data.width ?? null,
         height: data.height ?? null,
+        // Set by listings that know more about their files (RefMods).
+        preview: data.preview ?? null,
+        details: data.details ?? null,
     };
 }
 
@@ -247,6 +253,8 @@ function iconFor(type) {
 }
 
 function fillThumb(holder, file) {
+    // A listing may name a file's own preview picture (RefMods do).
+    if (file.preview) return showImage(holder, mediaFileUrl(file.preview));
     if (file.type === "image") return showImage(holder, mediaFileUrl(file.path));
     if (file.type === "video") return showVideoThumb(holder, file.path);
     // A LoRA shows the picture saved beside it with the same base name.
@@ -423,7 +431,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         const next = pathField.value.trim();
         if (next) go(next);
     });
-    const custom = options.custom ?? {
+    const custom = options.custom === null ? null : options.custom ?? {
         get: getCustomPresetPath,
         set: setCustomPresetPath,
         message: "The folder the Custom button opens, in every Load+ browser.",
@@ -439,6 +447,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         askCustomPath();
     });
     const updateCustomTitle = () => {
+        if (!custom) return;
         const path = custom.get();
         customButton.title = path ? `${path}\nRight-click to choose another folder` : "Click to choose your Custom folder";
     };
@@ -475,7 +484,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
             const path = await place.path();
             if (path) go(path);
         } })),
-        customButton,
+        ...(custom ? [customButton] : []),
         pathField,
         ...(state.kind === "lora" ? [] : [button("Regenerate cache", { icon: ICONS.film, title: "Rebuild every video thumbnail", onClick: () => { clearThumbCache(); load(); } })]),
     );
@@ -660,8 +669,8 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         if (file.type === "video") {
             entries.push({ label: "Refresh thumbnail", action: () => showVideoThumb(item.element.querySelector(".thumb"), file.path, { refresh: true }) });
         }
-        entries.push({ label: "Delete file…", danger: true, action: () => deleteFile(file) });
-        openMenu(event.clientX, event.clientY, entries);
+        if (options.canDelete !== false) entries.push({ label: "Delete file…", danger: true, action: () => deleteFile(file) });
+        if (entries.length) openMenu(event.clientX, event.clientY, entries);
     }
 
     async function deleteFile(file) {
