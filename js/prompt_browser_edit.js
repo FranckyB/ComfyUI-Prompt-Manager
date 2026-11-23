@@ -1070,7 +1070,7 @@ async function fetchAvailableComposerLoras(refresh = false) {
             }
 
             if (!rawPaths.length) {
-                const resp = await fetch("/prompt-manager-advanced/available-loras", { cache: "no-store" });
+                const resp = await api.fetchApi("/prompt-manager-advanced/available-loras", { cache: "no-store" });
                 const data = await resp.json();
                 if (resp.ok && data?.success && Array.isArray(data?.loras)) {
                     rawPaths = [...new Set(data.loras.map((x) => String(x || "").trim()).filter(Boolean))];

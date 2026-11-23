@@ -104,8 +104,9 @@ export function confirm({ title = "Are you sure?", message = "", confirmText = "
   });
 }
 
-// openMenu(clientX, clientY, [{ label, action, disabled, danger }]) at the
-// pointer, kept inside the viewport; closes on pick or any outside press.
+// openMenu(clientX, clientY, [{ label, action, disabled, danger } | null]) at
+// the pointer (null: a separator), kept inside the viewport; closes on pick
+// or any outside press.
 export function openMenu(x, y, items) {
   ensureKitCss();
   document.querySelector(".fbui-menu")?.remove();
@@ -126,6 +127,11 @@ export function openMenu(x, y, items) {
     setTimeout(() => document.removeEventListener("click", swallow, true), 400);
   };
   for (const item of items) {
+    // null: a separator between groups of items.
+    if (!item) {
+      menu.append(el("div", "sep"));
+      continue;
+    }
     const entry = el("button", item.danger ? "danger" : "", item.label);
     entry.type = "button";
     entry.disabled = Boolean(item.disabled);

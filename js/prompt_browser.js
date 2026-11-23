@@ -1,5 +1,11 @@
 import { createPromptBrowserEditPanel, getPromptTypeChoices } from "./prompt_browser_edit.js";
 import { PM_UI_PALETTE } from "./ui_palette.js";
+import { formDialog } from "./pm_dialogs.js";
+import { api } from "../../scripts/api.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { el } from "./fbui/dom.js";
+import { openMenu, prompt } from "./fbui/modal.js";
+import { ensureKitCss, FONT, RADIUS, RADIUS_CARD, T, Z_MENU } from "./fbui/theme.js";
 import {
     buildSavePromptRequestBodyForEndpoint,
     getCategoryPromptEntriesForEndpoint,
@@ -12,6 +18,22 @@ let app = null;
 let UI = PM_UI_PALETTE;
 
 let DEFAULT_THUMBNAIL = "";
+
+// The browser's own stylesheet on the kit tokens (injected once).
+const BROWSER_CSS_ID = "pm-browser-css-v1";
+function ensurePromptBrowserCss() {
+    ensureKitCss();
+    if (document.getElementById(BROWSER_CSS_ID)) return;
+    const style = document.createElement("style");
+    style.id = BROWSER_CSS_ID;
+    style.textContent = `
+@keyframes pm-spin{to{transform:rotate(360deg)}}
+.pm-spin{flex:none;width:16px;height:16px;box-sizing:border-box;border:2.5px solid ${T.brand};border-top-color:transparent;border-radius:50%;animation:pm-spin 1s linear infinite}
+.pm-progress{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:${Z_MENU};display:flex;align-items:center;gap:10px;min-width:320px;max-width:min(560px,90vw);padding:12px 12px 12px 16px;box-sizing:border-box;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.panel};box-shadow:0 12px 40px rgba(0,0,0,.6);color:${T.inkSoft};font:13px ${FONT}}
+.pm-progress .text{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+`;
+    document.head.append(style);
+}
 let loadPrompts = async () => ({});
 let showInfo = async () => {};
 let showConfirm = async () => false;
@@ -147,167 +169,18 @@ function typeSafeTruncate(value, maxLength) {
     return `${text.slice(0, Math.max(0, limit - 1))}…`;
 }
 
-function showTextInputDialog(title, message, defaultValue = "", useOverlay = false) {
-    return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 9999;
-        `;
-
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
-            border-radius: 8px;
-            padding: 20px;
-            z-index: 10000;
-            min-width: 320px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-        `;
-
-        dialog.innerHTML = `
-            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">${title}</div>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">${message}</div>
-            <input type="text" value="${String(defaultValue || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
-            <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
-            </div>
-        `;
-
-        const input = dialog.querySelector("input");
-        const okBtn = dialog.querySelector(".ok-btn");
-        const cancelBtn = dialog.querySelector(".cancel-btn");
-
-        const cleanup = () => {
-            if (overlay.parentNode) document.body.removeChild(overlay);
-            if (dialog.parentNode) document.body.removeChild(dialog);
-        };
-
-        const handleOk = () => {
-            resolve(String(input?.value || ""));
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            resolve(null);
-            cleanup();
-        };
-
-        okBtn.onclick = handleOk;
-        cancelBtn.onclick = handleCancel;
-        overlay.onclick = handleCancel;
-        input.onkeydown = (event) => {
-            if (event.key === "Enter") handleOk();
-            if (event.key === "Escape") handleCancel();
-        };
-
-        if (useOverlay) {
-            document.body.appendChild(overlay);
-        }
-        document.body.appendChild(dialog);
-        input.focus();
-        input.select();
-    });
+function showTextInputDialog(title, message, defaultValue = "") {
+    return prompt({ title, message, value: String(defaultValue || "") });
 }
 
-function showNewPromptGroupDialog(useOverlay = false) {
-    return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 9999;
-        `;
-
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
-            border-radius: 8px;
-            padding: 20px;
-            z-index: 10000;
-            width: min(380px, calc(100vw - 36px));
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            color: #fff;
-        `;
-
-        dialog.innerHTML = `
-            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: #fff;">New Prompt Group</div>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt group name</div>
-            <input class="pm-group-name" type="text" value="" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Starting category</div>
-            <input class="pm-category-name" type="text" value="" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 14px; box-sizing: border-box;" />
-            <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button class="cancel-btn" style="padding: 8px 16px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 16px; background: #0a0; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Create</button>
-            </div>
-        `;
-
-        const groupInput = dialog.querySelector(".pm-group-name");
-        const categoryInput = dialog.querySelector(".pm-category-name");
-        const okBtn = dialog.querySelector(".ok-btn");
-        const cancelBtn = dialog.querySelector(".cancel-btn");
-
-        const cleanup = () => {
-            if (overlay.parentNode) document.body.removeChild(overlay);
-            if (dialog.parentNode) document.body.removeChild(dialog);
-        };
-
-        const handleOk = () => {
-            resolve({
-                groupName: String(groupInput?.value || ""),
-                categoryName: String(categoryInput?.value || ""),
-            });
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            resolve(null);
-            cleanup();
-        };
-
-        okBtn.onclick = handleOk;
-        cancelBtn.onclick = handleCancel;
-        overlay.onclick = handleCancel;
-        groupInput.onkeydown = (event) => {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                categoryInput.focus();
-                categoryInput.select();
-            } else if (event.key === "Escape") {
-                event.preventDefault();
-                handleCancel();
-            }
-        };
-        categoryInput.onkeydown = (event) => {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                handleOk();
-            } else if (event.key === "Escape") {
-                event.preventDefault();
-                handleCancel();
-            }
-        };
-
-        if (useOverlay) {
-            document.body.appendChild(overlay);
-        }
-        document.body.appendChild(dialog);
-        groupInput.focus();
-        groupInput.select();
+function showNewPromptGroupDialog() {
+    return formDialog({
+        title: "New Prompt Group",
+        confirmText: "Create",
+        fields: [
+            { key: "groupName", label: "Prompt group name" },
+            { key: "categoryName", label: "Starting category" },
+        ],
     });
 }
 
@@ -409,60 +282,56 @@ export function configurePromptBrowserDeps(deps = {}) {
     _syncThumbnailRenderState();
 }
 
+// The thumbnail queue's toast: a spinner, "Generating i / n: name" and a
+// button that cancels what is left.
 function _ensureThumbQueueProgress() {
     if (_thumbQueueProgress) return;
 
     _thumbQueueCancelled = false;
-    const progress = document.createElement("div");
-    progress.style.cssText = `
-        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-        background: #222; border: 2px solid #4CAF50; border-radius: 8px;
-        padding: 14px 16px; z-index: 10000; color: #fff; font-size: 14px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 320px;
-    `;
-
-    const progressRow = document.createElement("div");
-    progressRow.style.cssText = `
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 14px;
-    `;
-
-    const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "✕";
-    cancelBtn.title = "Cancel remaining thumbnails";
-    cancelBtn.style.cssText = `
-        width: 24px; height: 24px; line-height: 22px;
-        border-radius: 6px; border: 1px solid #666;
-        background: #2f2f2f; color: #eee;
-        cursor: pointer; font-size: 14px; padding: 0;
-        display: flex; align-items: center; justify-content: center;
-        flex-shrink: 0;
-    `;
-    cancelBtn.onclick = () => {
+    ensurePromptBrowserCss();
+    const progress = el("div", "pm-progress");
+    const spinner = el("span", "pm-spin");
+    const text = el("span", "text");
+    const cancelBtn = button("", { icon: ICONS.close, small: true, title: "Cancel the remaining thumbnails", onClick: () => {
         _thumbQueueCancelled = true;
         cancelBtn.disabled = true;
-        cancelBtn.style.opacity = "0.6";
-        cancelBtn.style.cursor = "default";
-        cancelBtn.title = "Cancelling...";
-    };
+        cancelBtn.title = "Cancelling…";
+    } });
+    progress.append(spinner, text, cancelBtn);
+    document.body.append(progress);
 
-    const progressText = document.createElement("div");
-    progressText.style.cssText = `display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;`;
-    progressText.innerHTML = `
-        <div style="width: 18px; height: 18px; border: 3px solid #4CAF50; border-top-color: transparent; border-radius: 50%; animation: thumb-spin 1s linear infinite; flex-shrink: 0;"></div>
-        <span style="line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
-    `;
-    progressRow.appendChild(progressText);
-    progressRow.appendChild(cancelBtn);
-    progress.appendChild(progressRow);
-    const styleEl = document.createElement("style");
-    styleEl.textContent = `@keyframes thumb-spin { to { transform: rotate(360deg); } }`;
-    progress.appendChild(styleEl);
-    document.body.appendChild(progress);
+    _thumbQueueProgress = { root: progress, text, cancelBtn };
+}
 
-    _thumbQueueProgress = { root: progress, text: progressText.querySelector("span"), cancelBtn };
+// One thumbnail into the shared queue (the toast counts it). Resolves to
+// { value } with what make() returned, or { error }; null value when
+// cancelled. Never rejects, so the queue keeps going.
+function queueThumbnail(name, make) {
+    _thumbQueueTotal++;
+    _ensureThumbQueueProgress();
+    _updateThumbQueueProgress(name);
+    return new Promise((resolve) => {
+        _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
+            try {
+                if (_thumbQueueCancelled) {
+                    _thumbQueueDone++;
+                    resolve({ value: null });
+                    return;
+                }
+                _updateThumbQueueProgress(name);
+                const value = await make();
+                _thumbQueueDone++;
+                resolve({ value });
+            } catch (e) {
+                const error = e instanceof Error ? e : new Error(e == null ? "Thumbnail generation failed." : String(e));
+                console.error(`[ThumbnailGen] Failed for "${name}":`, error);
+                _thumbQueueFailed++;
+                resolve({ error });
+            } finally {
+                if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) _finishThumbQueueProgress();
+            }
+        });
+    });
 }
 
 function _updateThumbQueueProgress(currentName) {
@@ -487,7 +356,7 @@ function _finishThumbQueueProgress() {
 
 async function logThumbnailToServer(category, name, seed, prompt, mode) {
     try {
-        await fetch("/prompt-manager/log-thumbnail", {
+        await api.fetchApi("/prompt-manager/log-thumbnail", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -640,7 +509,7 @@ async function saveThumbnailEntry(node, category, promptName, thumbnail, endpoin
         const composerCategory = endpointPrefix === "/prompt-manager/compose"
             ? getComposerCategoryRequestIdentity(node, category)
             : null;
-        const response = await fetch(url, {
+        const response = await api.fetchApi(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -682,7 +551,7 @@ async function deletePromptEntry(node, category, promptName, endpointPrefix = "/
         const composerCategory = endpointPrefix === "/prompt-manager/compose"
             ? getComposerCategoryRequestIdentity(node, category)
             : null;
-        const response = await fetch(`${endpointPrefix}/delete-prompt`, {
+        const response = await api.fetchApi(`${endpointPrefix}/delete-prompt`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -832,315 +701,46 @@ function _attachThumbnailDropHandlers(element, node, category, promptName, onUpd
     });
 }
 
-function buildDialogSelectOptionsHtml(items, selectedValue) {
-    return (items || []).map((item) => {
-        const isObject = item && typeof item === "object";
-        const value = String(isObject ? item.value : item || "");
-        const label = String(isObject ? item.label : item || "");
-        const selected = value === String(selectedValue || "") ? " selected" : "";
-        return `<option value="${value}"${selected}>${label}</option>`;
-    }).join("");
+// The Prompt Group select (composer) and the Category select that follows it.
+function categoryFields(categories, defaultCategory, options) {
+    const groupOptions = Array.isArray(options.groupOptions) && options.groupOptions.length ? options.groupOptions : null;
+    const categoriesByGroup = options.categoriesByGroup && typeof options.categoriesByGroup === "object" ? options.categoriesByGroup : null;
+    const defaultGroup = String(options.defaultGroupValue || groupOptions?.[0]?.value || "");
+    const fields = [];
+    if (groupOptions) fields.push({ key: "typeFile", label: "Prompt Group", type: "select", options: groupOptions, value: defaultGroup });
+    fields.push({
+        key: "category",
+        label: options.categoryLabel || "Category",
+        type: "select",
+        value: String(defaultCategory || ""),
+        options: (values) => (categoriesByGroup ? categoriesByGroup[values.typeFile ?? defaultGroup] || [] : categories || []),
+    });
+    return { fields, defaultGroup };
 }
 
-function showPromptWithCategoryDialog(title, defaultName, categories, defaultCategory, options = {}) {
-    return new Promise((resolve) => {
-        const useOverlay = options.useOverlay === true;
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 10000;
-        `;
-
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
-            border-radius: 8px;
-            padding: 16px;
-            z-index: 10001;
-            width: min(520px, calc(100vw - 36px));
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            color: #fff;
-        `;
-
-        const groupOptions = Array.isArray(options.groupOptions) ? options.groupOptions : null;
-        const categoriesByGroup = options.categoriesByGroup && typeof options.categoriesByGroup === "object"
-            ? options.categoriesByGroup
-            : null;
-        const fallbackGroupValue = groupOptions && groupOptions.length > 0
-            ? String(groupOptions[0]?.value || "")
-            : "";
-        const defaultGroupValue = String(options.defaultGroupValue || fallbackGroupValue || "");
-        const resolvedDefaultCategory = String(defaultCategory || "");
-        const initialCategories = categoriesByGroup
-            ? (categoriesByGroup[defaultGroupValue] || [])
-            : (categories || []);
-        const initialCategoryValue = initialCategories.includes(resolvedDefaultCategory)
-            ? resolvedDefaultCategory
-            : (initialCategories[0] || resolvedDefaultCategory);
-        const groupFieldHtml = groupOptions && groupOptions.length > 0
-            ? `
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt Group</div>
-            <select class="group-select" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(groupOptions, defaultGroupValue)}</select>
-            `
-            : "";
-
-        dialog.innerHTML = `
-            <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">${title}</div>
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt name</div>
-            <input class="name-input" type="text" value="${String(defaultName || "")}" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;" />
-            ${groupFieldHtml}
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Category</div>
-            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(initialCategories, initialCategoryValue)}</select>
-            <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">OK</button>
-            </div>
-        `;
-
-        const nameInput = dialog.querySelector(".name-input");
-        const groupSelect = dialog.querySelector(".group-select");
-        const catSelect = dialog.querySelector(".cat-select");
-        const okBtn = dialog.querySelector(".ok-btn");
-        const cancelBtn = dialog.querySelector(".cancel-btn");
-
-        const syncCategoryOptions = () => {
-            if (!categoriesByGroup || !groupSelect || !catSelect) return;
-            const selectedGroupValue = String(groupSelect.value || defaultGroupValue || "");
-            const groupCategories = Array.isArray(categoriesByGroup[selectedGroupValue])
-                ? categoriesByGroup[selectedGroupValue]
-                : [];
-            const preferredCategory = selectedGroupValue === defaultGroupValue && groupCategories.includes(resolvedDefaultCategory)
-                ? resolvedDefaultCategory
-                : (groupCategories[0] || "");
-            catSelect.innerHTML = buildDialogSelectOptionsHtml(groupCategories, preferredCategory);
-            if (!catSelect.value && preferredCategory) {
-                catSelect.value = preferredCategory;
-            }
-        };
-
-        const cleanup = () => {
-            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
-        };
-
-        const handleOk = () => {
-            resolve({
-                name: String(nameInput.value || ""),
-                category: String(catSelect.value || resolvedDefaultCategory || ""),
-                typeFile: String(groupSelect?.value || defaultGroupValue || ""),
-            });
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            resolve(null);
-            cleanup();
-        };
-
-        okBtn.onclick = handleOk;
-        cancelBtn.onclick = handleCancel;
-        overlay.onclick = handleCancel;
-        if (groupSelect) {
-            groupSelect.onchange = () => syncCategoryOptions();
-        }
-        nameInput.onkeydown = (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                handleOk();
-            } else if (e.key === "Escape") {
-                e.preventDefault();
-                handleCancel();
-            }
-        };
-
-        if (useOverlay) {
-            document.body.appendChild(overlay);
-        }
-        document.body.appendChild(dialog);
-        syncCategoryOptions();
-        nameInput.focus();
-        nameInput.select();
-    });
+async function showPromptWithCategoryDialog(title, defaultName, categories, defaultCategory, options = {}) {
+    const { fields, defaultGroup } = categoryFields(categories, defaultCategory, options);
+    const result = await formDialog({ title, fields: [{ key: "name", label: "Prompt name", value: defaultName }, ...fields] });
+    if (!result) return null;
+    return { name: result.name, category: result.category || String(defaultCategory || ""), typeFile: result.typeFile || defaultGroup };
 }
 
-function showCategoryPickerDialog(title, categories, defaultCategory, options = {}) {
-    return new Promise((resolve) => {
-        const useOverlay = options.useOverlay === true;
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 10000;
-        `;
-
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
-            border-radius: 8px;
-            padding: 16px;
-            z-index: 10001;
-            width: min(460px, calc(100vw - 36px));
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            color: #fff;
-        `;
-
-        const groupOptions = Array.isArray(options.groupOptions) ? options.groupOptions : null;
-        const categoriesByGroup = options.categoriesByGroup && typeof options.categoriesByGroup === "object"
-            ? options.categoriesByGroup
-            : null;
-        const fallbackGroupValue = groupOptions && groupOptions.length > 0
-            ? String(groupOptions[0]?.value || "")
-            : "";
-        const defaultGroupValue = String(options.defaultGroupValue || fallbackGroupValue || "");
-        const resolvedDefaultCategory = String(defaultCategory || "");
-        const initialCategories = categoriesByGroup
-            ? (categoriesByGroup[defaultGroupValue] || [])
-            : (categories || []);
-        const initialCategoryValue = initialCategories.includes(resolvedDefaultCategory)
-            ? resolvedDefaultCategory
-            : (initialCategories[0] || resolvedDefaultCategory);
-        const groupFieldHtml = groupOptions && groupOptions.length > 0
-            ? `
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Prompt Group</div>
-            <select class="group-select" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(groupOptions, defaultGroupValue)}</select>
-            `
-            : "";
-
-        dialog.innerHTML = `
-            <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">${title}</div>
-            ${groupFieldHtml}
-            <div style="margin-bottom: 6px; color: #aaa; font-size: 12px;">Target category</div>
-            <select class="cat-select" style="width: 100%; padding: 8px; margin-bottom: 12px; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; box-sizing: border-box;">${buildDialogSelectOptionsHtml(initialCategories, initialCategoryValue)}</select>
-            <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="ok-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Move</button>
-            </div>
-        `;
-
-        const groupSelect = dialog.querySelector(".group-select");
-        const catSelect = dialog.querySelector(".cat-select");
-        const okBtn = dialog.querySelector(".ok-btn");
-        const cancelBtn = dialog.querySelector(".cancel-btn");
-
-        const syncCategoryOptions = () => {
-            if (!categoriesByGroup || !groupSelect || !catSelect) return;
-            const selectedGroupValue = String(groupSelect.value || defaultGroupValue || "");
-            const groupCategories = Array.isArray(categoriesByGroup[selectedGroupValue])
-                ? categoriesByGroup[selectedGroupValue]
-                : [];
-            const preferredCategory = selectedGroupValue === defaultGroupValue && groupCategories.includes(resolvedDefaultCategory)
-                ? resolvedDefaultCategory
-                : (groupCategories[0] || "");
-            catSelect.innerHTML = buildDialogSelectOptionsHtml(groupCategories, preferredCategory);
-            if (!catSelect.value && preferredCategory) {
-                catSelect.value = preferredCategory;
-            }
-        };
-
-        const cleanup = () => {
-            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
-        };
-
-        const handleOk = () => {
-            resolve({
-                category: String(catSelect.value || resolvedDefaultCategory || ""),
-                typeFile: String(groupSelect?.value || defaultGroupValue || ""),
-            });
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            resolve(null);
-            cleanup();
-        };
-
-        okBtn.onclick = handleOk;
-        cancelBtn.onclick = handleCancel;
-        overlay.onclick = handleCancel;
-        if (groupSelect) {
-            groupSelect.onchange = () => syncCategoryOptions();
-        }
-        catSelect.onkeydown = (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                handleOk();
-            } else if (e.key === "Escape") {
-                e.preventDefault();
-                handleCancel();
-            }
-        };
-
-        if (useOverlay) {
-            document.body.appendChild(overlay);
-        }
-        document.body.appendChild(dialog);
-        syncCategoryOptions();
-        catSelect.focus();
-    });
+async function showCategoryPickerDialog(title, categories, defaultCategory, options = {}) {
+    const { fields, defaultGroup } = categoryFields(categories, defaultCategory, { ...options, categoryLabel: "Target category" });
+    const result = await formDialog({ title, fields, confirmText: "Move" });
+    if (!result) return null;
+    return { category: result.category || String(defaultCategory || ""), typeFile: result.typeFile || defaultGroup };
 }
 
 function showThumbnailContextMenu(event, node, category, promptName, onUpdate, endpointPrefix = "/prompt-manager-advanced", options = {}) {
     const onDelete = typeof options?.onDelete === "function" ? options.onDelete : null;
-    const existing = document.querySelector('.thumbnail-context-menu');
-    if (existing) existing.remove();
     const isComposerManager = endpointPrefix === "/prompt-manager/compose";
     const composerCategory = isComposerManager ? getComposerCategoryRequestIdentity(node, category) : null;
     const categoryLabel = composerCategory?.categoryName || category;
+    const promptData = getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix);
+    const isNSFW = promptData?.nsfw === true;
 
-    const menu = document.createElement("div");
-    menu.className = "thumbnail-context-menu";
-    menu.style.cssText = `
-        position: fixed;
-        left: ${event.clientX}px;
-        top: ${event.clientY}px;
-        background: #2a2a2a;
-        border: 1px solid #444;
-        border-radius: 6px;
-        padding: 4px 0;
-        z-index: 10001;
-        min-width: 150px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    `;
-
-    const createMenuItem = (label, onClick) => {
-        const item = document.createElement("div");
-        item.textContent = label;
-        item.style.cssText = `
-            padding: 8px 16px;
-            color: #ccc;
-            cursor: pointer;
-            font-size: 13px;
-        `;
-        item.onmouseover = () => item.style.background = '#3a3a3a';
-        item.onmouseout = () => item.style.background = 'transparent';
-        item.onclick = () => {
-            menu.remove();
-            onClick();
-        };
-        return item;
-    };
-
-    menu.appendChild(createMenuItem("📋 Paste Thumbnail", async () => {
+    const pasteThumbnail = async () => {
         try {
             const file = await readClipboardImageFile();
             if (file) {
@@ -1154,61 +754,11 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
             console.error("[PromptBrowser] Error reading clipboard:", error);
             await showInfo("Error", "Failed to read clipboard. Make sure you have an image copied.");
         }
-    }));
+    };
 
-    const genDivider = document.createElement("div");
-    genDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(genDivider);
-
-    menu.appendChild(createMenuItem("🎨 Generate Thumbnail", async () => {
-        const queuedName = promptName;
-        _thumbQueueTotal++;
-        _ensureThumbQueueProgress();
-        _updateThumbQueueProgress(queuedName);
-
-        _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
-            if (_thumbQueueCancelled) {
-                _thumbQueueDone++;
-                if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                    _finishThumbQueueProgress();
-                }
-                return;
-            }
-            _updateThumbQueueProgress(queuedName);
-            try {
-                await _generateThumbnailForBrowserCategory(node, category, queuedName, onUpdate, { endpointPrefix });
-                _thumbQueueDone++;
-            } catch (e) {
-                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, e);
-                _thumbQueueFailed++;
-            } finally {
-                if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                    _finishThumbQueueProgress();
-                }
-            }
-        });
-    }));
-
-    const promptData = getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix);
-    if (promptData?.thumbnail) {
-        const divider = document.createElement("div");
-        divider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-        // menu.appendChild(divider);
-
-        menu.appendChild(createMenuItem("🗑️ Remove Thumbnail", async () => {
-            await saveThumbnailEntry(node, category, promptName, null, endpointPrefix);
-            onUpdate();
-        }));
-    }
-
-    const nsfwDivider = document.createElement("div");
-    nsfwDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(nsfwDivider);
-
-    const isNSFW = promptData?.nsfw === true;
-    const nsfwItem = createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
+    const toggleNSFW = async () => {
         try {
-            const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
+            const resp = await api.fetchApi(`${endpointPrefix}/toggle-nsfw`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1216,7 +766,7 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
                     category: categoryLabel,
                     name: promptName,
                     ...(composerCategory?.typeFile ? { type_file: composerCategory.typeFile } : {}),
-                })
+                }),
             });
             const result = await resp.json();
             if (result.success) {
@@ -1226,15 +776,9 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
         } catch (err) {
             console.error("[PromptBrowser] Error toggling prompt NSFW:", err);
         }
-    });
-    nsfwItem.style.color = isNSFW ? '#f66' : '#ccc';
-    menu.appendChild(nsfwItem);
+    };
 
-    const renameDivider = document.createElement("div");
-    renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(renameDivider);
-
-    menu.appendChild(createMenuItem("✏️ Rename / Move", async () => {
+    const renameOrMove = async () => {
         const allCategories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
         const currentTypeFile = composerCategory?.typeFile || "";
         const composerMoveTargets = isComposerManager ? getComposerMoveTargetOptions(node) : null;
@@ -1249,63 +793,59 @@ function showThumbnailContextMenu(event, node, category, promptName, onUpdate, e
                 defaultGroupValue: currentTypeFile,
             } : {}
         );
-        if (result && result.name && result.name.trim()) {
-            const newName = result.name.trim();
-            const newCat = result.category;
-            const newTypeFile = isComposerManager ? String(result.typeFile || currentTypeFile || "") : "";
-            if (newName === promptName && newCat === categoryLabel && (!isComposerManager || newTypeFile === currentTypeFile)) return;
-            try {
-                const resp = await fetch(`${endpointPrefix}/rename-prompt`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        category: categoryLabel,
-                        old_name: promptName,
-                        new_name: newName,
-                        new_category: newCat,
-                        ...(isComposerManager ? {
-                            type_file: currentTypeFile,
-                            new_type_file: newTypeFile || currentTypeFile,
-                        } : {}),
-                    })
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    applyPromptPayloadToNode(node, data);
-                    onUpdate();
-                } else {
-                    await showInfo("Error", data.error || "Failed to rename prompt");
-                }
-            } catch (err) {
-                console.error("[PromptBrowser] Error renaming prompt:", err);
+        if (!result?.name?.trim()) return;
+        const newName = result.name.trim();
+        const newCat = result.category;
+        const newTypeFile = isComposerManager ? String(result.typeFile || currentTypeFile || "") : "";
+        if (newName === promptName && newCat === categoryLabel && (!isComposerManager || newTypeFile === currentTypeFile)) return;
+        try {
+            const resp = await api.fetchApi(`${endpointPrefix}/rename-prompt`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    category: categoryLabel,
+                    old_name: promptName,
+                    new_name: newName,
+                    new_category: newCat,
+                    ...(isComposerManager ? {
+                        type_file: currentTypeFile,
+                        new_type_file: newTypeFile || currentTypeFile,
+                    } : {}),
+                }),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                applyPromptPayloadToNode(node, data);
+                onUpdate();
+            } else {
+                await showInfo("Error", data.error || "Failed to rename prompt");
             }
-        }
-    }));
-
-    const deleteDivider = document.createElement("div");
-    deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-    menu.appendChild(deleteDivider);
-
-    menu.appendChild(createMenuItem("🗑️ Delete Prompt", async () => {
-        if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
-            await deletePromptEntry(node, category, promptName, endpointPrefix);
-            await onDelete?.(category, promptName);
-            onUpdate();
-        }
-    }));
-    menu.lastChild.style.color = '#f66';
-
-    const closeMenu = (e) => {
-        if (!menu.contains(e.target)) {
-            menu.remove();
-            document.removeEventListener('mousedown', closeMenu, true);
+        } catch (err) {
+            console.error("[PromptBrowser] Error renaming prompt:", err);
         }
     };
-    setTimeout(() => {
-        document.addEventListener('mousedown', closeMenu, true);
-    }, 10);
 
-    document.body.appendChild(menu);
+    openMenu(event.clientX, event.clientY, [
+        { label: "Paste thumbnail", action: pasteThumbnail },
+        null,
+        { label: "Generate thumbnail", action: () => queueThumbnail(promptName, () => _generateThumbnailForBrowserCategory(node, category, promptName, onUpdate, { endpointPrefix })) },
+        promptData?.thumbnail ? { label: "Remove thumbnail", action: async () => {
+            await saveThumbnailEntry(node, category, promptName, null, endpointPrefix);
+            onUpdate();
+        } } : undefined,
+        null,
+        { label: isNSFW ? "✓ NSFW" : "Mark as NSFW", danger: isNSFW, action: toggleNSFW },
+        null,
+        { label: "Rename / Move…", action: renameOrMove },
+        null,
+        { label: "Delete prompt", danger: true, action: async () => {
+            if (await showConfirm("Delete Prompt", `Are you sure you want to delete prompt "${promptName}"?`)) {
+                await deletePromptEntry(node, category, promptName, endpointPrefix);
+                await onDelete?.(category, promptName);
+                onUpdate();
+            }
+        } },
+    ].filter((item) => item !== undefined));
 }
 
 // Browser session state persists during a UI session and resets on restart.
@@ -2782,7 +2322,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const promptType = showCategoryTypeFilter && categoryTypeFilter !== "__all__"
                         ? categoryTypeFilter
                         : "";
-                    const resp = await fetch(`${endpointPrefix}/save-category`, {
+                    const resp = await api.fetchApi(`${endpointPrefix}/save-category`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ category_name: categoryName, nsfw: result.nsfw, prompt_type: promptType })
@@ -3120,7 +2660,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const normalizedTarget = String(targetTypeFile || "").trim();
             if (!normalizedSource || !normalizedTarget || normalizedSource === normalizedTarget) return;
             try {
-                const resp = await fetch(`${endpointPrefix}/reorder-types`, {
+                const resp = await api.fetchApi(`${endpointPrefix}/reorder-types`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -3514,7 +3054,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
 
                 try {
-                    const resp = await fetch(`${endpointPrefix}/save-type-settings`, {
+                    const resp = await api.fetchApi(`${endpointPrefix}/save-type-settings`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
@@ -3616,77 +3156,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
         // Category context menu for NSFW toggle
         const showCategoryContextMenu = (event, cat) => {
-            const existing = document.querySelector('.category-context-menu');
-            if (existing) existing.remove();
             const isComposerManager = endpointPrefix === "/prompt-manager/compose";
-
-            const menu = document.createElement("div");
-            menu.className = "category-context-menu";
-            menu.style.cssText = `
-                position: fixed;
-                left: ${event.clientX}px;
-                top: ${event.clientY}px;
-                background: #2a2a2a;
-                border: 1px solid #444;
-                border-radius: 6px;
-                padding: 4px 0;
-                z-index: 10001;
-                min-width: 150px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-            `;
-
             const isNSFW = isCategoryNSFW(cat);
             const categoryLabel = showCategoryTypeFilter ? getComposerCategoryDisplayName(node, cat) : cat;
-
-            // Generate Missing Thumbnails
-            const thumbDivider = document.createElement("div");
-            thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-
-            const thumbItem = document.createElement("div");
-            const buildProgressUI = () => {
-                const progress = document.createElement("div");
-                progress.style.cssText = `
-                    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-                    background: #222; border: 2px solid #4CAF50; border-radius: 8px;
-                    padding: 14px 16px; z-index: 10000; color: #fff; font-size: 14px;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 320px;
-                `;
-
-                const progressRow = document.createElement("div");
-                progressRow.style.cssText = `
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 14px;
-                `;
-
-                const cancelBtn = document.createElement("button");
-                cancelBtn.textContent = "✕";
-                cancelBtn.title = "Cancel remaining thumbnails";
-                cancelBtn.style.cssText = `
-                    width: 24px; height: 24px; line-height: 22px;
-                    border-radius: 6px; border: 1px solid #666;
-                    background: #2f2f2f; color: #eee;
-                    cursor: pointer; font-size: 14px; padding: 0;
-                    display: flex; align-items: center; justify-content: center;
-                    flex-shrink: 0;
-                `;
-
-                const progressText = document.createElement("div");
-                progressText.style.cssText = `display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;`;
-                progressText.innerHTML = `
-                    <div style="width: 18px; height: 18px; border: 3px solid #4CAF50; border-top-color: transparent; border-radius: 50%; animation: thumb-spin 1s linear infinite; flex-shrink: 0;"></div>
-                    <span style="line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
-                `;
-                progressRow.appendChild(progressText);
-                progressRow.appendChild(cancelBtn);
-                progress.appendChild(progressRow);
-                const styleEl = document.createElement("style");
-                styleEl.textContent = `@keyframes thumb-spin { to { transform: rotate(360deg); } }`;
-                progress.appendChild(styleEl);
-                document.body.appendChild(progress);
-                return { progress, progressText, cancelBtn };
-            };
 
             const runBatchGeneration = async (names, title, options = {}) => {
                 const regenerateAll = options.regenerateAll === true;
@@ -3715,55 +3187,15 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 // Resolve family-compatible defaults once for the batch.
                 const fallbackBase = await resolveThumbnailFallbackBase(renderSelection);
 
-                for (let i = 0; i < names.length; i++) {
-                    const pName = names[i];
-                    _thumbQueueTotal++;
-                    _ensureThumbQueueProgress();
-                    _updateThumbQueueProgress(pName);
-
-                    _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
-                        if (_thumbQueueCancelled) {
-                            _thumbQueueDone++;
-                            if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                                _finishThumbQueueProgress();
-                            }
-                            return;
-                        }
-                        _updateThumbQueueProgress(pName);
-                        try {
-                            await _generateThumbnailForBrowserCategory(node, cat, pName, () => {
-                                renderContent(searchInput.value);
-                            }, {
-                                renderSelection,
-                                fallbackBase,
-                                endpointPrefix,
-                            });
-                            _thumbQueueDone++;
-                        } catch (e) {
-                            console.error(`[ThumbnailGen] Failed for "${pName}":`, e);
-                            _thumbQueueFailed++;
-                        } finally {
-                            if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                                _finishThumbQueueProgress();
-                            }
-                        }
-                    });
+                for (const pName of names) {
+                    queueThumbnail(pName, () => _generateThumbnailForBrowserCategory(node, cat, pName, () => {
+                        renderContent(searchInput.value);
+                    }, { renderSelection, fallbackBase, endpointPrefix }));
                 }
             };
 
-            // Generate Missing Thumbnails
-            const missingItem = document.createElement("div");
-            missingItem.textContent = "🎨 Generate Missing Thumbnails";
-            missingItem.style.cssText = `
-                padding: 8px 16px;
-                color: #ccc;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            missingItem.onmouseover = () => missingItem.style.background = '#3a3a3a';
-            missingItem.onmouseout = () => missingItem.style.background = 'transparent';
-            missingItem.onclick = async () => {
-                menu.remove();
+            openMenu(event.clientX, event.clientY, [
+                { label: "Generate missing thumbnails", action: async () => {
                 const catPrompts = node.prompts[cat];
                 if (!catPrompts) return;
 
@@ -3774,22 +3206,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 });
 
                 await runBatchGeneration(missing, "Generate Missing Thumbnails");
-            };
-            menu.appendChild(missingItem);
-
-            // Regenerate All Thumbnails
-            const regenerateItem = document.createElement("div");
-            regenerateItem.textContent = "🔄 Re-Generate All Thumbnails";
-            regenerateItem.style.cssText = `
-                padding: 8px 16px;
-                color: #ccc;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            regenerateItem.onmouseover = () => regenerateItem.style.background = '#3a3a3a';
-            regenerateItem.onmouseout = () => regenerateItem.style.background = 'transparent';
-            regenerateItem.onclick = async () => {
-                menu.remove();
+                } },
+                { label: "Re-generate all thumbnails", action: async () => {
                 const catPrompts = node.prompts[cat];
                 if (!catPrompts) return;
 
@@ -3799,25 +3217,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 });
 
                 await runBatchGeneration(all, "Re-Generate All Thumbnails", { regenerateAll: true });
-            };
-            menu.appendChild(regenerateItem);
-
-            menu.appendChild(thumbDivider);
-
-            const item = document.createElement("div");
-            item.textContent = isNSFW ? "✓ NSFW" : "Mark as NSFW";
-            item.style.cssText = `
-                padding: 8px 16px;
-                color: ${isNSFW ? '#f66' : '#ccc'};
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            item.onmouseover = () => item.style.background = '#3a3a3a';
-            item.onmouseout = () => item.style.background = 'transparent';
-            item.onclick = async () => {
-                menu.remove();
+                } },
+                null,
+                { label: isNSFW ? "✓ NSFW" : "Mark as NSFW", danger: isNSFW, action: async () => {
                 try {
-                    const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
+                    const resp = await api.fetchApi(`${endpointPrefix}/toggle-nsfw`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
@@ -3835,25 +3239,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 } catch (err) {
                     console.error("[PromptManagerAdvanced] Error toggling category NSFW:", err);
                 }
-            };
-            menu.appendChild(item);
-
-            const renameDivider = document.createElement("div");
-            renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(renameDivider);
-
-            const renameItem = document.createElement("div");
-            renameItem.textContent = isComposerManager ? "✏️ Rename / Move" : "✏️ Rename";
-            renameItem.style.cssText = `
-                padding: 8px 16px;
-                color: #ccc;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            renameItem.onmouseover = () => renameItem.style.background = '#3a3a3a';
-            renameItem.onmouseout = () => renameItem.style.background = 'transparent';
-            renameItem.onclick = async () => {
-                menu.remove();
+                } },
+                null,
+                { label: isComposerManager ? "Rename / Move…" : "Rename…", action: async () => {
                 const currentTypeFile = isComposerManager ? getComposerCategoryTypeFile(node, cat) : "";
                 const composerMoveTargets = isComposerManager ? getComposerMoveTargetOptions(node) : null;
                 const result = await showRenameCategoryDialog(
@@ -3871,7 +3259,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     const newTypeFile = isComposerManager ? String(result.typeFile || currentTypeFile || "") : "";
                     if (newCat === cat && (!isComposerManager || newTypeFile === currentTypeFile)) return;
                     try {
-                        const resp = await fetch(`${endpointPrefix}/rename-category`, {
+                        const resp = await api.fetchApi(`${endpointPrefix}/rename-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
@@ -3904,29 +3292,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         console.error("[PromptManagerAdvanced] Error renaming category:", err);
                     }
                 }
-            };
-            menu.appendChild(renameItem);
-
-            // Delete Category (always last, separated by a divider)
-            const deleteDivider = document.createElement("div");
-            deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(deleteDivider);
-
-            const deleteItem = document.createElement("div");
-            deleteItem.textContent = "🗑️ Delete Category";
-            deleteItem.style.cssText = `
-                padding: 8px 16px;
-                color: #f66;
-                cursor: pointer;
-                font-size: 13px;
-            `;
-            deleteItem.onmouseover = () => deleteItem.style.background = '#3a3a3a';
-            deleteItem.onmouseout = () => deleteItem.style.background = 'transparent';
-            deleteItem.onclick = async () => {
-                menu.remove();
+                } },
+                null,
+                { label: "Delete category", danger: true, action: async () => {
                 if (await showConfirm("Delete Category", `Are you sure you want to delete category "${categoryLabel}" and all its prompts?`)) {
                     try {
-                        const resp = await fetch(`${endpointPrefix}/delete-category`, {
+                        const resp = await api.fetchApi(`${endpointPrefix}/delete-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
@@ -3951,62 +3322,18 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         console.error("[PromptManagerAdvanced] Error deleting category:", err);
                     }
                 }
-            };
-            menu.appendChild(deleteItem);
-
-            document.body.appendChild(menu);
-            const closeMenu = (e) => {
-                if (!menu.contains(e.target)) {
-                    menu.remove();
-                    document.removeEventListener("mousedown", closeMenu, true);
-                    document.removeEventListener("contextmenu", closeMenu, true);
-                }
-            };
-            setTimeout(() => {
-                document.addEventListener("mousedown", closeMenu, true);
-                document.addEventListener("contextmenu", closeMenu, true);
-            }, 0);
+                } },
+            ]);
         };
 
         const showTypeContextMenu = (event, typeValue) => {
             if (!showCategoryTypeFilter || !typeValue || typeValue === "__all__") return;
-            const existing = document.querySelector('.category-context-menu');
-            if (existing) existing.remove();
 
             const typeFile = getComposerTypeFile(node, typeValue);
             const typeLabel = getComposerTypeDisplayName(node, typeValue) || typeValue;
-            const menu = document.createElement("div");
-            menu.className = "category-context-menu";
-            menu.style.cssText = `
-                position: fixed;
-                left: ${event.clientX}px;
-                top: ${event.clientY}px;
-                background: #2a2a2a;
-                border: 1px solid #444;
-                border-radius: 6px;
-                padding: 4px 0;
-                z-index: 10001;
-                min-width: 170px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-            `;
+            const items = [];
 
-            const createMenuItem = (label, onClick, danger = false) => {
-                const item = document.createElement("div");
-                item.textContent = label;
-                item.style.cssText = `
-                    padding: 8px 16px;
-                    color: ${danger ? '#f66' : '#ccc'};
-                    cursor: pointer;
-                    font-size: 13px;
-                `;
-                item.onmouseover = () => item.style.background = '#3a3a3a';
-                item.onmouseout = () => item.style.background = 'transparent';
-                item.onclick = async () => {
-                    menu.remove();
-                    await onClick();
-                };
-                return item;
-            };
+            const createMenuItem = (label, onClick, danger = false) => ({ label, action: onClick, danger });
 
             const typeRefs = () => getCategoriesForComposerType(node, typeValue)
                 .flatMap((category) => getPromptNamesForCategory(node, category, {
@@ -4047,42 +3374,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const fallbackBase = await resolveThumbnailFallbackBase(renderSelection);
 
                 for (const ref of refs) {
-                    _thumbQueueTotal++;
-                    _ensureThumbQueueProgress();
-                    _updateThumbQueueProgress(ref.name);
-
-                    _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
-                        if (_thumbQueueCancelled) {
-                            _thumbQueueDone++;
-                            if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                                _finishThumbQueueProgress();
-                            }
-                            return;
-                        }
-                        _updateThumbQueueProgress(ref.name);
-                        try {
-                            await _generateThumbnailForBrowserCategory(node, ref.category, ref.name, () => {
-                                renderContent(searchInput.value);
-                            }, {
-                                renderSelection,
-                                fallbackBase,
-                                endpointPrefix,
-                            });
-                            _thumbQueueDone++;
-                        } catch (err) {
-                            console.error(`[ThumbnailGen] Failed for "${ref.category}/${ref.name}":`, err);
-                            _thumbQueueFailed++;
-                        } finally {
-                            if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                                _finishThumbQueueProgress();
-                            }
-                        }
-                    });
+                    queueThumbnail(ref.name, () => _generateThumbnailForBrowserCategory(node, ref.category, ref.name, () => {
+                        renderContent(searchInput.value);
+                    }, { renderSelection, fallbackBase, endpointPrefix }));
                 }
             };
 
             const isNSFW = isComposerTypeNSFW(node, typeValue);
-            menu.appendChild(createMenuItem("📋 Paste Icon", async () => {
+            items.push(createMenuItem("Paste Icon", async () => {
                 try {
                     const file = await readClipboardImageFile();
                     if (!file) {
@@ -4091,7 +3390,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     }
 
                     const icon = await resizeImageToCoverDataUrl(file, 64, "image/png");
-                    const resp = await fetch(`${endpointPrefix}/save-type-settings`, {
+                    const resp = await api.fetchApi(`${endpointPrefix}/save-type-settings`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
@@ -4116,26 +3415,22 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }));
 
-            const pasteDivider = document.createElement("div");
-            pasteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(pasteDivider);
+            items.push(null);
 
-            const thumbDivider = document.createElement("div");
-            thumbDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
 
-            menu.appendChild(createMenuItem("🎨 Generate Missing Thumbnails", async () => {
+            items.push(createMenuItem("Generate Missing Thumbnails", async () => {
                 await runTypeBatchGeneration("Generate Missing Thumbnails");
             }));
 
-            menu.appendChild(createMenuItem("🔄 Re-Generate All Thumbnails", async () => {
+            items.push(createMenuItem("Re-Generate All Thumbnails", async () => {
                 await runTypeBatchGeneration("Re-Generate All Thumbnails", { regenerateAll: true });
             }));
 
-            menu.appendChild(thumbDivider);
+            items.push(null);
 
-            menu.appendChild(createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
+            items.push(createMenuItem(isNSFW ? "✓ NSFW" : "Mark as NSFW", async () => {
                 try {
-                    const resp = await fetch(`${endpointPrefix}/toggle-nsfw`, {
+                    const resp = await api.fetchApi(`${endpointPrefix}/toggle-nsfw`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ type: "type", type_file: typeFile })
@@ -4152,11 +3447,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }, isNSFW));
 
-            const renameDivider = document.createElement("div");
-            renameDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(renameDivider);
+            items.push(null);
 
-            menu.appendChild(createMenuItem("✏️ Rename", async () => {
+            items.push(createMenuItem("Rename", async () => {
                 const result = await showTextInputDialog(
                     "Rename Prompt Group",
                     "Enter new prompt group name:",
@@ -4167,7 +3460,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 if (!newName) return;
                 if (newName === typeLabel) return;
                 try {
-                    const resp = await fetch(`${endpointPrefix}/rename-type`, {
+                    const resp = await api.fetchApi(`${endpointPrefix}/rename-type`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ type_file: typeFile, new_name: newName })
@@ -4187,16 +3480,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }));
 
-            const deleteDivider = document.createElement("div");
-            deleteDivider.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(deleteDivider);
+            items.push(null);
 
-            menu.appendChild(createMenuItem("🗑️ Delete Group", async () => {
+            items.push(createMenuItem("Delete Group", async () => {
                 if (!await showConfirm("Delete Group", `Are you sure you want to delete group "${typeLabel}" and all its categories?`)) {
                     return;
                 }
                 try {
-                    const resp = await fetch(`${endpointPrefix}/delete-type`, {
+                    const resp = await api.fetchApi(`${endpointPrefix}/delete-type`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ type_file: typeFile })
@@ -4240,18 +3531,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }, true));
 
-            document.body.appendChild(menu);
-            const closeMenu = (e) => {
-                if (!menu.contains(e.target)) {
-                    menu.remove();
-                    document.removeEventListener("mousedown", closeMenu, true);
-                    document.removeEventListener("contextmenu", closeMenu, true);
-                }
-            };
-            setTimeout(() => {
-                document.addEventListener("mousedown", closeMenu, true);
-                document.addEventListener("contextmenu", closeMenu, true);
-            }, 0);
+            openMenu(event.clientX, event.clientY, items);
         };
 
         const rebuildCategoryList = () => {
@@ -4340,7 +3620,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         const promptType = showCategoryTypeFilter && categoryTypeFilter !== "__all__"
                             ? categoryTypeFilter
                             : "";
-                        const resp = await fetch(`${endpointPrefix}/save-category`, {
+                        const resp = await api.fetchApi(`${endpointPrefix}/save-category`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ category_name: categoryName, nsfw: result.nsfw, prompt_type: promptType })
@@ -4450,7 +3730,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                                 body.old_category = getComposerCategoryDisplayName(node, payload.old_category || payload.category);
                             }
                         }
-                        const resp = await fetch(`${endpointPrefix}/save-prompt`, {
+                        const resp = await api.fetchApi(`${endpointPrefix}/save-prompt`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify(body),
@@ -4493,58 +3773,26 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     renderContent(searchInput.value);
                 },
                 generateThumbnail: async (category, promptName, draftPromptData = null) => {
-                    return new Promise((resolve, reject) => {
-                        const queuedName = promptName;
-                        const isDraftGeneration = draftPromptData && typeof draftPromptData === "object";
-                        const requestedSeed = Number(draftPromptData?.__pm_thumbnail_seed);
-                        const staticSeed = Number.isFinite(requestedSeed) ? Math.trunc(requestedSeed) : 42;
-                        _thumbQueueTotal++;
-                        _ensureThumbQueueProgress();
-                        _updateThumbQueueProgress(queuedName);
-
-                        _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
-                            if (_thumbQueueCancelled) {
-                                _thumbQueueDone++;
-                                if (_thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                                    _finishThumbQueueProgress();
-                                }
-                                resolve(null);
-                                return;
-                            }
-                            _updateThumbQueueProgress(queuedName);
-                            try {
-                                const generatedThumbnail = await _generateThumbnailForBrowserCategory(node, category, queuedName, () => {
-                                    renderContent(searchInput.value);
-                                }, {
-                                    endpointPrefix,
-                                    draftPromptData,
-                                    persistThumbnail: !isDraftGeneration,
-                                    promptStrength,
-                                    generationMode: thumbnailGenerationMode,
-                                    staticSeed,
-                                });
-                                _thumbQueueDone++;
-                                if (isDraftGeneration) {
-                                    resolve(generatedThumbnail || null);
-                                    return;
-                                }
-                                await loadPromptsFn(node);
-                                resolve(getCategoryPromptEntry(node?.prompts?.[category], queuedName, endpointPrefix)?.thumbnail || null);
-                            } catch (e) {
-                                const error = e instanceof Error
-                                    ? e
-                                    : new Error(e == null ? "Thumbnail generation failed." : String(e));
-                                console.error(`[ThumbnailGen] Failed for "${queuedName}":`, error);
-                                _thumbQueueFailed++;
-                                reject(error);
-                                return;
-                            } finally {
-                                if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                                    _finishThumbQueueProgress();
-                                }
-                            }
+                    const isDraftGeneration = draftPromptData && typeof draftPromptData === "object";
+                    const requestedSeed = Number(draftPromptData?.__pm_thumbnail_seed);
+                    const staticSeed = Number.isFinite(requestedSeed) ? Math.trunc(requestedSeed) : 42;
+                    const job = await queueThumbnail(promptName, async () => {
+                        const generatedThumbnail = await _generateThumbnailForBrowserCategory(node, category, promptName, () => {
+                            renderContent(searchInput.value);
+                        }, {
+                            endpointPrefix,
+                            draftPromptData,
+                            persistThumbnail: !isDraftGeneration,
+                            promptStrength,
+                            generationMode: thumbnailGenerationMode,
+                            staticSeed,
                         });
+                        if (isDraftGeneration) return generatedThumbnail || null;
+                        await loadPromptsFn(node);
+                        return getCategoryPromptEntry(node?.prompts?.[category], promptName, endpointPrefix)?.thumbnail || null;
                     });
+                    if (job.error) throw job.error;
+                    return job.value;
                 },
                 onChange: () => {
                     renderContent(searchInput.value);
@@ -4663,78 +3911,24 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
         const isMultiSelectActive = () => supportsMultiSelect && multiSelectMode;
 
         const showMultiPromptContextMenu = (e, promptNames) => {
-            const existing = document.querySelector('.thumbnail-context-menu');
-            if (existing) existing.remove();
+            const items = [];
 
-            const menu = document.createElement("div");
-            menu.className = "thumbnail-context-menu";
-            menu.style.cssText = `
-                position: fixed;
-                left: ${e.clientX}px;
-                top: ${e.clientY}px;
-                background: #2a2a2a;
-                border: 1px solid #444;
-                border-radius: 6px;
-                padding: 4px 0;
-                z-index: 10001;
-                min-width: 170px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-            `;
-
-            const createMenuItem = (label, onClick, danger = false) => {
-                const item = document.createElement("div");
-                item.textContent = label;
-                item.style.cssText = `
-                    padding: 8px 16px;
-                    color: ${danger ? '#f66' : '#ccc'};
-                    cursor: pointer;
-                    font-size: 13px;
-                `;
-                item.onmouseover = () => item.style.background = '#3a3a3a';
-                item.onmouseout = () => item.style.background = 'transparent';
-                item.onclick = () => {
-                    menu.remove();
-                    onClick();
-                };
-                return item;
-            };
+            const createMenuItem = (label, onClick, danger = false) => ({ label, action: onClick, danger });
 
             const selectedList = Array.from(promptNames || []);
 
-            menu.appendChild(createMenuItem(`🎨 Generate Thumbnails (${selectedList.length})`, async () => {
-                const names = selectedList.slice();
-                _thumbQueueTotal += names.length;
-                _ensureThumbQueueProgress();
-                _updateThumbQueueProgress(names[0] || "");
-
-                _thumbQueuePromiseChain = _thumbQueuePromiseChain.then(async () => {
-                    for (const name of names) {
-                        if (_thumbQueueCancelled) {
-                            _thumbQueueDone++;
-                            continue;
-                        }
-                        _updateThumbQueueProgress(name);
-                        try {
-                            await _generateThumbnailForBrowserCategory(node, selectedCategory, name, () => {
-                                renderContent(searchInput.value);
-                            }, { endpointPrefix });
-                            _thumbQueueDone++;
-                        } catch (err) {
-                            console.error(`[ThumbnailGen] Failed for "${name}":`, err);
-                            _thumbQueueFailed++;
-                        }
-                    }
-                    if (_thumbQueueProgress && _thumbQueueDone + _thumbQueueFailed >= _thumbQueueTotal) {
-                        _finishThumbQueueProgress();
-                    }
-                });
+            items.push(createMenuItem(`Generate Thumbnails (${selectedList.length})`, async () => {
+                const category = selectedCategory;
+                for (const name of selectedList) {
+                    queueThumbnail(name, () => _generateThumbnailForBrowserCategory(node, category, name, () => {
+                        renderContent(searchInput.value);
+                    }, { endpointPrefix }));
+                }
             }));
 
-            const dividerA = document.createElement("div");
-            dividerA.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(dividerA);
+            items.push(null);
 
-            menu.appendChild(createMenuItem(`📁 Move (${selectedList.length})`, async () => {
+            items.push(createMenuItem(`Move (${selectedList.length})`, async () => {
                 const isComposerManager = endpointPrefix === "/prompt-manager/compose";
                 const allCategories = Object.keys(node.prompts || {}).filter(c => c !== "__meta__").sort((a, b) => a.localeCompare(b));
                 const currentComposerCategory = isComposerManager ? getComposerCategoryRequestIdentity(node, selectedCategory) : null;
@@ -4758,7 +3952,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const errors = [];
                 for (const promptName of selectedList) {
                     try {
-                        const resp = await fetch(`${endpointPrefix}/rename-prompt`, {
+                        const resp = await api.fetchApi(`${endpointPrefix}/rename-prompt`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
@@ -4798,11 +3992,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 }
             }));
 
-            const dividerB = document.createElement("div");
-            dividerB.style.cssText = `height: 1px; background: #444; margin: 4px 0;`;
-            menu.appendChild(dividerB);
+            items.push(null);
 
-            menu.appendChild(createMenuItem(`🗑️ Delete Prompts (${selectedList.length})`, async () => {
+            items.push(createMenuItem(`Delete Prompts (${selectedList.length})`, async () => {
                 const confirmed = await showConfirm(
                     "Delete Prompts",
                     `Are you sure you want to delete ${selectedList.length} selected prompt(s)?`,
@@ -4819,17 +4011,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 renderContent(searchInput.value);
             }, true));
 
-            const closeMenu = (evt) => {
-                if (!menu.contains(evt.target)) {
-                    menu.remove();
-                    document.removeEventListener('mousedown', closeMenu, true);
-                }
-            };
-            setTimeout(() => {
-                document.addEventListener('mousedown', closeMenu, true);
-            }, 10);
-
-            document.body.appendChild(menu);
+            openMenu(e.clientX, e.clientY, items);
         };
 
         // Shared right-click handler for prompt items (works in both grid and list view)

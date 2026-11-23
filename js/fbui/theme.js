@@ -7,7 +7,7 @@
 
 // Bump on any change to the CSS below. Two packs shipping the same version
 // inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 8;
+export const KIT_VERSION = 9;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -173,6 +173,7 @@ export function kitCss() {
 .fbui-menu button{display:block;width:100%;padding:6px 10px;border:none;border-radius:${RADIUS_XS}px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .fbui-menu button:hover{background:${T.fillHover};color:${T.inkHover}}
 .fbui-menu button.danger:hover{background:${T.dangerSoft};color:${T.dangerInk}}
+.fbui-menu .sep{height:1px;margin:4px 6px;background:${T.rule}}
 `;
 }
 
