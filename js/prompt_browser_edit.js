@@ -3,6 +3,8 @@ import { api } from "../../scripts/api.js";
 import { getCategoryPromptEntries, getCategoryPromptEntriesForEndpoint, getCategoryPromptEntryForEndpoint } from "./prompt_store_adapters.js";
 import { mediaFileUrl } from "./path_browser.js";
 import { PM_UI_PALETTE } from "./ui_palette.js";
+import { button as kitButton } from "./fbui/controls.js";
+import { RADIUS, T } from "./fbui/theme.js";
 
 // Placeholder thumbnail. Defined locally (NOT imported from prompt_manager_advanced.js)
 // to break the module cycle:
@@ -542,11 +544,7 @@ function showVisualAssetImportPicker({ title, rootPath, loadFolder, emptyMessage
         });
         selectionTools.appendChild(selectToggleBtn);
         const cancelBtn = createButton("Cancel", () => close(null));
-        const createBtn = createButton(createButtonLabel, () => close([...selectedAssets.values()]), {
-            background: "#2b6d3a",
-            borderColor: "#4a9158",
-            color: "#fff",
-        });
+        const createBtn = createButton(createButtonLabel, () => close([...selectedAssets.values()]), { primary: true });
         buttonRow.append(selectionTools, cancelBtn, createBtn);
 
         dialog.append(titleEl, controlsRow, selectionInfo, content, buttonRow);
@@ -772,84 +770,35 @@ function el(tag, styles = {}, text = "") {
     return element;
 }
 
+// The panel's controls are the kit's (js/fbui): text fields, selects and
+// buttons; `styles` adds layout on top.
 function createInput(value, placeholder, styles = {}) {
-    const input = document.createElement("input");
+    const input = el("input", styles);
+    input.className = "fbui-text";
     input.type = "text";
+    input.spellcheck = false;
     input.value = value || "";
     input.placeholder = placeholder || "";
-    input.style.cssText = `
-        width: 100%;
-        padding: 7px 10px;
-        background: ${STYLE.inputBg};
-        border: 1px solid ${STYLE.inputBorder};
-        border-radius: 4px;
-        color: #fff;
-        font-size: 13px;
-        box-sizing: border-box;
-        outline: none;
-    `;
-    Object.assign(input.style, styles);
-    input.addEventListener("focus", () => { input.style.borderColor = STYLE.accent; });
-    input.addEventListener("blur", () => { input.style.borderColor = STYLE.inputBorder; });
     return input;
 }
 
 function createTextarea(value, placeholder, styles = {}) {
-    const textarea = document.createElement("textarea");
+    const textarea = el("textarea", { height: "auto", minHeight: "120px", padding: "8px", resize: "none", lineHeight: "1.45", userSelect: "text", ...styles });
+    textarea.className = "fbui-text";
     textarea.value = value || "";
     textarea.placeholder = placeholder || "";
-    textarea.style.cssText = `
-        width: 100%;
-        min-height: 120px;
-        resize: none;
-        background: ${STYLE.inputBg};
-        border: 1px solid ${STYLE.inputBorder};
-        border-radius: 4px;
-        color: #fff;
-        font-size: 14px;
-        padding: 8px;
-        box-sizing: border-box;
-        outline: none;
-        font-family: inherit;
-    `;
-    Object.assign(textarea.style, styles);
-    textarea.addEventListener("focus", () => { textarea.style.borderColor = STYLE.accent; });
-    textarea.addEventListener("blur", () => { textarea.style.borderColor = STYLE.inputBorder; });
     return textarea;
 }
 
-function createButton(text, onClick, styles = {}) {
-    const button = document.createElement("button");
-    button.textContent = text;
-    button.style.cssText = `
-        background: ${STYLE.buttonBg};
-        border: 1px solid ${STYLE.inputBorder};
-        color: ${STYLE.textPrimary};
-        padding: 6px 12px;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 12px;
-        white-space: nowrap;
-    `;
-    Object.assign(button.style, styles);
-    button.addEventListener("click", onClick);
-    return button;
+function createButton(text, onClick, { primary = false, ...styles } = {}) {
+    const control = kitButton(text, { primary, onClick });
+    Object.assign(control.style, styles);
+    return control;
 }
 
 function createSelect(value, options, styles = {}) {
-    const select = document.createElement("select");
-    select.style.cssText = `
-        width: 100%;
-        padding: 7px 10px;
-        background: ${STYLE.inputBg};
-        border: 1px solid ${STYLE.inputBorder};
-        border-radius: 4px;
-        color: #fff;
-        font-size: 13px;
-        box-sizing: border-box;
-        outline: none;
-    `;
-    Object.assign(select.style, styles);
+    const select = el("select", { width: "100%", ...styles });
+    select.className = "fbui-select";
     for (const opt of options) {
         const option = document.createElement("option");
         option.value = opt.value;
@@ -857,8 +806,6 @@ function createSelect(value, options, styles = {}) {
         if (opt.value === value) option.selected = true;
         select.appendChild(option);
     }
-    select.addEventListener("focus", () => { select.style.borderColor = STYLE.accent; });
-    select.addEventListener("blur", () => { select.style.borderColor = STYLE.inputBorder; });
     return select;
 }
 
@@ -886,26 +833,13 @@ function replaceSelectOptions(select, options, value) {
 }
 
 function createNumberInput(value, options = {}, styles = {}) {
-    const input = document.createElement("input");
+    const input = el("input", { width: "84px", ...styles });
+    input.className = "fbui-text";
     input.type = "number";
     input.value = String(value ?? "1");
     if (options.min !== undefined && options.min !== null) input.min = String(options.min);
     if (options.max !== undefined && options.max !== null) input.max = String(options.max);
     if (options.step !== undefined && options.step !== null) input.step = String(options.step);
-    input.style.cssText = `
-        width: 84px;
-        padding: 7px 8px;
-        background: ${STYLE.inputBg};
-        border: 1px solid ${STYLE.inputBorder};
-        border-radius: 4px;
-        color: #fff;
-        font-size: 13px;
-        box-sizing: border-box;
-        outline: none;
-    `;
-    Object.assign(input.style, styles);
-    input.addEventListener("focus", () => { input.style.borderColor = STYLE.accent; });
-    input.addEventListener("blur", () => { input.style.borderColor = STYLE.inputBorder; });
     return input;
 }
 
@@ -934,23 +868,8 @@ function createPickerTrigger(placeholder = "(None)", styles = {}) {
     button.type = "button";
     button.value = "";
     button.title = placeholder;
-    button.style.cssText = `
-        width: 100%;
-        min-height: 34px;
-        padding: 7px 10px;
-        background: ${STYLE.inputBg};
-        border: 1px solid ${STYLE.inputBorder};
-        border-radius: 4px;
-        color: #fff;
-        font-size: 13px;
-        box-sizing: border-box;
-        outline: none;
-        cursor: pointer;
-        text-align: left;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    `;
+    button.className = "fbui-text";
+    button.style.cssText = "cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
     Object.assign(button.style, styles);
     button.dataset.placeholder = placeholder;
     button.setSelectedItem = (item) => {
@@ -959,12 +878,10 @@ function createPickerTrigger(placeholder = "(None)", styles = {}) {
         button.value = value;
         button.textContent = value ? label : placeholder;
         button.title = value ? `${label}${item?.pickerMeta ? `\n${item.pickerMeta}` : ""}` : placeholder;
-        button.style.color = value ? "#fff" : STYLE.textMuted;
+        button.style.color = value ? T.ink : T.faint;
     };
     button.getSelectedValue = () => String(button.value || "").trim();
     button.setSelectedItem(null);
-    button.addEventListener("focus", () => { button.style.borderColor = STYLE.accent; });
-    button.addEventListener("blur", () => { button.style.borderColor = STYLE.inputBorder; });
     return button;
 }
 
@@ -1187,17 +1104,17 @@ function showTextAssetPicker({ title, items, initialValue = "", emptyLabel = "(N
         list.style.cssText = `
             width: 100%;
             min-height: 280px;
-            background: ${STYLE.inputBg};
-            border: 1px solid ${STYLE.inputBorder};
-            border-radius: 4px;
-            color: #fff;
+            background: ${T.card};
+            border: 1px solid ${T.plateEdge};
+            border-radius: ${RADIUS}px;
+            color: ${T.inkSoft};
             padding: 6px;
             box-sizing: border-box;
         `;
         list.multiple = false;
         const buttonRow = el("div", { display: "flex", justifyContent: "flex-end", gap: "8px" });
         const cancelBtn = createButton("Cancel", () => close(null));
-        const selectBtn = createButton("Select", () => close(list.value), { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
+        const selectBtn = createButton("Select", () => close(list.value), { primary: true });
         buttonRow.append(cancelBtn, selectBtn);
         dialog.append(titleEl, filterInput, list, buttonRow);
         overlay.appendChild(dialog);
@@ -1718,7 +1635,7 @@ export function createPromptBrowserEditPanel(options) {
         } else {
             await _showInfo("Save Failed", result?.error || "Failed to save prompt group settings.");
         }
-    }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
+    }, { primary: true });
     groupBody.appendChild(saveGroupSettingsBtn);
 
     const categoryBasePromptInfoText = "Thumbnail prompt for this category.\nIf empty, the prompt group thumbnail prompt is used.";
@@ -1822,7 +1739,7 @@ export function createPromptBrowserEditPanel(options) {
         } else {
             await _showInfo("Save Failed", result?.error || "Failed to save category settings.");
         }
-    }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
+    }, { primary: true });
     settingsBody.appendChild(saveSettingsBtn);
 
     // Prompt editor section
@@ -2086,11 +2003,11 @@ export function createPromptBrowserEditPanel(options) {
 
     const saveNewBtn = createButton("Save New", async () => {
         await doSavePrompt(false);
-    }, { background: "#313843", borderColor: "#5f6773", color: STYLE.textPrimary });
+    }, {});
 
     const saveBtn = createButton("Save", async () => {
         await doPrimaryPromptAction(false);
-    }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
+    }, { primary: true });
     saveNewBtn.style.display = "none";
     editorButtonRow.appendChild(saveNewBtn);
     editorButtonRow.appendChild(saveBtn);
@@ -2902,7 +2819,7 @@ export function createPromptBrowserEditPanel(options) {
                 "Prompts Created",
                 `${created} prompt(s) created in "${category}".${failed ? ` ${failed} failed.` : ""}${invalid ? ` ${invalid} line(s) were skipped because they were not in the format \"Title - Prompt text\".` : ""}`
             );
-        }, { background: "#2b6d3a", borderColor: "#4a9158", color: "#fff" });
+        }, { primary: true });
 
         buttonRow.appendChild(cancelBtn);
         buttonRow.appendChild(createBtn);
