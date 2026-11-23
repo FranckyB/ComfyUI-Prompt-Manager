@@ -4,7 +4,7 @@ import { formDialog } from "./pm_dialogs.js";
 import { api } from "../../scripts/api.js";
 import { button, ICONS } from "./fbui/controls.js";
 import { el } from "./fbui/dom.js";
-import { openMenu, prompt } from "./fbui/modal.js";
+import { confirm, openMenu, openModal, prompt } from "./fbui/modal.js";
 import { ensureKitCss, FONT, RADIUS, RADIUS_CARD, ROW_HEIGHT, T, Z_MENU, Z_MODAL } from "./fbui/theme.js";
 import {
     buildSavePromptRequestBodyForEndpoint,
@@ -77,10 +77,6 @@ function ensurePromptBrowserCss() {
     document.head.append(style);
 }
 let loadPrompts = async () => ({});
-let showInfo = async () => {};
-let showConfirm = async () => false;
-let showRenameCategoryDialog = async () => null;
-let showNewCategoryDialog = async () => null;
 let ensureThumbnailRenderSelection = async () => null;
 let resolveThumbnailFallbackBase = async () => null;
 let generateThumbnailForPrompt = async () => null;
@@ -215,6 +211,46 @@ function showTextInputDialog(title, message, defaultValue = "") {
     return prompt({ title, message, value: String(defaultValue || "") });
 }
 
+// The browser's message, confirm and category dialogs, on the kit modal.
+function showInfo(title, message) {
+    return new Promise((resolve) => {
+        const text = el("div", "", message);
+        text.style.cssText = "max-width:420px;line-height:1.45;white-space:pre-wrap";
+        const dialog = openModal({
+            title,
+            body: text,
+            footer: button("OK", { primary: true, onClick: () => dialog.close() }),
+            onClose: () => resolve(),
+        });
+    });
+}
+
+function showConfirm(title, message, confirmText = "Delete", { danger = true } = {}) {
+    return confirm({ title, message, confirmText, danger });
+}
+
+function showNewCategoryDialog() {
+    return formDialog({
+        title: "New Category",
+        confirmText: "Create",
+        fields: [
+            { key: "name", label: "Category name" },
+            { key: "nsfw", label: "Mark as NSFW", type: "check" },
+        ],
+    });
+}
+
+// Rename a category; for the composer, also move it to another prompt group.
+async function showRenameCategoryDialog(title, message, categories, defaultCategory, options = {}) {
+    const groupOptions = Array.isArray(options.groupOptions) && options.groupOptions.length ? options.groupOptions : null;
+    const defaultGroup = String(options.defaultGroupValue || groupOptions?.[0]?.value || "");
+    const fields = [{ key: "newCategory", label: message, value: defaultCategory }];
+    if (groupOptions) fields.push({ key: "typeFile", label: "Prompt Group", type: "select", options: groupOptions, value: defaultGroup });
+    const result = await formDialog({ title, fields });
+    if (!result) return null;
+    return { oldCategory: String(defaultCategory || ""), newCategory: result.newCategory, typeFile: result.typeFile || defaultGroup };
+}
+
 function showNewPromptGroupDialog() {
     return formDialog({
         title: "New Prompt Group",
@@ -301,10 +337,6 @@ export function configurePromptBrowserDeps(deps = {}) {
     if (typeof deps.DEFAULT_THUMBNAIL === "string") DEFAULT_THUMBNAIL = deps.DEFAULT_THUMBNAIL;
 
     if (typeof deps.loadPrompts === "function") loadPrompts = deps.loadPrompts;
-    if (typeof deps.showInfo === "function") showInfo = deps.showInfo;
-    if (typeof deps.showConfirm === "function") showConfirm = deps.showConfirm;
-    if (typeof deps.showRenameCategoryDialog === "function") showRenameCategoryDialog = deps.showRenameCategoryDialog;
-    if (typeof deps.showNewCategoryDialog === "function") showNewCategoryDialog = deps.showNewCategoryDialog;
     if (typeof deps.ensureThumbnailRenderSelection === "function") ensureThumbnailRenderSelection = deps.ensureThumbnailRenderSelection;
     if (typeof deps.resolveThumbnailFallbackBase === "function") resolveThumbnailFallbackBase = deps.resolveThumbnailFallbackBase;
     if (typeof deps.generateThumbnailForPrompt === "function") generateThumbnailForPrompt = deps.generateThumbnailForPrompt;
@@ -702,7 +734,7 @@ function _attachThumbnailDropHandlers(element, node, category, promptName, onUpd
         if (!hasFiles) return;
         e.preventDefault();
         e.stopPropagation();
-        element.style.outline = "2px dashed #4CAF50";
+        element.style.outline = `2px dashed ${T.brand}`;
         element.style.outlineOffset = "2px";
     });
     element.addEventListener("dragleave", (e) => {
@@ -727,7 +759,6 @@ function _attachThumbnailDropHandlers(element, node, category, promptName, onUpd
                 "Replace Thumbnail",
                 `"${promptName}" already has a thumbnail. Do you want to replace it with the dropped image?`,
                 "Replace",
-                "#c00"
             );
             if (!confirmed) return;
         }
@@ -1158,86 +1189,6 @@ function getOrderedComposerCategories(node, categories = null) {
         const bIndex = categoryOrder.has(b) ? categoryOrder.get(b) : Number.POSITIVE_INFINITY;
         if (aIndex !== bIndex) return aIndex - bIndex;
         return a.localeCompare(b);
-    });
-}
-
-function showEditBasePromptDialog(categoryName, currentValue, useOverlay = false) {
-    return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 10000;
-        `;
-
-        const dialog = document.createElement("div");
-        dialog.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #222;
-            border: 2px solid #444;
-            border-radius: 8px;
-            padding: 16px;
-            z-index: 10001;
-            width: min(680px, calc(100vw - 36px));
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            color: #fff;
-        `;
-
-        dialog.innerHTML = `
-            <div style="font-size: 16px; font-weight: bold; margin-bottom: 8px;">Edit Base Prompt</div>
-            <div style="font-size: 12px; color: #aaa; margin-bottom: 10px;">Category: ${categoryName}</div>
-            <textarea style="width: 100%; min-height: 140px; resize: vertical; background: #303030; border: 1px solid #555; color: #fff; border-radius: 4px; padding: 8px; box-sizing: border-box; font-size: 13px;"></textarea>
-            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px;">
-                <button class="cancel-btn" style="padding: 8px 14px; background: #555; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button class="save-btn" style="padding: 8px 14px; background: #2b7cff; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Save</button>
-            </div>
-        `;
-
-        const textarea = dialog.querySelector("textarea");
-        const saveBtn = dialog.querySelector(".save-btn");
-        const cancelBtn = dialog.querySelector(".cancel-btn");
-        textarea.value = String(currentValue || "");
-
-        const cleanup = () => {
-            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
-        };
-
-        const handleSave = () => {
-            resolve(String(textarea.value || ""));
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            resolve(null);
-            cleanup();
-        };
-
-        saveBtn.onclick = handleSave;
-        cancelBtn.onclick = handleCancel;
-        overlay.onclick = handleCancel;
-
-        textarea.onkeydown = (e) => {
-            if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                handleCancel();
-            }
-        };
-
-        if (useOverlay) {
-            document.body.appendChild(overlay);
-        }
-        document.body.appendChild(dialog);
-        textarea.focus();
-        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     });
 }
 
@@ -2365,15 +2316,14 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             typeRailTooltip.style.cssText = `
                 position: fixed;
                 display: none;
-                background: ${UI.panel};
-                border: 1px solid ${UI.accentBorder};
-                border-radius: 8px;
-                color: ${UI.textPrimary || "#ddd"};
-                font-size: 13px;
-                line-height: 1.2;
-                padding: 8px 10px;
+                background: ${T.panel};
+                border: 1px solid ${T.plateEdge};
+                border-radius: ${RADIUS}px;
+                color: ${T.inkSoft};
+                font: 12px/1.2 ${FONT};
+                padding: 7px 10px;
                 box-shadow: 0 10px 28px rgba(0,0,0,0.55);
-                z-index: 10003;
+                z-index: ${Z_MENU};
                 pointer-events: none;
                 white-space: nowrap;
             `;
@@ -2438,8 +2388,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             const targetBtn = visibleButtons[targetIndex];
             const previousBtn = targetIndex > 0 ? visibleButtons[targetIndex - 1] : null;
             const nextBtn = targetIndex < visibleButtons.length - 1 ? visibleButtons[targetIndex + 1] : null;
-            const highlight = "rgba(147, 197, 253, 1)";
-            const glow = "rgba(56, 130, 246, 0.5)";
+            const highlight = T.brandInk;
+            const glow = T.brandSoftHover;
 
             if (dragHoverPosition === "before") {
                 targetBtn.style.boxShadow = `inset 0 4px 0 ${highlight}, 0 0 0 1px ${glow}`;
@@ -2521,13 +2471,13 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 const labelEl = btn.querySelector(".pm-type-rail-label");
                 const iconEl = btn.querySelector(".pm-type-rail-icon");
                 btn.style.display = isHidden ? "none" : "flex";
-                btn.style.background = isSelected ? "rgba(56, 130, 246, 0.22)" : "transparent";
+                btn.style.background = isSelected ? T.brandSoftHover : "transparent";
                 if (isNSFW && !isSelected) {
-                    btn.style.borderColor = "#944";
+                    btn.style.borderColor = T.danger;
                 } else {
-                    btn.style.borderColor = isSelected ? "rgba(56, 130, 246, 0.85)" : "rgba(95, 103, 115, 0.75)";
+                    btn.style.borderColor = isSelected ? T.brand : T.plateEdge;
                 }
-                btn.style.color = isSelected ? "#dbeafe" : "#c7d0db";
+                btn.style.color = isSelected ? T.ink : T.label;
                 btn.style.justifyContent = typeRailExpanded ? "flex-start" : "center";
                 btn.style.padding = typeRailExpanded ? "3px 8px" : "2px";
                 btn.title = "";
@@ -2544,11 +2494,11 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 btn.style.transform = isDraggingSelf ? "scale(1.04)" : "none";
                 btn.style.zIndex = isDraggingSelf ? "2" : "0";
                 if (isDraggingSelf) {
-                    btn.style.background = "rgba(56, 130, 246, 0.3)";
-                    btn.style.borderColor = "rgba(56, 130, 246, 1)";
-                    btn.style.color = "#eef6ff";
+                    btn.style.background = T.brandSoftHover;
+                    btn.style.borderColor = T.brand;
+                    btn.style.color = T.ink;
                 } else if (isDropHighlight) {
-                    btn.style.background = isSelected ? "rgba(56, 130, 246, 0.28)" : "rgba(147, 197, 253, 0.1)";
+                    btn.style.background = isSelected ? T.brandSoftHover : T.brandSoft;
                 }
                 btn.style.boxShadow = "none";
                 btn.style.outline = "none";
@@ -2582,10 +2532,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     width: 100%;
                     min-height: 42px;
                     padding: 2px;
-                    border-radius: 10px;
-                    border: 1px solid rgba(95, 103, 115, 0.75);
+                    border-radius: ${RADIUS_CARD}px;
+                    border: 1px solid ${T.plateEdge};
                     background: transparent;
-                    color: #c7d0db;
+                    color: ${T.label};
                     cursor: pointer;
                     font-size: 13px;
                     white-space: nowrap;
@@ -2746,10 +2696,10 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             toggleBtn.style.cssText = `
                 width: 100%;
                 height: 34px;
-                border-radius: 8px;
-                border: 1px solid ${UI.inputBorder};
-                background: ${UI.buttonBg};
-                color: #c7d0db;
+                border-radius: ${RADIUS}px;
+                border: none;
+                background: ${T.fill};
+                color: ${T.label};
                 cursor: pointer;
                 font-size: 14px;
                 margin-bottom: 8px;
@@ -2780,16 +2730,16 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 min-width: 34px;
                 min-height: 34px;
                 padding: 0;
-                border-radius: 6px;
-                border: 1px solid #5f6773;
-                background: #313843;
-                color: #aaa;
+                border-radius: ${RADIUS}px;
+                border: none;
+                background: ${T.fill};
+                color: ${T.label};
                 cursor: pointer;
                 font-size: 13px;
                 white-space: nowrap;
                 overflow: hidden;
                 box-sizing: border-box;
-                transition: all 0.15s ease;
+                transition: background 0.15s ease;
                 margin-top: 6px;
                 flex-shrink: 0;
             `;
@@ -2820,8 +2770,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             `;
 
             addTypeBtn.onmouseover = (evt) => {
-                addTypeBtn.style.background = "#38414c";
-                addTypeBtn.style.color = "#fff";
+                addTypeBtn.style.background = T.fillHover;
+                addTypeBtn.style.color = T.ink;
                 if (!typeRailExpanded) {
                     showTypeRailTooltip("New Prompt Group", evt.clientX, evt.clientY);
                 }
@@ -2833,8 +2783,8 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             };
             addTypeBtn.onmouseout = () => {
                 hideTypeRailTooltip();
-                addTypeBtn.style.background = "#313843";
-                addTypeBtn.style.color = "#aaa";
+                addTypeBtn.style.background = T.fill;
+                addTypeBtn.style.color = T.label;
             };
             addTypeBtn.onclick = async () => {
                 const canProceed = await canChangeEditorContext();
@@ -2977,7 +2927,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     ? `Re-generate thumbnails for ${names.length} prompt(s) in "${categoryLabel}"? Existing thumbnails will be replaced.`
                     : `Generate thumbnails for ${names.length} prompt(s) in "${categoryLabel}"?`;
                 const confirmText = regenerateAll ? "Re-Generate" : "Generate";
-                if (!await showConfirm(title, confirmMessage, confirmText, "#4CAF50")) {
+                if (!await showConfirm(title, confirmMessage, confirmText, { danger: false })) {
                     return;
                 }
 
@@ -3166,7 +3116,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                         ? `Re-generate thumbnails for ${refs.length} prompt(s) in "${typeLabel}"? Existing thumbnails will be replaced.`
                         : `Generate thumbnails for ${refs.length} prompt(s) in "${typeLabel}"?`,
                     options.regenerateAll ? "Re-Generate" : "Generate",
-                    "#4CAF50"
+                    { danger: false }
                 );
                 if (!confirmed) return;
 
@@ -3705,7 +3655,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     "Delete Prompts",
                     `Are you sure you want to delete ${selectedList.length} selected prompt(s)?`,
                     "Delete",
-                    "#c44"
                 );
                 if (!confirmed) return;
 
@@ -4750,8 +4699,6 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     "Overwrite Prompt",
                     `Prompt "${name}" already exists in category "${categoryLabel}". Do you want to replace it?`,
                     "Replace",
-                    "#c44",
-                    false
                 );
                 if (!overwrite) {
                     return;
@@ -4803,7 +4750,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
             margin-bottom: 0;
             font-size: 12px;
             line-height: 1.35;
-            color: #8a95a6;
+            color: ${T.faint};
             text-align: center;
         `;
 
@@ -4815,28 +4762,16 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 align-items: center;
                 margin-top: 8px;
                 padding-top: 8px;
-                border-top: 1px solid ${UI.sectionBorder};
+                border-top: 1px solid ${T.rule};
             `;
 
             if (!saveUsesEditPanel) {
-                saveNameInput = document.createElement("input");
+                saveNameInput = el("input", "fbui-text");
                 saveNameInput.type = "text";
+                saveNameInput.spellcheck = false;
                 saveNameInput.value = selectedSaveName;
                 saveNameInput.placeholder = saveNamePlaceholder;
-                saveNameInput.style.cssText = `
-                    flex: 1;
-                    min-width: 0;
-                    padding: 7px 10px;
-                    background: ${UI.inputBg};
-                    border: 1px solid ${UI.inputBorder};
-                    border-radius: 4px;
-                    color: #fff;
-                    font-size: 13px;
-                    box-sizing: border-box;
-                    outline: none;
-                `;
-                saveNameInput.onfocus = () => saveNameInput.style.borderColor = UI.accent;
-                saveNameInput.onblur = () => saveNameInput.style.borderColor = UI.inputBorder;
+                saveNameInput.style.cssText = "flex: 1; min-width: 0; user-select: text;";
                 saveNameInput.onkeydown = async (e) => {
                     if (e.key === "Enter") {
                         e.preventDefault();
@@ -4846,34 +4781,12 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 };
             }
 
-            saveActionButton = document.createElement("button");
-            saveActionButton.textContent = saveButtonText;
-            saveActionButton.style.cssText = `
-                background: #2b6d3a;
-                border: 1px solid #4a9158;
-                color: #fff;
-                padding: 7px 14px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 13px;
-                white-space: nowrap;
-            `;
+            saveActionButton = button(saveButtonText, { primary: true });
             saveActionButton.onclick = async () => {
                 await handleSaveAction();
             };
 
-            cancelSaveButton = document.createElement("button");
-            cancelSaveButton.textContent = "Cancel";
-            cancelSaveButton.style.cssText = `
-                background: #313843;
-                border: 1px solid #5f6773;
-                color: #ccc;
-                padding: 7px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 13px;
-                white-space: nowrap;
-            `;
+            cancelSaveButton = button("Cancel");
             cancelSaveButton.onclick = () => {
                 resolve(null);
                 cleanup();
@@ -4892,7 +4805,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 justify-content: space-between;
                 margin-top: 8px;
                 padding-top: 8px;
-                border-top: 1px solid ${UI.sectionBorder};
+                border-top: 1px solid ${T.rule};
             `;
 
             const selectionTools = document.createElement("div");
@@ -4909,18 +4822,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 gap: 8px;
             `;
 
-            const clearSelectionBtn = document.createElement("button");
-            clearSelectionBtn.textContent = "Clear";
-            clearSelectionBtn.style.cssText = `
-                background: #313843;
-                border: 1px solid #5f6773;
-                color: #ccc;
-                padding: 7px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 13px;
-                white-space: nowrap;
-            `;
+            const clearSelectionBtn = button("Clear");
             clearSelectionBtn.onclick = () => {
                 selectedNames.clear();
                 if (multiCategorySelect) {
@@ -4934,18 +4836,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 renderContent(searchInput.value);
             };
 
-            const selectAllBtn = document.createElement("button");
-            selectAllBtn.textContent = "Select All";
-            selectAllBtn.style.cssText = `
-                background: #313843;
-                border: 1px solid #5f6773;
-                color: #ccc;
-                padding: 7px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 13px;
-                white-space: nowrap;
-            `;
+            const selectAllBtn = button("Select All");
             selectAllBtn.onclick = () => {
                 const visiblePrompts = getFilteredPrompts(searchInput.value);
                 visiblePrompts.forEach((promptName) => selectedNames.add(promptName));
@@ -4957,18 +4848,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 renderContent(searchInput.value);
             };
 
-            const cancelBtn = document.createElement("button");
-            cancelBtn.textContent = "Cancel";
-            cancelBtn.style.cssText = `
-                background: #313843;
-                border: 1px solid #5f6773;
-                color: #ccc;
-                padding: 7px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 13px;
-                white-space: nowrap;
-            `;
+            const cancelBtn = button("Cancel");
             cancelBtn.onclick = () => {
                 resolve(null);
                 cleanup();
@@ -5001,20 +4881,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 return result;
             };
 
-            const selectBtn = document.createElement("button");
-            selectBtn.textContent = useComposerMultiSelectActions
+            const selectBtn = button(useComposerMultiSelectActions
                 ? `Add as 1 Prompt (${selectedNames.size})`
-                : `Select (${selectedNames.size})`;
-            selectBtn.style.cssText = `
-                background: #2b6d3a;
-                border: 1px solid #4a9158;
-                color: #fff;
-                padding: 7px 14px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 13px;
-                white-space: nowrap;
-            `;
+                : `Select (${selectedNames.size})`, { primary: true });
             updateSelectButton = () => {
                 const count = multiCategorySelect
                     ? Object.values(selectedByCategory).reduce((sum, set) => sum + set.size, 0)
@@ -5023,13 +4892,9 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                     ? `Add as 1 Prompt (${count})`
                     : `Select (${count})`;
                 selectBtn.disabled = count === 0;
-                selectBtn.style.opacity = count === 0 ? "0.55" : "1";
-                selectBtn.style.cursor = count === 0 ? "default" : "pointer";
                 if (addAllPromptsBtn) {
                     addAllPromptsBtn.textContent = `Add All Prompts (${count})`;
                     addAllPromptsBtn.disabled = count === 0;
-                    addAllPromptsBtn.style.opacity = count === 0 ? "0.55" : "1";
-                    addAllPromptsBtn.style.cursor = count === 0 ? "default" : "pointer";
                 }
             };
             selectBtn.addEventListener("click", (e) => {
@@ -5043,17 +4908,7 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
 
             let addAllPromptsBtn = null;
             if (useComposerMultiSelectActions) {
-                addAllPromptsBtn = document.createElement("button");
-                addAllPromptsBtn.style.cssText = `
-                    background: #2b6d3a;
-                    border: 1px solid #4a9158;
-                    color: #fff;
-                    padding: 7px 14px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 13px;
-                    white-space: nowrap;
-                `;
+                addAllPromptsBtn = button("", { primary: true });
                 addAllPromptsBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     if (addAllPromptsBtn.disabled) {
