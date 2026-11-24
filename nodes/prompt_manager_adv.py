@@ -4,7 +4,7 @@ Saves prompts along with associated LoRA configurations
 """
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import server
 from ..py.prompt_metadata import record_prompt
 from ..py.prompt_store import is_hidden_key, load_prompts, save_prompts
@@ -12,43 +12,15 @@ from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflo
 
 
 def _has_meaningful_workflow_data(workflow_data):
-    """Return True when workflow_data contains authored prompt/model/lora content."""
-    if not isinstance(workflow_data, dict):
-        return False
-
-    if int(workflow_data.get("version", 0) or 0) >= 2 and isinstance(workflow_data.get("models"), dict):
-        for mk in ("model_a", "model_b", "model_c", "model_d"):
-            block = workflow_data.get("models", {}).get(mk)
-            if not isinstance(block, dict):
-                continue
-            positive_prompt = str(block.get("positive_prompt", "")).strip()
-            model_name = str(block.get("model", "")).strip()
-            loras = block.get("loras")
-            has_loras = isinstance(loras, list) and any(
-                isinstance(lora_item, dict) and str(lora_item.get("name", "")).strip()
-                for lora_item in loras
-            )
-            if positive_prompt or model_name or has_loras:
-                return True
-        return False
-
-    positive_prompt = str(workflow_data.get("positive_prompt", "")).strip()
-    model_a = str(workflow_data.get("model_a", "")).strip()
-    model_b = str(workflow_data.get("model_b", "")).strip()
-
-    loras_a = workflow_data.get("loras_a")
-    has_loras_a = isinstance(loras_a, list) and any(
-        isinstance(lora_item, dict) and str(lora_item.get("name", "")).strip()
-        for lora_item in loras_a
-    )
-
-    loras_b = workflow_data.get("loras_b")
-    has_loras_b = isinstance(loras_b, list) and any(
-        isinstance(lora_item, dict) and str(lora_item.get("name", "")).strip()
-        for lora_item in loras_b
-    )
-
-    return bool(positive_prompt or model_a or model_b or has_loras_a or has_loras_b)
+    """Return True when v2 recipe data contains authored prompt/model/lora content."""
+    for block in workflow_data.get("models", {}).values():
+        if not isinstance(block, dict):
+            continue
+        loras = block.get("loras")
+        has_loras = isinstance(loras, list) and any(isinstance(lora, dict) and str(lora.get("name", "")).strip() for lora in loras)
+        if str(block.get("positive_prompt", "")).strip() or str(block.get("model", "")).strip() or has_loras:
+            return True
+    return False
 
 
 def _normalize_workflow_loras_for_prompt(loras):
@@ -1062,9 +1034,47 @@ class PromptManagerAdvanced:
 
 # API Routes for Advanced Prompt Manager
 
+def _normalize_saved_loras(loras):
+    """LoRAs from the frontend in the saved schema; the path is kept when present for a lossless restore."""
+    return [
+        {
+            "name": lora.get("name"),
+            "path": lora.get("path", lora.get("name")),
+            "strength": lora.get("strength", lora.get("model_strength", 1.0)),
+            "clip_strength": lora.get("clip_strength", lora.get("strength", 1.0)),
+            "active": lora.get("active", True),
+            "available": bool(lora.get("available", True)),
+        }
+        for lora in loras
+        if isinstance(lora, dict) and lora.get("name")
+    ]
+
+
+def _normalize_trigger_words(words):
+    """Trigger words as {text, active}, each once whatever its case."""
+    normalized = []
+    seen = set()
+    for word in words:
+        if isinstance(word, dict) and word.get("text"):
+            text, active = word["text"].strip(), word.get("active", True)
+        elif isinstance(word, str):
+            text, active = word.strip(), True
+        else:
+            continue
+        if text and text.lower() not in seen:
+            normalized.append({"text": text, "active": active})
+            seen.add(text.lower())
+    return normalized
+
+
+# Keys the save route writes; any other key on a saved prompt (workflow_config from RecipeManager, future fields)
+# is kept as it was.
+_SAVED_KEYS = {"prompt", "negative_prompt", "loras_a", "loras_b", "loras_c", "loras_d", "trigger_words", "thumbnail", "nsfw", "workflow_data", "saved_from", "saved_at"}
+
+
 @server.PromptServer.instance.routes.post("/prompt-manager-advanced/save-prompt")
 async def save_prompt_advanced(request):
-    """API endpoint to save a prompt with lora configurations"""
+    """Save a prompt with its LoRAs, trigger words and recipe data; old_category / old_name rename or move it."""
     try:
         data = await request.json()
         category = data.get("category", "").strip()
@@ -1072,11 +1082,6 @@ async def save_prompt_advanced(request):
         text = data.get("text", "").strip()
         old_category = data.get("old_category", "").strip() or category
         old_name = data.get("old_name", "").strip() or name
-        loras_a = data.get("loras_a", [])
-        loras_b = data.get("loras_b", [])
-        loras_c = data.get("loras_c", [])
-        loras_d = data.get("loras_d", [])
-        trigger_words = data.get("trigger_words", [])
 
         if not category or not name:
             return server.web.json_response({"success": False, "error": "Category and name are required"})
@@ -1112,193 +1117,65 @@ async def save_prompt_advanced(request):
         if existing_old_name and (old_category != category or existing_old_name != name):
             existing_prompt = source_prompts.pop(existing_old_name, existing_prompt)
 
-        # Case-insensitive check for existing prompt
-        # Get existing prompt data BEFORE potentially deleting it (to preserve thumbnail)
-        existing_prompts_lower = {
-            k.lower(): k
-            for k in prompts[category].keys()
-            if not is_hidden_key(k)
-        }
+        # The same prompt under another casing is replaced by this one.
+        existing_prompts_lower = {k.lower(): k for k in prompts[category].keys() if not is_hidden_key(k)}
         if name.lower() in existing_prompts_lower:
             casing_name = existing_prompts_lower[name.lower()]
             existing_prompt = prompts[category].get(casing_name, existing_prompt)
             if casing_name != name:
-                # Delete the old casing version
-                print(f"[PromptManagerAdvanced] Removing old casing '{casing_name}' before saving as '{name}'")
                 del prompts[category][casing_name]
 
-        # Normalize lora data - keep path when present for lossless save/restore.
-        def normalize_lora_data(loras):
-            normalized = []
-            for lora in loras:
-                if isinstance(lora, dict) and lora.get('name'):
-                    available = lora.get('available', lora.get('available', True))
-                    normalized.append({
-                        "name": lora.get('name'),
-                        "path": lora.get('path', lora.get('name')),
-                        "strength": lora.get('strength', lora.get('model_strength', 1.0)),
-                        "clip_strength": lora.get('clip_strength', lora.get('strength', 1.0)),
-                        "active": lora.get('active', True),
-                        "available": bool(available),
-                    })
-            return normalized
-
-        def normalize_workflow_lora_data(wf_loras):
-            """Normalize LoRAs coming from workflow_data payload structure."""
-            normalized = []
-            if not isinstance(wf_loras, list):
-                return normalized
-            for lora in wf_loras:
-                if not isinstance(lora, dict):
-                    continue
-                name = str(lora.get('name', '')).strip()
-                if not name:
-                    continue
-                strength = lora.get('strength', lora.get('model_strength', 1.0))
-                clip_strength = lora.get('clip_strength', strength)
-                available = lora.get('available', lora.get('available', True))
-                normalized.append({
-                    "name": name,
-                    "path": lora.get('path', name),
-                    "strength": strength,
-                    "clip_strength": clip_strength,
-                    "active": lora.get('active', True),
-                    "available": bool(available),
-                })
-            return normalized
-
-        # Normalize trigger words data
-        def normalize_trigger_words(words):
-            normalized = []
-            seen = set()
-            for word in words:
-                if isinstance(word, dict) and word.get('text'):
-                    text = word['text'].strip()
-                    text_lower = text.lower()
-                    if text and text_lower not in seen:
-                        normalized.append({
-                            "text": text,
-                            "active": word.get('active', True)
-                        })
-                        seen.add(text_lower)
-                elif isinstance(word, str) and word.strip():
-                    text = word.strip()
-                    text_lower = text.lower()
-                    if text_lower not in seen:
-                        normalized.append({"text": text, "active": True})
-                        seen.add(text_lower)
-            return normalized
-
-        # Preserve existing thumbnail if not provided, or use new thumbnail
         thumbnail = data.get("thumbnail")
         if thumbnail is None:
             thumbnail = existing_prompt.get("thumbnail")
 
-        # Save workflow_data if provided.
         workflow_data = data.get("workflow_data")
-        wf_to_save = None
-        if isinstance(workflow_data, dict):
-            wf_to_save = to_json_safe_workflow_data(ensure_v2_recipe_data(workflow_data, source="PromptManagerAdvanced"))
-        elif isinstance(workflow_data, str) and workflow_data.strip():
+        if isinstance(workflow_data, str) and workflow_data.strip():
             try:
-                parsed_wf = json.loads(workflow_data)
-                if isinstance(parsed_wf, dict):
-                    wf_to_save = to_json_safe_workflow_data(ensure_v2_recipe_data(parsed_wf, source="PromptManagerAdvanced"))
-            except (json.JSONDecodeError, TypeError):
-                wf_to_save = None
+                workflow_data = json.loads(workflow_data)
+            except json.JSONDecodeError:
+                workflow_data = None
+        wf_to_save = to_json_safe_workflow_data(ensure_v2_recipe_data(workflow_data, source="PromptManagerAdvanced")) if isinstance(workflow_data, dict) else None
+        wf_models = wf_to_save.get("models", {}) if wf_to_save and isinstance(wf_to_save.get("models"), dict) else {}
+        recipe_is_authored = bool(wf_to_save) and _has_meaningful_workflow_data(wf_to_save)
 
-        # Save prompt with normalized lora data (no paths - they're resolved at runtime)
-        normalized_loras_a = normalize_lora_data(loras_a)
-        normalized_loras_b = normalize_lora_data(loras_b)
-        normalized_loras_c = normalize_lora_data(loras_c)
-        normalized_loras_d = normalize_lora_data(loras_d)
-
-        workflow_has_meaningful_data = _has_meaningful_workflow_data(wf_to_save)
-
-        # Workflow Saver parity: when meaningful workflow_data is present, treat
-        # its LoRA lists as authoritative for persistence.
-        wf_models = (wf_to_save or {}).get("models", {}) if isinstance((wf_to_save or {}).get("models"), dict) else {}
-        wf_loras_a = normalize_workflow_lora_data((wf_models.get("model_a") or {}).get("loras", []))
-        wf_loras_b = normalize_workflow_lora_data((wf_models.get("model_b") or {}).get("loras", []))
-        wf_loras_c = normalize_workflow_lora_data((wf_models.get("model_c") or {}).get("loras", []))
-        wf_loras_d = normalize_workflow_lora_data((wf_models.get("model_d") or {}).get("loras", []))
-        if isinstance(wf_to_save, dict) and workflow_has_meaningful_data:
-            if isinstance(wf_models.get("model_a"), dict) and wf_loras_a:
-                normalized_loras_a = wf_loras_a
-            elif not normalized_loras_a and wf_loras_a:
-                normalized_loras_a = wf_loras_a
-
-            if isinstance(wf_models.get("model_b"), dict) and wf_loras_b:
-                normalized_loras_b = wf_loras_b
-            elif not normalized_loras_b and wf_loras_b:
-                normalized_loras_b = wf_loras_b
-
-            if isinstance(wf_models.get("model_c"), dict) and wf_loras_c:
-                normalized_loras_c = wf_loras_c
-            elif not normalized_loras_c and wf_loras_c:
-                normalized_loras_c = wf_loras_c
-
-            if isinstance(wf_models.get("model_d"), dict) and wf_loras_d:
-                normalized_loras_d = wf_loras_d
-            elif not normalized_loras_d and wf_loras_d:
-                normalized_loras_d = wf_loras_d
-
-        # Guard against accidental empty-stack overwrites from transient UI state.
-        # If the incoming payload has no LoRAs for a side, preserve existing saved
-        # LoRAs for that side instead of silently erasing them.
-        if not normalized_loras_a and isinstance(existing_prompt.get("loras_a"), list):
-            normalized_loras_a = existing_prompt.get("loras_a", [])
-        if not normalized_loras_b and isinstance(existing_prompt.get("loras_b"), list):
-            normalized_loras_b = existing_prompt.get("loras_b", [])
-        if not normalized_loras_c and isinstance(existing_prompt.get("loras_c"), list):
-            normalized_loras_c = existing_prompt.get("loras_c", [])
-        if not normalized_loras_d and isinstance(existing_prompt.get("loras_d"), list):
-            normalized_loras_d = existing_prompt.get("loras_d", [])
-
-        prompt_data = {
-            "prompt": text,
-            "loras_a": normalized_loras_a,
-            "loras_b": normalized_loras_b,
-            "loras_c": normalized_loras_c,
-            "loras_d": normalized_loras_d,
-            "trigger_words": normalize_trigger_words(trigger_words)
-        }
-
-        # Persist prompt fields from workflow_data snapshot when available.
-        if isinstance(wf_to_save, dict):
-            model_a_block = wf_models.get("model_a") if isinstance(wf_models.get("model_a"), dict) else {}
-            if isinstance(model_a_block.get("positive_prompt"), str) and model_a_block.get("positive_prompt", "").strip():
-                prompt_data["prompt"] = model_a_block.get("positive_prompt", "")
-            if isinstance(model_a_block.get("negative_prompt"), str):
-                prompt_data["negative_prompt"] = model_a_block.get("negative_prompt", "")
-            prompt_data["saved_from"] = str(wf_to_save.get("_source") or "RecipeManager")
-            prompt_data["saved_at"] = datetime.utcnow().isoformat() + "Z"
+        prompt_data = {"prompt": text}
+        for slot in _MODEL_SLOT_KEYS:
+            loras = _normalize_saved_loras(data.get(f"loras_{slot}", []))
+            # An authored recipe's LoRAs are authoritative, as in Workflow Saver.
+            recipe_loras = _normalize_workflow_loras_for_prompt((wf_models.get(f"model_{slot}") or {}).get("loras", []))
+            if recipe_is_authored and recipe_loras:
+                loras = recipe_loras
+            # A side sent with no LoRAs keeps the saved ones: transient UI state must not erase them.
+            if not loras and isinstance(existing_prompt.get(f"loras_{slot}"), list):
+                loras = existing_prompt[f"loras_{slot}"]
+            prompt_data[f"loras_{slot}"] = loras
+        prompt_data["trigger_words"] = _normalize_trigger_words(data.get("trigger_words", []))
 
         if wf_to_save:
+            model_a_block = wf_models.get("model_a") if isinstance(wf_models.get("model_a"), dict) else {}
+            if isinstance(model_a_block.get("positive_prompt"), str) and model_a_block.get("positive_prompt", "").strip():
+                prompt_data["prompt"] = model_a_block["positive_prompt"]
+            if isinstance(model_a_block.get("negative_prompt"), str):
+                prompt_data["negative_prompt"] = model_a_block["negative_prompt"]
+            prompt_data["saved_from"] = str(wf_to_save.get("_source") or "RecipeManager")
+            prompt_data["saved_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
             prompt_data["workflow_data"] = wf_to_save
-        else:
-            # Preserve previously saved workflow_data when user saves prompt/LoRA
-            # edits without a currently connected workflow_data source.
-            existing_wf = existing_prompt.get("workflow_data")
-            if isinstance(existing_wf, dict):
-                prompt_data["workflow_data"] = to_json_safe_workflow_data(ensure_v2_recipe_data(existing_wf, source="PromptManagerAdvanced"))
+        elif isinstance(existing_prompt.get("workflow_data"), dict):
+            # Prompt or LoRA edits saved without a connected recipe keep the saved recipe.
+            prompt_data["workflow_data"] = to_json_safe_workflow_data(ensure_v2_recipe_data(existing_prompt["workflow_data"], source="PromptManagerAdvanced"))
 
         if thumbnail:
             prompt_data["thumbnail"] = thumbnail
 
-        # Preserve or set NSFW flag
         nsfw = data.get("nsfw")
         if nsfw is not None:
             prompt_data["nsfw"] = bool(nsfw)
         elif existing_prompt.get("nsfw"):
             prompt_data["nsfw"] = existing_prompt["nsfw"]
 
-        # Preserve any extra fields from an existing prompt that this node does not manage.
-        # This includes workflow_config (added by RecipeManager) and any future extensions.
-        # Known managed keys — everything else is preserved verbatim.
-        _MANAGED_KEYS = {"prompt", "negative_prompt", "loras_a", "loras_b", "loras_c", "loras_d", "trigger_words", "thumbnail", "nsfw", "workflow_data", "saved_from", "saved_at"}
         for extra_key, extra_val in existing_prompt.items():
-            if extra_key not in _MANAGED_KEYS and extra_key not in prompt_data:
+            if extra_key not in _SAVED_KEYS and extra_key not in prompt_data:
                 prompt_data[extra_key] = extra_val
 
         prompts[category][name] = prompt_data
