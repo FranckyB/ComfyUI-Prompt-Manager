@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+- **New node: Multi LoRA Relay**
+  - Combines and splits LoRA stacks in one node, passing through on both ends like Recipe Relay: `lora_stacks` (a multi stack, or a plain stack as slot A) and `lora_stack_a`..`d` in; the same out. A stack wired to a slot is appended to it.
+  - Multi LoRA Combine and Multi LoRA Splitter are now legacy; old workflows keep working.
+- **Fixes**
+  - Saving a prompt in Prompt Manager (Basic) no longer wipes the LoRAs C/D, recipe data and negative prompt saved by the full Prompt Manager.
+  - Importing a library keeps every field of a prompt (recipe data, negative prompt, extra fields) and the category base prompt / prefix.
+  - Prompt Manager no longer resets its LoRA and trigger-word toggles on every run when no LoRAs are connected to its inputs.
+  - Prompt Manager (Basic): the unsaved-changes warning works, and switching to an empty category no longer fails.
+  - The prompt library is read once per load instead of about four times, and an unreadable library is never overwritten with the default prompts.
+  - Library files can only be opened as JSON.
+
 ## version 3.0.1
 - **Prompt Generator: GPU detection fix for Windows (and recent llama.cpp builds)**
   - `--n-gpu-layers 0` is no longer forced just because GPU support could not be detected. On Windows the old check always failed (`ldd` does not exist there, `--version` no longer names the backend, and `-h` lists `--n-gpu-layers` on every build), which pushed CUDA users into CPU inference and printed a misleading "CPU-only build" error.

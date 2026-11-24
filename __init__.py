@@ -26,7 +26,7 @@ from .nodes.recipe_relay import WorkflowRelay as RecipeRelay
 from .nodes.recipe_model_loader import WorkflowModelLoader as RecipeModelLoader
 from .nodes.recipe_model_picker import RecipeModelPicker
 from .nodes.multi_prompt import RecipeBuilderMultiPrompts
-from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter, LoraStackCombine
+from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter, MultiLoraRelay, LoraStackCombine
 
 NODE_CLASS_MAPPINGS = {
     "PromptManagerAdvanced":     PromptManagerAdvanced,
@@ -49,6 +49,7 @@ NODE_CLASS_MAPPINGS = {
     "MultiLoraStackerLM":        MultiLoraStackerLM,
     "MultiLoraCombine":          MultiLoraCombine,
     "MultiLoraSplitter":         MultiLoraSplitter,
+    "MultiLoraRelay":            MultiLoraRelay,
     "LoraStackCombine":          LoraStackCombine,
 }
 
@@ -71,8 +72,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RecipeModelPicker":          "Recipe Model Picker",
     "RecipeBuilderMultiPrompts":  "Multi Prompts",
     "MultiLoraStackerLM":         "Multi LoRA Stack",
-    "MultiLoraCombine":           "Multi LoRA Combine",
-    "MultiLoraSplitter":          "Multi LoRA Splitter",
+    "MultiLoraCombine":           "Multi LoRA Combine (legacy)",
+    "MultiLoraSplitter":          "Multi LoRA Splitter (legacy)",
+    "MultiLoraRelay":             "Multi LoRA Relay",
     "LoraStackCombine":           "LoRA Stack Combine",
 }
 

@@ -270,6 +270,7 @@ class MultiLoraCombine:
 
     NAME = "Multi LoRA Combine"
     CATEGORY = "Prompt Manager"
+    DEPRECATED = True
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -343,6 +344,7 @@ class MultiLoraSplitter:
 
     NAME = "Multi LoRA Splitter"
     CATEGORY = "Prompt Manager"
+    DEPRECATED = True
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -368,6 +370,37 @@ class MultiLoraSplitter:
         out_c = _coerce_lora_stack(multi_lora_stack.get("c"))
         out_d = _coerce_lora_stack(multi_lora_stack.get("d"))
         return (out_a, out_b, out_c, out_d)
+
+
+class MultiLoraRelay:
+    """LoRA stacks in and out as one set of slots A-D and as four plain stacks: a stack wired to a slot is appended
+    to it, so the node combines and splits, and passes through on both ends like Recipe Relay."""
+
+    CATEGORY = "Prompt Manager"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        slots = {f"lora_stack_{slot}": ("LORA_STACK", {"tooltip": f"Appended to slot {slot.upper()}."}) for slot in "abcd"}
+        return {
+            "required": {},
+            "optional": {
+                "lora_stacks": ("LORA_STACK,MULTI_LORA_STACK", {
+                    "tooltip": "LoRA stacks for slots A-D, from a Prompt Manager or another relay; a plain LoRA stack is slot A.",
+                }),
+                **slots,
+            },
+        }
+
+    RETURN_TYPES = ("MULTI_LORA_STACK", "LORA_STACK", "LORA_STACK", "LORA_STACK", "LORA_STACK")
+    RETURN_NAMES = ("lora_stacks", "lora_stack_a", "lora_stack_b", "lora_stack_c", "lora_stack_d")
+    FUNCTION = "relay"
+    DESCRIPTION = "Combine and split LoRA stacks: slots A-D come in as one set and as separate stacks, and go out both ways."
+
+    def relay(self, lora_stacks=None, lora_stack_a=None, lora_stack_b=None, lora_stack_c=None, lora_stack_d=None):
+        incoming = lora_stacks if isinstance(lora_stacks, dict) else {"a": lora_stacks}
+        added = {"a": lora_stack_a, "b": lora_stack_b, "c": lora_stack_c, "d": lora_stack_d}
+        out = {slot: _coerce_lora_stack(incoming.get(slot)) + _coerce_lora_stack(added[slot]) for slot in "abcd"}
+        return (out, out["a"], out["b"], out["c"], out["d"])
 
 
 class LoraStackCombine:
