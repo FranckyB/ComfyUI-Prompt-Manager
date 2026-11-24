@@ -11,6 +11,7 @@ from .py.prompt_store import prompts_path
 from .py.prompt_composer_store import PromptComposerStore
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
+from .nodes import prompt_library_routes  # the routes on the shared prompt library
 from .nodes.prompt_composer import PromptComposer
 from .nodes.library_manager import LibraryManager
 from .nodes.prompt_generator import PromptGenerator, PromptGeneratorDataStore

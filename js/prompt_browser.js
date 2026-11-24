@@ -428,24 +428,6 @@ function _finishThumbQueueProgress() {
     _thumbQueuePromiseChain = Promise.resolve();
 }
 
-async function logThumbnailToServer(category, name, seed, prompt, mode) {
-    try {
-        await api.fetchApi("/prompt-manager/log-thumbnail", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                category: category,
-                name: name,
-                seed: seed,
-                prompt: prompt,
-                mode: mode,
-            })
-        });
-    } catch (e) {
-        console.error("[PromptBrowser] Failed to log thumbnail to server:", e);
-    }
-}
-
 async function _generateThumbnailForBrowserCategory(node, category, promptName, onUpdate, options = {}) {
     const {
         renderSelection: providedRenderSelection = null,
@@ -500,13 +482,9 @@ async function _generateThumbnailForBrowserCategory(node, category, promptName, 
             .join(" ");
     }
 
-    const isComposerManager = endpointPrefix === "/prompt-manager/compose";
     const numericSeed = Number(staticSeed);
     const staticSeedForRun = Number.isFinite(numericSeed) ? Math.trunc(numericSeed) : 42;
 
-    console.log(`[ThumbnailGen] Preparing thumbnail for "${category}/${promptName}" | seed=${staticSeedForRun ?? "random"}`);
-    console.log(`[ThumbnailGen] Effective prompt text: ${promptText}`);
-    logThumbnailToServer(category, promptName, staticSeedForRun, promptText, isComposerManager ? "composer" : "pma");
 
     const activeRenderSelection = providedRenderSelection || (
         (_thumbnailRenderFamily && _thumbnailRenderModel)
