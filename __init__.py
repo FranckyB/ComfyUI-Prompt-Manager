@@ -11,6 +11,7 @@ from .py.prompt_store import prompts_path
 from .py.prompt_composer_store import PromptComposerStore
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
+from .nodes.prompt_manager_v2 import PromptManagerV2
 from .nodes import prompt_library_routes  # the routes on the shared prompt library
 from .nodes.prompt_composer import PromptComposer
 from .nodes.library_manager import LibraryManager
@@ -29,6 +30,7 @@ from .nodes.multi_prompt import RecipeBuilderMultiPrompts
 from .nodes.multi_lora_stacker import MultiLoraStackerLM, MultiLoraCombine, MultiLoraSplitter, MultiLoraRelay, LoraStackCombine
 
 NODE_CLASS_MAPPINGS = {
+    "PromptManagerV2":           PromptManagerV2,
     "PromptManagerAdvanced":     PromptManagerAdvanced,
     "PromptManager":             PromptManager,
     "PromptComposer":            PromptComposer,
@@ -54,8 +56,9 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptManagerAdvanced":      "Prompt Manager",
-    "PromptManager":              "Prompt Manager (Basic)",
+    "PromptManagerV2":            "Prompt Manager",
+    "PromptManagerAdvanced":      "Prompt Manager (legacy)",
+    "PromptManager":              "Prompt Manager (Basic, legacy)",
     "PromptComposer":             "Prompt Composer",
     "LibraryManager":             "Library Manager",
     "PromptGenerator":            "Prompt Generator",

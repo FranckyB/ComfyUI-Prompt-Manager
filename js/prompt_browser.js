@@ -40,7 +40,7 @@ function ensurePromptBrowserCss() {
 .pm-search .lead{display:grid;color:${T.faint}}
 .pm-search .fbui-text{flex:1;min-width:0;height:100%;padding:0;border:none;background:transparent;user-select:text;-webkit-user-select:text}
 .pm-viewgroup{display:flex;gap:2px}
-.pm-categories{display:flex;gap:8px;min-height:0;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid ${T.rule}}
+.pm-categories{flex:none;display:flex;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid ${T.rule}}
 .pm-category-controls{display:flex;gap:6px;flex:none;align-items:flex-start}
 .pm-tabs{display:flex;flex-wrap:wrap;align-content:flex-start;gap:4px;flex:1;min-width:0;max-height:${ROW_HEIGHT * 3 + 8}px;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin;scrollbar-color:${T.fill} transparent}
 .pm-tab{flex:none;height:${ROW_HEIGHT}px;padding:0 12px;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill};color:${T.label};font:500 12px ${FONT};white-space:nowrap;cursor:pointer}
@@ -3348,6 +3348,16 @@ async function standaloneShowThumbnailBrowser(node, currentCategory, currentProm
                 showConfirm,
                 loadPrompts: loadPromptsFn,
                 savePrompt: async (payload) => {
+                    // Saving for a node: the node's own save stores the prompt and selects it, and the browser closes.
+                    if (saveUsesEditPanel && onSave) {
+                        const overwrite = Boolean(getCategoryPromptEntry(node?.prompts?.[payload.category], payload.name, endpointPrefix));
+                        const result = await onSave({ ...payload, overwrite });
+                        if (result?.success) {
+                            resolve(result);
+                            cleanup();
+                        }
+                        return result;
+                    }
                     try {
                         const body = buildSavePromptRequestBodyForEndpoint(endpointPrefix, payload);
                         if (endpointPrefix === "/prompt-manager/compose") {

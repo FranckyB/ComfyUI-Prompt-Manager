@@ -20,6 +20,8 @@ class LibraryManager(PromptManagerAdvanced):
     """Workflow-focused manager for manager_data payloads with explicit thumbnail input."""
 
     SOURCE_NAME = "LibraryManager"
+    # Current, though the legacy Prompt Manager it builds on is deprecated.
+    DEPRECATED = False
 
     @classmethod
     def INPUT_TYPES(cls):

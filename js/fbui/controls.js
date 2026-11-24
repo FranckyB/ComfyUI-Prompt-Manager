@@ -1,12 +1,14 @@
 // Stand-alone controls for panels that are not card rows (a toolbar over a
 // preview, a modal footer). Card rows build on the same classes.
-import { el } from "./dom.js";
+import { chainCallback, chainHandler, el } from "./dom.js";
 
-// button("Browse", { icon, title, primary, danger, small, grow, onClick })
-export function button(label, { icon = "", title = "", primary = false, danger = false, small = false, grow = false, onClick = null } = {}) {
+// button("Browse", { icon, title, primary, soft, danger, small, grow, onClick })
+// soft: the suite's blue action button (Save, New, More).
+export function button(label, { icon = "", title = "", primary = false, soft = false, danger = false, small = false, grow = false, onClick = null } = {}) {
   const node = el("button", "fbui-btn");
   node.type = "button";
   node.classList.toggle("primary", primary);
+  node.classList.toggle("soft", soft);
   node.classList.toggle("danger", danger);
   node.classList.toggle("small", small);
   node.classList.toggle("grow", grow);
@@ -19,66 +21,110 @@ export function button(label, { icon = "", title = "", primary = false, danger =
   return node;
 }
 
-// A small (i) beside a label. A click opens its help in a popover that
-// stays until a click outside it (or Esc), so the text can be selected and
-// copied; a click on a token copies that token. `lines` are strings, or
-// [code, text] pairs shown as a two-column list (tokens and what they do).
-export function info(lines) {
-  const icon = el("span", "fbui-info");
-  icon.innerHTML = ICONS.info;
-  icon.title = "Help";
-  let pop = null;
+// The help popover: `lines` under (or over) `anchor`, a client-pixel box
+// { left, top, bottom }. It stays until a click outside it (or Esc), so the
+// text can be selected and copied; a click on a token copies that token.
+// `lines` are strings, or [code, text] pairs shown as a two-column list
+// (tokens and what they do). Returns close().
+export function openHelp(lines, anchor, { keep = null, onClose = null } = {}) {
+  const pop = el("div", "fbui-pop");
+  pop.tabIndex = -1;
+  for (const line of lines) {
+    if (Array.isArray(line)) {
+      const row = el("div", "pair");
+      const code = el("code", "", line[0]);
+      code.title = "Click to copy";
+      code.addEventListener("click", () => {
+        navigator.clipboard?.writeText(line[0]).then(() => {
+          code.classList.add("copied");
+          setTimeout(() => code.classList.remove("copied"), 900);
+        });
+      });
+      row.append(code, el("span", "", line[1]));
+      pop.append(row);
+    } else {
+      pop.append(el("div", "", line));
+    }
+  }
   const close = () => {
-    pop?.remove();
-    pop = null;
-    icon.classList.remove("on");
+    pop.remove();
     document.removeEventListener("pointerdown", outside, true);
     document.removeEventListener("keydown", onEscape, true);
+    onClose?.();
   };
+  // A press on `keep` (the control that opened it) is that control's to handle.
   const outside = (event) => {
-    if (!pop?.contains(event.target) && !icon.contains(event.target)) close();
+    if (!pop.contains(event.target) && !keep?.contains(event.target)) close();
   };
   const onEscape = (event) => {
     if (event.key === "Escape") close();
   };
-  const open = () => {
-    pop = el("div", "fbui-pop");
-    pop.tabIndex = -1;
-    for (const line of lines) {
-      if (Array.isArray(line)) {
-        const row = el("div", "pair");
-        const code = el("code", "", line[0]);
-        code.title = "Click to copy";
-        code.addEventListener("click", () => {
-          navigator.clipboard?.writeText(line[0]).then(() => {
-            code.classList.add("copied");
-            setTimeout(() => code.classList.remove("copied"), 900);
-          });
-        });
-        row.append(code, el("span", "", line[1]));
-        pop.append(row);
-      } else {
-        pop.append(el("div", "", line));
-      }
-    }
-    // Keys typed here (Ctrl+C on a selection) are the popover's, not the canvas's.
-    pop.addEventListener("keydown", (event) => event.stopPropagation());
-    document.body.append(pop);
-    const box = icon.getBoundingClientRect();
-    pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, box.left))}px`;
-    const below = box.bottom + 6;
-    pop.style.top = `${below + pop.offsetHeight > window.innerHeight - 8 ? Math.max(8, box.top - pop.offsetHeight - 6) : below}px`;
-    icon.classList.add("on");
-    pop.focus({ preventScroll: true });
-    document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("keydown", onEscape, true);
-  };
+  // Keys typed here (Ctrl+C on a selection) are the popover's, not the canvas's.
+  pop.addEventListener("keydown", (event) => event.stopPropagation());
+  document.body.append(pop);
+  pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, anchor.left))}px`;
+  const below = anchor.bottom + 6;
+  pop.style.top = `${below + pop.offsetHeight > window.innerHeight - 8 ? Math.max(8, anchor.top - pop.offsetHeight - 6) : below}px`;
+  pop.focus({ preventScroll: true });
+  document.addEventListener("pointerdown", outside, true);
+  document.addEventListener("keydown", onEscape, true);
+  return close;
+}
+
+// A small (i) beside a label; a click opens `lines` (see openHelp).
+export function info(lines) {
+  const icon = el("span", "fbui-info");
+  icon.innerHTML = ICONS.info;
+  icon.title = "Help";
+  let close = null;
   icon.addEventListener("click", (event) => {
     event.stopPropagation();
-    if (pop) close();
-    else open();
+    if (close) return close();
+    icon.classList.add("on");
+    close = openHelp(lines, icon.getBoundingClientRect(), {
+      keep: icon,
+      onClose: () => {
+        close = null;
+        icon.classList.remove("on");
+      },
+    });
   });
   return icon;
+}
+
+// The node's help as a "?" at the right of its title bar, where most packs
+// put it; a click opens `lines` (see openHelp). Nodes 2.0 draws no title
+// badges, so there it is "About this node" in the node's menu.
+const BADGE_INSET = 16;
+const BADGE_MIN_WIDTH = 140;
+
+function badgeShown(node) {
+  return !node.flags?.collapsed && (node.size?.[0] ?? 0) >= BADGE_MIN_WIDTH;
+}
+
+export function helpBadge(node, lines) {
+  const centerY = -(globalThis.LiteGraph?.NODE_TITLE_HEIGHT ?? 30) / 2;
+  chainCallback(node, "onDrawForeground", function (ctx) {
+    if (!badgeShown(this)) return;
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "bold 19px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("?", this.size[0] - BADGE_INSET, centerY + 1);
+    ctx.restore();
+  });
+  chainHandler(node, "onMouseDown", function (event, pos) {
+    if (!badgeShown(this) || !pos) return false;
+    if (Math.abs(pos[0] - (this.size[0] - BADGE_INSET)) > 10 || Math.abs(pos[1] - centerY) > 11) return false;
+    openHelp(lines, { left: event.clientX - 150, top: event.clientY, bottom: event.clientY + 6 });
+    // Consumed, so the click does not start a drag.
+    return true;
+  });
+  chainCallback(node, "getExtraMenuOptions", function (_canvas, options) {
+    if (!globalThis.LiteGraph?.vueNodesMode) return;
+    options.unshift({ content: "About this node", callback: () => openHelp(lines, { left: window.innerWidth / 2 - 150, top: 80, bottom: 80 }) });
+  });
 }
 
 // A row of pill choices: segmented([{ value, label, title }], { onPick, bool })

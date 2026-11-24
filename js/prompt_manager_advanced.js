@@ -9566,6 +9566,8 @@ configurePromptBrowserDeps({
 export {
     PMA_THEME,
     DEFAULT_THUMBNAIL,
+    exportPromptsJSON,
+    getLoraManagerPreviewTooltip,
     loadPrompts,
     forwardWheelToCanvas,
     showInfo,

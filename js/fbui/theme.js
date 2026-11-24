@@ -5,9 +5,10 @@
 //
 // No imports: the node:test suites load this file without the ComfyUI app.
 
-// Bump on any change to the CSS below. Two packs shipping the same version
-// inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 12;
+// Bump once per release that changes the CSS below (against the last pushed
+// value, not per local edit). Two packs shipping the same version inject one
+// stylesheet; different versions both inject and the later wins.
+export const KIT_VERSION = 13;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -109,7 +110,9 @@ export function kitCss() {
 .fbui-select option{background:${T.panel};color:${T.ink}}
 .fbui-text{width:100%;height:${ROW_HEIGHT}px;padding:0 8px;box-sizing:border-box;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill};color:${T.ink};font:12px ${FONT};min-width:0}
 .fbui-text:focus{outline:none;border-color:${T.brand}}
-textarea.fbui-text{background:${T.card};border-color:${T.plateEdge}}
+textarea.fbui-text{background:${T.card};border-color:${T.plateEdge};font-size:13px;line-height:1.45}
+.fbui-text.entry{flex:none;height:30px;background:${T.card};border-color:${T.plateEdge};font-size:13px}
+.comfy-multiline-input.fbui-native-text,.lg-node-widgets textarea[data-fbui-text]{background:${T.card};border:1px solid ${T.plateEdge};color:${T.ink}}
 .fbui-text::placeholder{color:${T.faint}}
 .fbui-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:${ROW_HEIGHT}px;padding:0 10px;box-sizing:border-box;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill};color:${T.inkSoft};font:600 11px/1 ${FONT};cursor:pointer;white-space:nowrap;pointer-events:auto}
 .fbui-btn:hover{background:${T.fillHover};color:${T.inkHover}}
@@ -117,7 +120,9 @@ textarea.fbui-text{background:${T.card};border-color:${T.plateEdge}}
 .fbui-btn:disabled{opacity:.45;cursor:default}
 .fbui-card [hidden],.fbui-overlay [hidden],.fbui-btn[hidden]{display:none!important}
 .fbui-btn.grow{flex:1 1 0;min-width:0}
-.fbui-btn.on{background:${T.brandSoft};color:${T.brandInk}}
+/* soft: the suite's blue action button; on: a tool that is enabled but not the one in use. Same look. */
+.fbui-btn.on,.fbui-btn.soft{background:${T.brandSoft};color:${T.brandInk}}
+.fbui-btn.soft:hover{background:${T.brandSoftHover};color:${T.ink}}
 .fbui-btn.primary{background:${T.brand};color:${T.onBrand}}
 .fbui-btn.primary:hover{filter:brightness(1.1)}
 .fbui-btn.danger:hover{background:${T.dangerSoft};color:${T.dangerInk}}

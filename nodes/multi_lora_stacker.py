@@ -5,7 +5,7 @@ import importlib
 import os
 import sys
 
-from ..py.lora_stacks import coerce_lora_stack
+from ..py.lora_stacks import coerce_lora_stack, normalize_lora_slots
 from ..py.lora_utils import resolve_lora_path
 try:
     from ..py.lora_utils import get_lora_relative_path
@@ -268,17 +268,9 @@ class MultiLoraCombine:
         lora_stack_d=None,
         **kwargs,
     ):
-        # Start from empty payload when no multi input is connected.
-        out_a = []
-        out_b = []
-        out_c = []
-        out_d = []
-
-        if isinstance(multi_lora_stack, dict):
-            out_a = coerce_lora_stack(multi_lora_stack.get("a"))
-            out_b = coerce_lora_stack(multi_lora_stack.get("b"))
-            out_c = coerce_lora_stack(multi_lora_stack.get("c"))
-            out_d = coerce_lora_stack(multi_lora_stack.get("d"))
+        # A plain LoRA stack (the Prompt Manager's when one slot has LoRAs) is slot A.
+        slots = normalize_lora_slots(multi_lora_stack, "a")
+        out_a, out_b, out_c, out_d = (slots[slot] for slot in "abcd")
 
         # Append separate stack inputs to each slot (if connected).
         out_a.extend(coerce_lora_stack(lora_stack_a))
@@ -318,14 +310,9 @@ class MultiLoraSplitter:
     DESCRIPTION = "Split a MULTI_LORA_STACK payload into LORA_STACK outputs A/B/C/D."
 
     def split_multi(self, multi_lora_stack, **kwargs):
-        if not isinstance(multi_lora_stack, dict):
-            return ([], [], [], [])
-
-        out_a = coerce_lora_stack(multi_lora_stack.get("a"))
-        out_b = coerce_lora_stack(multi_lora_stack.get("b"))
-        out_c = coerce_lora_stack(multi_lora_stack.get("c"))
-        out_d = coerce_lora_stack(multi_lora_stack.get("d"))
-        return (out_a, out_b, out_c, out_d)
+        # A plain LoRA stack (the Prompt Manager's when one slot has LoRAs) is slot A.
+        slots = normalize_lora_slots(multi_lora_stack, "a")
+        return tuple(slots[slot] for slot in "abcd")
 
 
 class MultiLoraRelay:
@@ -353,9 +340,9 @@ class MultiLoraRelay:
     DESCRIPTION = "Combine and split LoRA stacks: slots A-D come in as one set and as separate stacks, and go out both ways."
 
     def relay(self, lora_stacks=None, lora_stack_a=None, lora_stack_b=None, lora_stack_c=None, lora_stack_d=None):
-        incoming = lora_stacks if isinstance(lora_stacks, dict) else {"a": lora_stacks}
+        incoming = normalize_lora_slots(lora_stacks, "a")
         added = {"a": lora_stack_a, "b": lora_stack_b, "c": lora_stack_c, "d": lora_stack_d}
-        out = {slot: coerce_lora_stack(incoming.get(slot)) + coerce_lora_stack(added[slot]) for slot in "abcd"}
+        out = {slot: incoming[slot] + coerce_lora_stack(added[slot]) for slot in "abcd"}
         return (out, out["a"], out["b"], out["c"], out["d"])
 
 

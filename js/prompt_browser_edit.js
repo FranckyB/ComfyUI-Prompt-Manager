@@ -1744,6 +1744,7 @@ export function createPromptBrowserEditPanel(options) {
 
     // Prompt editor section
     const promptNameInput = createInput("", "Prompt name");
+    promptNameInput.classList.add("entry");
     promptBody.appendChild(promptNameInput);
     promptNameInput.addEventListener("input", () => {
         const nextName = String(promptNameInput.value || "").trim();
@@ -2293,7 +2294,8 @@ export function createPromptBrowserEditPanel(options) {
             generateBtn.textContent = "Generate Thumbnail";
         }
     });
-    generateBtn.style.flex = "1";
+    // Shrinks with a narrow browser, its label cut short, so the row never scrolls sideways.
+    Object.assign(generateBtn.style, { flex: "1", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis" });
     generateBtn.style.height = thumbnailControlHeight;
     generateBtn.style.minHeight = thumbnailControlHeight;
     const refreshThumbnailModelButton = () => {

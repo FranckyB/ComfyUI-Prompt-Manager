@@ -1,11 +1,10 @@
 """Prompt Manager: a saved prompt, typed or taken from the prompt input, with the LoRA stacks and trigger words that
 go with it. The node face only shows what is in use: one LoRA panel per slot that has LoRAs, trigger words when there
-are any. On/off and strength edits live in the `state` widget, as overrides by slot and LoRA name."""
+are any. On/off and strength edits live in the `state` widget, as overrides by slot and LoRA name; the rows the panels
+show go back to the frontend as the node's UI output."""
 
 import json
 import os
-
-import server
 
 from ..py.lora_stacks import (
     LORA_MODE_COMBINE,
@@ -31,8 +30,8 @@ def _saved_entry(category, name):
 
 
 def _parse_state(state):
-    """The node's overrides: {"loras": {slot: {name: {"active", "strength"}}}, "trigger_words": {text: active}},
-    names and texts in lower case."""
+    """The node's edits: {"loras": {slot: {name: {"active", "strength", "removed"}}}, "order": {slot: [name]},
+    "trigger_words": {text: {"active", "removed"}}}, names and texts in lower case."""
     try:
         parsed = json.loads(state) if isinstance(state, str) and state else {}
     except json.JSONDecodeError:
@@ -80,7 +79,11 @@ def _input_row(path, model_strength, clip_strength, lora_files):
 
 
 def _apply_override(row, override):
-    """The row with the node's on/off and strength edits; clip strength follows the strength by the same ratio."""
+    """The row with the node's on/off, strength and removal edits; clip strength follows the strength by the same
+    ratio. The row keeps its own strength and state as base_strength and base_active, for the frontend's reset."""
+    row["base_strength"] = row["strength"]
+    row["base_active"] = row["active"]
+    row["removed"] = override.get("removed") is True
     if "active" in override:
         row["active"] = override["active"] is not False
     if isinstance(override.get("strength"), (int, float)):
@@ -90,9 +93,9 @@ def _apply_override(row, override):
     return row
 
 
-def _slot_rows(prompt_loras, input_stack, mode, overrides, lora_files):
+def _slot_rows(prompt_loras, input_stack, mode, overrides, order, lora_files):
     """One slot's panel rows: the prompt's LoRAs, the input's, or both (the prompt's first, an input LoRA of the same
-    name left out), with the node's edits."""
+    name left out), with the node's edits, in the node's order (LoRAs it does not name after, as they came)."""
     rows = []
     if mode != LORA_MODE_INPUT_ONLY:
         rows += [_saved_row(lora) for lora in prompt_loras if isinstance(lora, dict) and str(lora.get("name", "")).strip()]
@@ -104,12 +107,13 @@ def _slot_rows(prompt_loras, input_stack, mode, overrides, lora_files):
         if key not in seen:
             seen.add(key)
             unique.append(_apply_override(row, overrides.get(key, {})))
+    unique.sort(key=lambda row: order.index(row["name"].lower()) if row["name"].lower() in order else len(order))
     return unique
 
 
 def _trigger_rows(saved_words, connected_words, overrides):
-    """Trigger words saved with the prompt, then the connected ones not already there, with the node's on/off edits.
-    Connected words come as one string, groups split by ",," (as LoRA Manager sends them)."""
+    """Trigger words saved with the prompt, then the connected ones not already there, with the node's on/off and
+    removal edits. Connected words come as one string, groups split by ",," (as LoRA Manager sends them)."""
     rows, seen = [], set()
     candidates = [(word.get("text", "") if isinstance(word, dict) else word, word.get("active", True) if isinstance(word, dict) else True, False)
                   for word in saved_words or []]
@@ -119,7 +123,9 @@ def _trigger_rows(saved_words, connected_words, overrides):
         text = str(text or "").strip()
         if text and text.lower() not in seen:
             seen.add(text.lower())
-            rows.append({"text": text, "active": overrides.get(text.lower(), active is not False), "from_input": from_input})
+            override = overrides.get(text.lower(), {})
+            rows.append({"text": text, "active": override.get("active", active is not False) is not False, "base_active": active is not False,
+                         "removed": override.get("removed") is True, "from_input": from_input})
     return rows
 
 
@@ -173,6 +179,8 @@ class PromptManagerV2:
         "The prompt and its LoRAs as a recipe.",
     )
     FUNCTION = "get_prompt"
+    # Runs on its own (ComfyUI's run-node button) to pull in a prompt from a generator upstream.
+    OUTPUT_NODE = True
 
     @classmethod
     def VALIDATE_INPUTS(cls, category, name):
@@ -205,20 +213,20 @@ class PromptManagerV2:
         inputs = normalize_lora_slots(lora_stacks, "a")
         lora_files = get_available_loras()
         lora_overrides = overrides.get("loras") if isinstance(overrides.get("loras"), dict) else {}
-        rows, stacks = {}, {}
+        orders = overrides.get("order") if isinstance(overrides.get("order"), dict) else {}
+        shown, rows, stacks = {}, {}, {}
         for slot in MODEL_SLOT_KEYS:
             # The prompt's LoRAs: the connected recipe's, else the saved prompt's, else its saved recipe's.
             prompt_loras = fields[f"loras_{slot}"] if isinstance(manager_data, dict) else (entry.get(f"loras_{slot}") or fields[f"loras_{slot}"])
             slot_overrides = lora_overrides.get(slot) if isinstance(lora_overrides.get(slot), dict) else {}
-            rows[slot] = _slot_rows(prompt_loras, inputs[slot], lora_mode, slot_overrides, lora_files)
+            order = orders.get(slot) if isinstance(orders.get(slot), list) else []
+            shown[slot] = _slot_rows(prompt_loras, inputs[slot], lora_mode, slot_overrides, order, lora_files)
+            rows[slot] = [row for row in shown[slot] if not row["removed"]]
             stacks[slot] = [(row["path"], row["strength"], row["clip_strength"]) for row in rows[slot] if row["active"] and row["available"]]
 
         word_overrides = overrides.get("trigger_words") if isinstance(overrides.get("trigger_words"), dict) else {}
-        words = _trigger_rows(entry.get("trigger_words"), trigger_words, word_overrides)
-        final_output = _with_trigger_words(output_text, [word["text"] for word in words if word["active"]])
-
-        if unique_id is not None:
-            server.PromptServer.instance.send_sync("prompt-manager-v2-update", {"node_id": unique_id, "loras": rows, "trigger_words": words})
+        shown_words = _trigger_rows(entry.get("trigger_words"), trigger_words, word_overrides)
+        final_output = _with_trigger_words(output_text, [word["text"] for word in shown_words if word["active"] and not word["removed"]])
 
         # Saver nodes embed the final prompt as typed text, not the link that fed it.
         record_prompt(unique_id, final_output, extra_pnginfo, api_prompt, toggle="use_prompt_input", link_input="prompt", text_index=4)
@@ -241,4 +249,8 @@ class PromptManagerV2:
             input_lora_stack=flatten_lora_slots(stacks),
         )
         recipe_out[PROMPT_MANAGER_RECIPE_KEY] = {"category": category, "name": name}
-        return (final_output, lora_output, recipe_out)
+
+        # The panels' rows for the frontend (onExecuted), for the prompt they were made for; removed rows included,
+        # so undoing a removal needs no new run.
+        panels = {"category": category, "name": name, "lora_mode": lora_mode, "loras": shown, "trigger_words": shown_words, "prompt_input": prompt if use_prompt_input else None}
+        return {"ui": {"prompt_manager": [panels]}, "result": (final_output, lora_output, recipe_out)}

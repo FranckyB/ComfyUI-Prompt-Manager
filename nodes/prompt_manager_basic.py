@@ -4,6 +4,9 @@ from ..py.prompt_store import is_hidden_key, load_prompts, save_prompts
 
 
 class PromptManager:
+    """Legacy: kept for saved workflows; Prompt Manager (PromptManagerV2) replaces it."""
+
+    DEPRECATED = True
 
     @classmethod
     def INPUT_TYPES(s):

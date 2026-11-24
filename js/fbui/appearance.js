@@ -102,6 +102,13 @@ export function installAppearance({ settingsPrefix, category }) {
       if (!ours(node)) return;
       node[MARK] = true;
       if (followsSetting(node)) apply(node, schemeColors(active));
+      // Native text boxes wear the kit's text-area colour: Classic draws the
+      // widget's own textarea, Nodes 2.0 one carrying the widget's options.
+      for (const widget of node.widgets ?? []) {
+        if (widget.element?.tagName !== "TEXTAREA") continue;
+        widget.element.classList.add("fbui-native-text");
+        widget.options = { ...widget.options, "data-fbui-text": "true" };
+      }
       // Saved colours arrive after construction: a workflow saved before the
       // pack had colours, or with another scheme, follows the setting now.
       chainCallback(node, "onConfigure", function () {

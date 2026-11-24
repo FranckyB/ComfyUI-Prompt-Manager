@@ -36,7 +36,10 @@ class PromptManagerAdvanced:
     Advanced Prompt Manager with LoRA stack integration.
     Supports saving/loading prompts with associated LoRA configurations.
     Features two LoRA stack inputs/outputs for dual LoRA workflows (e.g., Wan video).
+    Legacy: kept for saved workflows; Prompt Manager (PromptManagerV2) replaces it.
     """
+
+    DEPRECATED = True
 
     def __init__(self):
         # Per node: the last run's prompt, input LoRA paths and input prompt, to tell when the frontend resets.
