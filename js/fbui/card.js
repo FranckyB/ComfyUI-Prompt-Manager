@@ -17,7 +17,8 @@
 //       a labelled row holding the node's own control; `widgets` names the
 //       hidden widgets it drives; a returned `label` element replaces the text
 //   { panel: (node, card) => ({ element, sync?(values) }), height, grow?, when? }
-//       grow takes the node's spare height
+//       grow takes the node's spare height; a height function is read again
+//       on every refresh (a panel whose content wraps)
 //   { group: "more", label: "More", tools? }   later rows with group: "more" fold under it
 //       tools: (node, card) => ({ element, sync?(values) }) at the header's right
 // Options: minWidth, first (place before the node's other DOM widgets).
@@ -370,6 +371,7 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
       entry.element.classList.toggle("hidden", !show);
       if (entry.header) entry.element.classList.toggle("open", open[entry.row.group]);
       if (!show) continue;
+      if (entry.row.panel && !entry.row.grow && typeof entry.row.height === "function") entry.element.style.height = `${rowHeight(entry.row)}px`;
       const linkedNames = (entry.names ?? []).filter((name) => widgetLinked(node, name));
       const linked = linkedNames.length > 0 && linkedNames.length === entry.names.length;
       entry.element.classList.toggle("linked", linked);
