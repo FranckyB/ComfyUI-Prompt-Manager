@@ -738,7 +738,7 @@ function addButtonBar(node) {
     const newPromptBtn = createButton("New Prompt", async () => {
         // Check for unsaved changes before creating new prompt
         const hasUnsaved = hasUnsavedChanges(node);
-        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.warnUnsavedChanges");
+        const warnEnabled = app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges");
         
         if (hasUnsaved && warnEnabled) {
             const confirmed = await showConfirm(
@@ -891,10 +891,10 @@ function setupCategoryChangeHandler(node) {
             }
             promptWidget.options.values = promptNames;
 
+            // Only update the text widget if not using external
+            const useExternal = useExternalWidget ? useExternalWidget.value : false;
             if (promptNames.length > 0) {
                 promptWidget.value = promptNames[0];
-                // Only update text widget if not using external
-                const useExternal = useExternalWidget ? useExternalWidget.value : false;
                 if (!useExternal) {
                     const promptData = node.prompts[category][promptNames[0]];
                     textWidget.value = promptData?.prompt || "";
