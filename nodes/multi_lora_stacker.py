@@ -5,6 +5,7 @@ import importlib
 import os
 import sys
 
+from ..py.lora_stacks import coerce_lora_stack
 from ..py.lora_utils import resolve_lora_path
 try:
     from ..py.lora_utils import get_lora_relative_path
@@ -220,51 +221,6 @@ class MultiLoraStackerLM:
         return (multi_lora_stack, combined_lora_stack, trigger_words_text)
 
 
-def _coerce_lora_stack(raw_stack):
-    """Normalize an incoming LORA_STACK-like payload to list[(path, model, clip)]."""
-    if raw_stack is None:
-        return []
-
-    if isinstance(raw_stack, dict) and "__value__" in raw_stack:
-        raw_stack = raw_stack.get("__value__")
-
-    if not isinstance(raw_stack, list):
-        return []
-
-    out = []
-    for item in raw_stack:
-        if isinstance(item, (list, tuple)) and len(item) >= 1:
-            path = str(item[0] or "").strip()
-            if not path:
-                continue
-            try:
-                model_strength = float(item[1]) if len(item) >= 2 else 1.0
-            except Exception:
-                model_strength = 1.0
-            try:
-                clip_strength = float(item[2]) if len(item) >= 3 else model_strength
-            except Exception:
-                clip_strength = model_strength
-            out.append((path, model_strength, clip_strength))
-            continue
-
-        if isinstance(item, dict):
-            path = str(item.get("path") or item.get("name") or "").strip()
-            if not path:
-                continue
-            try:
-                model_strength = float(item.get("model_strength", item.get("strength", 1.0)))
-            except Exception:
-                model_strength = 1.0
-            try:
-                clip_strength = float(item.get("clip_strength", model_strength))
-            except Exception:
-                clip_strength = model_strength
-            out.append((path, model_strength, clip_strength))
-
-    return out
-
-
 class MultiLoraCombine:
     """Combine optional multi stack + optional A/B/C/D stacks into one MULTI_LORA_STACK."""
 
@@ -319,16 +275,16 @@ class MultiLoraCombine:
         out_d = []
 
         if isinstance(multi_lora_stack, dict):
-            out_a = _coerce_lora_stack(multi_lora_stack.get("a"))
-            out_b = _coerce_lora_stack(multi_lora_stack.get("b"))
-            out_c = _coerce_lora_stack(multi_lora_stack.get("c"))
-            out_d = _coerce_lora_stack(multi_lora_stack.get("d"))
+            out_a = coerce_lora_stack(multi_lora_stack.get("a"))
+            out_b = coerce_lora_stack(multi_lora_stack.get("b"))
+            out_c = coerce_lora_stack(multi_lora_stack.get("c"))
+            out_d = coerce_lora_stack(multi_lora_stack.get("d"))
 
         # Append separate stack inputs to each slot (if connected).
-        out_a.extend(_coerce_lora_stack(lora_stack_a))
-        out_b.extend(_coerce_lora_stack(lora_stack_b))
-        out_c.extend(_coerce_lora_stack(lora_stack_c))
-        out_d.extend(_coerce_lora_stack(lora_stack_d))
+        out_a.extend(coerce_lora_stack(lora_stack_a))
+        out_b.extend(coerce_lora_stack(lora_stack_b))
+        out_c.extend(coerce_lora_stack(lora_stack_c))
+        out_d.extend(coerce_lora_stack(lora_stack_d))
 
         merged = {
             "a": out_a,
@@ -365,10 +321,10 @@ class MultiLoraSplitter:
         if not isinstance(multi_lora_stack, dict):
             return ([], [], [], [])
 
-        out_a = _coerce_lora_stack(multi_lora_stack.get("a"))
-        out_b = _coerce_lora_stack(multi_lora_stack.get("b"))
-        out_c = _coerce_lora_stack(multi_lora_stack.get("c"))
-        out_d = _coerce_lora_stack(multi_lora_stack.get("d"))
+        out_a = coerce_lora_stack(multi_lora_stack.get("a"))
+        out_b = coerce_lora_stack(multi_lora_stack.get("b"))
+        out_c = coerce_lora_stack(multi_lora_stack.get("c"))
+        out_d = coerce_lora_stack(multi_lora_stack.get("d"))
         return (out_a, out_b, out_c, out_d)
 
 
@@ -399,7 +355,7 @@ class MultiLoraRelay:
     def relay(self, lora_stacks=None, lora_stack_a=None, lora_stack_b=None, lora_stack_c=None, lora_stack_d=None):
         incoming = lora_stacks if isinstance(lora_stacks, dict) else {"a": lora_stacks}
         added = {"a": lora_stack_a, "b": lora_stack_b, "c": lora_stack_c, "d": lora_stack_d}
-        out = {slot: _coerce_lora_stack(incoming.get(slot)) + _coerce_lora_stack(added[slot]) for slot in "abcd"}
+        out = {slot: coerce_lora_stack(incoming.get(slot)) + coerce_lora_stack(added[slot]) for slot in "abcd"}
         return (out, out["a"], out["b"], out["c"], out["d"])
 
 
@@ -443,8 +399,8 @@ class LoraStackCombine:
         **kwargs,
     ):
         merged = []
-        merged.extend(_coerce_lora_stack(lora_stack_a))
-        merged.extend(_coerce_lora_stack(lora_stack_b))
-        merged.extend(_coerce_lora_stack(lora_stack_c))
-        merged.extend(_coerce_lora_stack(lora_stack_d))
+        merged.extend(coerce_lora_stack(lora_stack_a))
+        merged.extend(coerce_lora_stack(lora_stack_b))
+        merged.extend(coerce_lora_stack(lora_stack_c))
+        merged.extend(coerce_lora_stack(lora_stack_d))
         return (merged,)

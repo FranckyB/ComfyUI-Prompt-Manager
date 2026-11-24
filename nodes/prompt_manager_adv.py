@@ -6,266 +6,29 @@ import os
 import json
 from datetime import datetime, timezone
 import server
-from ..py.prompt_metadata import record_prompt
-from ..py.prompt_store import is_hidden_key, load_prompts, save_prompts
-from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
-
-
-def _has_meaningful_workflow_data(workflow_data):
-    """Return True when v2 recipe data contains authored prompt/model/lora content."""
-    for block in workflow_data.get("models", {}).values():
-        if not isinstance(block, dict):
-            continue
-        loras = block.get("loras")
-        has_loras = isinstance(loras, list) and any(isinstance(lora, dict) and str(lora.get("name", "")).strip() for lora in loras)
-        if str(block.get("positive_prompt", "")).strip() or str(block.get("model", "")).strip() or has_loras:
-            return True
-    return False
-
-
-def _normalize_workflow_loras_for_prompt(loras):
-    """Normalize workflow_data LoRA list to prompt-manager LoRA schema."""
-    normalized = []
-    if not isinstance(loras, list):
-        return normalized
-    for lora in loras:
-        if not isinstance(lora, dict):
-            continue
-        name = str(lora.get("name", "")).strip()
-        if not name:
-            continue
-        strength = lora.get("strength", lora.get("model_strength", 1.0))
-        clip_strength = lora.get("clip_strength", strength)
-        normalized.append({
-            "name": name,
-            "path": str(lora.get("path", name) or name),
-            "strength": strength,
-            "clip_strength": clip_strength,
-            "active": lora.get("active", True),
-            "available": bool(lora.get("available", True)),
-        })
-    return normalized
-
-
-def _derive_prompt_fields_from_workflow_data(workflow_data):
-    """Derive prompt + LoRA compatibility fields from v2 workflow_data model blocks."""
-    if not isinstance(workflow_data, dict):
-        return {
-            "prompt": "",
-            "negative_prompt": "",
-            "loras_a": [],
-            "loras_b": [],
-            "loras_c": [],
-            "loras_d": [],
-            "model_a": "",
-            "model_b": "",
-            "model_c": "",
-            "model_d": "",
-        }
-
-    wf_v2 = ensure_v2_recipe_data(workflow_data, source="PromptManagerAdvanced")
-    wf_models = wf_v2.get("models", {}) if isinstance(wf_v2.get("models"), dict) else {}
-    model_a_block = wf_models.get("model_a") if isinstance(wf_models.get("model_a"), dict) else {}
-    model_b_block = wf_models.get("model_b") if isinstance(wf_models.get("model_b"), dict) else {}
-    model_c_block = wf_models.get("model_c") if isinstance(wf_models.get("model_c"), dict) else {}
-    model_d_block = wf_models.get("model_d") if isinstance(wf_models.get("model_d"), dict) else {}
-
-    return {
-        "prompt": str(model_a_block.get("positive_prompt", "") or ""),
-        "negative_prompt": str(model_a_block.get("negative_prompt", "") or ""),
-        "loras_a": _normalize_workflow_loras_for_prompt(model_a_block.get("loras", [])),
-        "loras_b": _normalize_workflow_loras_for_prompt(model_b_block.get("loras", [])),
-        "loras_c": _normalize_workflow_loras_for_prompt(model_c_block.get("loras", [])),
-        "loras_d": _normalize_workflow_loras_for_prompt(model_d_block.get("loras", [])),
-        "model_a": str(model_a_block.get("model", "") or ""),
-        "model_b": str(model_b_block.get("model", "") or ""),
-        "model_c": str(model_c_block.get("model", "") or ""),
-        "model_d": str(model_d_block.get("model", "") or ""),
-    }
-
-
-# ── Shared LoRA utilities ─────────────────────────────────────────────────────
+from ..py.lora_stacks import (
+    has_meaningful_workflow_data,
+    normalize_workflow_loras,
+    derive_prompt_fields,
+    combine_lora_inputs,
+    flatten_lora_slots,
+    merge_prompt_composer_input_data,
+    MODEL_SLOT_KEYS,
+    LORA_MODE_PROMPT_ONLY,
+    LORA_MODE_COMBINE,
+    LORA_MODE_INPUT_ONLY,
+    LORA_MODES,
+    PROMPT_MANAGER_RECIPE_KEY,
+)
 from ..py.lora_utils import (
     get_available_loras,
     normalize_path_separators,
     strip_lora_extension,
-    fuzzy_match_lora,
     get_lora_relative_path,
 )
-
-
-_MODEL_SLOT_KEYS = ("a", "b", "c", "d")
-_LORA_INPUT_MODE_PROMPT_ONLY = "Prompt LoRAs Only"
-_LORA_INPUT_MODE_COMBINE = "Combine LoRAs"
-_LORA_INPUT_MODE_INPUT_ONLY = "Input LoRAs Only"
-_PROMPT_COMPOSER_RECIPE_KEY = "prompt_composer"
-# Marks manager_data produced by Prompt Manager, next to "prompt_composer" and "prompt_layout".
-_PROMPT_MANAGER_RECIPE_KEY = "prompt_manager"
-_LORA_INPUT_MODES = (
-    _LORA_INPUT_MODE_PROMPT_ONLY,
-    _LORA_INPUT_MODE_COMBINE,
-    _LORA_INPUT_MODE_INPUT_ONLY,
-)
-
-
-def _coerce_lora_stack(raw_stack):
-    """Normalize a LORA_STACK-like payload into list[(path, model, clip)]."""
-    if raw_stack is None:
-        return []
-
-    if isinstance(raw_stack, dict) and "__value__" in raw_stack:
-        raw_stack = raw_stack.get("__value__")
-
-    if not isinstance(raw_stack, list):
-        return []
-
-    out = []
-    for item in raw_stack:
-        if isinstance(item, (list, tuple)) and len(item) >= 1:
-            path = str(item[0] or "").strip()
-            if not path:
-                continue
-            try:
-                model_strength = float(item[1]) if len(item) >= 2 else 1.0
-            except Exception:
-                model_strength = 1.0
-            try:
-                clip_strength = float(item[2]) if len(item) >= 3 else model_strength
-            except Exception:
-                clip_strength = model_strength
-            out.append((path, model_strength, clip_strength))
-            continue
-
-        if isinstance(item, dict):
-            path = str(item.get("path") or item.get("name") or "").strip()
-            if not path:
-                continue
-            try:
-                model_strength = float(item.get("model_strength", item.get("strength", 1.0)))
-            except Exception:
-                model_strength = 1.0
-            try:
-                clip_strength = float(item.get("clip_strength", model_strength))
-            except Exception:
-                clip_strength = model_strength
-            out.append((path, model_strength, clip_strength))
-
-    return out
-
-
-def _normalize_input_multi_lora_payload(raw_input, primary_slot):
-    """Normalize one PMA input socket into 4 slots (A/B/C/D)."""
-    slots = {k: [] for k in _MODEL_SLOT_KEYS}
-
-    plain = _coerce_lora_stack(raw_input)
-    if plain:
-        slots[primary_slot] = plain
-        return slots
-
-    if not isinstance(raw_input, dict):
-        return slots
-
-    for slot_key, suffix in (("model_a", "a"), ("model_b", "b"), ("model_c", "c"), ("model_d", "d")):
-        candidate = None
-        if slot_key in raw_input:
-            candidate = raw_input.get(slot_key)
-        elif suffix in raw_input:
-            candidate = raw_input.get(suffix)
-        slots[suffix] = _coerce_lora_stack(candidate)
-
-    return slots
-
-
-def _combine_multi_lora_inputs(input_a, input_b):
-    """Combine PMA A/B sockets into a single multi-slot payload."""
-    normalized_a = _normalize_input_multi_lora_payload(input_a, "a")
-    normalized_b = _normalize_input_multi_lora_payload(input_b, "b")
-
-    out = {}
-    for slot in _MODEL_SLOT_KEYS:
-        out[slot] = [*(normalized_a.get(slot) or []), *(normalized_b.get(slot) or [])]
-    return out
-
-
-def _flatten_multi_lora_slots(multi_slots):
-    flat = []
-    if not isinstance(multi_slots, dict):
-        return flat
-    for slot in _MODEL_SLOT_KEYS:
-        flat.extend(_coerce_lora_stack(multi_slots.get(slot)))
-    return flat
-
-
-def _normalize_prompt_composer_input_loras(raw_loras):
-    normalized = []
-    for path, model_strength, clip_strength in _coerce_lora_stack(raw_loras):
-        normalized.append({
-            "name": str(os.path.splitext(os.path.basename(normalize_path_separators(path)))[0] or "").strip(),
-            "path": str(path or "").strip(),
-            "model_strength": float(model_strength),
-            "clip_strength": float(clip_strength),
-            "active": True,
-            "available": True,
-            "source": "upstream",
-        })
-    return [entry for entry in normalized if entry.get("name")]
-
-
-def _prompt_composer_lora_key(item):
-    raw_path = str(item.get("path", item.get("name", "")) or "").replace("\\", "/").strip().lower()
-    leaf = os.path.basename(raw_path)
-    stem, _ext = os.path.splitext(leaf)
-    return stem or leaf
-
-
-def _merge_prompt_composer_input_data(recipe_data, input_prompt="", prompt_enabled=False, input_lora_stack=None):
-    if not isinstance(recipe_data, dict):
-        return recipe_data
-
-    payload = recipe_data.get(_PROMPT_COMPOSER_RECIPE_KEY)
-    if not isinstance(payload, dict):
-        return recipe_data
-
-    input_data = payload.get("input_data") if isinstance(payload.get("input_data"), dict) else {}
-    prompt_data = payload.get("prompt_data") if isinstance(payload.get("prompt_data"), dict) else {}
-    existing_prompt = str(input_data.get("prompt", payload.get("input_prompt", "")) or "").strip()
-    incoming_prompt = str(input_prompt or "").strip()
-    merged_prompt = existing_prompt if existing_prompt else (incoming_prompt if prompt_enabled and incoming_prompt else "")
-
-    existing_loras = _normalize_prompt_composer_input_loras(
-        input_data.get("lora_stack", payload.get("input_lora_stack", []))
-    )
-    added_loras = _normalize_prompt_composer_input_loras(input_lora_stack or []) if input_lora_stack is not None else []
-    prompt_loras = _normalize_prompt_composer_input_loras(
-        prompt_data.get("lora_stack", payload.get("prompt_lora_stack", []))
-    )
-    prompt_lora_keys = {
-        _prompt_composer_lora_key(item)
-        for item in prompt_loras
-        if _prompt_composer_lora_key(item)
-    }
-
-    merged_loras = []
-    seen = set()
-    for item in [*existing_loras, *added_loras]:
-        key = _prompt_composer_lora_key(item)
-        if not key:
-            continue
-        if key in prompt_lora_keys:
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        merged_loras.append(item)
-
-    payload["input_data"] = {
-        **input_data,
-        "source": "upstream",
-        "prompt": merged_prompt,
-        "lora_stack": merged_loras,
-    }
-    recipe_data[_PROMPT_COMPOSER_RECIPE_KEY] = payload
-    return recipe_data
+from ..py.prompt_metadata import record_prompt
+from ..py.prompt_store import is_hidden_key, load_prompts, save_prompts
+from ..py.workflow_data_utils import ensure_v2_recipe_data, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 
 
 class PromptManagerAdvanced:
@@ -305,8 +68,8 @@ class PromptManagerAdvanced:
                 "use_prompt_input": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Toggle to use connected prompt input instead of internal text"}),
-                "use_lora_input": (_LORA_INPUT_MODES, {
-                    "default": _LORA_INPUT_MODE_PROMPT_ONLY,
+                "use_lora_input": (LORA_MODES, {
+                    "default": LORA_MODE_PROMPT_ONLY,
                     "tooltip": (
                         "LoRA mode. Prompt LoRAs Only = use saved prompt stacks only. "
                         "Combine LoRAs = merge connected stacks with prompt stacks. "
@@ -352,34 +115,34 @@ class PromptManagerAdvanced:
     def _normalize_lora_input_mode(mode_value):
         """Normalize legacy bool/new string modes to canonical dropdown values."""
         if mode_value is False:
-            return _LORA_INPUT_MODE_PROMPT_ONLY
+            return LORA_MODE_PROMPT_ONLY
         if mode_value is True:
-            return _LORA_INPUT_MODE_COMBINE
+            return LORA_MODE_COMBINE
 
         value = str(mode_value or "").strip()
-        if value in _LORA_INPUT_MODES:
+        if value in LORA_MODES:
             return value
 
         lowered = value.lower()
         if lowered in ("off", "false", "0", "prompt", "prompt only", "prompt loras", "prompt loras only"):
-            return _LORA_INPUT_MODE_PROMPT_ONLY
+            return LORA_MODE_PROMPT_ONLY
         if lowered in ("on", "true", "1", "combine", "combine loras"):
-            return _LORA_INPUT_MODE_COMBINE
+            return LORA_MODE_COMBINE
         if lowered in ("2", "input", "input only", "input loras", "input loras only"):
-            return _LORA_INPUT_MODE_INPUT_ONLY
+            return LORA_MODE_INPUT_ONLY
 
-        return _LORA_INPUT_MODE_PROMPT_ONLY
+        return LORA_MODE_PROMPT_ONLY
 
     @staticmethod
     def _should_use_combined_loras(mode_value):
-        return PromptManagerAdvanced._normalize_lora_input_mode(mode_value) == _LORA_INPUT_MODE_COMBINE
+        return PromptManagerAdvanced._normalize_lora_input_mode(mode_value) == LORA_MODE_COMBINE
 
     @staticmethod
     def _should_use_input_only_loras(mode_value):
-        return PromptManagerAdvanced._normalize_lora_input_mode(mode_value) == _LORA_INPUT_MODE_INPUT_ONLY
+        return PromptManagerAdvanced._normalize_lora_input_mode(mode_value) == LORA_MODE_INPUT_ONLY
 
     @classmethod
-    def IS_CHANGED(cls, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY, text="", **kwargs):
+    def IS_CHANGED(cls, category, name, use_prompt_input, use_lora_input=LORA_MODE_PROMPT_ONLY, text="", **kwargs):
         """
         Track changes to the node's inputs to determine if re-execution is needed.
         Returns a tuple of relevant values that should trigger re-execution when changed.
@@ -554,21 +317,21 @@ class PromptManagerAdvanced:
         # Not found
         return lora_path, False
 
-    def get_prompt(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
+    def get_prompt(self, category, name, use_prompt_input, use_lora_input=LORA_MODE_PROMPT_ONLY,
                    text="", prompt=None, manager_data=None, lora_stack_a=None, lora_stack_b=None,
                    trigger_words=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None, trigger_words_toggle=None,
                    extra_pnginfo=None, api_prompt=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
         toggles = {"a": loras_a_toggle, "b": loras_b_toggle, "c": loras_c_toggle, "d": loras_d_toggle}
-        inputs = _combine_multi_lora_inputs(lora_stack_a, lora_stack_b)
-        input_paths = {slot: [path for path, _, _ in inputs.get(slot, [])] for slot in _MODEL_SLOT_KEYS}
+        inputs = combine_lora_inputs(lora_stack_a, lora_stack_b)
+        input_paths = {slot: [path for path, _, _ in inputs.get(slot, [])] for slot in MODEL_SLOT_KEYS}
         prompt_input_text = prompt if prompt else ""
 
         # Tell the frontend to reset its toggles when the prompt changed, when the input LoRAs and the input prompt
         # changed together (a new extraction), or when the input LoRAs were cleared; not when only toggles changed.
         node_key = str(unique_id) if unique_id else "default"
-        last = self._last_known_state.get(node_key, {"prompt_key": "", "input_paths": {slot: [] for slot in _MODEL_SLOT_KEYS}, "prompt_input_text": ""})
+        last = self._last_known_state.get(node_key, {"prompt_key": "", "input_paths": {slot: [] for slot in MODEL_SLOT_KEYS}, "prompt_input_text": ""})
         prompt_key = f"{category}|{name}"
         input_loras_changed = input_paths != last["input_paths"]
         loras_were_cleared = any(last["input_paths"].values()) and not any(input_paths.values())
@@ -587,7 +350,7 @@ class PromptManagerAdvanced:
         stored_prompt_wf = prompt_entry.get("workflow_data")
         connected_recipe_data = ensure_v2_recipe_data(manager_data, source="PromptManagerAdvanced") if isinstance(manager_data, dict) else None
         resolved_workflow_data = connected_recipe_data or (ensure_v2_recipe_data(stored_prompt_wf, source="PromptManagerAdvanced") if isinstance(stored_prompt_wf, dict) else None)
-        workflow_fields = _derive_prompt_fields_from_workflow_data(resolved_workflow_data)
+        workflow_fields = derive_prompt_fields(resolved_workflow_data)
 
         # The prompt input when it is on and has text, else the typed text, else the recipe's prompt.
         if use_prompt_input and prompt:
@@ -602,7 +365,7 @@ class PromptManagerAdvanced:
 
         update = {}
         out_stacks = {}
-        for slot in _MODEL_SLOT_KEYS:
+        for slot in MODEL_SLOT_KEYS:
             toggle = toggles[slot]
             connected = inputs.get(slot)
             # The connected LoRAs as they came in, for the frontend to notice an input change.
@@ -682,21 +445,21 @@ class PromptManagerAdvanced:
         out_workflow_data = build_v2_recipe_data_from_prompt(
             prompt_text=final_output,
             negative_prompt=str(workflow_fields.get("negative_prompt", "") or ""),
-            **{f"loras_{slot}": update[f"loras_{slot}"] for slot in _MODEL_SLOT_KEYS},
+            **{f"loras_{slot}": update[f"loras_{slot}"] for slot in MODEL_SLOT_KEYS},
             source="PromptManagerAdvanced",
             base_recipe_data=resolved_workflow_data,
         )
-        out_workflow_data = _merge_prompt_composer_input_data(
+        out_workflow_data = merge_prompt_composer_input_data(
             out_workflow_data,
             input_prompt=prompt_input_text,
             prompt_enabled=bool(use_prompt_input and prompt_input_text),
-            input_lora_stack=_flatten_multi_lora_slots(out_stacks),
+            input_lora_stack=flatten_lora_slots(out_stacks),
         )
-        out_workflow_data[_PROMPT_MANAGER_RECIPE_KEY] = {"category": category, "name": name}
+        out_workflow_data[PROMPT_MANAGER_RECIPE_KEY] = {"category": category, "name": name}
 
         return (final_output, out_stacks["a"], out_stacks["b"], out_stacks, out_workflow_data)
 
-    def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
+    def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=LORA_MODE_PROMPT_ONLY,
                           text="", prompt=None, lora_stack_a=None, lora_stack_b=None,
                           trigger_words=None,
                           unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None,
@@ -1137,13 +900,13 @@ async def save_prompt_advanced(request):
                 workflow_data = None
         wf_to_save = to_json_safe_workflow_data(ensure_v2_recipe_data(workflow_data, source="PromptManagerAdvanced")) if isinstance(workflow_data, dict) else None
         wf_models = wf_to_save.get("models", {}) if wf_to_save and isinstance(wf_to_save.get("models"), dict) else {}
-        recipe_is_authored = bool(wf_to_save) and _has_meaningful_workflow_data(wf_to_save)
+        recipe_is_authored = bool(wf_to_save) and has_meaningful_workflow_data(wf_to_save)
 
         prompt_data = {"prompt": text}
-        for slot in _MODEL_SLOT_KEYS:
+        for slot in MODEL_SLOT_KEYS:
             loras = _normalize_saved_loras(data.get(f"loras_{slot}", []))
             # An authored recipe's LoRAs are authoritative, as in Workflow Saver.
-            recipe_loras = _normalize_workflow_loras_for_prompt((wf_models.get(f"model_{slot}") or {}).get("loras", []))
+            recipe_loras = normalize_workflow_loras((wf_models.get(f"model_{slot}") or {}).get("loras", []))
             if recipe_is_authored and recipe_loras:
                 loras = recipe_loras
             # A side sent with no LoRAs keeps the saved ones: transient UI state must not erase them.
