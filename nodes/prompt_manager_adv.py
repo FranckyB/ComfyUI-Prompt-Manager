@@ -303,6 +303,10 @@ class PromptManagerAdvanced:
     Features two LoRA stack inputs/outputs for dual LoRA workflows (e.g., Wan video).
     """
 
+    def __init__(self):
+        # Per node: the last run's prompt, input LoRA paths and input prompt, to tell when the frontend resets.
+        self._last_known_state = {}
+
     @classmethod
     def INPUT_TYPES(s):
         prompts_data = load_prompts()
@@ -582,440 +586,143 @@ class PromptManagerAdvanced:
                    text="", prompt=None, manager_data=None, lora_stack_a=None, lora_stack_b=None,
                    trigger_words=None,
                    unique_id=None, loras_a_toggle=None, loras_b_toggle=None, loras_c_toggle=None, loras_d_toggle=None, trigger_words_toggle=None,
-                   extra_pnginfo=None, api_prompt=None,
-                   **kwargs):
+                   extra_pnginfo=None, api_prompt=None):
         """Return the prompt text and filtered lora stacks based on toggle states"""
+        toggles = {"a": loras_a_toggle, "b": loras_b_toggle, "c": loras_c_toggle, "d": loras_d_toggle}
+        inputs = _combine_multi_lora_inputs(lora_stack_a, lora_stack_b)
+        input_paths = {slot: [path for path, _, _ in inputs.get(slot, [])] for slot in _MODEL_SLOT_KEYS}
+        prompt_input_text = prompt if prompt else ""
 
-        recipe_data = manager_data
-        if recipe_data is None:
-            recipe_data = kwargs.get("data")
-        if recipe_data is None:
-            recipe_data = kwargs.get("recipe_data")
-
-        # ========================================
-        # RESET LOGIC - Determine if we should clear toggles and start fresh
-        # ========================================
-        # Track state for this node instance (stored in class variable per node)
-        if not hasattr(self, '_last_known_state'):
-            self._last_known_state = {}
-
-        node_state_key = str(unique_id) if unique_id else "default"
-        if node_state_key not in self._last_known_state:
-            self._last_known_state[node_state_key] = {
-                'prompt_key': '',
-                'input_loras_a': [],
-                'input_loras_b': [],
-                'input_loras_c': [],
-                'input_loras_d': [],
-                'prompt_input_text': '',
-                'toggle_data_a': '',
-                'toggle_data_b': '',
-                'toggle_data_c': '',
-                'toggle_data_d': '',
-            }
-
-        last_state = self._last_known_state[node_state_key]
-
-        # Current state signatures (using LoRA file paths directly - NO splitext)
-        current_prompt_key = f"{category}|{name}"
-        combined_input_multi = _combine_multi_lora_inputs(lora_stack_a, lora_stack_b)
-        current_input_loras_a = [lora_path for lora_path, _, _ in combined_input_multi.get('a', [])]
-        current_input_loras_b = [lora_path for lora_path, _, _ in combined_input_multi.get('b', [])]
-        current_input_loras_c = [lora_path for lora_path, _, _ in combined_input_multi.get('c', [])]
-        current_input_loras_d = [lora_path for lora_path, _, _ in combined_input_multi.get('d', [])]
-        current_prompt_input_text = prompt if prompt else ""
-        current_toggle_data_a = loras_a_toggle if loras_a_toggle else ""
-        current_toggle_data_b = loras_b_toggle if loras_b_toggle else ""
-        current_toggle_data_c = loras_c_toggle if loras_c_toggle else ""
-        current_toggle_data_d = loras_d_toggle if loras_d_toggle else ""
-
-        # Determine if reset is needed
-        prompt_changed = current_prompt_key != last_state['prompt_key']
-        input_loras_changed = (
-            current_input_loras_a != last_state['input_loras_a'] or
-            current_input_loras_b != last_state['input_loras_b'] or
-            current_input_loras_c != last_state['input_loras_c'] or
-            current_input_loras_d != last_state['input_loras_d']
-        )
-        prompt_input_changed = current_prompt_input_text != last_state['prompt_input_text']
-        toggle_data_changed = (
-            current_toggle_data_a != last_state['toggle_data_a'] or
-            current_toggle_data_b != last_state['toggle_data_b'] or
-            current_toggle_data_c != last_state['toggle_data_c'] or
-            current_toggle_data_d != last_state['toggle_data_d']
-        )
-
-        # Check if input loras were cleared (had loras before, now empty)
-        had_loras = last_state['input_loras_a'] or last_state['input_loras_b'] or last_state['input_loras_c'] or last_state['input_loras_d']
-        now_has_no_loras = not current_input_loras_a and not current_input_loras_b and not current_input_loras_c and not current_input_loras_d
-        loras_were_cleared = had_loras and now_has_no_loras
-
-        # Reset conditions:
-        # 1. Prompt dropdown changed
-        # 2. Input loras AND prompt text both changed (new extraction)
-        # 3. Input loras were cleared (switching from image with workflow to one without)
-        # 4. Don't reset if ONLY toggle data changed (user is adjusting toggles)
-        is_new_extraction = input_loras_changed and prompt_input_changed
-        should_reset = prompt_changed or is_new_extraction or loras_were_cleared
-
-        # Update tracked state
-        self._last_known_state[node_state_key] = {
-            'prompt_key': current_prompt_key,
-            'input_loras_a': current_input_loras_a,
-            'input_loras_b': current_input_loras_b,
-            'input_loras_c': current_input_loras_c,
-            'input_loras_d': current_input_loras_d,
-            'prompt_input_text': current_prompt_input_text,
-            'toggle_data_a': current_toggle_data_a,
-            'toggle_data_b': current_toggle_data_b,
-            'toggle_data_c': current_toggle_data_c,
-            'toggle_data_d': current_toggle_data_d,
-        }
+        # Tell the frontend to reset its toggles when the prompt changed, when the input LoRAs and the input prompt
+        # changed together (a new extraction), or when the input LoRAs were cleared; not when only toggles changed.
+        node_key = str(unique_id) if unique_id else "default"
+        last = self._last_known_state.get(node_key, {"prompt_key": "", "input_paths": {slot: [] for slot in _MODEL_SLOT_KEYS}, "prompt_input_text": ""})
+        prompt_key = f"{category}|{name}"
+        input_loras_changed = input_paths != last["input_paths"]
+        loras_were_cleared = any(last["input_paths"].values()) and not any(input_paths.values())
+        should_reset = (prompt_key != last["prompt_key"]
+                        or (input_loras_changed and prompt_input_text != last["prompt_input_text"])
+                        or loras_were_cleared)
+        self._last_known_state[node_key] = {"prompt_key": prompt_key, "input_paths": input_paths, "prompt_input_text": prompt_input_text}
 
         lora_input_mode = self._normalize_lora_input_mode(use_lora_input)
         use_combined_loras = self._should_use_combined_loras(lora_input_mode)
         use_input_only_loras = self._should_use_input_only_loras(lora_input_mode)
 
-        # ========================================
-        # CONTINUE WITH NORMAL PROCESSING
-        # ========================================
-
-        prompts_data = load_prompts()
-        prompt_entry = prompts_data.get(category, {}).get(name, {}) if isinstance(prompts_data, dict) else {}
-        stored_prompt_wf = prompt_entry.get("workflow_data") if isinstance(prompt_entry, dict) else None
-        connected_recipe_data = ensure_v2_recipe_data(recipe_data, source="PromptManagerAdvanced") if isinstance(recipe_data, dict) else None
+        prompt_entry = load_prompts().get(category, {}).get(name, {})
+        if not isinstance(prompt_entry, dict):
+            prompt_entry = {}
+        stored_prompt_wf = prompt_entry.get("workflow_data")
+        connected_recipe_data = ensure_v2_recipe_data(manager_data, source="PromptManagerAdvanced") if isinstance(manager_data, dict) else None
         resolved_workflow_data = connected_recipe_data or (ensure_v2_recipe_data(stored_prompt_wf, source="PromptManagerAdvanced") if isinstance(stored_prompt_wf, dict) else None)
         workflow_fields = _derive_prompt_fields_from_workflow_data(resolved_workflow_data)
 
-        # Choose which text to use based on the toggles
-        # Priority: use_prompt_input > internal text
+        # The prompt input when it is on and has text, else the typed text, else the recipe's prompt.
         if use_prompt_input and prompt:
             output_text = prompt
         else:
             output_text = text if text else ""
             if not output_text.strip() and workflow_fields.get("prompt"):
-                # Compatibility fallback: v2 prompt is authoritative in model_a block.
                 output_text = workflow_fields.get("prompt", "")
 
-        # Capture the original input loras BEFORE any processing
-        # These are used by the frontend to detect when inputs change
-        # and clear toggle states accordingly
-        input_loras_a = self._format_loras_for_display(combined_input_multi.get('a')) if combined_input_multi.get('a') else []
-        input_loras_b = self._format_loras_for_display(combined_input_multi.get('b')) if combined_input_multi.get('b') else []
-        input_loras_c = self._format_loras_for_display(combined_input_multi.get('c')) if combined_input_multi.get('c') else []
-        input_loras_d = self._format_loras_for_display(combined_input_multi.get('d')) if combined_input_multi.get('d') else []
-
-        # Build map of ORIGINAL strengths (before any user adjustments via toggles)
-        # This is used for "Reset Strength" functionality
-        original_strengths_a = {}
-        original_strengths_b = {}
-        original_strengths_c = {}
-        original_strengths_d = {}
-
-        # Get original strengths from saved prompt dict
-        prompts = load_prompts()
-        if prompts and category and name:
-            prompt_data = prompts.get(category, {}).get(name, {})
-            if prompt_data:
-                for lora in prompt_data.get('loras_a', []):
-                    lora_name = lora.get('name', '')
-                    if lora_name:
-                        original_strengths_a[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-                for lora in prompt_data.get('loras_b', []):
-                    lora_name = lora.get('name', '')
-                    if lora_name:
-                        original_strengths_b[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-                for lora in prompt_data.get('loras_c', []):
-                    lora_name = lora.get('name', '')
-                    if lora_name:
-                        original_strengths_c[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-                for lora in prompt_data.get('loras_d', []):
-                    lora_name = lora.get('name', '')
-                    if lora_name:
-                        original_strengths_d[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-
-        # Add original strengths from connected input loras
-        for lora in input_loras_a:
-            lora_name = lora.get('name', '')
-            if lora_name and lora_name not in original_strengths_a:
-                original_strengths_a[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-        for lora in input_loras_b:
-            lora_name = lora.get('name', '')
-            if lora_name and lora_name not in original_strengths_b:
-                original_strengths_b[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-        for lora in input_loras_c:
-            lora_name = lora.get('name', '')
-            if lora_name and lora_name not in original_strengths_c:
-                original_strengths_c[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-        for lora in input_loras_d:
-            lora_name = lora.get('name', '')
-            if lora_name and lora_name not in original_strengths_d:
-                original_strengths_d[lora_name] = lora.get('strength', lora.get('model_strength', 1.0))
-
-        # Process trigger words
-        trigger_words_display = self._process_trigger_words(
-            trigger_words, trigger_words_toggle
-        )
+        trigger_words_display = self._process_trigger_words(trigger_words, trigger_words_toggle)
         active_trigger_words = self._get_active_trigger_words(trigger_words_toggle, trigger_words)
 
-        # Build preset stacks from saved toggle data (these are what we display/manage)
-        preset_stack_a = self._build_stack_from_toggle(loras_a_toggle) if loras_a_toggle else []
-        preset_stack_b = self._build_stack_from_toggle(loras_b_toggle) if loras_b_toggle else []
-        preset_stack_c = self._build_stack_from_toggle(loras_c_toggle) if loras_c_toggle else []
-        preset_stack_d = self._build_stack_from_toggle(loras_d_toggle) if loras_d_toggle else []
+        update = {}
+        out_stacks = {}
+        for slot in _MODEL_SLOT_KEYS:
+            toggle = toggles[slot]
+            connected = inputs.get(slot)
+            # The connected LoRAs as they came in, for the frontend to notice an input change.
+            input_display = self._format_loras_for_display(connected) if connected else []
 
-        # Compatibility fallback: when no saved toggle payload exists, seed
-        # PMA stack defaults from v2 model_a/model_b LoRA blocks.
-        if not preset_stack_a and not loras_a_toggle:
-            preset_stack_a = [
-                (
-                    lora.get("name", ""),
-                    lora.get("strength", lora.get("model_strength", 1.0)),
-                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
-                )
-                for lora in workflow_fields.get("loras_a", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
-        if not preset_stack_b and not loras_b_toggle:
-            preset_stack_b = [
-                (
-                    lora.get("name", ""),
-                    lora.get("strength", lora.get("model_strength", 1.0)),
-                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
-                )
-                for lora in workflow_fields.get("loras_b", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
-        if not preset_stack_c and not loras_c_toggle:
-            preset_stack_c = [
-                (
-                    lora.get("name", ""),
-                    lora.get("strength", lora.get("model_strength", 1.0)),
-                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
-                )
-                for lora in workflow_fields.get("loras_c", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
-        if not preset_stack_d and not loras_d_toggle:
-            preset_stack_d = [
-                (
-                    lora.get("name", ""),
-                    lora.get("strength", lora.get("model_strength", 1.0)),
-                    lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))),
-                )
-                for lora in workflow_fields.get("loras_d", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
+            # Strengths before any adjustment, for "Reset Strength": the saved prompt's, then the inputs'.
+            original_strengths = {}
+            for lora in prompt_entry.get(f"loras_{slot}", []) if category and name else []:
+                if lora.get("name"):
+                    original_strengths[lora["name"]] = lora.get("strength", lora.get("model_strength", 1.0))
+            for lora in input_display:
+                if lora.get("name") and lora["name"] not in original_strengths:
+                    original_strengths[lora["name"]] = lora.get("strength", lora.get("model_strength", 1.0))
 
-        # Get ALL preset loras including unavailable ones (for display purposes)
-        all_preset_loras_a = self._get_all_loras_from_toggle(loras_a_toggle) if loras_a_toggle else []
-        all_preset_loras_b = self._get_all_loras_from_toggle(loras_b_toggle) if loras_b_toggle else []
-        all_preset_loras_c = self._get_all_loras_from_toggle(loras_c_toggle) if loras_c_toggle else []
-        all_preset_loras_d = self._get_all_loras_from_toggle(loras_d_toggle) if loras_d_toggle else []
+            # The prompt's own LoRAs: the saved toggle payload, else the recipe's LoRAs.
+            recipe_loras = [lora for lora in workflow_fields.get(f"loras_{slot}", []) if isinstance(lora, dict) and lora.get("name")]
+            preset_stack = self._build_stack_from_toggle(toggle) if toggle else []
+            all_preset_loras = self._get_all_loras_from_toggle(toggle) if toggle else []
+            if not toggle:
+                preset_stack = [
+                    (lora.get("name", ""), lora.get("strength", lora.get("model_strength", 1.0)),
+                     lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0))))
+                    for lora in recipe_loras
+                ]
+                all_preset_loras = [
+                    {
+                        "name": lora.get("name", ""),
+                        "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
+                        "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
+                        "active": lora.get("active", True),
+                        "available": bool(lora.get("available", True)),
+                    }
+                    for lora in recipe_loras
+                ]
 
-        # If no saved toggle payload exists yet, preserve active flags from
-        # incoming workflow_data loras as the initial authoritative state.
-        if not all_preset_loras_a and not loras_a_toggle:
-            all_preset_loras_a = [
-                {
-                    "name": lora.get("name", ""),
-                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
-                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
-                    "active": lora.get("active", True),
-                    "available": bool(lora.get("available", True)),
-                }
-                for lora in workflow_fields.get("loras_a", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
-        if not all_preset_loras_b and not loras_b_toggle:
-            all_preset_loras_b = [
-                {
-                    "name": lora.get("name", ""),
-                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
-                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
-                    "active": lora.get("active", True),
-                    "available": bool(lora.get("available", True)),
-                }
-                for lora in workflow_fields.get("loras_b", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
-        if not all_preset_loras_c and not loras_c_toggle:
-            all_preset_loras_c = [
-                {
-                    "name": lora.get("name", ""),
-                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
-                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
-                    "active": lora.get("active", True),
-                    "available": bool(lora.get("available", True)),
-                }
-                for lora in workflow_fields.get("loras_c", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
-        if not all_preset_loras_d and not loras_d_toggle:
-            all_preset_loras_d = [
-                {
-                    "name": lora.get("name", ""),
-                    "strength": float(lora.get("strength", lora.get("model_strength", 1.0))),
-                    "clip_strength": float(lora.get("clip_strength", lora.get("strength", lora.get("model_strength", 1.0)))),
-                    "active": lora.get("active", True),
-                    "available": bool(lora.get("available", True)),
-                }
-                for lora in workflow_fields.get("loras_d", [])
-                if isinstance(lora, dict) and lora.get("name")
-            ]
-
-        # When use_lora_input is disabled, ignore connected stacks and use only saved loras
-        if use_input_only_loras:
-            lora_stack_a = combined_input_multi.get('a') or []
-            lora_stack_b = combined_input_multi.get('b') or []
-            lora_stack_c = combined_input_multi.get('c') or []
-            lora_stack_d = combined_input_multi.get('d') or []
-        elif not use_combined_loras:
-            lora_stack_a = preset_stack_a
-            lora_stack_b = preset_stack_b
-            lora_stack_c = preset_stack_c
-            lora_stack_d = preset_stack_d
-        else:
-            # Merge: preset loras + connected loras (avoiding duplicates by lora name)
-            # Handle case where connected stack might be None or empty
-            input_stack_a = combined_input_multi.get('a')
-            if input_stack_a:
-                lora_stack_a = self._merge_lora_stacks(preset_stack_a, input_stack_a)
+            if use_input_only_loras:
+                stack = connected or []
+            elif use_combined_loras and connected:
+                stack = self._merge_lora_stacks(preset_stack, connected)
             else:
-                lora_stack_a = preset_stack_a if preset_stack_a else []
+                stack = preset_stack
 
-            input_stack_b = combined_input_multi.get('b')
-            if input_stack_b:
-                lora_stack_b = self._merge_lora_stacks(preset_stack_b, input_stack_b)
+            out_stacks[slot] = self._process_lora_toggle(stack, None if use_input_only_loras else toggle) or []
+            if use_input_only_loras:
+                display = self._format_loras_for_display(stack)
+                unavailable = [lora.get("name") for lora in display if lora.get("available") is False]
             else:
-                lora_stack_b = preset_stack_b if preset_stack_b else []
+                display = self._format_loras_for_display_with_unavailable(stack, all_preset_loras)
+                unavailable = [lora["name"] for lora in all_preset_loras if not lora.get("available", False)]
 
-            input_stack_c = combined_input_multi.get('c')
-            if input_stack_c:
-                lora_stack_c = self._merge_lora_stacks(preset_stack_c, input_stack_c)
-            else:
-                lora_stack_c = preset_stack_c if preset_stack_c else []
+            update[f"loras_{slot}"] = display
+            update[f"input_loras_{slot}"] = input_display
+            update[f"unavailable_loras_{slot}"] = unavailable
+            update[f"original_strengths_{slot}"] = original_strengths
 
-            input_stack_d = combined_input_multi.get('d')
-            if input_stack_d:
-                lora_stack_d = self._merge_lora_stacks(preset_stack_d, input_stack_d)
-            else:
-                lora_stack_d = preset_stack_d if preset_stack_d else []
-
-        # Process lora stacks with toggle data (filter inactive, apply strength)
-        processed_stack_a = self._process_lora_toggle(lora_stack_a, None if use_input_only_loras else loras_a_toggle)
-        processed_stack_b = self._process_lora_toggle(lora_stack_b, None if use_input_only_loras else loras_b_toggle)
-        processed_stack_c = self._process_lora_toggle(lora_stack_c, None if use_input_only_loras else loras_c_toggle)
-        processed_stack_d = self._process_lora_toggle(lora_stack_d, None if use_input_only_loras else loras_d_toggle)
-
-        # Display logic: Include ALL loras (available + unavailable) so UI shows complete picture
-        # Build display from available loras first, then add unavailable ones
-        if use_input_only_loras:
-            loras_a_display = self._format_loras_for_display(lora_stack_a)
-            loras_b_display = self._format_loras_for_display(lora_stack_b)
-            loras_c_display = self._format_loras_for_display(lora_stack_c)
-            loras_d_display = self._format_loras_for_display(lora_stack_d)
-        elif not use_combined_loras:
-            loras_a_display = self._format_loras_for_display_with_unavailable(preset_stack_a, all_preset_loras_a)
-            loras_b_display = self._format_loras_for_display_with_unavailable(preset_stack_b, all_preset_loras_b)
-            loras_c_display = self._format_loras_for_display_with_unavailable(preset_stack_c, all_preset_loras_c)
-            loras_d_display = self._format_loras_for_display_with_unavailable(preset_stack_d, all_preset_loras_d)
-        else:
-            loras_a_display = self._format_loras_for_display_with_unavailable(lora_stack_a, all_preset_loras_a)
-            loras_b_display = self._format_loras_for_display_with_unavailable(lora_stack_b, all_preset_loras_b)
-            loras_c_display = self._format_loras_for_display_with_unavailable(lora_stack_c, all_preset_loras_c)
-            loras_d_display = self._format_loras_for_display_with_unavailable(lora_stack_d, all_preset_loras_d)
-
-        # Build explicit list of unavailable lora names for frontend
-        if use_input_only_loras:
-            unavailable_loras_a = [l.get('name') for l in loras_a_display if l.get('available') is False]
-            unavailable_loras_b = [l.get('name') for l in loras_b_display if l.get('available') is False]
-            unavailable_loras_c = [l.get('name') for l in loras_c_display if l.get('available') is False]
-            unavailable_loras_d = [l.get('name') for l in loras_d_display if l.get('available') is False]
-        else:
-            unavailable_loras_a = [lora['name'] for lora in all_preset_loras_a if not lora.get('available', False)]
-            unavailable_loras_b = [lora['name'] for lora in all_preset_loras_b if not lora.get('available', False)]
-            unavailable_loras_c = [lora['name'] for lora in all_preset_loras_c if not lora.get('available', False)]
-            unavailable_loras_d = [lora['name'] for lora in all_preset_loras_d if not lora.get('available', False)]
-
-        # Broadcast update to frontend
         if unique_id is not None:
             server.PromptServer.instance.send_sync("prompt-manager-advanced-update", {
                 "node_id": unique_id,
                 "prompt": output_text,
                 "use_prompt_input": use_prompt_input,
                 "prompt_input": prompt,
-                "loras_a": loras_a_display,
-                "loras_b": loras_b_display,
-                "loras_c": loras_c_display,
-                "loras_d": loras_d_display,
-                "input_loras_a": input_loras_a,  # Original input loras for change detection
-                "input_loras_b": input_loras_b,  # Original input loras for change detection
-                "input_loras_c": input_loras_c,
-                "input_loras_d": input_loras_d,
-                "unavailable_loras_a": unavailable_loras_a,  # Explicit list of unavailable lora names
-                "unavailable_loras_b": unavailable_loras_b,  # Explicit list of unavailable lora names
-                "unavailable_loras_c": unavailable_loras_c,
-                "unavailable_loras_d": unavailable_loras_d,
+                **update,
                 "trigger_words": trigger_words_display,
                 "connected_thumbnail": None,
-                "should_reset": should_reset,  # Python tells JavaScript when to reset toggles
+                "should_reset": should_reset,
                 "lora_input_mode": lora_input_mode,
                 "use_lora_input": use_combined_loras,
                 "use_input_only_loras": use_input_only_loras,
-                "original_strengths_a": original_strengths_a,  # For "Reset Strength" button
-                "original_strengths_b": original_strengths_b,  # For "Reset Strength" button
-                "original_strengths_c": original_strengths_c,
-                "original_strengths_d": original_strengths_d,
-                "has_multi_lora_input": bool(combined_input_multi.get('c') or combined_input_multi.get('d')),
+                "has_multi_lora_input": bool(inputs.get("c") or inputs.get("d")),
             })
 
-        # Append active trigger words to output
         final_output = self._append_trigger_words_to_prompt(output_text, active_trigger_words)
 
-        # Save resolved runtime prompt into execution metadata so saver nodes
-        # embed the final prompt value, not the unresolved linked input state.
+        # Saver nodes embed the final prompt as typed text, not the link that fed it.
         record_prompt(unique_id, final_output, extra_pnginfo, api_prompt, toggle="use_prompt_input", link_input="prompt", text_index=4)
 
-        # Swap outputs if requested
-        out_stack_a = processed_stack_a if processed_stack_a else []
-        out_stack_b = processed_stack_b if processed_stack_b else []
-        out_stack_c = processed_stack_c if processed_stack_c else []
-        out_stack_d = processed_stack_d if processed_stack_d else []
-        active_used_input_loras = _flatten_multi_lora_slots({
-            "a": out_stack_a,
-            "b": out_stack_b,
-            "c": out_stack_c,
-            "d": out_stack_d,
-        })
-
-        neg_prompt = str(workflow_fields.get('negative_prompt', '') or '')
         out_workflow_data = build_v2_recipe_data_from_prompt(
             prompt_text=final_output,
-            negative_prompt=neg_prompt,
-            loras_a=loras_a_display,
-            loras_b=loras_b_display,
-            loras_c=loras_c_display,
-            loras_d=loras_d_display,
-            source='PromptManagerAdvanced',
+            negative_prompt=str(workflow_fields.get("negative_prompt", "") or ""),
+            **{f"loras_{slot}": update[f"loras_{slot}"] for slot in _MODEL_SLOT_KEYS},
+            source="PromptManagerAdvanced",
             base_recipe_data=resolved_workflow_data,
         )
         out_workflow_data = _merge_prompt_composer_input_data(
             out_workflow_data,
-            input_prompt=current_prompt_input_text,
-            prompt_enabled=bool(use_prompt_input and current_prompt_input_text),
-            input_lora_stack=active_used_input_loras,
+            input_prompt=prompt_input_text,
+            prompt_enabled=bool(use_prompt_input and prompt_input_text),
+            input_lora_stack=_flatten_multi_lora_slots(out_stacks),
         )
         out_workflow_data[_PROMPT_MANAGER_RECIPE_KEY] = {"category": category, "name": name}
 
-        out_multi_stack = {
-            "a": out_stack_a,
-            "b": out_stack_b,
-            "c": out_stack_c,
-            "d": out_stack_d,
-        }
-
-        return (final_output, out_stack_a, out_stack_b, out_multi_stack, out_workflow_data)
+        return (final_output, out_stacks["a"], out_stacks["b"], out_stacks, out_workflow_data)
 
     def check_lazy_status(self, category, name, use_prompt_input, use_lora_input=_LORA_INPUT_MODE_PROMPT_ONLY,
                           text="", prompt=None, lora_stack_a=None, lora_stack_b=None,
