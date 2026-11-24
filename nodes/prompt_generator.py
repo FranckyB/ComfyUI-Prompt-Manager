@@ -19,7 +19,7 @@ import server
 import folder_paths
 from PIL import Image
 from io import BytesIO
-from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
+from ..py.backup_manager import atomic_save, load_with_fallback
 from ..py.system_prompt_converter import convert_system_prompts, ensure_category_buckets
 
 # ComfyUI-style ANSI console colors (matches app/logger.py)
@@ -415,7 +415,6 @@ class PromptGeneratorDataStore:
     @staticmethod
     def load():
         data_path = _ensure_prompt_generator_data()
-        check_backup(data_path)
         data = load_with_fallback(data_path, "PromptGeneratorDataStore")
         if not isinstance(data, dict):
             return {}

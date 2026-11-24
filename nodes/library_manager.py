@@ -10,6 +10,7 @@ import json
 
 import server
 
+from ..py.prompt_store import load_prompts
 from ..py.thumbnail_utils import image_to_base64_thumbnail
 from ..py.workflow_data_utils import ensure_v2_recipe_data, get_v2_model_block, to_json_safe_workflow_data, build_v2_recipe_data_from_prompt
 from .prompt_manager_adv import PromptManagerAdvanced
@@ -22,7 +23,7 @@ class LibraryManager(PromptManagerAdvanced):
 
     @classmethod
     def INPUT_TYPES(cls):
-        prompts_data = cls.load_prompts()
+        prompts_data = load_prompts()
         categories = list(prompts_data.keys()) if prompts_data else ["Default"]
 
         all_prompts = set()
@@ -104,7 +105,7 @@ class LibraryManager(PromptManagerAdvanced):
         saved_workflow_data=None,
         **kwargs,
     ):
-        prompts_data = self.load_prompts()
+        prompts_data = load_prompts()
         source_name = self.SOURCE_NAME
         recipe_data = manager_data
         if recipe_data is None:

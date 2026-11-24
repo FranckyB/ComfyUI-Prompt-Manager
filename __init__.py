@@ -7,6 +7,7 @@ __author__ = "François Beaudry"
 __license__ = "MIT"
 
 from .py.backup_manager import check_backup
+from .py.prompt_store import prompts_path
 from .py.prompt_composer_store import PromptComposerStore
 from .nodes.prompt_manager_adv import PromptManagerAdvanced
 from .nodes.prompt_manager_basic import PromptManager
@@ -79,7 +80,7 @@ __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
 # Ensure rotating backups exist for all prompt data files on ComfyUI startup.
 try:
-    check_backup(PromptManager.get_prompts_path())
+    check_backup(prompts_path())
     check_backup(PromptComposerStore.get_data_path())
     check_backup(PromptGeneratorDataStore.get_data_path())
 except Exception as e:

@@ -21,16 +21,10 @@ def _get_backups_dir():
     return os.path.join(folder_paths.get_user_directory(), "default", BACKUPS_DIR_NAME)
 
 
-def _ensure_backups_dir():
-    path = _get_backups_dir()
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 def _backup_path(data_path, index):
     """Return the path for the i-th numbered backup (1-based)."""
     filename = os.path.basename(data_path)
-    return os.path.join(_ensure_backups_dir(), f"{filename}_bak_{index:02d}")
+    return os.path.join(_get_backups_dir(), f"{filename}_bak_{index:02d}")
 
 
 def _rotate_backups(data_path):
@@ -50,15 +44,14 @@ def _rotate_backups(data_path):
                 pass
 
 
-def _is_valid_json_file(path):
-    if not os.path.exists(path):
-        return False
+def _read_json_dict(path):
+    """The JSON object stored at path, or None when it is missing, unreadable or not an object."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return isinstance(data, dict)
-    except Exception:
-        return False
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _backup_is_from_today(backup_path):
@@ -73,53 +66,24 @@ def _backup_is_from_today(backup_path):
         return False
 
 
-def refresh_backup(data_path):
-    """
-    Rotate backups and copy the current data file to *_bak_01 if valid.
-    This is the daily backup entry point; it should NOT be called on every save.
-    """
-    if not _is_valid_json_file(data_path):
-        return
-    if _backup_is_from_today(_backup_path(data_path, 1)):
-        return
-    _rotate_backups(data_path)
-    try:
-        _ensure_backups_dir()
-        backup_path = _backup_path(data_path, 1)
-        shutil.copy2(data_path, backup_path)
-        # Record the backup creation time so _backup_is_from_today() works.
-        os.utime(backup_path, None)
-    except Exception:
-        pass
-
-
 def load_with_fallback(data_path, log_prefix="PromptManager"):
     """
-    Load JSON from data_path. If corrupt, try *_bak_01..*_bak_05 and return
-    the newest valid backup. The main file is NOT overwritten here.
+    Load JSON from data_path. If it is unreadable, return the newest valid
+    *_bak_01..*_bak_05 instead. The main file is NOT overwritten here. None
+    when there is no file and no backup.
     """
-    if _is_valid_json_file(data_path):
-        try:
-            with open(data_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[{log_prefix}] Error loading {data_path}: {e}")
-    else:
-        print(f"[{log_prefix}] Data file missing or corrupt: {data_path}")
-
+    data = _read_json_dict(data_path)
+    if data is not None:
+        return data
+    exists = os.path.exists(data_path)
     for i in range(1, MAX_BACKUPS + 1):
         candidate = _backup_path(data_path, i)
-        if not _is_valid_json_file(candidate):
-            continue
-        try:
-            with open(candidate, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            print(f"[{log_prefix}] Recovered data from backup: {candidate}")
+        data = _read_json_dict(candidate)
+        if data is not None:
+            print(f"[{log_prefix}] {data_path} is unreadable; using the backup {candidate}")
             return data
-        except Exception as be:
-            print(f"[{log_prefix}] Backup load failed ({candidate}): {be}")
-
-    print(f"[{log_prefix}] No valid backup found for {data_path}.")
+    if exists:
+        print(f"[{log_prefix}] {data_path} is unreadable and no backup could be read")
     return None
 
 
@@ -151,9 +115,20 @@ def atomic_save(data_path, data, log_prefix="PromptManager"):
 
 def check_backup(data_path):
     """
-    Called on startup for each registered data file. Creates a daily backup if
-    one does not already exist for today.
+    Called on startup for each registered data file: rotate backups and copy
+    the current data file to *_bak_01 if it is valid and today has no backup
+    yet. Not called on every load or save.
     """
-    if not _is_valid_json_file(data_path):
+    if _read_json_dict(data_path) is None:
         return
-    refresh_backup(data_path)
+    if _backup_is_from_today(_backup_path(data_path, 1)):
+        return
+    _rotate_backups(data_path)
+    try:
+        os.makedirs(_get_backups_dir(), exist_ok=True)
+        backup_path = _backup_path(data_path, 1)
+        shutil.copy2(data_path, backup_path)
+        # Record the backup creation time so _backup_is_from_today() works.
+        os.utime(backup_path, None)
+    except Exception:
+        pass
