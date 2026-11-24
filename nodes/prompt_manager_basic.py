@@ -5,6 +5,7 @@ import time
 import folder_paths
 import server
 from ..py.backup_manager import atomic_save, load_with_fallback, check_backup
+from .prompt_manager_adv import _is_hidden_category_entry_key
 
 
 def _safe_abspath(path):
@@ -87,7 +88,7 @@ class PromptManager:
 
         all_prompts = set()
         for category_prompts in prompts_data.values():
-            all_prompts.update(k for k in category_prompts.keys() if k != "__meta__")
+            all_prompts.update(k for k in category_prompts.keys() if not _is_hidden_category_entry_key(k))
 
         all_prompts.add("")
         all_prompts_list = sorted(list(all_prompts))
@@ -98,7 +99,7 @@ class PromptManager:
         first_prompt = ""
         first_prompt_text = ""
         if prompts_data and first_category in prompts_data and prompts_data[first_category]:
-            first_category_prompts = [k for k in prompts_data[first_category].keys() if k != "__meta__"]
+            first_category_prompts = [k for k in prompts_data[first_category].keys() if not _is_hidden_category_entry_key(k)]
             first_prompt = sorted(first_category_prompts, key=str.lower)[0] if first_category_prompts else ""
             if first_prompt:
                 first_prompt_text = prompts_data[first_category][first_prompt].get("prompt", "")
@@ -320,17 +321,9 @@ async def save_prompt(request):
                 print(f"[PromptManager] Removing old casing '{casing_name}' before saving as '{name}'")
                 del prompts[category][casing_name]
 
-        # Save prompt in dict, preserving any existing lora data, trigger words, thumbnail, and nsfw from PromptManagerAdvanced
-        prompts[category][name] = {
-            "prompt": text,
-            "loras_a": existing_data.get("loras_a", []),
-            "loras_b": existing_data.get("loras_b", []),
-            "trigger_words": existing_data.get("trigger_words", []),
-            "thumbnail": existing_data.get("thumbnail")
-        }
-        # Preserve nsfw flag if it was set
-        if existing_data.get("nsfw"):
-            prompts[category][name]["nsfw"] = existing_data["nsfw"]
+        # Only the text changes: LoRAs, trigger words, recipe data, thumbnail and flags saved by the full
+        # Prompt Manager stay with the prompt.
+        prompts[category][name] = {**existing_data, "prompt": text} if isinstance(existing_data, dict) else {"prompt": text}
 
         PromptManager.save_prompts(prompts)
 
@@ -535,6 +528,8 @@ async def load_prompts_file(request):
         file_path = _safe_abspath(data.get("path", ""))
         if not file_path:
             return server.web.json_response({"success": False, "error": "Path is required"})
+        if not file_path.lower().endswith(".json"):
+            return server.web.json_response({"success": False, "error": "Only JSON files can be opened"}, status=400)
         if not os.path.isfile(file_path):
             return server.web.json_response({"success": False, "error": "JSON file not found"}, status=404)
 

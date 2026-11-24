@@ -2117,38 +2117,33 @@ async def import_prompts_advanced(request):
                 created_categories += 1
 
             for prompt_name, prompt_data in category_prompts.items():
-                if not isinstance(prompt_data, dict):
-                    continue
-
-                # Handle hidden category metadata keys (not prompt entries).
+                # Hidden category metadata keys (not prompt entries); the base prompt and prefix are plain text.
                 if _is_hidden_category_entry_key(prompt_name):
                     if mode != "skip_existing" or prompt_name not in prompts[category]:
                         prompts[category][prompt_name] = prompt_data
+                    continue
+
+                # Older exports stored a prompt as its text alone.
+                if isinstance(prompt_data, str):
+                    prompt_data = {"prompt": prompt_data}
+                elif not isinstance(prompt_data, dict):
                     continue
 
                 if prompt_name in prompts[category] and mode == "skip_existing":
                     skipped_prompts += 1
                     continue
 
-                # Normalize the prompt data structure (include thumbnail if present)
-                normalized = {
-                    "prompt": prompt_data.get("prompt", ""),
-                    "loras_a": prompt_data.get("loras_a", []),
-                    "loras_b": prompt_data.get("loras_b", []),
-                    "loras_c": prompt_data.get("loras_c", []),
-                    "loras_d": prompt_data.get("loras_d", []),
-                    "trigger_words": prompt_data.get("trigger_words", [])
+                # Every field the entry carries (recipe data, negative prompt, thumbnail, flags) comes along;
+                # the lists a prompt always has default to empty.
+                prompts[category][prompt_name] = {
+                    "prompt": "",
+                    "loras_a": [],
+                    "loras_b": [],
+                    "loras_c": [],
+                    "loras_d": [],
+                    "trigger_words": [],
+                    **prompt_data,
                 }
-
-                # Include thumbnail if present in imported data
-                if "thumbnail" in prompt_data and prompt_data["thumbnail"]:
-                    normalized["thumbnail"] = prompt_data["thumbnail"]
-
-                # Preserve NSFW flag if present
-                if prompt_data.get("nsfw"):
-                    normalized["nsfw"] = prompt_data["nsfw"]
-
-                prompts[category][prompt_name] = normalized
                 imported_prompts += 1
 
         PromptManagerAdvanced.save_prompts(prompts)
@@ -2172,6 +2167,8 @@ async def load_prompts_file_advanced(request):
         file_path = _safe_abspath(data.get("path", ""))
         if not file_path:
             return server.web.json_response({"success": False, "error": "Path is required"})
+        if not file_path.lower().endswith(".json"):
+            return server.web.json_response({"success": False, "error": "Only JSON files can be opened"}, status=400)
         if not os.path.isfile(file_path):
             return server.web.json_response({"success": False, "error": "JSON file not found"}, status=404)
 

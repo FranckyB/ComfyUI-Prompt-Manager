@@ -531,6 +531,8 @@ async def generator_load_prompts_file(request):
         file_path = _safe_abspath(data.get("path", ""))
         if not file_path:
             return server.web.json_response({"success": False, "error": "Path is required"})
+        if not file_path.lower().endswith(".json"):
+            return server.web.json_response({"success": False, "error": "Only JSON files can be opened"}, status=400)
         if not os.path.isfile(file_path):
             return server.web.json_response({"success": False, "error": "JSON file not found"}, status=404)
 
