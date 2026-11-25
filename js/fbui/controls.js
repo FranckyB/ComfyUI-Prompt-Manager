@@ -148,43 +148,40 @@ export function segmented(choices, { onPick, bool = false } = {}) {
   };
 }
 
-// A timeline rail with a playhead, for picking a frame: press or drag
-// anywhere on it. rail({ onSeek(fraction, settled) }) -> { root, set(fraction), setEnabled(on) }.
-// `fraction` is 0..1 along the rail; the caller maps it to its own frames.
-// A row label that slides what its row sets: drag it along `axis` ("x" or
-// "y"). onStart() at the press, onSlide(delta) with the CSS pixels moved
-// since (the graph zoom taken out), onEnd() at the release.
-export function slideLabel(text, { axis = "x", title = "", onStart, onSlide, onEnd } = {}) {
-  const label = el("span", "fbui-label fbui-slide");
-  label.insertAdjacentHTML("beforeend", axis === "x" ? ICONS.slideX : ICONS.slideY);
-  label.append(el("span", "", text));
-  label.title = title;
-  label.style.cursor = axis === "x" ? "ew-resize" : "ns-resize";
-  label.addEventListener("pointerdown", (event) => {
+// A slide handle (↔ or ↕) at the start of a row's fields: dragging it
+// reports the pointer's sideways travel for either axis, as every slider
+// here moves sideways (right is right, or down).
+export function slideHandle({ axis = "x", title = "", onStart, onSlide, onEnd } = {}) {
+  const handle = el("span", "fbui-slide");
+  handle.insertAdjacentHTML("beforeend", axis === "x" ? ICONS.slideX : ICONS.slideY);
+  handle.title = title;
+  handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    label.setPointerCapture(event.pointerId);
-    label.classList.add("on");
-    const zoom = label.getBoundingClientRect().width / Math.max(1, label.offsetWidth) || 1;
-    const at = (e) => (axis === "x" ? e.clientX : e.clientY);
-    const start = at(event);
-    const move = (e) => onSlide?.((at(e) - start) / zoom);
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("on");
+    const zoom = handle.getBoundingClientRect().width / Math.max(1, handle.offsetWidth) || 1;
+    const start = event.clientX;
+    const move = (e) => onSlide?.((e.clientX - start) / zoom);
     const end = () => {
-      label.removeEventListener("pointermove", move);
-      label.removeEventListener("pointerup", end);
-      label.removeEventListener("pointercancel", end);
-      label.classList.remove("on");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      handle.classList.remove("on");
       onEnd?.();
     };
     onStart?.();
-    label.addEventListener("pointermove", move);
-    label.addEventListener("pointerup", end);
-    label.addEventListener("pointercancel", end);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
   });
-  return label;
+  return handle;
 }
 
+// A timeline rail with a playhead, for picking a frame: press or drag
+// anywhere on it. rail({ onSeek(fraction, settled) }) -> { root, set(fraction), setEnabled(on) }.
+// `fraction` is 0..1 along the rail; the caller maps it to its own frames.
 export function rail({ onSeek, title = "" } = {}) {
   const root = el("div", "fbui-rail");
   const fill = el("div", "fbui-rail-fill");

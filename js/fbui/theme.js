@@ -129,9 +129,9 @@ textarea.fbui-text{background:${T.card};border-color:${T.plateEdge};font-size:13
 .fbui-btn.small{height:20px;padding:0 7px;font-size:10px}
 .fbui-btn.icon{width:${ROW_HEIGHT}px;padding:0}
 .fbui-btn.icon.small{width:20px}
-.fbui-slide{display:flex;align-items:center;gap:5px;align-self:stretch;margin:2px 0;padding:0 4px;border-radius:${RADIUS}px;touch-action:none}
-.fbui-slide>span{overflow:hidden;text-overflow:ellipsis}
-.fbui-slide svg{flex:none;color:${T.faint}}
+/* A slide handle sits in a field's icon column: its padding hangs outside so the icon lines up. */
+.fbui-slide{flex:none;display:flex;align-items:center;align-self:stretch;margin:2px -4px;padding:0 4px;border-radius:${RADIUS}px;cursor:ew-resize;touch-action:none}
+.fbui-slide svg{flex:none;color:${T.label}}
 .fbui-slide:hover,.fbui-slide.on{background:${T.fill};color:${T.ink}}
 .fbui-slide:hover svg,.fbui-slide.on svg{color:${T.brand}}
 .fbui-rail{position:relative;height:24px;margin:0 7px;touch-action:none;cursor:pointer;user-select:none;pointer-events:auto}
