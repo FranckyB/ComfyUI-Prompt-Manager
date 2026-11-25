@@ -17,11 +17,11 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { button, helpBadge, ICONS } from "./fbui/controls.js";
+import { button, helpBadge, ICONS, segmented, toggleSwitch } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { confirm, openMenu } from "./fbui/modal.js";
 import { FONT, ROW_HEIGHT } from "./fbui/theme.js";
-import { findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.js";
+import { comboValues, findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.js";
 import { DEFAULT_THUMBNAIL, exportPromptsJSON, getLoraManagerPreviewTooltip, PMA_THEME } from "./prompt_manager_advanced.js";
 import { getHideNSFW, hasComposeLikePayload, hasLayoutPayload, hasRecipeLikePayload, openPromptBrowserForSave, showThumbnailBrowser } from "./prompt_browser.js";
 import { buildSavePromptRequestBodyForEndpoint, isHiddenPromptEntryKey, PROMPT_ADVANCED_ENDPOINT_PREFIX as ENDPOINT } from "./prompt_store_adapters.js";
@@ -466,6 +466,26 @@ function promptBar(node) {
     };
 }
 
+// Prompt input's switch and LoRA input's choice share one line.
+function inputsControl(node, card) {
+    const field = el("div", "fbui-field");
+    const prompt = toggleSwitch({ title: "Use the connected prompt instead of the saved one", onPick: (value) => card.setWidget("use_prompt_input", value) });
+    const modes = comboValues(findWidget(node, "lora_mode"));
+    const lora = segmented(modes.map((value) => ({ value, label: MODE_LABELS[value] ?? value, title: MODE_TITLES[value] })), { onPick: (value) => card.setWidget("lora_mode", value) });
+    lora.root.style.flex = "1 1 0";
+    lora.root.style.minWidth = "0";
+    const loraLabel = el("span", "fbui-label", "LoRA input");
+    loraLabel.style.cssText = "flex:none;margin-left:8px";
+    field.append(prompt.root, loraLabel, lora.root);
+    return {
+        element: field,
+        sync(values) {
+            prompt.set(values.use_prompt_input);
+            lora.set(values.lora_mode);
+        },
+    };
+}
+
 function buttonBar(node) {
     const row = el("div", "fbui-field");
     const add = (text, title, onClick, icon = "") => row.append(button(text, { icon, soft: true, grow: true, title, onClick }));
@@ -692,8 +712,7 @@ function setupNode(node) {
     pm.card = mountCard(node, {
         minWidth: MIN_WIDTH,
         rows: [
-            { widget: "use_prompt_input", label: "Prompt input" },
-            { widget: "lora_mode", label: "LoRA input", kind: "segment", labels: MODE_LABELS, titles: MODE_TITLES },
+            { label: "Prompt input", widgets: ["use_prompt_input", "lora_mode"], control: inputsControl },
             // The prompt's name, then its text, then what to do with it.
             { panel: promptBar, height: ROW_HEIGHT },
             { panel: textPanel, grow: true, height: TEXT_MIN_HEIGHT },

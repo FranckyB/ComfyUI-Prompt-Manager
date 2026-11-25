@@ -259,7 +259,7 @@ const OPTIONS_WIDGETS = ["model", "system_prompt_mode", "system_prompt", "use_mo
 const OPTIONS_GUIDE = [
     "Connect it to the Prompt Generator's options input.",
     ["Instructions", "replace the system prompt with the text below, or add it after."],
-    ["Sampling", "the model's own settings, or the ones shown below it."],
+    ["Model sampling", "on: the model's own settings; off: the ones shown below it."],
     ["Llama", "context size and GPU for llama.cpp."],
     ["Native", "the longest answer, in tokens, for a native text encoder."],
     "image2 … image5 add pictures after the Prompt Generator's images.",
@@ -275,7 +275,7 @@ function setupOptionsNode(node) {
         rows: [
             { widget: "system_prompt_mode", label: "Instructions", kind: "segment", labels: { replace: "Replace", append: "Append" } },
             { panel: textPanel("system_prompt", (values) => (values.system_prompt_mode === "append" ? "Added after the system prompt…" : "Replaces the system prompt…")), grow: true, height: TEXT_MIN_HEIGHT },
-            { widget: "use_model_default_sampling", label: "Sampling", offText: "Custom", onText: "Model" },
+            { widget: "use_model_default_sampling", label: "Model sampling" },
             { widget: "temperature", label: "Temperature", when: custom },
             { pair: ["top_k", "top_p"], label: "Top K · P", when: custom },
             { pair: ["min_p", "repeat_penalty"], label: "Min P · Rep", when: custom },
@@ -285,7 +285,7 @@ function setupOptionsNode(node) {
             { section: "Native" },
             { widget: "max_length", label: "Max length" },
             { section: "Console" },
-            { widget: "show_everything_in_console", label: "Show", offText: "Summary", onText: "Everything" },
+            { widget: "show_everything_in_console", label: "Show all" },
         ],
     });
     helpBadge(node, OPTIONS_GUIDE);

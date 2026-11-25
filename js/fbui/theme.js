@@ -8,7 +8,7 @@
 // Bump once per release that changes the CSS below (against the last pushed
 // value, not per local edit). Two packs shipping the same version inject one
 // stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 14;
+export const KIT_VERSION = 16;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -24,7 +24,6 @@ export const T = Object.freeze({
   fillHover: "#363c43",
   rule: "#2a2f35",           // hairline after a section label
   switchOff: "#5f666e",      // paused bar, empty check box
-  offPick: "#181c21",        // the "off" half of a boolean pill when picked: darker than the pill, a switchOff outline
 
   ink: "#f5f7f9",            // values
   inkSoft: "#dfe3e7",        // default card text
@@ -72,7 +71,7 @@ const CHEVRON = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/sv
 export function kitCss() {
   return `
 .fbui-card{position:relative;box-sizing:border-box;width:100%;height:100%;display:flex;flex-direction:column;gap:${ROW_GAP}px;padding:${CARD_PADDING}px 12px;overflow:hidden;border-radius:${RADIUS_CARD}px;background:${T.card};font:12px/1.3 ${FONT};color:${T.inkSoft};pointer-events:none}
-.fbui-row{display:grid;grid-template-columns:minmax(52px,24%) 1fr;align-items:center;gap:10px;height:${ROW_HEIGHT}px;flex:none;pointer-events:auto}
+.fbui-row{display:grid;grid-template-columns:minmax(0,min(var(--fbui-label-w,24%),40%)) 1fr;align-items:center;gap:10px;height:${ROW_HEIGHT}px;flex:none;pointer-events:auto}
 .fbui-row.wide{grid-template-columns:1fr}
 .fbui-card .hidden{display:none!important}
 .fbui-row.linked{opacity:.5}
@@ -106,7 +105,14 @@ export function kitCss() {
 .fbui-seg button{min-width:0;border:none;border-radius:${RADIUS_XS}px;padding:0 2px;background:transparent;color:${T.label};font:600 11px/1 ${FONT};cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fbui-seg button:hover{color:${T.inkHover}}
 .fbui-seg button.on{background:${T.lit};box-shadow:inset 0 0 0 1px ${T.brand};color:${T.litInk}}
-.fbui-bool button.on:first-child{background:${T.offPick};box-shadow:inset 0 0 0 1px ${T.switchOff};color:${T.label}}
+.fbui-switch{display:inline-flex;align-items:center;gap:8px;height:${ROW_HEIGHT}px;padding:0 2px;border:none;background:none;color:${T.label};font:600 11px/1 ${FONT};cursor:pointer}
+.fbui-switch .track{position:relative;flex:none;width:30px;height:16px;border-radius:8px;background:${T.fill};box-shadow:inset 0 0 0 1px ${T.switchOff};transition:background .12s}
+.fbui-switch .track::after{content:"";position:absolute;top:3px;left:3px;width:10px;height:10px;border-radius:50%;background:${T.label};transition:transform .12s,background .12s}
+.fbui-switch.on .track{background:${T.brand};box-shadow:none}
+.fbui-switch.on .track::after{transform:translateX(14px);background:#fff}
+.fbui-switch.on .word{color:${T.ink}}
+.fbui-switch:hover .track::after{background:${T.inkHover}}
+.fbui-switch:focus-visible{outline:2px solid ${T.brand};outline-offset:1px;border-radius:${RADIUS_XS}px}
 .fbui-select{width:100%;height:${ROW_HEIGHT}px;padding:0 24px 0 8px;box-sizing:border-box;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill} ${CHEVRON} no-repeat right 9px center;color:${T.ink};font:500 12px ${FONT};appearance:none;-webkit-appearance:none;cursor:pointer;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .fbui-select:hover{background-color:${T.fillHover}}
 .fbui-select:focus-visible{outline:2px solid ${T.brand};outline-offset:1px}

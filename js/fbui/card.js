@@ -24,11 +24,11 @@
 // Options: minWidth, first (place before the node's other DOM widgets).
 import { chainCallback, el, keepDomWidgetWidthAuto, keepKeyInField } from "./dom.js";
 import { notifyChange } from "./comfy.js";
-import { button as makeButton, info as infoIcon, segmented } from "./controls.js";
+import { button as makeButton, info as infoIcon, segmented, toggleSwitch } from "./controls.js";
 import { cardHeight, choiceLabel, isGroupHeader, rowHeight, rowKind, rowTops, socketWidgetY, visibleRows } from "./card_math.js";
 import { ensureNodeMinHeight, fillNodeHeight, pinHeight, WIDGET_FRAME } from "./layout.js";
 import { makeScrub, scrubSteps } from "./scrub.js";
-import { ensureKitCss, GROUP_HEIGHT, ROW_HEIGHT, UNIT_SLOT_WIDTH } from "./theme.js";
+import { ensureKitCss, FONT, GROUP_HEIGHT, ROW_HEIGHT, UNIT_SLOT_WIDTH } from "./theme.js";
 import { comboValues, commitWidgetValue, findWidget, hideWidget, widgetLinked, widgetSlot, widgetTooltip } from "./widgets.js";
 
 export const CARD_WIDGET = "fbui_card";
@@ -106,10 +106,10 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
       };
     },
     switch(name, row, into) {
-      const seg = segmented([{ value: false, label: row.offText ?? "off" }, { value: true, label: row.onText ?? "on" }], { bool: true, onPick: (value) => setWidget(name, value) });
-      seg.root.title = row.title ?? widgetTooltip(node, name);
-      into.append(seg.root);
-      return (vals) => seg.set(Boolean(vals[name]));
+      const words = row.offText || row.onText ? [row.offText ?? "off", row.onText ?? "on"] : null;
+      const control = toggleSwitch({ words, title: row.title ?? widgetTooltip(node, name), onPick: (value) => setWidget(name, value) });
+      into.append(control.root);
+      return (vals) => control.set(Boolean(vals[name]));
     },
     select(name, row, into) {
       const widget = findWidget(node, name);
@@ -280,6 +280,13 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
   root.addEventListener("pointerdown", (event) => {
     if (event.target.closest("button,input,select,textarea,.fbui-scrub")) event.stopPropagation();
   });
+
+  // The label column fits the longest label (an (i) adds its icon), rather
+  // than a share of the width that leaves a gap on a wide node.
+  const measure = document.createElement("canvas").getContext("2d");
+  measure.font = `11px ${FONT}`;
+  const labelWidth = Math.max(0, ...[...root.querySelectorAll(":scope > .fbui-row > .fbui-label")].map((label) => measure.measureText(label.textContent).width + (label.querySelector(".fbui-info") ? 20 : 0)));
+  if (labelWidth > 0) root.style.setProperty("--fbui-label-w", `${Math.ceil(labelWidth) + 2}px`);
 
   const widget = node.addDOMWidget(CARD_WIDGET, CARD_WIDGET, root, { serialize: false, hideOnZoom: false });
   keepDomWidgetWidthAuto(widget);

@@ -54,7 +54,9 @@ async function refreshPreferredModelOptions(definition) {
 
 const nativeModelSettingOptions = [AUTO_SELECT_MODEL_OPTION];
 
-// The native engine's text encoders, shown by file name alone.
+// The native engine's text encoders, shown by file name alone in the
+// setting. The Prompt Generator's list follows the same folder: its
+// definition for new nodes, and the nodes already on the canvas.
 async function refreshNativeModelOptions(definition) {
     let models = [];
     try {
@@ -69,6 +71,16 @@ async function refreshNativeModelOptions(definition) {
     definition.options = nativeModelSettingOptions;
     const registeredDefinition = app?.ui?.settings?.settingsLookup?.[definition.id];
     if (registeredDefinition) registeredDefinition.options = nativeModelSettingOptions;
+
+    const values = ["(use default)", ...models];
+    const spec = globalThis.LiteGraph?.registered_node_types?.PromptGenerator?.nodeData?.input?.optional?.text_encoder;
+    if (Array.isArray(spec)) spec[0] = values;
+    for (const node of app.graph?._nodes ?? []) {
+        const widget = node.type === "PromptGenerator" ? node.widgets?.find(w => w.name === "text_encoder") : null;
+        if (!widget?.options) continue;
+        widget.options.values = values;
+        node._pg?.card.refresh();
+    }
 }
 
 function isTruthyInputFlag(value) {
@@ -185,10 +197,7 @@ app.registerExtension({
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ key: "native_model_folder", value: value })
-                }).then(() => {
-                    refreshNativeModelOptions(preferredNativeModelSetting);
-                    return app.refreshComboInNodes?.();
-                }).catch(error => {
+                }).then(() => refreshNativeModelOptions(preferredNativeModelSetting)).catch(error => {
                     console.error("[PromptManager] Error saving native model folder preference:", error);
                 });
             }
@@ -440,14 +449,12 @@ app.registerExtension({
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "ollama_keep_alive", value: ollamaKeepAlive })
             });
-            // The node lists were read before this sync; another folder needs them again.
             const nativeFolder = app.ui.settings.getSettingValue("PromptManager.NativeModelFolder") || "LLM";
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "native_model_folder", value: nativeFolder })
             });
-            if (nativeFolder.toLowerCase() !== "llm") await app.refreshComboInNodes?.();
             await fetch("/prompt-manager/save-preference", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },

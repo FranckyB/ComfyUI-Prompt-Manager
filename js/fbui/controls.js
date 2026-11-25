@@ -127,10 +127,10 @@ export function helpBadge(node, lines) {
   });
 }
 
-// A row of pill choices: segmented([{ value, label, title }], { onPick, bool })
+// A row of pill choices: segmented([{ value, label, title }], { onPick })
 // -> { root, set(value) }.
-export function segmented(choices, { onPick, bool = false } = {}) {
-  const root = el("div", bool ? "fbui-seg fbui-bool" : "fbui-seg");
+export function segmented(choices, { onPick } = {}) {
+  const root = el("div", "fbui-seg");
   const buttons = new Map();
   for (const choice of choices) {
     const item = el("button", "", choice.label ?? String(choice.value));
@@ -144,6 +144,29 @@ export function segmented(choices, { onPick, bool = false } = {}) {
     root,
     set(value) {
       for (const [key, item] of buttons) item.classList.toggle("on", key === value);
+    },
+  };
+}
+
+// A small on/off switch for a yes/no setting; `words` ([off, on]) shows the
+// state beside it. -> { root, set(value) }
+export function toggleSwitch({ onPick, words = null, title = "" } = {}) {
+  const root = el("button", "fbui-switch");
+  root.type = "button";
+  root.title = title;
+  root.setAttribute("role", "switch");
+  const word = el("span", "word");
+  root.append(el("span", "track"), word);
+  word.hidden = !words;
+  let value = false;
+  root.addEventListener("click", () => onPick?.(!value));
+  return {
+    root,
+    set(next) {
+      value = Boolean(next);
+      root.classList.toggle("on", value);
+      root.setAttribute("aria-checked", String(value));
+      if (words) word.textContent = words[value ? 1 : 0];
     },
   };
 }
