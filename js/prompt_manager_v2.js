@@ -729,6 +729,10 @@ function setupNode(node) {
         if (!panels) return;
         pm.run = { ...panels, key: runKey(panels.category, panels.name, panels.lora_mode) };
         node.properties[RUN_PROPERTY] = pm.run;
+        // The connected prompt becomes the node's text, so it stays to reuse
+        // or edit once Prompt input is off. Only while it is on: a replayed
+        // result never overwrites text typed since.
+        if (findWidget(node, "use_prompt_input")?.value === true && typeof panels.prompt_input === "string" && panels.prompt_input) pm.card.setWidget("text", panels.prompt_input);
         pm.card.refresh();
     });
     chainCallback(node, "onConfigure", () => {

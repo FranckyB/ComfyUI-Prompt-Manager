@@ -8,7 +8,7 @@
 // Bump once per release that changes the CSS below (against the last pushed
 // value, not per local edit). Two packs shipping the same version inject one
 // stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 16;
+export const KIT_VERSION = 17;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -43,7 +43,7 @@ export const T = Object.freeze({
   panel: "#171b20",           // modal surface
   shade: "rgba(8,10,12,.62)", // outside a crop
   maskInk: "#ff3b3b",         // painted mask, drawn at half strength
-  plate: "#1d232b",           // media frame and footnote bar: neutral slate
+  plate: "#1d232b",           // footnote bar and lists: neutral slate (media frames use card, as text areas)
   plateEdge: "#323a45",       // their 1px trim
 });
 
@@ -166,7 +166,7 @@ textarea.fbui-text{background:${T.card};border-color:${T.plateEdge};font-size:13
 .fbui-scrub>.fbui-scrub-step{flex:none;width:14px;display:flex;flex-direction:column;background:${T.fillHover}}
 .fbui-scrub>.fbui-scrub-step>button{flex:1 1 0;min-height:0;border:none;background:transparent;color:${T.label};cursor:pointer;padding:0;margin:0;display:grid;place-items:center;border-radius:0}
 .fbui-scrub>.fbui-scrub-step>button:hover{color:${T.brand};background:rgba(255,255,255,.05)}
-.fbui-stage{position:relative;width:100%;height:100%;min-height:0;box-sizing:border-box;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.plate};overflow:hidden;pointer-events:auto}
+.fbui-stage{position:relative;width:100%;height:100%;min-height:0;box-sizing:border-box;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.card};overflow:hidden;pointer-events:auto}
 .fbui-stage>img,.fbui-stage>video,.fbui-stage>canvas.fbui-fit{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
 .fbui-stage-empty{position:absolute;inset:0;display:grid;place-items:center;padding:12px;color:${T.faint};font:11px ${FONT};text-align:center;pointer-events:none}
 .fbui-stage-tools{position:absolute;top:6px;right:6px;display:flex;gap:4px;z-index:2}
