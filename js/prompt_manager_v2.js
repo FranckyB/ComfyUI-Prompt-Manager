@@ -269,15 +269,16 @@ async function checkAvailability(node) {
 
 const isLinked = (node, name) => node.inputs?.find((input) => input.name === name)?.link != null;
 
+// Only the prompt's text counts; LoRA and trigger word edits are not asked about.
 function isDirty(node) {
     const entry = entryOf(node);
-    const text = findWidget(node, "text")?.value ?? "";
-    return hasEdits(readState(node)) || (entry ? text !== (entry.prompt ?? "") : text.trim() !== "");
+    const text = String(findWidget(node, "text")?.value ?? "").trimEnd();
+    return entry ? text !== String(entry.prompt ?? "").trimEnd() : text !== "";
 }
 
 async function mayLeave(node) {
     if (!isDirty(node) || app.ui.settings.getSettingValue("PromptManager.WarnUnsavedChanges") === false) return true;
-    return confirm({ title: "Unsaved changes", message: "The prompt's text or LoRA edits are not saved. Discard them and switch?", confirmText: "Discard & Switch" });
+    return confirm({ title: "Unsaved changes", message: "The prompt's text is not saved. Discard it and switch?", confirmText: "Discard & Switch" });
 }
 
 // Show a prompt: its saved text and no edits. The last run's rows no longer
@@ -751,6 +752,8 @@ app.registerExtension({
         hideInputsInDef(nodeData, ["category", "name", "use_prompt_input", "lora_mode", "text", "state"]);
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             setupNode(this);
+            // Room for the prompt text from the start; a loaded workflow keeps its own size.
+            this.setSize([Math.max(MIN_WIDTH, this.size[0]), Math.max(640, this.size[1])]);
         });
     },
 });

@@ -1,6 +1,6 @@
 ﻿import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { PM_UI_PALETTE } from "./ui_palette.js";
+import { T } from "./fbui/theme.js";
 
 const NODE_CLASS = "MultiLoraStackerLM";
 const LM_PROVIDER_CLASS = "Lora Stacker (LoraManager)";
@@ -39,17 +39,17 @@ let lmBridgePromise = null;
 
 function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
-    const p = PM_UI_PALETTE || {};
-    const panel = p.panel || "hsl(216 11% 15%)";
-    const panelBorder = p.panelBorder || "hsl(216 20% 65% / 0.24)";
-    const inputBg = p.inputBg || "hsl(220 15% 10%)";
-    const inputBorder = p.inputBorder || "hsl(218 10% 41%)";
-    const textHeading = p.textHeading || "hsl(220 13% 85%)";
-    const textPrimary = p.textPrimary || "hsl(0 0% 87%)";
-    const textHint = p.textHint || "hsl(216 15% 65%)";
-    const cardBg = p.cardBg || "hsl(219 16% 18%)";
-    const accentBorder = "rgba(255,255,255,0.98)";
-    const accentSoft = "rgba(255,255,255,0.42)";
+    // The suite's kit colours; the picked stack is outlined in its blue.
+    const panel = T.card;
+    const panelBorder = T.plateEdge;
+    const inputBg = T.card;
+    const inputBorder = T.plateEdge;
+    const textHeading = T.inkSoft;
+    const textPrimary = T.ink;
+    const textHint = T.faint;
+    const cardBg = T.plate;
+    const accentBorder = T.brand;
+    const accentSoft = T.brandSoft;
 
     const style = document.createElement("style");
     style.id = STYLE_ID;
@@ -197,6 +197,26 @@ function ensureStyles() {
     overflow-x: hidden;
     scrollbar-width: none;
     -ms-overflow-style: none;
+}
+/* Lora Manager's rows read its --lm-* colours: here they take the kit's,
+   as the rows of LoRA List+. */
+.pm-multi-lm-list-host,
+.pm-multi-lm-list-host .lm-widget-root,
+.pm-multi-lm-list-host .lm-loras-container {
+    --lm-surface: ${T.plate};
+    --lm-surface-raised: ${T.fill};
+    --lm-surface-hover: ${T.fillHover};
+    --lm-surface-selected: ${T.lit};
+    --lm-border-soft: ${T.plateEdge};
+    --lm-border: ${T.switchOff};
+    --lm-fg: ${T.ink};
+    --lm-fg-muted: ${T.label};
+    --lm-fg-subtle: ${T.faint};
+    --lm-accent: ${T.brand};
+    --lm-accent-border: ${T.brand};
+    --lm-accent-soft: ${T.brandSoft};
+    --lm-accent-text: ${T.brandInk};
+    --lm-on-accent: ${T.onBrand};
 }
 .pm-multi-lm-list-host .lm-loras-container {
     height: 100%;

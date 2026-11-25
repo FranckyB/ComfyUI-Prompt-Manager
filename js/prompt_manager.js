@@ -274,7 +274,7 @@ app.registerExtension({
             id: "PromptManager.WarnUnsavedChanges",
             category: ["Prompt Manager", "4. Advanced Preferences", "Warn Unsaved Changes"],
             name: "Warn about unsaved prompt changes",
-            tooltip: "Show a warning when switching prompts if there are unsaved changes to the current prompt text, LoRAs, or trigger words.",
+            tooltip: "Show a warning when switching prompts if the current prompt's text has unsaved changes.",
             type: "boolean",
             defaultValue: true
         },
