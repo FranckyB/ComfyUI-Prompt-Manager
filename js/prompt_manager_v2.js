@@ -434,13 +434,12 @@ function thumbnailHover(node, target) {
 
 function promptBar(node) {
     ensureCss();
-    // The prompt as a button that opens the library (the suite's soft blue
-    // action), ‹ › stepping through it.
+    // The prompt as a lit button that opens the library, ‹ › stepping through it.
     const bar = el("div", "fbui-field");
     const label = el("span", "label");
     const nsfw = el("span", "pm-v2-badge nsfw", "NSFW");
     const kind = el("span", "pm-v2-badge kind");
-    const name = button("", { soft: true, onClick: () => browse(node) });
+    const name = button("", { primary: true, onClick: () => browse(node) });
     name.classList.add("pm-v2-name");
     name.append(label, nsfw, kind);
     const back = button("", { icon: ICONS.chevronLeft, title: "Previous prompt", onClick: () => step(node, -1) });

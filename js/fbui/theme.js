@@ -8,7 +8,7 @@
 // Bump once per release that changes the CSS below (against the last pushed
 // value, not per local edit). Two packs shipping the same version inject one
 // stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 13;
+export const KIT_VERSION = 14;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -16,12 +16,15 @@ export const T = Object.freeze({
   brandSoft: "rgba(66,153,225,.16)",
   brandSoftHover: "rgba(66,153,225,.28)",
   brandInk: "#8cc4f2",       // chip text on brandSoft
+  lit: "#1e3950",            // an "on" choice: this fill (brandSoftHover over the card), a brand outline, litInk text
+  litInk: "#dbeafe",
 
   card: "#101317",           // card ground
   fill: "#2b3036",           // every control: solid, no border
   fillHover: "#363c43",
   rule: "#2a2f35",           // hairline after a section label
-  switchOff: "#5f666e",      // the "off" half of a boolean pill when picked
+  switchOff: "#5f666e",      // paused bar, empty check box
+  offPick: "#181c21",        // the "off" half of a boolean pill when picked: darker than the pill, a switchOff outline
 
   ink: "#f5f7f9",            // values
   inkSoft: "#dfe3e7",        // default card text
@@ -102,8 +105,8 @@ export function kitCss() {
 .fbui-seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;width:100%;height:${ROW_HEIGHT}px;padding:2px;box-sizing:border-box;border-radius:${RADIUS}px;background:${T.fill}}
 .fbui-seg button{min-width:0;border:none;border-radius:${RADIUS_XS}px;padding:0 2px;background:transparent;color:${T.label};font:600 11px/1 ${FONT};cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fbui-seg button:hover{color:${T.inkHover}}
-.fbui-seg button.on{background:${T.brand};color:${T.onBrand}}
-.fbui-bool button.on:first-child{background:${T.switchOff};color:${T.ink}}
+.fbui-seg button.on{background:${T.lit};box-shadow:inset 0 0 0 1px ${T.brand};color:${T.litInk}}
+.fbui-bool button.on:first-child{background:${T.offPick};box-shadow:inset 0 0 0 1px ${T.switchOff};color:${T.label}}
 .fbui-select{width:100%;height:${ROW_HEIGHT}px;padding:0 24px 0 8px;box-sizing:border-box;border:1px solid transparent;border-radius:${RADIUS}px;background:${T.fill} ${CHEVRON} no-repeat right 9px center;color:${T.ink};font:500 12px ${FONT};appearance:none;-webkit-appearance:none;cursor:pointer;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .fbui-select:hover{background-color:${T.fillHover}}
 .fbui-select:focus-visible{outline:2px solid ${T.brand};outline-offset:1px}
@@ -123,7 +126,7 @@ textarea.fbui-text{background:${T.card};border-color:${T.plateEdge};font-size:13
 /* soft: the suite's blue action button; on: a tool that is enabled but not the one in use. Same look. */
 .fbui-btn.on,.fbui-btn.soft{background:${T.brandSoft};color:${T.brandInk}}
 .fbui-btn.soft:hover{background:${T.brandSoftHover};color:${T.ink}}
-.fbui-btn.primary{background:${T.brand};color:${T.onBrand}}
+.fbui-btn.primary{background:${T.lit};box-shadow:inset 0 0 0 1px ${T.brand};color:${T.litInk}}
 .fbui-btn.primary:hover{filter:brightness(1.1)}
 .fbui-btn.danger:hover{background:${T.dangerSoft};color:${T.dangerInk}}
 .fbui-btn.small{height:20px;padding:0 7px;font-size:10px}
@@ -163,7 +166,7 @@ textarea.fbui-text{background:${T.card};border-color:${T.plateEdge};font-size:13
 .fbui-stage-tools{position:absolute;top:6px;right:6px;display:flex;gap:4px;z-index:2}
 .fbui-stage-tools .fbui-btn{height:20px;padding:0 7px;font-size:10px;letter-spacing:.04em;background:rgba(16,19,23,.82)}
 .fbui-stage-tools .fbui-btn:hover{background:${T.fillHover}}
-.fbui-stage-tools .fbui-btn.on{background:${T.brand};color:${T.onBrand}}
+.fbui-stage-tools .fbui-btn.on{background:${T.lit};box-shadow:inset 0 0 0 1px ${T.brand};color:${T.litInk}}
 .fbui-caption{box-sizing:border-box;width:100%;height:${CAPTION_HEIGHT}px;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid ${T.plateEdge};border-radius:${RADIUS + 2}px;background:${T.plate};color:${T.label};font:600 11px ${FONT};font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:auto}
 .fbui-overlay{position:fixed;inset:0;z-index:${Z_MODAL};display:flex;align-items:center;justify-content:center;background:${T.overlay};font:12px/1.4 ${FONT};color:${T.inkSoft}}
 .fbui-modal{display:flex;flex-direction:column;max-width:92vw;max-height:90vh;min-width:320px;border-radius:${RADIUS_CARD}px;background:${T.panel};box-shadow:0 18px 60px rgba(0,0,0,.6);overflow:hidden}

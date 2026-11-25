@@ -28,13 +28,14 @@ YELLOW      = "\033[33m"
 RED         = "\033[31m"
 GREEN       = "\033[32m"
 
-from ..py.model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, has_vision_support
+from ..py.model_manager import get_local_models, get_model_path, is_model_local, download_model, get_mmproj_path, has_vision_support, get_native_models
 
 # Ollama integration
 from ..py.ollama_wrapper import generate_chat as ollama_generate_chat, unload_model as ollama_unload_model
 
 # ComfyUI interrupt helper
 import comfy.model_management
+import comfy.sd
 
 # Try to import preferences cache, fallback to empty dict if not available
 try:
@@ -1364,8 +1365,8 @@ class PromptGenerator:
                     "placeholder": "Enter prompt...",
                     "tooltip": "Text prompt (optional when an image is connected; combined with the image when both are given)"
                 }),
-                "image": ("IMAGE", {
-                    "tooltip": "Connect an image (required for 'Analyze Image' and 'Analyze Image with Prompt' modes)"
+                "images": ("IMAGE", {
+                    "tooltip": "An image, or a batch of images that the model reads as separate pictures"
                 }),
                 "format_as_json": ("BOOLEAN", {
                     "default": False,
@@ -1386,25 +1387,23 @@ class PromptGenerator:
                 "options": ("OPTIONS", {
                     "tooltip": "Optional: Connect options node to control model and parameters"
                 }),
-                "clip": ("CLIP", {
-                    "tooltip": "Optional: Connect a CLIP/text encoder to generate prompts directly without starting llama.cpp/Ollama. Requires a model that supports .generate()."
-                }),
-                "prompt_input": ("STRING", {
-                    "forceInput": True,
-                    "tooltip": "Optional: Connect a text input. When connected, it overrides the prompt widget (which becomes read-only)."
-                }),
                 "model": (cls._available_models(), {
                     "default": "(use default)",
                     "tooltip": "Model to use. Leave on '(use default)' to fall back to the preferred-model setting."
-                })
+                }),
+                "engine": (["llama", "native"], {
+                    "default": "llama",
+                    "tooltip": "llama: a llama.cpp or Ollama server runs a GGUF model. native: ComfyUI runs a .safetensors text encoder itself."
+                }),
+                "text_encoder": (["(use default)"] + get_native_models(), {
+                    "default": "(use default)",
+                    "tooltip": "Text encoder for the native engine, from models/text_encoders/LLM (the folder is a Prompt Manager setting). '(use default)' takes the preferred native model setting."
+                }),
             },
-            "hidden": {
-                "unique_id": "UNIQUE_ID",
-            }
         }
 
     CATEGORY = "Prompt Manager"
-    DESCRIPTION = "Generate or enhance prompts using a local LLM via llama.cpp, Ollama, or a connected CLIP/text encoder."
+    DESCRIPTION = "Generate or enhance prompts using a local LLM via llama.cpp, Ollama, or ComfyUI's own text encoders."
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("output", "thoughts")
     FUNCTION = "convert_prompt"
@@ -1414,8 +1413,9 @@ class PromptGenerator:
         return seed
 
     @classmethod
-    def VALIDATE_INPUTS(cls, model="(use default)"):
-        return True if isinstance(model, str) else "Model must be a string."
+    def VALIDATE_INPUTS(cls, model="(use default)", text_encoder=""):
+        # Both lists change with settings and files; a missing choice fails when it is used.
+        return True if isinstance(model, str) and isinstance(text_encoder, str) else "Model must be a string."
 
     @staticmethod
     def is_server_alive():
@@ -1914,23 +1914,10 @@ class PromptGenerator:
         """Aggressive pre-run VRAM cleanup before generation starts."""
         PromptGenerator.flush_vram(unload_models=True)
 
-    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt", prompt="", image=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, clip=None, prompt_input=None, model="(use default)", unique_id=None, **kwargs) -> str:
-        """Convert prompt using llama.cpp server or Ollama, with caching for repeated requests."""
+    def convert_prompt(self, seed: int, system_prompt="Image / Enhance Prompt", prompt="", images=None, format_as_json=False, enable_thinking=True, stop_server_after=True, clear_vram_on_run=True, options=None, model="(use default)", engine="llama", text_encoder="", **kwargs) -> str:
+        """Convert prompt using llama.cpp server, Ollama or a native text encoder."""
         global _current_model
-
-        # A connected prompt_input overrides the prompt widget. Broadcast the
-        # received value to the frontend immediately, before any LLM work starts,
-        # so the user can see what is being sent.
-        has_prompt_input = isinstance(prompt_input, str) and bool(prompt_input.strip())
-        if has_prompt_input:
-            prompt = prompt_input
-
-        if unique_id is not None:
-            server.PromptServer.instance.send_sync("prompt-generator-update-text", {
-                "node_id": unique_id,
-                "prompt": prompt,
-                "has_prompt_input": bool(has_prompt_input),
-            })
+        native = engine == "native"
 
         # A model selected on the base node overrides the Options node's model.
         # "(use default)" (the default) means defer to options/settings.
@@ -1943,13 +1930,13 @@ class PromptGenerator:
         print_pg_header()  # Print header for this execution
 
         if clear_vram_on_run:
-            if clip is None:
+            if not native:
                 self.cleanup_vram_before_run()
             else:
-                # Skip aggressive pre-run VRAM cleanup when using ComfyUI's CLIP/text encoder;
-                print_pg("VRAM          :", "VRAM flush Skipped for CLIP/text encoder generation.")
+                # ComfyUI's model management makes room for its own text encoder.
+                print_pg("VRAM          :", "VRAM flush Skipped for native text encoder generation.")
 
-        # Determine LLM backend: "ollama" or "llama.cpp" (only used when no CLIP is connected)
+        # Determine LLM backend: "ollama" or "llama.cpp" (only used by the llama engine)
         use_ollama = (
             (options and options.get("llm_backend") == "ollama") or
             _preferences_cache.get("llm_backend", "llama.cpp") == "ollama"
@@ -1963,7 +1950,12 @@ class PromptGenerator:
         selected = self.get_system_prompt_entry(system_prompt)
         prompt_category = selected["category"]
         prompt_label = f"{selected['category']} / {selected['name']}"
-        has_image = image is not None
+        # A workflow saved before the rename still sends "image".
+        if images is None:
+            images = kwargs.get("image")
+        # A batch is read as that many separate pictures.
+        pictures = [images[i:i + 1] for i in range(images.shape[0])] if images is not None else []
+        has_image = bool(pictures)
         has_prompt = bool(str(prompt or "").strip())
         use_vision_model = has_image
 
@@ -2007,14 +1999,14 @@ class PromptGenerator:
         # system prompt rather than being appended here.
         user_content = prompt
 
-        # === CLIP text-encoder generation path ===
-        # If a CLIP/text encoder is connected, bypass llama.cpp/Ollama entirely.
-        if clip is not None:
+        # === Native text-encoder generation path ===
+        # ComfyUI runs the text encoder itself; llama.cpp/Ollama are not started.
+        if native:
             return self._generate_via_clip(
-                clip=clip,
+                clip=self._load_text_encoder(text_encoder, keep=not stop_server_after),
                 system_prompt=system_prompt,
                 user_content=user_content,
-                image=image if use_vision_model else None,
+                images=pictures,
                 seed=seed,
                 enable_thinking=enable_thinking,
                 options=options,
@@ -2120,16 +2112,14 @@ class PromptGenerator:
         # Prepare images for vision modes (needed for cache key)
         images = None
         if use_vision_model:
-            # Gather all images: main image plus up to 4 extra from options
-            images = []
-            if image is not None:
-                images.append(image)
+            # Gather all images: the input's pictures plus up to 4 extra from options
+            images = list(pictures)
             # Check for extra images in options (image2-5)
             if options:
                 for key in ["image2", "image3", "image4", "image5"]:
                     img = options.get(key, None)
                     if img is not None:
-                        images.append(img)
+                        images.extend(img[i:i + 1] for i in range(img.shape[0]))
 
             if not images:
                 error_msg = "Error: An image-dependent prompt was selected but no image is connected. Please connect an image or pick a text-only system prompt."
@@ -2374,8 +2364,7 @@ class PromptGenerator:
             if stop_server_after:
                 self.stop_server()
 
-            # Echo the input prompt back so the widget displays it on execute.
-            return {"result": (full_response, thinking_content), "ui": {"prompt": [prompt]}}
+            return (full_response, thinking_content)
 
         except comfy.model_management.InterruptProcessingException:
             # User requested interrupt; ensure response is closed and optionally stop server
@@ -2558,7 +2547,7 @@ class PromptGenerator:
                 if keep_alive and str(keep_alive) != "0":
                     print_pg(f"Model will stay loaded for: {keep_alive}")
 
-            return {"result": (full_response, thinking_content), "ui": {"prompt": [prompt]}}
+            return (full_response, thinking_content)
 
         except comfy.model_management.InterruptProcessingException:
             try:
@@ -2632,7 +2621,26 @@ class PromptGenerator:
         print_pg("TOTAL:", f"{total_input + total_output:>5} tokens", GREEN)
         print_pg("=" * 46, "", GREEN)
 
-    def _generate_via_clip(self, clip, system_prompt, user_content, image, seed, enable_thinking, options, show_everything_in_console, clear_vram_on_run, prompt):
+    def _load_text_encoder(self, name, keep):
+        """Load a native text encoder as a CLIP loader would. The last one stays
+        with the node until a run asks to unload it."""
+        if name in ("", "(use default)"):
+            available = get_native_models()
+            preferred = _preferences_cache.get("preferred_native_model", "")
+            if not available:
+                raise RuntimeError(f"No .safetensors text encoder in models/text_encoders/{_preferences_cache.get('native_model_folder') or 'LLM'}.")
+            name = preferred if preferred in available else available[0]
+        cached = getattr(self, "_native", None)
+        if cached and cached[0] == name:
+            clip = cached[1]
+        else:
+            path = folder_paths.get_full_path_or_raise("text_encoders", name)
+            print_pg("Text encoder  :", name)
+            clip = comfy.sd.load_clip(ckpt_paths=[path], embedding_directory=folder_paths.get_folder_paths("embeddings"))
+        self._native = (name, clip) if keep else None
+        return clip
+
+    def _generate_via_clip(self, clip, system_prompt, user_content, images, seed, enable_thinking, options, show_everything_in_console, clear_vram_on_run, prompt):
         """Generate text directly through a connected CLIP/text encoder model."""
         print_pg("Backend       :", "CLIP/text encoder")
         print_pg("Thinking mode :", f"{'ON' if enable_thinking else 'OFF'}")
@@ -2683,10 +2691,8 @@ class PromptGenerator:
             print_pg("\nUSER PROMPT:\n", f"{user_content}")
 
         try:
-            # Tokenize with optional image for vision modes.
-            tokenize_kwargs = {"min_length": 1, "thinking": enable_thinking}
-            if image is not None:
-                tokenize_kwargs["image"] = image
+            # Tokenize with the pictures, one image each, as core's Generate Text does.
+            tokenize_kwargs = {"min_length": 1, "thinking": enable_thinking, "images": images}
 
             tokens = clip.tokenize(full_prompt, skip_template=False, **tokenize_kwargs)
 
@@ -2717,4 +2723,4 @@ class PromptGenerator:
         else:
             print_pg("Prompt generation complete.")
 
-        return {"result": (generated_text, ""), "ui": {"prompt": [prompt]}}
+        return (generated_text, "")

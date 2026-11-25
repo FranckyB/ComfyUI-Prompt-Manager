@@ -52,6 +52,25 @@ async function refreshPreferredModelOptions(definition) {
     }
 }
 
+const nativeModelSettingOptions = [AUTO_SELECT_MODEL_OPTION];
+
+// The native engine's text encoders, shown by file name alone.
+async function refreshNativeModelOptions(definition) {
+    let models = [];
+    try {
+        const response = await api.fetchApi("/prompt-manager/native-models");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        models = (await response.json())?.models ?? [];
+    } catch (error) {
+        console.error("[PromptManager] Error loading native model options:", error);
+    }
+    const choices = models.map(value => ({ text: value.split(/[\\/]/).pop().replace(/\.safetensors$/i, ""), value }));
+    nativeModelSettingOptions.splice(0, nativeModelSettingOptions.length, AUTO_SELECT_MODEL_OPTION, ...choices);
+    definition.options = nativeModelSettingOptions;
+    const registeredDefinition = app?.ui?.settings?.settingsLookup?.[definition.id];
+    if (registeredDefinition) registeredDefinition.options = nativeModelSettingOptions;
+}
+
 function isTruthyInputFlag(value) {
     return value === true || value === 1 || value === "1" || value === "true";
 }
@@ -97,7 +116,7 @@ function attachPromptInputMaskShim() {
 const preferredModelSetting = {
     id: "PromptManager.PreferredModel",
     category: ["Prompt Manager", "1. Model Preferences", "Preferred Model"],
-    name: "Preferred Model",
+    name: "Preferred Llama Model",
     tooltip: preferredModelBaseTooltip,
     type: "combo",
     options: preferredModelSettingOptions,
@@ -113,10 +132,30 @@ const preferredModelSetting = {
     }
 };
 
+const preferredNativeModelSetting = {
+    id: "PromptManager.PreferredNativeModel",
+    category: ["Prompt Manager", "1. Model Preferences", "Preferred Native Model"],
+    name: "Preferred Native Model",
+    tooltip: "The text encoder the Prompt Generator's native engine uses when its model is '(use default)'. Auto-select takes the first one in the native model folder.",
+    type: "combo",
+    options: nativeModelSettingOptions,
+    defaultValue: AUTO_SELECT_MODEL_OPTION,
+    onChange(value) {
+        fetch("/prompt-manager/save-preference", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key: "preferred_native_model", value: normalizePreferredModelSettingValue(value) })
+        }).catch(error => {
+            console.error("[PromptManager] Error saving preferred native model preference:", error);
+        });
+    }
+};
+
 app.registerExtension({
     name: "PromptManager",
     settings: [
         preferredModelSetting,
+        preferredNativeModelSetting,
         {
             id: "PromptManager.HideDownloadableModels",
             category: ["Prompt Manager", "1. Model Preferences", "Hide Downloadable Models"],
@@ -131,6 +170,26 @@ app.registerExtension({
                     body: JSON.stringify({ key: "hide_downloadable_models", value: value })
                 }).then(() => refreshPreferredModelOptions(preferredModelSetting)).catch(error => {
                     console.error("[PromptManager] Error saving hide-downloadable-models preference:", error);
+                });
+            }
+        },
+        {
+            id: "PromptManager.NativeModelFolder",
+            category: ["Prompt Manager", "1. Model Preferences", "Native Model Folder"],
+            name: "Native model folder",
+            tooltip: "Folder in models/text_encoders whose .safetensors the Prompt Generator's native engine lists (any letter case). Default: LLM",
+            type: "text",
+            defaultValue: "LLM",
+            onChange(value) {
+                fetch("/prompt-manager/save-preference", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ key: "native_model_folder", value: value })
+                }).then(() => {
+                    refreshNativeModelOptions(preferredNativeModelSetting);
+                    return app.refreshComboInNodes?.();
+                }).catch(error => {
+                    console.error("[PromptManager] Error saving native model folder preference:", error);
                 });
             }
         },
@@ -381,10 +440,25 @@ app.registerExtension({
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ key: "ollama_keep_alive", value: ollamaKeepAlive })
             });
+            // The node lists were read before this sync; another folder needs them again.
+            const nativeFolder = app.ui.settings.getSettingValue("PromptManager.NativeModelFolder") || "LLM";
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "native_model_folder", value: nativeFolder })
+            });
+            if (nativeFolder.toLowerCase() !== "llm") await app.refreshComboInNodes?.();
+            await fetch("/prompt-manager/save-preference", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ key: "preferred_native_model", value: normalizePreferredModelSettingValue(app.ui.settings.getSettingValue("PromptManager.PreferredNativeModel")) })
+            });
+            await refreshNativeModelOptions(preferredNativeModelSetting);
             await refreshPreferredModelOptions(preferredModelSetting);
         } catch (error) {
             console.error("[PromptManager] Error syncing preferences:", error);
             await refreshPreferredModelOptions(preferredModelSetting);
+            await refreshNativeModelOptions(preferredNativeModelSetting);
         }
     },
     async beforeRegisterNodeDef(nodeType, nodeData, app) {

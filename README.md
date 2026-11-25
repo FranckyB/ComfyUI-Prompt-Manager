@@ -196,7 +196,7 @@ llama-server --list-devices
 
 If it prints `Available devices:` followed by `CUDA0: ...` or `Vulkan0: ...`, GPU offload works. If it prints `(none)`, that build (or its driver) cannot use your GPU — Prompt Generator will then run the model on CPU and say so at startup.
 
-**Using the CLIP/text encoder backend**: No additional setup is needed. Connect any ComfyUI `CLIP` output to the Prompt Generator node's `clip` input. When `clip` is connected, the node bypasses llama.cpp/Ollama and generates prompts directly through the text encoder.
+**Using the native engine**: No additional setup is needed. Put a `.safetensors` LLM text encoder (Qwen, Gemma, …) in `models/text_encoders/LLM`, set the Prompt Generator's engine to **Native** and pick it from the model list. ComfyUI then runs it itself, without llama.cpp/Ollama. The folder is the *Native model folder* setting.
 
 
 **Data Location**

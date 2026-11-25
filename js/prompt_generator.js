@@ -1,219 +1,294 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { mountCard } from "./fbui/card.js";
+import { toast } from "./fbui/comfy.js";
+import { button, helpBadge, ICONS } from "./fbui/controls.js";
+import { chainCallback, el } from "./fbui/dom.js";
+import { FONT, ROW_HEIGHT } from "./fbui/theme.js";
+import { findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.js";
 import { showThumbnailBrowser } from "./prompt_browser.js";
 import { SYSTEM_PROMPTS_ENDPOINT_PREFIX, getCategoryPromptEntries } from "./prompt_store_adapters.js";
-import { setPromptTextLocked } from "./prompt_text_lock.js";
 
-function setupSystemPromptSelector(node) {
-    const widget = node.widgets?.find(w => w.name === "system_prompt");
-    if (!widget || widget.type === "system_prompt_selector") return;
+const NODE_NAME = "PromptGenerator";
+const MIN_WIDTH = 380;
+const TEXT_MIN_HEIGHT = 90;
+const CSS_ID = "pg-css-v1";
+const TWO = "display:grid;grid-template-columns:repeat(2,minmax(0,1fr))";
 
-    const selectPrompt = async (value) => {
-        widget.value = value;
-        await widget.callback?.call(widget, value, app.canvas, node);
-        updateDisplay();
-        node.setDirtyCanvas(true, true);
-    };
+const ENGINE_LABELS = { llama: "Llama", native: "Native" };
+const ENGINE_TITLES = {
+    llama: "A llama.cpp or Ollama server runs a GGUF model (Prompt Manager settings choose which).",
+    native: "ComfyUI runs a .safetensors text encoder from models/text_encoders/LLM itself, as a connected CLIP would.",
+};
 
-    const loadSystemPrompts = async () => {
-        const response = await api.fetchApi(`${SYSTEM_PROMPTS_ENDPOINT_PREFIX}/get-prompts`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`Could not load system prompts (${response.status})`);
-        const prompts = await response.json();
-        node.prompts = prompts;
-        // The combo list comes from page load; keep it current with prompts added or moved since.
-        const choices = getChoices(prompts);
-        if (choices.length && widget.options && typeof widget.options.values !== "function") widget.options.values = choices;
-        return prompts;
-    };
+const GUIDE = [
+    "Pick a system prompt with ◀ ▶ or click its name to browse them.",
+    "Write a prompt, connect an image, or both.",
+    ["Llama", "a llama.cpp or Ollama server runs a GGUF model."],
+    ["Native", "ComfyUI runs a .safetensors text encoder from models/text_encoders/LLM (the folder is a Prompt Manager setting)."],
+    ["Unload after", "stop the server, or drop the native model, when the run ends."],
+    ["Clear VRAM", "free VRAM before and after a Llama run."],
+];
 
-    const getChoices = (prompts) => Object.entries(prompts)
-        .filter(([category, entries]) => !category.startsWith("_") && entries && typeof entries === "object")
-        .flatMap(([category, entries]) => Object.entries(getCategoryPromptEntries(entries, "generator"))
-            .filter(([name, entry]) => {
-                const text = entry && typeof entry === "object" ? entry.prompt : entry;
-                return !name.startsWith("_") && String(text ?? "").trim();
-            })
-            .map(([name]) => `${category} / ${name}`))
-        .sort((left, right) => left.toLowerCase().localeCompare(right.toLowerCase()));
+function ensureCss() {
+    if (document.getElementById(CSS_ID)) return;
+    const style = document.createElement("style");
+    style.id = CSS_ID;
+    style.textContent = `
+.pg-name{flex:1 1 0;min-width:0;justify-content:flex-start;font:500 12px ${FONT}}
+.pg-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pg-text.fbui-text{width:100%;height:100%;min-height:${TEXT_MIN_HEIGHT}px;padding:6px 8px;box-sizing:border-box;resize:none;pointer-events:auto}
+`;
+    document.head.append(style);
+}
 
-    let busy = false;
-    const activate = async (direction) => {
-        if (busy) return;
-        busy = true;
-        try {
-            if (direction) {
-                const choices = getChoices(await loadSystemPrompts());
-                if (!choices.length) return;
-                const index = choices.indexOf(widget.value);
-                const nextIndex = index < 0
-                    ? (direction > 0 ? 0 : choices.length - 1)
-                    : (index + direction + choices.length) % choices.length;
-                await selectPrompt(choices[nextIndex]);
-            } else {
-                const value = String(widget.value ?? "");
-                const separator = value.indexOf(" / ");
-                const category = separator < 0 ? "" : value.slice(0, separator);
-                const name = separator < 0 ? value : value.slice(separator + 3);
-                const selection = await showThumbnailBrowser(node, category, name, {
-                    title: "Select System Prompt",
-                    endpointPrefix: SYSTEM_PROMPTS_ENDPOINT_PREFIX,
-                    loadPromptsFn: loadSystemPrompts,
-                    preferenceScope: "system",
-                    promptOnly: true,
-                    allowMultiSelect: false,
-                });
-                if (selection?.prompt) {
-                    await selectPrompt(`${selection.category} / ${selection.prompt}`);
-                }
-            }
-        } catch (error) {
-            console.error("[PromptGenerator] System prompt selection failed:", error);
-            app.extensionManager.toast.add({
-                severity: "error",
-                summary: "System prompts unavailable",
-                detail: String(error.message || error),
-            });
-        } finally {
-            busy = false;
-        }
-    };
+// ---------------------------------------------------------------- system prompt
 
-    const container = document.createElement("div");
-    // Mirrors Prompt Manager's selector; the dark backing is what keeps the translucent name button dark.
-    container.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 0;
-        background: #1a1a1a;
-        border-radius: 6px;
-        width: 100%;
-        min-width: 0;
-        height: 26px;
-        box-sizing: border-box;
-    `;
-    for (const eventName of ["pointerdown", "mousedown", "dblclick"]) {
-        container.addEventListener(eventName, event => event.stopPropagation());
-    }
+const getChoices = (prompts) => Object.entries(prompts)
+    .filter(([category, entries]) => !category.startsWith("_") && entries && typeof entries === "object")
+    .flatMap(([category, entries]) => Object.entries(getCategoryPromptEntries(entries, "generator"))
+        .filter(([name, entry]) => {
+            const text = entry && typeof entry === "object" ? entry.prompt : entry;
+            return !name.startsWith("_") && String(text ?? "").trim();
+        })
+        .map(([name]) => `${category} / ${name}`))
+    .sort((left, right) => left.toLowerCase().localeCompare(right.toLowerCase()));
 
-    const makeButton = (label, title, direction) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = label;
-        button.title = title;
-        button.setAttribute("aria-label", title);
-        button.style.cssText = `
-            background: #2a2a2a;
-            border: none;
-            color: #888;
-            padding: 0 10px;
-            height: 100%;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.15s ease;
-        `;
-        button.addEventListener("mouseover", () => {
-            button.style.background = direction ? "#3a3a3a" : "rgba(56, 130, 246, 0.32)";
-            if (direction) button.style.color = "#fff";
-        });
-        button.addEventListener("mouseout", () => {
-            button.style.background = direction ? "#2a2a2a" : "rgba(56, 130, 246, 0.22)";
-            if (direction) button.style.color = "#888";
-        });
-        button.addEventListener("click", event => {
-            event.stopPropagation();
-            void activate(direction);
-        });
-        container.appendChild(button);
-        return button;
-    };
-
-    makeButton("\u25c0", "Previous system prompt", -1);
-    const nameButton = makeButton("", "Browse System Prompts", 0);
-    nameButton.style.cssText = `
-        flex: 1;
-        min-width: 0;
-        text-align: center;
-        color: #dbeafe;
-        font-family: inherit;
-        font-size: 15px;
-        padding: 0 10px;
-        cursor: pointer;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        background: rgba(56, 130, 246, 0.22);
-        border: 1px solid rgba(56, 130, 246, 0.85);
-        border-radius: 4px;
-        height: 100%;
-        transition: background 0.15s ease;
-        box-sizing: border-box;
-    `;
-    makeButton("\u25b6", "Next system prompt", 1);
-    const updateDisplay = () => {
-        nameButton.textContent = String(widget.value ?? "").replace(" / ", " : ");
-        nameButton.title = `Browse System Prompts: ${widget.value ?? ""}`;
-    };
-    const index = node.widgets.indexOf(widget);
-    const selector = node.addDOMWidget("system_prompt", "system_prompt_selector", container, {
-        getMinHeight: () => 26,
-        getMaxHeight: () => 26,
-        getValue: () => widget.value,
-        setValue: value => {
-            widget.value = value;
-            updateDisplay();
-        },
+const matchChoice = (value, choices, allowFallback) => {
+    const normalized = String(value ?? "").trim().toLowerCase();
+    const entries = choices.map(choice => {
+        const separator = choice.indexOf(" / ");
+        return { value: choice, category: choice.slice(0, separator), name: choice.slice(separator + 3) };
     });
-    selector.computeSize = width => [width, 28];
-    // Nodes 2.0 stretches DOM widgets that expose computeLayoutSize; keep this row fixed-height.
-    selector.computeLayoutSize = undefined;
-    selector.serializeValue = () => widget.value;
-    node.widgets.splice(node.widgets.indexOf(selector), 1);
-    node.widgets.splice(index, 1, selector);
-    const matchChoice = (value, choices, allowFallback) => {
-        const normalized = String(value ?? "").trim().toLowerCase();
-        const entries = choices.map(choice => {
-            const separator = choice.indexOf(" / ");
-            return { value: choice, category: choice.slice(0, separator), name: choice.slice(separator + 3) };
-        });
-        const exact = entries.find(entry => entry.value.toLowerCase() === normalized);
-        const legacy = entries.find(entry => `${entry.name} (${entry.category})`.toLowerCase() === normalized);
-        // A prompt moved to another category keeps its name.
-        const previousName = normalized.includes(" / ") ? normalized.slice(normalized.indexOf(" / ") + 3) : normalized;
-        const names = entries.filter(entry => entry.name.toLowerCase() === previousName);
-        const match = exact || legacy || (names.length === 1 ? names[0] : null);
-        if (match || !allowFallback) return match;
-        return entries.find(entry => entry.value.toLowerCase() === "image / enhance prompt") || entries[0] || null;
-    };
-    const applyMatch = (match) => {
-        if (!match || widget.value === match.value) return;
-        const previous = widget.value;
-        selector.value = match.value;
-        console.log(`[PromptGenerator] Migrated system prompt '${previous}' to '${match.value}'.`);
-        node.setDirtyCanvas(true, true);
-    };
-    // The combo's choices date from page load, so canonical values are checked against the live list.
-    const reconcileSelection = async () => {
-        let choices;
-        try {
-            choices = getChoices(await loadSystemPrompts());
-        } catch (error) {
-            console.warn("[PromptGenerator] Could not refresh system prompts; keeping the saved selection.", error);
-            return;
+    const exact = entries.find(entry => entry.value.toLowerCase() === normalized);
+    const legacy = entries.find(entry => `${entry.name} (${entry.category})`.toLowerCase() === normalized);
+    // A prompt moved to another category keeps its name.
+    const previousName = normalized.includes(" / ") ? normalized.slice(normalized.indexOf(" / ") + 3) : normalized;
+    const names = entries.filter(entry => entry.name.toLowerCase() === previousName);
+    const match = exact || legacy || (names.length === 1 ? names[0] : null);
+    if (match || !allowFallback) return match;
+    return entries.find(entry => entry.value.toLowerCase() === "image / enhance prompt") || entries[0] || null;
+};
+
+async function loadSystemPrompts(node) {
+    const response = await api.fetchApi(`${SYSTEM_PROMPTS_ENDPOINT_PREFIX}/get-prompts`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Could not load system prompts (${response.status})`);
+    const prompts = await response.json();
+    node.prompts = prompts;
+    // The combo list comes from page load; keep it current with prompts added or moved since.
+    const widget = findWidget(node, "system_prompt");
+    const choices = getChoices(prompts);
+    if (choices.length && widget?.options && typeof widget.options.values !== "function") widget.options.values = choices;
+    return prompts;
+}
+
+async function pickSystemPrompt(node, direction) {
+    const pg = node._pg;
+    if (pg.busy) return;
+    pg.busy = true;
+    try {
+        const value = String(findWidget(node, "system_prompt")?.value ?? "");
+        if (direction) {
+            const choices = getChoices(await loadSystemPrompts(node));
+            if (!choices.length) return;
+            const index = choices.indexOf(value);
+            const nextIndex = index < 0 ? (direction > 0 ? 0 : choices.length - 1) : (index + direction + choices.length) % choices.length;
+            pg.card.setWidget("system_prompt", choices[nextIndex]);
+        } else {
+            const separator = value.indexOf(" / ");
+            const selection = await showThumbnailBrowser(node, separator < 0 ? "" : value.slice(0, separator), separator < 0 ? value : value.slice(separator + 3), {
+                title: "Select System Prompt",
+                endpointPrefix: SYSTEM_PROMPTS_ENDPOINT_PREFIX,
+                loadPromptsFn: () => loadSystemPrompts(node),
+                preferenceScope: "system",
+                promptOnly: true,
+                allowMultiSelect: false,
+            });
+            if (selection?.prompt) pg.card.setWidget("system_prompt", `${selection.category} / ${selection.prompt}`);
         }
-        if (choices.length) applyMatch(matchChoice(widget.value, choices, true));
+    } catch (error) {
+        console.error("[PromptGenerator] System prompt selection failed:", error);
+        toast(String(error.message || error), { severity: "error", summary: "System prompts unavailable" });
+    } finally {
+        pg.busy = false;
+    }
+}
+
+// A saved name that no longer matches (a legacy label, a prompt moved to
+// another category) becomes its current "Category / Name".
+function migrateSystemPrompt(node, choices, allowFallback) {
+    const widget = findWidget(node, "system_prompt");
+    const match = widget && choices.length ? matchChoice(widget.value, choices, allowFallback) : null;
+    if (!match || widget.value === match.value) return;
+    console.log(`[PromptGenerator] Migrated system prompt '${widget.value}' to '${match.value}'.`);
+    widget.value = match.value;
+    node._pg.card.refresh();
+}
+
+function systemPromptBar(node) {
+    ensureCss();
+    // The system prompt as a button that opens the browser, ‹ › stepping through them.
+    const bar = el("div", "fbui-field");
+    const label = el("span");
+    const name = button("", { primary: true, onClick: () => pickSystemPrompt(node, 0) });
+    name.classList.add("pg-name");
+    name.append(label);
+    const back = button("", { icon: ICONS.chevronLeft, title: "Previous system prompt", onClick: () => pickSystemPrompt(node, -1) });
+    const next = button("", { icon: ICONS.chevronRight, title: "Next system prompt", onClick: () => pickSystemPrompt(node, 1) });
+    bar.append(name, back, next);
+    return {
+        element: bar,
+        sync(values) {
+            label.textContent = String(values.system_prompt ?? "").replace(" / ", " : ");
+            name.title = `System prompt: ${values.system_prompt ?? ""}\nClick to browse the system prompts`;
+        },
     };
-    const onConfigure = node.onConfigure;
-    node.onConfigure = function() {
-        const result = onConfigure?.apply(this, arguments);
+}
+
+// A multiline widget as the card's text area.
+function textPanel(name, placeholder) {
+    return (node, card) => {
+        const area = el("textarea", "fbui-text pg-text");
+        area.spellcheck = false;
+        area.addEventListener("input", () => card.setWidget(name, area.value, { settle: false }));
+        area.addEventListener("change", () => card.setWidget(name, area.value));
+        // Typing and selecting here must not drag the node or reach the canvas.
+        area.addEventListener("pointerdown", (event) => event.stopPropagation());
+        area.addEventListener("keydown", (event) => event.stopPropagation());
+        return {
+            element: area,
+            sync(values) {
+                area.placeholder = typeof placeholder === "function" ? placeholder(values) : placeholder;
+                const shown = String(values[name] ?? "");
+                if (area.value !== shown && document.activeElement !== area) area.value = shown;
+            },
+        };
+    };
+}
+
+// ---------------------------------------------------------------- chips
+
+// A chip for a BOOLEAN widget: lit (the bright blue of an enabled choice)
+// while on, greyed while `active()` says it has no effect.
+function chip(node, card, name, { text, title, active = () => true }) {
+    const element = button(text, { grow: true, title, onClick: () => card.setWidget(name, !findWidget(node, name)?.value) });
+    return {
+        element,
+        sync() {
+            const live = active();
+            element.disabled = !live;
+            element.classList.toggle("primary", live && Boolean(findWidget(node, name)?.value));
+        },
+    };
+}
+
+function chipPair(...chips) {
+    return (node, card) => {
+        const built = chips.map(([name, options]) => chip(node, card, name, options(node)));
+        const field = el("div", "fbui-field");
+        field.style.cssText = TWO;
+        field.append(...built.map((item) => item.element));
+        return { element: field, sync: () => built.forEach((item) => item.sync()) };
+    };
+}
+
+// A model by its file name alone: no folder, no extension.
+const modelLabel = (value) => String(value).split(/[\\/]/).pop().replace(/\.(gguf|safetensors)$/i, "");
+
+const isNative = (node) => findWidget(node, "engine")?.value === "native";
+
+// ---------------------------------------------------------------- node
+
+function setupNode(node) {
+    ensureCss();
+    const pg = { busy: false };
+    node._pg = pg;
+    for (const name of ["system_prompt", "prompt"]) hideWidget(findWidget(node, name));
+    pg.card = mountCard(node, {
+        minWidth: MIN_WIDTH,
+        rows: [
+            // Set and forget: folded under Options.
+            { group: "options", label: "Options" },
+            { group: "options", widget: "engine", label: "Engine", kind: "segment", labels: ENGINE_LABELS, titles: ENGINE_TITLES },
+            { group: "options", widget: "model", label: "Model", kind: "select", labels: modelLabel, when: (values) => values.engine !== "native" },
+            { group: "options", widget: "text_encoder", label: "Model", kind: "select", labels: modelLabel, when: (values) => values.engine === "native" },
+            {
+                group: "options",
+                label: "Output",
+                widgets: ["format_as_json", "enable_thinking"],
+                control: chipPair(
+                    ["format_as_json", () => ({ text: "JSON", title: "Format the output as structured JSON with a scene breakdown" })],
+                    ["enable_thinking", () => ({ text: "Thinking", title: "Let a model that can reason think first; its thoughts go to the thoughts output" })],
+                ),
+            },
+            {
+                group: "options",
+                label: "Memory",
+                widgets: ["stop_server_after", "clear_vram_on_run"],
+                control: chipPair(
+                    ["stop_server_after", () => ({ text: "Unload after", title: "Stop the llama server, or drop the native model, when the run ends" })],
+                    ["clear_vram_on_run", (n) => ({ text: "Clear VRAM", title: "Free VRAM before and after a Llama run", active: () => !isNative(n) })],
+                ),
+            },
+            { group: "options", pair: ["seed", "control_after_generate"], label: "Seed" },
+            { panel: systemPromptBar, height: ROW_HEIGHT },
+            { panel: textPanel("prompt", "Enter prompt…"), grow: true, height: TEXT_MIN_HEIGHT },
+        ],
+    });
+    // The bar is a panel, so a new pick redraws the card here.
+    chainCallback(findWidget(node, "system_prompt"), "callback", () => pg.card.refresh());
+    helpBadge(node, GUIDE);
+    chainCallback(node, "onConfigure", () => {
         // Legacy labels such as "Enhance Prompt (Image)" migrate at once so an immediate queue never sends them.
-        if (!String(widget.value ?? "").includes(" / ")) {
-            const choices = typeof widget.options?.values === "function" ? widget.options.values() : widget.options?.values;
-            if (Array.isArray(choices) && choices.length) applyMatch(matchChoice(widget.value, choices, false));
+        const widget = findWidget(node, "system_prompt");
+        if (!String(widget?.value ?? "").includes(" / ")) {
+            const values = widget?.options?.values;
+            migrateSystemPrompt(node, Array.isArray(values) ? values : [], false);
         }
-        void reconcileSelection();
-        return result;
-    };
-    updateDisplay();
+        // The combo's choices date from page load, so the value is checked against the live list.
+        loadSystemPrompts(node)
+            .then((prompts) => migrateSystemPrompt(node, getChoices(prompts), true))
+            .catch((error) => console.warn("[PromptGenerator] Could not refresh system prompts; keeping the saved selection.", error));
+    });
+}
+
+// ---------------------------------------------------------------- options node
+
+const OPTIONS_NAME = "PromptGenOptions";
+const OPTIONS_WIDGETS = ["model", "system_prompt_mode", "system_prompt", "use_model_default_sampling", "temperature", "top_k", "top_p", "min_p", "repeat_penalty", "context_size", "max_length", "gpu_device", "show_everything_in_console"];
+const OPTIONS_GUIDE = [
+    "Connect it to the Prompt Generator's options input.",
+    ["Instructions", "replace the system prompt with the text below, or add it after."],
+    ["Sampling", "the model's own settings, or the ones shown below it."],
+    ["Llama", "context size and GPU for llama.cpp."],
+    ["Native", "the longest answer, in tokens, for a native text encoder."],
+    "image2 … image5 add pictures after the Prompt Generator's images.",
+];
+const custom = (values) => values.use_model_default_sampling === false;
+
+function setupOptionsNode(node) {
+    ensureCss();
+    // The model moved to the Prompt Generator; old workflows still pass theirs through.
+    for (const name of ["model", "system_prompt"]) hideWidget(findWidget(node, name));
+    mountCard(node, {
+        minWidth: 320,
+        rows: [
+            { widget: "system_prompt_mode", label: "Instructions", kind: "segment", labels: { replace: "Replace", append: "Append" } },
+            { panel: textPanel("system_prompt", (values) => (values.system_prompt_mode === "append" ? "Added after the system prompt…" : "Replaces the system prompt…")), grow: true, height: TEXT_MIN_HEIGHT },
+            { widget: "use_model_default_sampling", label: "Sampling", offText: "Custom", onText: "Model" },
+            { widget: "temperature", label: "Temperature", when: custom },
+            { pair: ["top_k", "top_p"], label: "Top K · P", when: custom },
+            { pair: ["min_p", "repeat_penalty"], label: "Min P · Rep", when: custom },
+            { section: "Llama" },
+            { widget: "context_size", label: "Context" },
+            { widget: "gpu_device", label: "GPU", kind: "text", placeholder: "system default" },
+            { section: "Native" },
+            { widget: "max_length", label: "Max length" },
+            { section: "Console" },
+            { widget: "show_everything_in_console", label: "Show", offText: "Summary", onText: "Everything" },
+        ],
+    });
+    helpBadge(node, OPTIONS_GUIDE);
 }
 
 function migrateLegacyPromptGenOptionsWidgets(node) {
@@ -276,137 +351,24 @@ function migrateLegacyPromptGenOptionsWidgets(node) {
 app.registerExtension({
     name: "comfyui-prompt-manager.generator",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        // Make the Options node taller/wider by default so the system_prompt area is roomier
-        if (nodeData.name === "PromptGenOptions") {
-            const onNodeCreated = nodeType.prototype.onNodeCreated;
-            nodeType.prototype.onNodeCreated = function () {
-                const result = onNodeCreated?.apply(this, arguments);
+        if (nodeData.name === OPTIONS_NAME) {
+            hideInputsInDef(nodeData, OPTIONS_WIDGETS);
+            chainCallback(nodeType.prototype, "onNodeCreated", function () {
                 migrateLegacyPromptGenOptionsWidgets(this);
-                // Model selection now lives on the Prompt Generator base node. The
-                // Options node's model widget is kept (hidden) purely so old workflows
-                // still load and pass their value through as a fallback.
-                const modelWidget = this.widgets?.find(w => w.name === "model");
-                if (modelWidget) {
-                    modelWidget.hidden = true;
-                    modelWidget.computeSize = () => [0, -4];
-                    if (modelWidget.inputEl) modelWidget.inputEl.style.display = "none";
-                }
-                // Set a default size (width x height)
-                try {
-                    this.setSize([400, 420]);
-                } catch (e) {
-                    // ignore if method unavailable
-                }
-                return result;
-            };
-            const onConfigureOpt = nodeType.prototype.onConfigure;
-            nodeType.prototype.onConfigure = function(info) {
-                const result = onConfigureOpt?.apply(this, arguments);
+                setupOptionsNode(this);
+                this.setSize([380, 460]);
+            });
+            chainCallback(nodeType.prototype, "onConfigure", function () {
                 migrateLegacyPromptGenOptionsWidgets(this);
-                // Re-hide the legacy model widget on restore (tab switch / reload).
-                const modelWidget = this.widgets?.find(w => w.name === "model");
-                if (modelWidget) {
-                    modelWidget.hidden = true;
-                    modelWidget.computeSize = () => [0, -4];
-                    if (modelWidget.inputEl) modelWidget.inputEl.style.display = "none";
-                }
-                return result;
-            };
-            // Enforce sensible minimums when the user resizes the options node
-            const onResizeOpt = nodeType.prototype.onResize;
-            nodeType.prototype.onResize = function(size) {
-                size[0] = Math.max(300, size[0]);
-                return onResizeOpt ? onResizeOpt.apply(this, arguments) : size;
-            };
+            });
         }
 
-        // Enforce minimum size for PromptGenerator node (no default size)
-        if (nodeData.name === "PromptGenerator") {
-           const onNodeCreated = nodeType.prototype.onNodeCreated;
-            nodeType.prototype.onNodeCreated = function () {
-                const result = onNodeCreated?.apply(this, arguments);
-                setupSystemPromptSelector(this);
-                // Set a default size (width x height) - taller to fit the UI comfortably
-                try {
-                    this.setSize([400, 600]);
-                } catch (e) {
-                    // ignore if method unavailable
-                }
-
-                // Darken + make the prompt widget read-only while a `prompt_input`
-                // link is connected (mirrors PromptManager's use_prompt_input UI).
-                const node = this;
-                const promptWidget = node.widgets?.find(w => w.name === "prompt");
-                const promptInputSlot = () => node.inputs?.find(i => i && i.name === "prompt_input");
-                const isPromptInputConnected = () => {
-                    const inp = promptInputSlot();
-                    return !!(inp && inp.link != null);
-                };
-
-                const applyPromptInputState = () => {
-                    setPromptTextLocked(promptWidget, isPromptInputConnected());
-                };
-                // Python echoes back the value it actually received on prompt_input
-                // (only when that input was connected) in the "executed" event.
-                // Display it here; when the key is absent, never touch the widget.
-                const prevOnConnectionsChange = node.onConnectionsChange;
-                node.onConnectionsChange = function () {
-                    const r = prevOnConnectionsChange?.apply(this, arguments);
-                    applyPromptInputState();
-                    return r;
-                };
-                const prevOnConfigure = node.onConfigure;
-                node.onConfigure = function () {
-                    const r = prevOnConfigure?.apply(this, arguments);
-                    applyPromptInputState();
-                    return r;
-                };
-                const prevOnExecuted = node.onExecuted;
-                node.onExecuted = function (output) {
-                    const r = prevOnExecuted?.apply(this, arguments);
-                    applyPromptInputState();
-                    const echoed = output && output.ui ? output.ui.prompt : null;
-                    if (Array.isArray(echoed) && typeof echoed[0] === "string" && echoed[0].length > 0) {
-                        promptWidget.value = echoed[0];
-                        if (promptWidget.inputEl) {
-                            promptWidget.inputEl.value = echoed[0];
-                        }
-                        node.setDirtyCanvas(true, true);
-                    }
-                    return r;
-                };
-
-                // Listen for incoming prompt_input text updates from the backend.
-                // This fires at the very start of execution, before the LLM call.
-                api.addEventListener("prompt-generator-update-text", (event) => {
-                    if (String(event.detail.node_id) === String(node.id)) {
-                        const incoming = event.detail.prompt || "";
-                        if (event.detail.has_prompt_input) {
-                            if (promptWidget) {
-                                promptWidget.value = incoming;
-                                if (promptWidget.inputEl) {
-                                    promptWidget.inputEl.value = incoming;
-                                }
-                                setPromptTextLocked(promptWidget, true);
-                            }
-                        } else {
-                            setPromptTextLocked(promptWidget, false);
-                        }
-                        node.serialize_widgets = true;
-                        app.graph.setDirtyCanvas(true, true);
-                    }
-                });
-
-                // Initial state.
-                applyPromptInputState();
-
-                return result;
-            };
-            const onResizeModel = nodeType.prototype.onResize;
-            nodeType.prototype.onResize = function(size) {
-                size[0] = Math.max(300, size[0]);
-                return onResizeModel ? onResizeModel.apply(this, arguments) : size;
-            };
+        if (nodeData.name === NODE_NAME) {
+            hideInputsInDef(nodeData, ["system_prompt", "prompt", "engine", "model", "text_encoder", "format_as_json", "enable_thinking", "stop_server_after", "clear_vram_on_run", "seed"]);
+            chainCallback(nodeType.prototype, "onNodeCreated", function () {
+                setupNode(this);
+                this.setSize([420, 520]);
+            });
         }
     }
 });

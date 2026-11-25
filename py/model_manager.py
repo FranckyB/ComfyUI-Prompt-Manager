@@ -22,6 +22,8 @@ _preferences_cache = {
     "ollama_url": "http://127.0.0.1:11434",
     "ollama_keep_alive": "5m",           # How long Ollama keeps model loaded after request
     "llama_gpu_device": "",              # GPU device index for llama.cpp (e.g. "0", "1")
+    "native_model_folder": "LLM",        # Folder in text_encoders listed by the native engine
+    "preferred_native_model": "",        # Native engine's model for "(use default)"
 }
 
 # Predefined models - use real filenames as keys
@@ -69,7 +71,9 @@ async def save_preference(request):
                        "llm_backend",
                        "ollama_url",
                        "ollama_keep_alive",
-                       "llama_gpu_device"]:
+                       "llama_gpu_device",
+                       "native_model_folder",
+                       "preferred_native_model"]:
             return server.web.json_response({"success": False, "error": "Invalid preference key"})
 
         # Update in-memory cache
@@ -89,6 +93,20 @@ async def list_ollama_models(request):
         return server.web.json_response({"models": models, "status": status})
     except Exception as e:
         return server.web.json_response({"models": [], "status": f"Error: {e}"}, status=500)
+
+
+def get_native_models():
+    """The .safetensors text encoders in the native engine's folder of text_encoders
+    (the LLM folder by default, matched in any letter case)."""
+    folder = str(_preferences_cache.get("native_model_folder", "") or "LLM").strip("/\\").lower()
+    names = [name for name in folder_paths.get_filename_list("text_encoders")
+             if name.lower().endswith(".safetensors") and name.replace("\\", "/").lower().startswith(folder + "/")]
+    return sorted(names, key=str.lower)
+
+
+@server.PromptServer.instance.routes.get("/prompt-manager/native-models")
+async def list_native_models(request):
+    return server.web.json_response({"models": get_native_models()})
 
 
 @server.PromptServer.instance.routes.get("/prompt-manager/available-models")

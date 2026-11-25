@@ -161,7 +161,7 @@ class PromptGenOptions:
                     "min": 1,
                     "max": 32768,
                     "step": 1,
-                    "tooltip": "Maximum number of tokens to generate when the Prompt Generator is connected to a CLIP/text encoder."
+                    "tooltip": "Maximum number of tokens to generate with the Prompt Generator's native engine."
                 }),
                 "gpu_device": ("STRING", {
                     "default": "",
