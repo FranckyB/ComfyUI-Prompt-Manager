@@ -17,10 +17,10 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { button, helpBadge } from "./fbui/controls.js";
+import { button, helpBadge, ICONS } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { confirm, openMenu } from "./fbui/modal.js";
-import { FONT } from "./fbui/theme.js";
+import { FONT, ROW_HEIGHT } from "./fbui/theme.js";
 import { findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.js";
 import { DEFAULT_THUMBNAIL, exportPromptsJSON, getLoraManagerPreviewTooltip, PMA_THEME } from "./prompt_manager_advanced.js";
 import { getHideNSFW, hasComposeLikePayload, hasLayoutPayload, hasRecipeLikePayload, openPromptBrowserForSave, showThumbnailBrowser } from "./prompt_browser.js";
@@ -38,8 +38,6 @@ const PROMPT_ONLY = "Prompt LoRAs Only";
 const INPUT_ONLY = "Input LoRAs Only";
 const MIN_WIDTH = 460;
 const TEXT_MIN_HEIGHT = 90;
-const BAR_HEIGHT = 26;
-const BUTTONS_HEIGHT = 28;
 // A stack card's padding and title bar, then one 24px line of tags per 28px.
 const STACK_HEAD = 50;
 const CSS_ID = "pm-v2-css-v2";
@@ -61,21 +59,13 @@ function ensureCss() {
     const style = document.createElement("style");
     style.id = CSS_ID;
     style.textContent = `
-.pm-v2-bar{display:flex;align-items:center;width:100%;height:100%;background:#1a1a1a;border-radius:6px;pointer-events:auto}
-.pm-v2-arrow{height:100%;padding:0 10px;border:none;background:#2a2a2a;color:#888;font-size:12px;cursor:pointer;transition:all .15s ease}
-.pm-v2-arrow:first-child{border-radius:6px 0 0 6px}
-.pm-v2-arrow:last-child{border-radius:0 6px 6px 0}
-.pm-v2-arrow:hover{background:#3a3a3a;color:#fff}
-.pm-v2-name{flex:1;min-width:0;height:100%;display:flex;align-items:center;justify-content:center;padding:0 10px;box-sizing:border-box;border:1px solid rgba(56,130,246,.85);border-radius:4px;background:rgba(56,130,246,.22);color:#dbeafe;font-size:15px;cursor:pointer;transition:background .15s ease}
-.pm-v2-name:hover{background:rgba(56,130,246,.32)}
+.pm-v2-name{flex:1 1 0;min-width:0;justify-content:flex-start;gap:6px;font:500 12px ${FONT}}
 .pm-v2-name .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pm-v2-badge{flex-shrink:0;margin-left:6px;color:#fff;font-weight:bold}
+.pm-v2-badge{flex-shrink:0;color:#fff;font-weight:bold}
 .pm-v2-badge.nsfw{padding:0 4px;border-radius:2px;background:rgba(204,50,50,.85);font-size:8px;line-height:12px}
 .pm-v2-badge.kind{width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-size:9px;line-height:1}
 .pm-v2-thumb{position:fixed;display:none;z-index:10001;pointer-events:none}
 .pm-v2-thumb img{display:block;max-width:300px;max-height:300px;object-fit:contain;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.5)}
-.pm-v2-buttons{display:flex;align-items:center;gap:2px;width:100%;height:100%;pointer-events:auto}
-.pm-v2-btn{min-width:80px;height:28px;font:500 13px/1 ${FONT}}
 .pm-v2-text.fbui-text{width:100%;height:100%;min-height:${TEXT_MIN_HEIGHT}px;padding:6px 8px;box-sizing:border-box;resize:none;pointer-events:auto}
 .pm-v2-text[readonly]{opacity:.5}
 .pm-v2-stack{display:flex;flex-direction:column;gap:4px;padding:8px;box-sizing:border-box;width:100%;border-radius:6px;background:${PMA_THEME.cardBg};pointer-events:auto}
@@ -444,20 +434,18 @@ function thumbnailHover(node, target) {
 
 function promptBar(node) {
     ensureCss();
-    const bar = el("div", "pm-v2-bar");
-    const back = el("button", "pm-v2-arrow", "◀");
+    // The prompt as a button that opens the library (the suite's soft blue
+    // action), ‹ › stepping through it.
+    const bar = el("div", "fbui-field");
     const label = el("span", "label");
     const nsfw = el("span", "pm-v2-badge nsfw", "NSFW");
     const kind = el("span", "pm-v2-badge kind");
-    const name = el("div", "pm-v2-name");
-    const next = el("button", "pm-v2-arrow", "▶");
-    back.title = "Previous prompt";
-    next.title = "Next prompt";
+    const name = button("", { soft: true, onClick: () => browse(node) });
+    name.classList.add("pm-v2-name");
     name.append(label, nsfw, kind);
-    bar.append(back, name, next);
-    back.addEventListener("click", () => step(node, -1));
-    next.addEventListener("click", () => step(node, 1));
-    name.addEventListener("click", () => browse(node));
+    const back = button("", { icon: ICONS.chevronLeft, title: "Previous prompt", onClick: () => step(node, -1) });
+    const next = button("", { icon: ICONS.chevronRight, title: "Next prompt", onClick: () => step(node, 1) });
+    bar.append(name, back, next);
     bar.addEventListener("contextmenu", (event) => event.preventDefault());
     thumbnailHover(node, name);
     return {
@@ -480,15 +468,11 @@ function promptBar(node) {
 }
 
 function buttonBar(node) {
-    const row = el("div", "pm-v2-buttons");
-    const add = (text, title, onClick) => {
-        const btn = button(text, { soft: true, grow: true, title, onClick });
-        btn.classList.add("pm-v2-btn");
-        row.append(btn);
-    };
+    const row = el("div", "fbui-field");
+    const add = (text, title, onClick, icon = "") => row.append(button(text, { icon, soft: true, grow: true, title, onClick }));
     add("Save Prompt", "Save the prompt, its LoRAs and trigger words to the library", () => savePrompt(node));
     add("New Prompt", "Start a new prompt", () => newPrompt(node));
-    add("More ▼", "", (event) => {
+    add("More", "", (event) => {
         const box = event.currentTarget.getBoundingClientRect();
         openMenu(box.left, box.bottom + 4, [
             { label: "Delete Prompt", danger: true, disabled: !selection(node).name, action: () => deletePrompt(node) },
@@ -498,7 +482,7 @@ function buttonBar(node) {
             { label: "Import JSON", action: () => importPrompts(node, "merge") },
             { label: "Replace JSON", action: () => importPrompts(node, "replace") },
         ]);
-    });
+    }, ICONS.chevronDown);
     row.addEventListener("contextmenu", (event) => event.preventDefault());
     return { element: row };
 }
@@ -711,9 +695,10 @@ function setupNode(node) {
         rows: [
             { widget: "use_prompt_input", label: "Prompt input" },
             { widget: "lora_mode", label: "LoRA input", kind: "segment", labels: MODE_LABELS, titles: MODE_TITLES },
+            // The prompt's name, then its text, then what to do with it.
+            { panel: promptBar, height: ROW_HEIGHT },
             { panel: textPanel, grow: true, height: TEXT_MIN_HEIGHT },
-            { panel: promptBar, height: BAR_HEIGHT },
-            { panel: buttonBar, height: BUTTONS_HEIGHT },
+            { panel: buttonBar, height: ROW_HEIGHT },
             ...SLOTS.map((slot) => ({ panel: (n) => loraCard(n, slot), height: () => pm.heights[slot], when: (_values, n) => loraRows(n, slot).length > 0 })),
             { panel: wordsCard, height: () => pm.heights.words, when: (_values, n) => wordRows(n).length > 0 },
         ],

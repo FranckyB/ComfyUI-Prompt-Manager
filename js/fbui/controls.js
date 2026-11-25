@@ -304,6 +304,7 @@ export const ICONS = {
   rotateLeft: svg('<path d="M2.5 5.5h7a4 4 0 0 1 0 8h-2M5 3 2.5 5.5 5 8"/>'),
   rotateRight: svg('<path d="M13.5 5.5h-7a4 4 0 0 0 0 8h2M11 3l2.5 2.5L11 8"/>'),
   cropTurn: svg('<path d="M4 1.5V10h6M1.5 4H10v2"/><path d="M14.5 11a3.5 3.5 0 1 1-1-2.5M14.5 7v2h-2"/>'),
+  save: svg('<path d="M2.5 2.5h9l2 2v9h-11z"/><path d="M5 2.5v3.5h5V2.5M5 13.5V9.5h6v4"/>'),
   scale: svg('<rect x="1.5" y="8.5" width="6" height="6" rx=".5"/><path d="M9.5 1.5h5v5M14.5 1.5 8.5 7.5"/>'),
   eraser: svg('<path d="M6 13.5h7.5M2.5 10l6-6.5 5 5-5 5h-3z"/>'),
   undo: svg('<path d="M4.5 6.5h6a3 3 0 0 1 0 6h-3M6.5 4l-2.5 2.5L6.5 9"/>'),
