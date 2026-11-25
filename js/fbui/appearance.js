@@ -97,6 +97,12 @@ export function installAppearance({ settingsPrefix, category }) {
       const stored = app.ui?.settings?.getSettingValue?.(settingId);
       if (NAMES.includes(stored)) active = stored;
       installTitleInk();
+      // ComfyUI's colour menus list LGraphCanvas.node_colors: the suite's
+      // blue joins them, so a node coloured by hand can go back to it. Its
+      // menu name comes from the pack's locales/<lang>/main.json (color.fbBlue).
+      const colors = app.canvas?.constructor?.node_colors;
+      const blue = NODE_COLOR_SCHEMES[0].colors;
+      if (colors && !colors.fbBlue) colors.fbBlue = { color: blue.title, bgcolor: blue.body, groupcolor: "#2f5f8a" };
     },
     nodeCreated(node) {
       if (!ours(node)) return;
