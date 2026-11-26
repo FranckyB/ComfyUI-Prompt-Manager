@@ -315,6 +315,7 @@ export const ICONS = {
   pause: svg('<path d="M5 3.5v9M11 3.5v9"/>'),
   expand: svg('<path d="M10 2.5h3.5V6M6 13.5H2.5V10M13.5 2.5 9 7M2.5 13.5 7 9"/>'),
   brush: svg('<path d="M10.5 2.5l3 3-6 6-3-3zM4.5 8.5l-2 5 5-2"/>'),
+  pencil: svg('<path d="M2.5 13.5l1-3.2 7.3-7.3a1.3 1.3 0 0 1 1.9 1.9l-7.3 7.3zM9.4 4.4l2.2 2.2"/>'),
   crop: svg('<path d="M4 1.5V12h10.5M1.5 4H12v10.5"/>'),
   feather: svg('<path d="M13.5 2.5C8 2.5 4.5 6 4.5 11.5h2c5.5 0 7-4 7-9z"/><path d="M2.5 13.5l7-7"/>'),
   ratio: svg('<rect x="1.5" y="3.5" width="13" height="9" rx="1"/><path d="M4.5 8.5v-2H7M11.5 7.5v2H9"/>'),

@@ -6,6 +6,7 @@ These rules apply to FBnodes, Prompt Manager and H3RefModPicker. Each pack ships
 - A converted node shows **one card** (`mountCard` in `fbui/card.js`). No stock widget rows stay visible on it.
 - Do not push plain-object widgets into `node.widgets`, do not draw UI in `onDrawForeground`/`onDrawBackground`, and do not override `widget.draw`. These do not render under Nodes 2.0.
 - Previews, players and editors are card `panel` rows. A panel that should take the node's spare height uses `grow: true`, and media sits `position:absolute` inside a `.fbui-stage`.
+- A stage may add a full-screen view or editor: a `.fbui-stage-tools` button opens it through the kit modal layer — `openViewer` for media, `openModal` from `fbui/modal.js` for a node's own DOM, as Save Image+ in preview mode and the Video Review node do. While it is open the card shows a placeholder in place of the panel, and the same button state closes it.
 
 ## Look
 - Every colour, radius and size comes from `fbui/theme.js`. Node files contain no hex literals.
