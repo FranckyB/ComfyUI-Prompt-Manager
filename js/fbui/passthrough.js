@@ -2,8 +2,8 @@
 //
 // A panel that takes the mouse also swallows the wheel, so the graph stopped
 // zooming the moment the pointer crossed a card or preview. One listener hands
-// those gestures back to the canvas, unless the element under the pointer can
-// still scroll that way. In the classic renderer a file dropped on a panel
+// those gestures back to the canvas, unless the element under the pointer
+// scrolls that way. In the classic renderer a file dropped on a panel
 // missed its node; the drop listeners hand it to the node under the pointer.
 //
 // Every pack carrying the kit calls installPassthrough(); the first one wins,
@@ -23,26 +23,33 @@ function panelRoot(target) {
   return root;
 }
 
+// An element with more content than room keeps the wheel, even at its
+// ends, as a native scroll box: the graph only zooms where nothing scrolls.
 function canScroll(element, delta, horizontal) {
   if (!delta) return false;
   const size = horizontal ? element.scrollWidth : element.scrollHeight;
   const visible = horizontal ? element.clientWidth : element.clientHeight;
-  const start = horizontal ? element.scrollLeft : element.scrollTop;
-  if (size - visible <= 1) return false;
-  return delta > 0 ? start + visible < size - 1 : start > 0;
+  return size - visible > 1;
 }
 
 function panelKeepsWheel(target, event, root) {
   if (event.ctrlKey || event.metaKey) return false;
   for (let element = target; element && element !== root.parentElement; element = element.parentElement) {
     const style = getComputedStyle(element);
-    if (/(auto|scroll)/.test(style.overflowY) && canScroll(element, event.deltaY, false)) return true;
+    if ((element.tagName === "TEXTAREA" || /(auto|scroll)/.test(style.overflowY)) && canScroll(element, event.deltaY, false)) return true;
     if (/(auto|scroll)/.test(style.overflowX) && canScroll(element, event.deltaX, true)) return true;
   }
   return false;
 }
 
 let forwardedPointer = null;
+
+// Nodes 2.0 hands the wheel over a node to the canvas unless a focused
+// element takes it: a panel that scrolls keeps it, focused or not.
+function keepScroll(event) {
+  const root = panelRoot(event.target);
+  if (root && panelKeepsWheel(event.target, event, root)) event.stopPropagation();
+}
 
 function onWheel(event) {
   const root = panelRoot(event.target);
@@ -98,6 +105,7 @@ async function onDrop(event) {
 export function installPassthrough() {
   if (globalThis[INSTALLED]) return;
   globalThis[INSTALLED] = true;
+  window.addEventListener("wheel", keepScroll, { capture: true, passive: true });
   window.addEventListener("wheel", onWheel, { passive: false });
   window.addEventListener("pointerdown", onPointerDown, true);
   window.addEventListener("pointermove", onPointerMove, true);

@@ -43,6 +43,8 @@ const STACK_HEAD = 50;
 const CSS_ID = "pm-v2-css-v2";
 // The last run's panel rows, saved with the workflow.
 const RUN_PROPERTY = "pm_last_run";
+// The stack cards' measured heights, saved so a loaded node lays out at its saved size.
+const HEIGHTS_PROPERTY = "pm_stack_heights";
 
 const GUIDE = [
     "Pick a prompt with ◀ ▶ or click its name to browse the library.",
@@ -146,9 +148,13 @@ function readState(node) {
     }
 }
 
+// Once a loaded node has laid out, a row that appears, grows or shrinks
+// moves the node's height with it, so the prompt text keeps its size.
+const relayout = (node) => (node._pm.settled ? node._pm.card.refreshByHand() : node._pm.card.refresh());
+
 function writeState(node, state) {
     findWidget(node, "state").value = JSON.stringify(state);
-    node._pm.card.refresh();
+    relayout(node);
     notifyChange();
 }
 
@@ -262,7 +268,7 @@ async function checkAvailability(node) {
     });
     const result = response.ok ? await response.json() : null;
     for (const [name, found] of Object.entries(result?.results ?? {})) node._pm.available.set(name.toLowerCase(), found === true);
-    node._pm.card.refresh();
+    relayout(node);
 }
 
 // ---------------------------------------------------------------- selection
@@ -350,7 +356,7 @@ function importPrompts(node, mode) {
         const result = await response.json();
         if (!result?.success) return toast(result?.error || "Could not import the prompts.", { severity: "error" });
         node.prompts = result.prompts;
-        node._pm.card.refresh();
+        relayout(node);
         toast(mode === "replace" ? "Prompts replaced." : "Prompts imported.");
     });
     input.click();
@@ -518,12 +524,13 @@ function textPanel(node) {
     return {
         element: area,
         sync() {
-            // With the prompt input on, its text from the last run, read-only.
+            // With the prompt input on, the text stays, ghosted and read-only,
+            // until a run brings a new prompt (it becomes the text).
             const fromInput = findWidget(node, "use_prompt_input")?.value === true && isLinked(node, "prompt");
             area.readOnly = fromInput;
-            const shown = fromInput ? node._pm.run?.prompt_input ?? "" : findWidget(node, "text").value ?? "";
+            const shown = findWidget(node, "text").value ?? "";
             if (area.value !== shown && document.activeElement !== area) area.value = shown;
-            area.placeholder = fromInput ? "From the prompt input (shown after a run)" : "Enter prompt text";
+            area.placeholder = fromInput ? "Waiting for the connected prompt" : "Enter prompt text";
         },
     };
 }
@@ -551,7 +558,8 @@ function stackCard(node, key, title, tools, renderTags) {
         const height = Math.ceil(box.scrollHeight);
         if (height && height !== node._pm.heights[key]) {
             node._pm.heights[key] = height;
-            node._pm.card.refresh();
+            node.properties[HEIGHTS_PROPERTY] = { ...node._pm.heights };
+            relayout(node);
         }
     };
     new ResizeObserver(measure).observe(tags);
@@ -706,7 +714,7 @@ function wordsCard(node) {
 
 function setupNode(node) {
     ensureCss();
-    const pm = { run: null, available: new Map(), heights: { a: STACK_HEAD + 28, b: STACK_HEAD + 28, c: STACK_HEAD + 28, d: STACK_HEAD + 28, words: STACK_HEAD + 28 } };
+    const pm = { run: null, available: new Map(), settled: true, heights: { a: STACK_HEAD + 28, b: STACK_HEAD + 28, c: STACK_HEAD + 28, d: STACK_HEAD + 28, words: STACK_HEAD + 28 } };
     node._pm = pm;
     // The card stands in for these; use_prompt_input and lora_mode are card rows.
     for (const name of ["category", "name", "text", "state"]) hideWidget(findWidget(node, name));
@@ -733,19 +741,22 @@ function setupNode(node) {
         // or edit once Prompt input is off. Only while it is on: a replayed
         // result never overwrites text typed since.
         if (findWidget(node, "use_prompt_input")?.value === true && typeof panels.prompt_input === "string" && panels.prompt_input) pm.card.setWidget("text", panels.prompt_input);
-        pm.card.refresh();
+        relayout(node);
     });
     chainCallback(node, "onConfigure", () => {
         pm.configured = true;
         pm.run = node.properties?.[RUN_PROPERTY] ?? null;
+        // The saved size already holds the saved rows: the first layout keeps it.
+        pm.settled = false;
+        Object.assign(pm.heights, node.properties?.[HEIGHTS_PROPERTY]);
         loadPrompts(node).then(() => {
             pm.card.refresh();
             checkAvailability(node);
-        });
+        }).finally(() => requestAnimationFrame(() => requestAnimationFrame(() => { pm.settled = true; })));
     });
     queueMicrotask(() => {
         if (pm.configured) return;
-        loadPrompts(node).then(() => pm.card.refresh());
+        loadPrompts(node).then(() => relayout(node));
     });
 }
 
